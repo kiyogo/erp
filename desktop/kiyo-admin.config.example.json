@@ -1,0 +1,6 @@
+{
+  "mode": "kiyo_cloud",
+  "kiyoCloudUrl": "https://api.kiyo.example/api/v1",
+  "selfHostedApiUrl": "https://self-hosted.example/api/v1",
+  "localApiUrl": "http://127.0.0.1:3011/api/v1"
+}

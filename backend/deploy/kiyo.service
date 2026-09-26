@@ -1,0 +1,18 @@
+[Unit]
+Description=Kiyo Platform Self-Hosted Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/kiyo
+EnvironmentFile=-/opt/kiyo/.env
+ExecStart=/opt/kiyo/kiyo-server
+Restart=always
+RestartSec=3
+
+# Security & Sandboxing
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

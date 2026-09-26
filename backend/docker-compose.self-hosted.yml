@@ -1,0 +1,16 @@
+services:
+  kiyo-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      KIYO_API_HOST: 0.0.0.0
+      KIYO_API_DB_PATH: /var/lib/kiyo/kiyo-cloud.sqlite
+      KIYO_JWT_SECRET: ${KIYO_JWT_SECRET:?set-a-long-random-secret}
+      KIYO_BOOTSTRAP_ADMIN_EMAIL: ${KIYO_BOOTSTRAP_ADMIN_EMAIL:?set-an-admin-email}
+      KIYO_BOOTSTRAP_ADMIN_PASSWORD: ${KIYO_BOOTSTRAP_ADMIN_PASSWORD:?set-a-strong-password}
+    volumes:
+      - kiyo_data:/var/lib/kiyo
+volumes:
+  kiyo_data:

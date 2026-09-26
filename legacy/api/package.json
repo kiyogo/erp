@@ -1,0 +1,16 @@
+{
+  "name": "kiyodn-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "dev": "node --watch index.mjs",
+    "seed:admin": "node index.mjs --seed-admin",
+    "migrate:pg": "node scripts/migrate-sqlite-to-pg.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.23.0",
+    "puppeteer": "^25.4.0"
+  }
+}

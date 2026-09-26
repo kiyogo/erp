@@ -1,0 +1,15 @@
+[Unit]
+Description=Kiyo Cloud API
+After=network.target
+
+[Service]
+Type=simple
+User=kiyo
+WorkingDirectory=/opt/kiyo-api
+EnvironmentFile=/etc/kiyo/kiyo-api.env
+ExecStart=/opt/kiyo-api/kiyo-cloud-api
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

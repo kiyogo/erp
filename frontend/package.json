@@ -1,0 +1,41 @@
+{
+  "name": "kiyo-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.2.6",
+    "@tensorflow-models/blazeface": "^0.1.0",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.15",
+    "axios": "^1.5.0",
+    "inter-ui": "^3.19.3",
+    "jsqr": "^1.4.0",
+    "lucide-react": "^1.34.0",
+    "pdf-lib": "^1.17.1",
+    "puppeteer": "^25.4.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.18.2",
+    "react-selecto": "^1.26.3",
+    "tesseract.js": "^7.0.0",
+    "xterm": "^5.2.0",
+    "zustand": "^4.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.1.0",
+    "autoprefixer": "^10.5.4",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.2.2",
+    "vite": "^8.2.2"
+  }
+}
