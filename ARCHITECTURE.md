@@ -8,10 +8,11 @@ Tài liệu này định nghĩa cấu trúc kỹ thuật tổng thể của nề
 
 | Thư mục | Vai trò / Nhiệm vụ | Công nghệ sử dụng |
 | :--- | :--- | :--- |
-| **`backend/`** | Server Backend duy nhất (API + Xác thực + Quản lý File + Phục vụ Web SPA) | **Rust** (`axum`, `tokio`, `rusqlite`, `argon2`, `jsonwebtoken`, `tower-http`) |
-| **`frontend/`** | Giao diện Web Client (Admin Dashboard & Employee Portal) | **React 18**, **TypeScript**, **Vite 8**, **Tailwind CSS**, **Zustand** |
-| **`desktop/`** | Ứng dụng Desktop chạy trực tiếp trên Windows | **Tauri (Rust)** + React |
-| **`legacy/`** | Bản sao lưu trữ mã nguồn cũ để đối chiếu | Legacy React + Node API |
+| **`backend/`** | Server Backend (API + Xác thực + Quản lý File + phục vụ static assets) | **Rust** (`axum`, `tokio`, `rusqlite`, `argon2`, `jsonwebtoken`, `tower-http`) |
+| **`crates/kiyo-ui/`** | UI, models, state và API client dùng chung cho mọi nền tảng | **Rust + egui/eframe** |
+| **`desktop/`** | Launcher native Windows, Linux và macOS gọi `kiyo-ui` | **Rust + eframe** |
+| **`web/`** | Launcher trình duyệt biên dịch từ `kiyo-ui` | **WebAssembly + eframe WebRunner** |
+| **`legacy/`** | Kho mã cũ chỉ đọc để tham chiếu, không tham gia build | **Legacy snapshot** |
 
 ---
 
@@ -22,9 +23,16 @@ Tài liệu này định nghĩa cấu trúc kỹ thuật tổng thể của nề
    - Không phụ thuộc vào bất kỳ máy chủ xác thực bên thứ 3 nào.
 2. **Khởi tạo Quản trị viên ban đầu (Bootstrap Admin)**:
    - Server tự động khởi tạo tài khoản quản trị tối cao ban đầu (`admin@kiyo.local`) qua biến môi trường `KIYO_BOOTSTRAP_ADMIN_EMAIL` và `KIYO_BOOTSTRAP_ADMIN_PASSWORD`.
-3. **Phục vụ giao diện Web trực tiếp (All-In-One Binary)**:
-   - Backend Rust có tích hợp sẵn `ServeDir` & `ServeFile` từ `tower-http` để phục vụ thư mục `dist/` của React.
-   - Khi chạy `kiyo-server`, server tự động xử lý cả các endpoint `/api/v1/*` lẫn phục vụ Single Page Application (SPA) cho người dùng cuối.
+3. **UI đa nền tảng từ một nguồn**:
+   - `crates/kiyo-ui` chứa màn hình và state duy nhất.
+   - `desktop/` build native Windows, Linux và macOS.
+   - `web/` build WebAssembly bằng Trunk.
+   - Backend chỉ cung cấp API và dữ liệu; không chứa business UI.
+
+4. **Một nguồn mã duy nhất**:
+   - Không còn frontend React trong source tree vận hành.
+   - `legacy/` vẫn được giữ nguyên như kho tham chiếu chỉ đọc.
+   - Màn hình mới và thay đổi giao diện chỉ được viết trong `crates/kiyo-ui`.
 
 ---
 
@@ -62,5 +70,5 @@ sudo certbot --nginx -d your-domain.com
 | `KIYO_API_PORT` | `3001` | Cổng dịch vụ Web & API |
 | `KIYO_API_DB_PATH` | `data/kiyo.sqlite` | Đường dẫn tệp CSDL SQLite |
 | `KIYO_API_STORAGE_PATH`| `data/files` | Thư mục lưu trữ tệp tin upload |
-| `KIYO_STATIC_DIR` | `dist` | Thư mục chứa mã build Frontend React |
+| `KIYO_STATIC_DIR` | `dist` | Thư mục chứa bundle WebAssembly/static web |
 | `KIYO_JWT_SECRET` | *(Bắt buộc trên Production)* | Chuỗi khóa bí mật mã hóa JWT Token |

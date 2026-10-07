@@ -1,6 +1,7 @@
 # Kiyo Desktop Parity Manifest
 
-The desktop frontend in `app/frontend` is independently authored. It must not import, link, symlink, copy a build artifact from, or depend on any frontend source under `web` or `web wbe hiện tại`.
+The native and WebAssembly launchers both consume `crates/kiyo-ui`. They must
+not create a second implementation of the same screen in another UI stack.
 
 ## Acceptance rule
 

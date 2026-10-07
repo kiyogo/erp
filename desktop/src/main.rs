@@ -1,13 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod api;
-mod app;
-mod models;
-mod native_text;
-mod views;
-
-use app::KiyoApp;
 use eframe::egui;
+use kiyo_ui::{KiyoApp, native_text};
 
 fn main() -> eframe::Result<()> {
     native_text::enable_per_monitor_dpi_awareness();

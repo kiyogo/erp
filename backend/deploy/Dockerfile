@@ -1,24 +1,26 @@
-# Multi-stage build for Kiyo Platform (Rust Backend + React Frontend)
-FROM node:22-alpine AS frontend-builder
-WORKDIR /app/frontend
-COPY ../frontend/package*.json ./
-RUN npm install
-COPY ../frontend ./
-RUN npm run build
+# Multi-stage build for the shared Rust UI (WebAssembly) and Rust API.
+FROM rust:1.89-bookworm AS web-builder
+RUN rustup target add wasm32-unknown-unknown \
+    && cargo install trunk --locked
+WORKDIR /source
+COPY . .
+RUN cd web && trunk build --release
 
-FROM rust:1.85-alpine AS backend-builder
-RUN apk add --no-cache musl-dev
-WORKDIR /app/backend
-COPY ../backend/Cargo*.toml ./
-COPY ../backend/src ./src
-RUN cargo build --release
+FROM rust:1.89-bookworm AS backend-builder
+WORKDIR /source
+COPY . .
+RUN cargo build -p kiyo-server --release
 
-FROM alpine:3.20 AS runner
-RUN apk add --no-cache ca-certificates tzdata
+FROM debian:bookworm-slim AS runner
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 10001 kiyo
 WORKDIR /app
-COPY --from=backend-builder /app/backend/target/release/kiyo-server /app/kiyo-server
-COPY --from=frontend-builder /app/frontend/dist /app/dist
-RUN mkdir -p /app/data/files
+COPY --from=backend-builder /source/target/release/kiyo-server /app/kiyo-server
+COPY --from=web-builder /source/web/dist /app/dist
+RUN mkdir -p /app/data/files && chown -R kiyo:kiyo /app
+USER kiyo
 
 ENV KIYO_API_HOST=0.0.0.0
 ENV KIYO_API_PORT=3001

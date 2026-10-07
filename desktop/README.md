@@ -1,7 +1,14 @@
-# Kiyo Admin desktop application
+# KIYO Admin Native App
 
-This is the Windows desktop application. The native shell is Rust/Tauri and the desktop frontend is independently implemented in `frontend`.
+Đây là launcher native mỏng cho Windows, Linux và macOS. Toàn bộ màn hình,
+models, state và API client dùng chung với WebAssembly trong `crates/kiyo-ui`;
+thư mục này chỉ chứa cấu hình cửa sổ native và entry point `src/main.rs`.
 
-`D:\DATA\source\apwdnt\web` remains the absolute visual and feature reference. The desktop frontend must not import, symlink, copy, or alias code from `web`; its parity is verified by screenshots and feature tests.
+Chạy từ thư mục gốc:
 
-Run `npm install` then `npm run dev` in this directory for desktop development, or `npm run build` to create the Windows installer. API mode/config is delivered by the Rust shell without storing passwords in the frontend.
+```bash
+cargo run -p kiyo-admin-desktop
+```
+
+Mọi thay đổi giao diện phải thực hiện trong `crates/kiyo-ui` để ba nền tảng
+native và web luôn dùng cùng một code.

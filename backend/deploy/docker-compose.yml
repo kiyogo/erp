@@ -16,8 +16,8 @@ services:
       - KIYO_API_STORAGE_PATH=/app/data/files
       - KIYO_STATIC_DIR=/app/dist
       - KIYO_JWT_SECRET=${KIYO_JWT_SECRET:-change-this-very-long-secret-key-32-chars-minimum}
-      - KIYO_BOOTSTRAP_ADMIN_EMAIL=admin@kiyo.local
-      - KIYO_BOOTSTRAP_ADMIN_PASSWORD=KiyoAdmin@2026#
+      - KIYO_BOOTSTRAP_ADMIN_EMAIL=${KIYO_BOOTSTRAP_ADMIN_EMAIL:?set-an-admin-email}
+      - KIYO_BOOTSTRAP_ADMIN_PASSWORD=${KIYO_BOOTSTRAP_ADMIN_PASSWORD:?set-a-strong-password}
     volumes:
       - kiyo_data:/app/data
 

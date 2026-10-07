@@ -1,0 +1,15 @@
+.git
+.gitignore
+target
+**/target
+dist
+**/dist
+node_modules
+**/node_modules
+legacy
+backend/data
+backend/deploy/data
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

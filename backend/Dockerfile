@@ -8,9 +8,9 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 RUN useradd --create-home --uid 10001 kiyo
 WORKDIR /app
-COPY --from=build /source/target/release/kiyo-cloud-api /usr/local/bin/kiyo-cloud-api
+COPY --from=build /source/target/release/kiyo-server /usr/local/bin/kiyo-server
 USER kiyo
 ENV KIYO_API_HOST=0.0.0.0 KIYO_API_PORT=3001 KIYO_API_DB_PATH=/var/lib/kiyo/kiyo-cloud.sqlite
 VOLUME ["/var/lib/kiyo"]
 EXPOSE 3001
-ENTRYPOINT ["kiyo-cloud-api"]
+ENTRYPOINT ["kiyo-server"]

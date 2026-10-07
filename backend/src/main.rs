@@ -277,15 +277,13 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| {
             if std::path::Path::new("dist").exists() {
                 std::path::PathBuf::from("dist")
-            } else if std::path::Path::new("../frontend/dist").exists() {
-                std::path::PathBuf::from("../frontend/dist")
             } else {
                 std::path::PathBuf::from("static")
             }
         });
 
     if static_dir.exists() && static_dir.join("index.html").exists() {
-        info!(path = ?static_dir, "Serving frontend SPA static files");
+        info!(path = ?static_dir, "Serving WebAssembly SPA static files");
         let index_file = static_dir.join("index.html");
         let serve_dir = ServeDir::new(&static_dir).not_found_service(ServeFile::new(index_file));
         app = app.fallback_service(serve_dir);
@@ -408,7 +406,7 @@ fn router(state: AppState) -> Router {
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        service: "kiyo-cloud-api",
+        service: "kiyo-server",
         api_version: "v1",
     })
 }
