@@ -1,6 +1,6 @@
 # KIẾN TRÚC HỆ THỐNG KIYO PLATFORM (ARCHITECTURE.MD)
 
-Tài liệu này định nghĩa cấu trúc kỹ thuật tổng thể của nền tảng **Kiyo Platform** theo mô hình **Self-Hosted / On-Premise độc lập** (phong cách aaPanel: triển khai trực tiếp lên server của khách hàng, độc lập 100%, tự trỏ domain và quản trị trọn gói).
+Tài liệu này mô tả kiến trúc đích và phần đã có của **Kiyo Platform** theo hướng Self-Hosted / On-Premise. Dự án đang chuyển đổi; các module chưa được xác nhận đầy đủ trong [ma trận migration](docs/MIGRATION_MATRIX.md). Không coi cấu trúc hiện có là bằng chứng đã sẵn sàng production.
 
 ---
 
@@ -16,17 +16,17 @@ Tài liệu này định nghĩa cấu trúc kỹ thuật tổng thể của nề
 
 ---
 
-## II. KIẾN TRÚC TỰ TRỊ 100% (SELF-HOSTED / AUTONOMOUS)
+## II. KIẾN TRÚC SELF-HOSTED ĐANG XÂY DỰNG
 
 1. **Khách hàng sở hữu trọn vẹn dữ liệu**:
-   - Dữ liệu cơ sở dữ liệu SQLite (`kiyo.sqlite`) và tệp tin (`data/files/`) được lưu trữ 100% cục bộ trên ổ cứng máy chủ của khách.
-   - Không phụ thuộc vào bất kỳ máy chủ xác thực bên thứ 3 nào.
+   - Backend Rust hiện sử dụng SQLite (mặc định `data/kiyo-cloud.sqlite`) và thư mục tệp (mặc định theo thư mục database). Không có adapter PostgreSQL.
+   - Auth email/password và JWT chạy tại backend; một số tích hợp bên ngoài từ legacy chưa được chuyển và cần quyết định riêng.
 2. **Khởi tạo Quản trị viên ban đầu (Bootstrap Admin)**:
    - Server tự động khởi tạo tài khoản quản trị tối cao ban đầu (`admin@kiyo.local`) qua biến môi trường `KIYO_BOOTSTRAP_ADMIN_EMAIL` và `KIYO_BOOTSTRAP_ADMIN_PASSWORD`.
 3. **UI đa nền tảng từ một nguồn**:
    - `crates/kiyo-ui` chứa màn hình và state duy nhất.
-   - `desktop/` build native Windows, Linux và macOS.
-   - `web/` build WebAssembly bằng Trunk.
+   - `desktop/` hướng tới native Windows, Linux và macOS; hiện mới build trên Windows.
+   - `web/` biên dịch WebAssembly; binary wasm đã build, bundle Trunk và chạy trên browser chưa được kiểm thử.
    - Backend chỉ cung cấp API và dữ liệu; không chứa business UI.
 
 4. **Một nguồn mã duy nhất**:
@@ -38,20 +38,21 @@ Tài liệu này định nghĩa cấu trúc kỹ thuật tổng thể của nề
 
 ## III. QUY TRÌNH TRIỂN KHAI CHO KHÁCH HÀNG (DEPLOYMENT)
 
-### 1. Triển khai Linux (Ubuntu / Debian / CentOS / Rocky Linux)
-Chạy script cài đặt 1 chạm:
-```bash
-sudo bash backend/deploy/install.sh
-```
-- Tự động tạo thư mục `/opt/kiyo`.
-- Tự sinh mã khóa bảo mật JWT ngẫu nhiên.
-- Tạo và kích hoạt dịch vụ `systemd` (`kiyo.service`) tự khởi động cùng hệ điều hành.
+Các script dưới đây là bản nháp chưa được chạy kiểm chứng cho production. Chưa có nghiệm thu bảo mật, TLS, sao lưu/khôi phục hoặc thử nghiệm chuyển dữ liệu legacy. Không dùng với dữ liệu thật trước khi hoàn tất các bước đó.
 
-### 2. Triển khai Windows Server
+### 1. Triển khai Linux (dự thảo)
+Script chỉ nhận artifact từ thư mục hiện hành. Trước tiên cần tạo gói staging chứa `kiyo-server`, `dist/` đã build và `install.sh`; kiểm tra bí mật, quyền và nội dung script trên máy thử. Từ thư mục staging:
+```bash
+sudo bash install.sh
+```
+Script dự kiến tạo `/opt/kiyo`, tệp cấu hình và dịch vụ `systemd`, nhưng chưa được kiểm thử end-to-end; hiện dịch vụ trong script chạy với quyền root và cần được harden trước production.
+
+### 2. Triển khai Windows Server (dự thảo)
 Chạy script PowerShell Administrator:
 ```powershell
 powershell -ExecutionPolicy Bypass -File backend\deploy\install.ps1
 ```
+Script copy artifact và tạo `.env`, nhưng chạy binary thủ công chưa tự nạp biến trong `.env`; chưa nghiệm thu như một dịch vụ Windows.
 
 ### 3. Cấu hình Tên miền riêng & Chứng chỉ SSL (Domain & HTTPS)
 - Khách hàng trỏ bản ghi DNS (`A Record`) về IP của Server.
@@ -66,9 +67,11 @@ sudo certbot --nginx -d your-domain.com
 
 | Biến môi trường | Mặc định | Ý nghĩa |
 | :--- | :--- | :--- |
-| `KIYO_API_HOST` | `0.0.0.0` | Địa chỉ IP lắng nghe kết nối |
+| `KIYO_API_HOST` | `127.0.0.1` | Địa chỉ IP lắng nghe; triển khai mạng phải cấu hình tường lửa/TLS |
 | `KIYO_API_PORT` | `3001` | Cổng dịch vụ Web & API |
-| `KIYO_API_DB_PATH` | `data/kiyo.sqlite` | Đường dẫn tệp CSDL SQLite |
+| `KIYO_API_DB_PATH` | `data/kiyo-cloud.sqlite` | Đường dẫn tệp CSDL SQLite |
 | `KIYO_API_STORAGE_PATH`| `data/files` | Thư mục lưu trữ tệp tin upload |
-| `KIYO_STATIC_DIR` | `dist` | Thư mục chứa bundle WebAssembly/static web |
-| `KIYO_JWT_SECRET` | *(Bắt buộc trên Production)* | Chuỗi khóa bí mật mã hóa JWT Token |
+| `KIYO_STATIC_DIR` | `dist` nếu tồn tại, nếu không là `static` | Thư mục chứa bundle WebAssembly/static web; dùng `web/dist` khi chạy từ root sau `trunk build` |
+| `KIYO_CORS_ORIGIN` | không đặt | Một origin HTTP(S) cụ thể cho dev server khác origin; không cho phép wildcard |
+| `KIYO_JWT_SECRET` | *(Bắt buộc mọi môi trường)* | Chuỗi bí mật ký JWT, tối thiểu 32 ký tự |
+| `KIYO_BOOTSTRAP_ADMIN_PASSWORD` | *(Bắt buộc khi tạo database)* | Mật khẩu admin ban đầu, 12–256 ký tự; không in vào log |

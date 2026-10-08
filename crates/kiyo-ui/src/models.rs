@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum StorageMode {
@@ -40,6 +40,7 @@ impl StorageMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct User {
     pub id: String,
     pub email: String,
@@ -47,6 +48,149 @@ pub struct User {
     pub role: String,
     #[serde(default)]
     pub is_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUser {
+    pub id: String,
+    pub email: String,
+    pub name: String,
+    pub role: String,
+    pub is_active: bool,
+    #[serde(default)]
+    pub employee_code: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
+    pub department: String,
+    #[serde(default)]
+    pub position: String,
+    #[serde(default)]
+    pub activation_status: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Employee {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub email: String,
+    pub phone: String,
+    pub department: String,
+    pub position: String,
+    pub status: String,
+    pub join_date: String,
+    pub salary_base: i64,
+    pub role: String,
+    pub is_active: bool,
+    pub activation_status: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgUnit {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default, skip_serializing)]
+    pub id: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub parent_unit: String,
+    #[serde(default)]
+    pub manager: String,
+    #[serde(default)]
+    pub manager_title: String,
+    #[serde(default)]
+    pub manager_email: String,
+    #[serde(default)]
+    pub manager_phone: String,
+    #[serde(default)]
+    pub headcount_limit: u64,
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    pub actual_headcount: u64,
+    #[serde(default)]
+    pub location: String,
+    #[serde(default)]
+    pub established_date: String,
+    #[serde(default)]
+    pub annual_budget: u64,
+    #[serde(default)]
+    pub budget_spent: u64,
+    #[serde(default = "default_org_unit_status")]
+    pub status: String,
+}
+
+fn default_org_unit_status() -> String {
+    "Đang hoạt động".to_owned()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmployeeWire {
+    id: String,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    employee_code: Option<String>,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    phone: String,
+    #[serde(default)]
+    department: String,
+    #[serde(default)]
+    position: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    join_date: String,
+    #[serde(default)]
+    salary_base: i64,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    activation_status: String,
+}
+
+impl<'de> Deserialize<'de> for Employee {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = EmployeeWire::deserialize(deserializer)?;
+        Ok(Self {
+            id: wire.id,
+            code: wire
+                .code
+                .filter(|code| !code.trim().is_empty())
+                .or(wire.employee_code)
+                .unwrap_or_default(),
+            name: wire.name,
+            email: wire.email,
+            phone: wire.phone,
+            department: wire.department,
+            position: wire.position,
+            status: wire.status,
+            join_date: wire.join_date,
+            salary_base: wire.salary_base,
+            role: wire.role,
+            is_active: wire.is_active,
+            activation_status: wire.activation_status,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

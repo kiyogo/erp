@@ -1,14 +1,7 @@
 use eframe::egui;
-use egui::{Color32, FontDefinitions, FontFamily, FontId, TextStyle};
+use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, TextStyle};
 
-#[cfg(not(target_arch = "wasm32"))]
-use egui::FontData;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
-
-pub const UI_FONT_VARIABLE: &str = "Segoe UI Variable";
-pub const UI_FONT_REGULAR: &str = "Segoe UI";
-pub const ICON_FONT: &str = "Segoe Fluent Icons";
+pub const UI_FONT: &str = "Noto Sans";
 #[allow(dead_code)]
 pub const TEXT_RENDERER: &str = "egui/epaint font atlas";
 #[allow(dead_code)]
@@ -50,92 +43,35 @@ pub fn enable_per_monitor_dpi_awareness() {
 pub fn enable_per_monitor_dpi_awareness() {}
 
 pub fn setup_fonts(ctx: &egui::Context) -> FontRuntimeInfo {
-    let mut fonts = FontDefinitions::empty();
-    let mut used_variable = false;
-    let mut used_icon_font = false;
-
-    if add_font_file(
-        &mut fonts,
-        "segoe_ui_variable",
-        "C:\\Windows\\Fonts\\SegUIVar.ttf",
-    ) {
-        used_variable = true;
-    }
-
-    let used_regular = add_font_file(
-        &mut fonts,
-        "segoe_ui_regular",
-        "C:\\Windows\\Fonts\\segoeui.ttf",
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "noto_sans".to_owned(),
+        FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Variable.ttf")),
     );
-
-    add_font_file(
-        &mut fonts,
-        "segoe_ui_semibold",
-        "C:\\Windows\\Fonts\\seguisb.ttf",
-    );
-
-    let used_symbols = add_font_file(
-        &mut fonts,
-        "segoe_ui_symbols",
-        "C:\\Windows\\Fonts\\seguisym.ttf",
-    );
-
-    if add_font_file(
-        &mut fonts,
-        "segoe_fluent_icons",
-        "C:\\Windows\\Fonts\\SegoeIcons.ttf",
-    ) {
-        used_icon_font = true;
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, "noto_sans".to_owned());
     }
-
-    let mut proportional = Vec::new();
-    if used_regular {
-        proportional.push("segoe_ui_regular".to_owned());
-    }
-    if used_variable {
-        proportional.push("segoe_ui_variable".to_owned());
-    }
-    if used_symbols {
-        proportional.push("segoe_ui_symbols".to_owned());
-    }
-
-    let mut icon_family = Vec::new();
-    if used_icon_font {
-        icon_family.push("segoe_fluent_icons".to_owned());
-    }
-    icon_family.extend(proportional.clone());
-
-    fonts
+    let icon_family = fonts
         .families
-        .insert(FontFamily::Proportional, proportional);
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
     fonts
         .families
         .insert(FontFamily::Name("kiyo_icons".into()), icon_family);
-    let mut monospace = Vec::new();
-    if used_regular {
-        monospace.push("segoe_ui_regular".to_owned());
-    }
-    if used_variable {
-        monospace.push("segoe_ui_variable".to_owned());
-    }
-    fonts.families.insert(FontFamily::Monospace, monospace);
 
     ctx.set_fonts(fonts);
 
     let info = FontRuntimeInfo {
-        family: if used_regular {
-            UI_FONT_REGULAR
-        } else {
-            UI_FONT_VARIABLE
-        },
-        fallback: if used_variable {
-            UI_FONT_VARIABLE
-        } else {
-            UI_FONT_REGULAR
-        },
-        icon_family: ICON_FONT,
-        used_variable,
-        used_icon_font,
+        family: UI_FONT,
+        fallback: "egui default fonts",
+        icon_family: "Unicode symbols",
+        used_variable: true,
+        used_icon_font: false,
     };
 
     #[cfg(debug_assertions)]
@@ -199,37 +135,10 @@ pub fn apply_visuals(ctx: &egui::Context, dark: bool) {
 }
 
 pub fn icon_text(symbol: &'static str, color: Color32) -> egui::RichText {
-    egui::RichText::new(fluent_icon(symbol))
+    egui::RichText::new(symbol)
         .size(13.0)
         .family(FontFamily::Name("kiyo_icons".into()))
         .color(color)
-}
-
-fn fluent_icon(symbol: &'static str) -> &'static str {
-    match symbol {
-        "☰" => "\u{E700}",
-        "✕" => "\u{E711}",
-        "✓" => "\u{E73E}",
-        "🏠" => "\u{E80F}",
-        "👤" => "\u{E77B}",
-        "👥" => "\u{E716}",
-        "💼" => "\u{E821}",
-        "📁" => "\u{E8B7}",
-        "📄" => "\u{E8A5}",
-        "📅" => "\u{E787}",
-        "📋" => "\u{E8A5}",
-        "📊" => "\u{E9D2}",
-        "🔔" => "\u{EA8F}",
-        "✍" => "\u{E70F}",
-        "💳" => "\u{E8C7}",
-        "💻" => "\u{E770}",
-        "💰" => "\u{EAFD}",
-        "🤝" => "\u{E8F9}",
-        "🚪" => "\u{E8A7}",
-        "📤" => "\u{E898}",
-        "💾" => "\u{E74E}",
-        _ => "\u{E10F}",
-    }
 }
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -257,27 +166,3 @@ pub fn log_dpi_if_changed(last_pixels_per_point: &mut Option<f32>, ctx: &egui::C
 
 #[cfg(any(not(debug_assertions), target_arch = "wasm32"))]
 pub fn log_dpi_if_changed(_last_pixels_per_point: &mut Option<f32>, _ctx: &egui::Context) {}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn add_font_file(fonts: &mut FontDefinitions, name: &str, path: &str) -> bool {
-    if Path::new(path).exists() {
-        match std::fs::read(path) {
-            Ok(data) => {
-                fonts
-                    .font_data
-                    .insert(name.to_owned(), FontData::from_owned(data));
-                true
-            }
-            Err(_) => false,
-        }
-    } else {
-        false
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn add_font_file(_fonts: &mut FontDefinitions, _name: &str, _path: &str) -> bool {
-    // Browser fonts are managed by the page. Never access a native filesystem
-    // from the WebAssembly build.
-    false
-}

@@ -47,14 +47,14 @@ Every applicable route must verify:
 | `/admin/meeting-rooms` | overview, list, calendar, history, settings | Meeting rooms | Scaffolded |
 | `/admin/services` | services | Services | Scaffolded |
 | `/admin/documents` | overview, list, contracts, notes, archives, settings contract templates, settings digital signature | Documents | Scaffolded |
-| `/admin/files` | folders, upload, preview, permissions, hidden files | Files | Partial/scaffolded |
+| `/admin/files` | folders, upload, preview, permissions, hidden files | Files | Partial: real API list/navigation/create-folder; upload/download/share and runtime validation pending |
 | `/admin/tickets` | tickets, incidents | Tickets | Scaffolded |
 | `/admin/tasks`, `/admin/plans/*` | tasks, list, progress, milestones, reports | Plans | Scaffolded |
 | `/admin/reports` | reports | Reports | Scaffolded |
 | `/admin/system`, `/admin/*admin` | overview, users, roles, permissions, audit logs, sessions, backup, drop-menu, system, system notifications | Administration | Partial/scaffolded |
 | `/admin/digital-signature` | list, certs, providers, signers, verify, history, alerts, renew | Digital signatures | Scaffolded |
 | `/admin/notifications` | my notifications, system notifications | Notifications | Scaffolded |
-| `/admin/settings` | account, security, appearance, system, logs | Settings | Partial/scaffolded |
+| `/admin/settings` | account, security, appearance, system, logs | Settings | Partial: security password-change UI/API/test added; other settings remain scaffolded |
 
 ## Employee Routes
 
@@ -67,10 +67,10 @@ Every applicable route must verify:
 | `/employee/contracts` | contracts | Employee contracts | Scaffolded |
 | `/employee/proposals` | proposals | Employee proposals | Scaffolded |
 | `/employee/assets` | assigned assets | Employee assets | Scaffolded |
-| `/employee/files` | employee file scope | Employee files | Scaffolded |
+| `/employee/files` | employee file scope | Employee files | Partial: authenticated real workspace listing/navigation/create-folder; remaining file actions pending |
 | `/employee/notifications` | employee notifications | Employee notifications | Scaffolded |
 | `/employee/digital-signature` | my-signature, verify, history | Employee signatures | Scaffolded |
-| `/employee/settings` | account, security, appearance, logs | Employee settings | Scaffolded |
+| `/employee/settings` | account, security, appearance, logs | Employee settings | Partial: security password-change UI/API/test added; remaining screens pending |
 | `/employee/identity/verification` | eKYC, camera/QR/document checks | eKYC | Not started |
 
 ## Special Routes

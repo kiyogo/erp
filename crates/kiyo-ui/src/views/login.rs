@@ -10,6 +10,7 @@ pub struct LoginView {
     pub mode: StorageMode,
     pub error_msg: String,
     pub is_submitting: bool,
+    pub activation_requested: bool,
     pending_login: Option<ApiTask<Session>>,
 }
 
@@ -22,6 +23,7 @@ impl LoginView {
             mode: StorageMode::KiyoCloud,
             error_msg: String::new(),
             is_submitting: false,
+            activation_requested: false,
             pending_login: None,
         }
     }
@@ -34,7 +36,10 @@ impl LoginView {
                 self.pending_login = None;
                 self.is_submitting = false;
                 match result {
-                    Ok(session) => session_out = Some(session),
+                    Ok(session) => {
+                        self.password.clear();
+                        session_out = Some(session);
+                    }
                     Err(error) => self.error_msg = error,
                 }
             } else {
@@ -43,12 +48,16 @@ impl LoginView {
         }
 
         ui.vertical_centered(|ui| {
-            ui.add_space(50.0);
+            let compact = ui.available_width() < 520.0;
+            let inner_margin = if compact { 16.0 } else { 36.0 };
+            let control_width =
+                (ui.available_width() - 2.0 * inner_margin - 24.0).clamp(160.0, 360.0);
+            ui.add_space(if compact { 24.0 } else { 50.0 });
 
             egui::Frame::window(ui.style())
                 .fill(Color32::from_rgb(255, 255, 255))
                 .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(226, 232, 240)))
-                .inner_margin(egui::Margin::same(36.0))
+                .inner_margin(egui::Margin::same(inner_margin))
                 .rounding(egui::Rounding::same(12.0))
                 .shadow(egui::epaint::Shadow {
                     offset: Vec2::new(0.0, 8.0),
@@ -57,7 +66,7 @@ impl LoginView {
                     color: Color32::from_black_alpha(20),
                 })
                 .show(ui, |ui| {
-                    ui.set_max_width(400.0);
+                    ui.set_max_width(control_width);
 
                     // Logo & Brand
                     ui.horizontal(|ui| {
@@ -98,7 +107,7 @@ impl LoginView {
                     );
                     ui.add_space(4.0);
                     egui::ComboBox::from_id_salt("login_mode_combo")
-                        .width(360.0)
+                        .width(control_width)
                         .selected_text(self.mode.label())
                         .show_ui(ui, |ui| {
                             if ui
@@ -143,7 +152,9 @@ impl LoginView {
                             .color(Color32::from_rgb(51, 65, 85)),
                     );
                     ui.add_space(2.0);
-                    ui.add(egui::TextEdit::singleline(&mut self.endpoint).desired_width(360.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.endpoint).desired_width(control_width),
+                    );
 
                     ui.add_space(14.0);
                     ui.label(
@@ -155,7 +166,7 @@ impl LoginView {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.email)
                             .hint_text("admin@kiyo.vn")
-                            .desired_width(360.0),
+                            .desired_width(control_width),
                     );
 
                     ui.add_space(14.0);
@@ -168,7 +179,7 @@ impl LoginView {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.password)
                             .password(true)
-                            .desired_width(360.0),
+                            .desired_width(control_width),
                     );
 
                     if !self.error_msg.is_empty() {
@@ -195,7 +206,7 @@ impl LoginView {
                             .color(Color32::WHITE),
                     )
                     .fill(Color32::from_rgb(0, 150, 136))
-                    .min_size(Vec2::new(360.0, 38.0))
+                    .min_size(Vec2::new(control_width, 38.0))
                     .rounding(6.0);
 
                     if ui.add_enabled(!self.is_submitting, login_btn).clicked() {
@@ -207,6 +218,14 @@ impl LoginView {
                             &self.password,
                             self.mode,
                         ));
+                    }
+
+                    ui.add_space(8.0);
+                    if ui
+                        .small_button("Kích hoạt tài khoản bằng liên kết")
+                        .clicked()
+                    {
+                        self.activation_requested = true;
                     }
 
                     ui.add_space(16.0);

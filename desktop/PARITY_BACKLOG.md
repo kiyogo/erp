@@ -31,7 +31,7 @@ For every route, record its source route, roles, API calls, desktop route, scree
 
 ## Current delivery
 
-* **Implemented in shared Rust UI:** login, native shell, route-level nested sidebar scaffold, header, workspace tab, dashboard and user views.
-* **Backed by Rust:** login/profile, dashboard statistics, user list/create/update/delete and the collection contract. These endpoints enforce the administrator role on the server.
-* **Visual checks:** native and WebAssembly launchers must be checked at 1440x900, 1280x800 and 390x844.
+* **Implemented in shared Rust UI:** login, native shell, route-level nested sidebar scaffold, header, workspace tab, dashboard and user views; security password-change form; real file listing/navigation/folder creation. Other views may still contain sample data.
+* **Backed by Rust:** login/profile, dashboard statistics, user list/create/update/delete, password change, file listing/folder creation and the collection contract. Do not infer full endpoint parity or authorization coverage from route existence; see `../docs/MIGRATION_MATRIX.md`.
+* **Visual checks:** desktop 1440x900 and 1280x800; browser 1440x900, 1280x800 and 390x844. These checks have not yet been performed for the new slices.
 * **Not yet complete:** all other module routes and their original forms, tables, workflows, special tools, route-specific screens and corresponding Rust API slices. They remain in the work order above and must not be represented as 100% parity yet. Track them in `DESKTOP_PARITY_MATRIX.md`.

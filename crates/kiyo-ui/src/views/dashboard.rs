@@ -1,174 +1,228 @@
-use crate::models::{NavItem, Session};
-use egui::{Align, Color32, Layout, RichText, Ui};
+use crate::api::{ApiClient, ApiTask, DashboardStats};
+use crate::models::{NavGroup, NavItem, Session};
+use egui::{Color32, RichText, Ui};
+use std::time::Duration;
 
-pub struct DashboardView;
+#[derive(Default)]
+pub struct DashboardView {
+    stats: Option<DashboardStats>,
+    task: Option<ApiTask<DashboardStats>>,
+    loaded_for: Option<String>,
+    needs_reload: bool,
+    error: String,
+}
 
 impl DashboardView {
-    pub fn render(ui: &mut Ui, session: &Session, nav_change: &mut Option<NavItem>) {
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn render(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &egui::Context,
+        session: &Session,
+        api: &ApiClient,
+        nav_change: &mut Option<NavItem>,
+    ) {
+        if self.loaded_for.as_deref() != Some(session.user.id.as_str()) {
+            self.stats = None;
+            self.loaded_for = Some(session.user.id.clone());
+            self.needs_reload = true;
+        }
+
+        if self.needs_reload && self.task.is_none() {
+            self.error.clear();
+            self.task = Some(api.dashboard_stats_task(session));
+            self.needs_reload = false;
+        }
+        if let Some(result) = self.task.as_ref().and_then(ApiClient::poll) {
+            self.task = None;
+            match result {
+                Ok(stats) => {
+                    self.stats = Some(stats);
+                    self.error.clear();
+                }
+                Err(error) => self.error = error,
+            }
+        }
+        if self.task.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(80));
+        }
+
+        let stats = self.stats.as_ref();
+        let loading_value = if self.task.is_some() { "…" } else { "—" };
+        let employee_count = stats
+            .map(|stats| stats.total_employees.to_string())
+            .unwrap_or_else(|| loading_value.to_owned());
+        let active_count = stats
+            .map(|stats| stats.active_users.to_string())
+            .unwrap_or_else(|| loading_value.to_owned());
+        let new_count = stats
+            .map(|stats| stats.new_employees_this_month.to_string())
+            .unwrap_or_else(|| loading_value.to_owned());
+        let workflow_count = stats
+            .map(|stats| stats.pending_approvals_count.to_string())
+            .unwrap_or_else(|| loading_value.to_owned());
+
         ui.vertical(|ui| {
-            // Header Banner
+            ui.set_width(ui.available_width());
             egui::Frame::none()
                 .fill(Color32::from_rgb(0, 105, 92))
                 .rounding(8.0)
                 .inner_margin(egui::Margin::symmetric(20.0, 16.0))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new("TỔNG QUAN DOANH NGHIỆP")
-                                    .size(11.0)
-                                    .strong()
-                                    .color(Color32::from_rgb(178, 223, 219)),
-                            );
-                            ui.label(
-                                RichText::new(format!("Xin chào, {}!", session.user.name))
-                                    .size(20.0)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            );
-                            ui.label(
-                                RichText::new(format!(
-                                    "Hệ thống đang hoạt động ở chế độ: {}",
-                                    session.mode.label()
-                                ))
-                                .size(12.5)
-                                .color(Color32::from_rgb(224, 242, 241)),
-                            );
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let btn = egui::Button::new(
-                                RichText::new("Điểm danh hôm nay")
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(Color32::from_rgb(5, 150, 105));
-                            if ui.add(btn).clicked() {
-                                *nav_change = Some(NavItem::new(
-                                    "att-overview",
-                                    "Tổng quan",
-                                    "/admin/attendance/overview",
-                                    "📊",
-                                    crate::models::NavGroup::Attendance,
-                                ));
-                            }
-                        });
-                    });
+                    ui.set_min_width(ui.available_width());
+                    ui.label(
+                        RichText::new("TỔNG QUAN DOANH NGHIỆP")
+                            .size(11.0)
+                            .strong()
+                            .color(Color32::from_rgb(178, 223, 219)),
+                    );
+                    ui.label(
+                        RichText::new(format!("Xin chào, {}!", session.user.name))
+                            .size(20.0)
+                            .strong()
+                            .color(Color32::WHITE),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Hệ thống đang hoạt động ở chế độ: {}",
+                            session.mode.label()
+                        ))
+                        .size(12.5)
+                        .color(Color32::from_rgb(224, 242, 241)),
+                    );
                 });
 
-            ui.add_space(16.0);
-
-            // KPI Cards Grid
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(self.task.is_none(), egui::Button::new("Làm mới số liệu"))
+                        .clicked()
+                    {
+                        self.needs_reload = true;
+                    }
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
                 render_metric_card(
                     ui,
                     "TỔNG NHÂN SỰ",
-                    "24",
-                    "Hoạt động",
+                    &employee_count,
+                    "Tài khoản nhân viên trong backend",
                     Color32::from_rgb(0, 150, 136),
                 );
-                ui.add_space(12.0);
                 render_metric_card(
                     ui,
-                    "DOANH THU THÁNG",
-                    "1.250.000.000 ₫",
-                    "Tăng 12% so với tháng trước",
+                    "ĐANG HOẠT ĐỘNG",
+                    &active_count,
+                    "Tài khoản nhân viên đang hoạt động",
                     Color32::from_rgb(22, 163, 74),
                 );
-                ui.add_space(12.0);
                 render_metric_card(
                     ui,
-                    "ĐỀ XUẤT CHỜ DUYỆT",
-                    "3",
-                    "Cần xử lý",
-                    Color32::from_rgb(79, 70, 229),
+                    "NHÂN SỰ MỚI THÁNG NÀY",
+                    &new_count,
+                    "Theo thời điểm UTC trong backend",
+                    Color32::from_rgb(124, 58, 237),
                 );
-                ui.add_space(12.0);
                 render_metric_card(
                     ui,
-                    "TÀI SẢN DOANH NGHIỆP",
-                    "48",
-                    "Thiết bị quản lý",
+                    "WORKFLOW CHỜ XỬ LÝ",
+                    &workflow_count,
+                    "Chỉ tính collection workflow đã kết nối",
                     Color32::from_rgb(217, 119, 6),
                 );
             });
 
-            ui.add_space(20.0);
+            ui.add_space(10.0);
+            if !self.error.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.colored_label(Color32::from_rgb(185, 28, 28), &self.error);
+                    if ui
+                        .add_enabled(self.task.is_none(), egui::Button::new("Thử lại"))
+                        .clicked()
+                    {
+                        self.needs_reload = true;
+                    }
+                });
+            } else if self.task.is_some() && self.stats.is_none() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Đang tải số liệu từ máy chủ...");
+                });
+            }
 
-            // Two-column layout
             ui.columns(2, |cols| {
-                // Left Column: Quick Actions
                 cols[0].group(|ui| {
                     ui.label(
-                        RichText::new("LỐI TẮT THAO TÁC NHANH")
+                        RichText::new("LỐI TẮT ĐÃ KẾT NỐI")
                             .size(12.0)
                             .strong()
                             .color(Color32::from_rgb(0, 150, 136)),
                     );
                     ui.add_space(8.0);
-                    if ui.button("Quản lý tài khoản & Phân quyền").clicked() {
+                    if ui.button("Quản lý tài khoản").clicked() {
                         *nav_change = Some(NavItem::new(
                             "adm-users",
                             "Quản lý người dùng",
                             "/admin/users",
                             "👥",
-                            crate::models::NavGroup::Administration,
+                            NavGroup::Administration,
                         ));
                     }
-                    ui.add_space(4.0);
-                    if ui.button("Lập phiếu thu chi & Hóa đơn").clicked() {
+                    if ui.button("Quản lý nhân sự").clicked() {
                         *nav_change = Some(NavItem::new(
-                            "fin-overview",
-                            "Tổng quan",
-                            "/admin/finance/overview",
-                            "📊",
-                            crate::models::NavGroup::Finance,
+                            "hr-employees",
+                            "Nhân viên",
+                            "/admin/hr/employees",
+                            "⌁",
+                            NavGroup::Hr,
                         ));
                     }
-                    ui.add_space(4.0);
-                    if ui.button("Danh bạ Khách hàng & Đối tác").clicked() {
+                    if ui.button("Đơn vị tổ chức").clicked() {
                         *nav_change = Some(NavItem::new(
-                            "crm-customers",
-                            "Khách hàng",
-                            "/admin/crm/customers",
-                            "🙂",
-                            crate::models::NavGroup::Crm,
+                            "business-org-units",
+                            "Đơn vị tổ chức",
+                            "/admin/business/org-units",
+                            "⌂",
+                            NavGroup::Business,
                         ));
                     }
-                    ui.add_space(4.0);
-                    if ui.button("Đặt lịch phòng họp nội bộ").clicked() {
+                    if ui.button("Tài liệu & Cloud Drive").clicked() {
                         *nav_change = Some(NavItem::new(
-                            "mr-overview",
-                            "Tổng quan",
-                            "/admin/meeting-rooms/overview",
-                            "📊",
-                            crate::models::NavGroup::MeetingRooms,
-                        ));
-                    }
-                    ui.add_space(4.0);
-                    if ui.button("Bảng vẽ chữ ký số & Chứng thực eKYC").clicked() {
-                        *nav_change = Some(NavItem::new(
-                            "set-sig-list",
-                            "Danh sách chữ ký số",
-                            "/admin/digital-signature/list",
-                            "✍",
-                            crate::models::NavGroup::Signatures,
+                            "files",
+                            "Tài liệu",
+                            "/admin/files",
+                            "▰",
+                            NavGroup::Files,
                         ));
                     }
                 });
 
-                // Right Column: System Logs & Status
                 cols[1].group(|ui| {
                     ui.label(
-                        RichText::new("NHẬT KÝ HOẠT ĐỘNG HỆ THỐNG")
+                        RichText::new("TRẠNG THÁI NGUỒN DỮ LIỆU")
                             .size(12.0)
                             .strong()
                             .color(Color32::from_rgb(0, 150, 136)),
                     );
                     ui.add_space(8.0);
-                    ui.label("• [08:30] Hệ thống Rust Native GUI khởi chạy thành công.");
-                    ui.label("• [08:32] Nhân viên điểm danh vào ca hành chính.");
-                    ui.label("• [09:15] Đồng bộ dữ liệu Kiyo Cloud hoàn tất.");
-                    ui.label("• [10:00] Hợp đồng Alpha Tech đã được ký số điện tử.");
+                    if stats.is_some_and(|stats| stats.financial_metrics_available) {
+                        ui.label("Đã kết nối số liệu tài chính.");
+                    } else {
+                        ui.label("Tài chính: chưa có nguồn giao dịch được kết nối.");
+                    }
+                    if stats.is_some_and(|stats| stats.audit_logs_available) {
+                        ui.label("Đã kết nối nhật ký kiểm toán.");
+                    } else {
+                        ui.label("Kiểm toán: backend chưa lưu audit events.");
+                    }
+                    if stats.is_none() && self.task.is_none() && self.error.is_empty() {
+                        ui.label("Chưa có số liệu trả về từ máy chủ.");
+                    }
                 });
             });
         });
@@ -178,7 +232,7 @@ impl DashboardView {
 fn render_metric_card(ui: &mut Ui, title: &str, value: &str, subtext: &str, accent_color: Color32) {
     egui::Frame::none()
         .fill(Color32::from_rgb(255, 255, 255))
-        .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(226, 232, 240)))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(226, 232, 240)))
         .rounding(8.0)
         .inner_margin(egui::Margin::same(14.0))
         .show(ui, |ui| {
@@ -195,7 +249,7 @@ fn render_metric_card(ui: &mut Ui, title: &str, value: &str, subtext: &str, acce
             ui.label(
                 RichText::new(subtext)
                     .size(11.0)
-                    .color(Color32::from_rgb(148, 163, 184)),
+                    .color(Color32::from_rgb(100, 116, 139)),
             );
         });
 }

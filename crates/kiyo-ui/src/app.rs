@@ -2,12 +2,25 @@ use crate::api::ApiClient;
 use crate::models::{ADMIN_NAV_TREE, EMPLOYEE_NAV_TREE, NavGroup, NavItem, NavNode, Session};
 use crate::native_text;
 use crate::views::{
-    assets::AssetsView, attendance::AttendanceView, chat::ChatView, crm::CrmView,
-    dashboard::DashboardView, document_editor::DocumentEditorView,
-    employee_portal::EmployeePortalView, employees::EmployeesView, files::FilesView,
-    finance::FinanceView, insurance::InsuranceView, login::LoginView,
-    meeting_rooms::MeetingRoomsView, org_units::OrgUnitsView, settings::SettingsView,
-    signatures::SignaturesView, users::UsersView, workflows::WorkflowsView,
+    activation::{ActivationOutcome, ActivationView},
+    assets::AssetsView,
+    attendance::AttendanceView,
+    chat::ChatView,
+    crm::CrmView,
+    dashboard::DashboardView,
+    document_editor::DocumentEditorView,
+    employee_portal::EmployeePortalView,
+    employees::EmployeesView,
+    files::FilesView,
+    finance::FinanceView,
+    insurance::InsuranceView,
+    login::LoginView,
+    meeting_rooms::MeetingRoomsView,
+    org_units::OrgUnitsView,
+    settings::SettingsView,
+    signatures::SignaturesView,
+    users::UsersView,
+    workflows::WorkflowsView,
 };
 use egui::{Color32, Layout, RichText, Vec2};
 
@@ -23,6 +36,9 @@ pub struct KiyoApp {
 
     // Views
     pub login_view: LoginView,
+    pub activation_view: ActivationView,
+    pub show_activation: bool,
+    pub dashboard_view: DashboardView,
     pub users_view: UsersView,
     pub employees_view: EmployeesView,
     pub org_units_view: OrgUnitsView,
@@ -54,6 +70,9 @@ impl Default for KiyoApp {
             last_logged_pixels_per_point: None,
 
             login_view: LoginView::new(),
+            activation_view: ActivationView::default(),
+            show_activation: false,
+            dashboard_view: DashboardView::default(),
             users_view: UsersView::default(),
             employees_view: EmployeesView::default(),
             org_units_view: OrgUnitsView::default(),
@@ -80,20 +99,33 @@ impl eframe::App for KiyoApp {
         native_text::log_dpi_if_changed(&mut self.last_logged_pixels_per_point, ctx);
 
         if self.session.is_none() {
+            let endpoint = self.login_view.endpoint.clone();
+            let mode = self.login_view.mode;
+            let api = &self.api;
+            let show_activation = self.show_activation;
+            let login_view = &mut self.login_view;
+            let activation_view = &mut self.activation_view;
+            let mut activation_outcome = ActivationOutcome::None;
             egui::CentralPanel::default().show(ctx, |ui| {
-                if let Some(session) = self.login_view.render(ui, ctx, &self.api) {
-                    if session.user.role == "USER" {
-                        self.is_employee_mode = true;
-                        self.current_nav = NavItem::employee_home();
-                    } else {
-                        self.is_employee_mode = false;
-                        self.current_nav = NavItem::admin_dashboard();
-                    }
-                    self.session = Some(session);
+                if show_activation {
+                    activation_outcome = activation_view.render(ui, ctx, api, &endpoint, mode);
+                } else if let Some(session) = login_view.render(ui, ctx, api) {
+                    activation_outcome = ActivationOutcome::Authenticated(session);
                 }
             });
+            match activation_outcome {
+                ActivationOutcome::None => {}
+                ActivationOutcome::BackToLogin => self.show_activation = false,
+                ActivationOutcome::Authenticated(session) => self.accept_session(session),
+            }
+            if !self.show_activation && self.login_view.activation_requested {
+                self.login_view.activation_requested = false;
+                self.show_activation = true;
+            }
             return;
         }
+
+        let was_security_screen = self.current_nav.path.ends_with("/security");
 
         let user_name = self
             .session
@@ -202,6 +234,14 @@ impl eframe::App for KiyoApp {
             });
 
         if should_logout {
+            self.settings_view.clear_sensitive();
+            self.dashboard_view.reset();
+            self.files_view.reset();
+            self.users_view.reset();
+            self.employees_view.reset();
+            self.org_units_view.reset();
+            self.emp_view.reset();
+            self.activation_view.clear_sensitive();
             self.session = None;
             return;
         }
@@ -292,16 +332,22 @@ impl eframe::App for KiyoApp {
 
                         match self.current_nav.group {
                             NavGroup::Dashboard => {
-                                DashboardView::render(ui, session, &mut nav_change)
+                                self.dashboard_view.render(
+                                    ui,
+                                    ctx,
+                                    session,
+                                    &self.api,
+                                    &mut nav_change,
+                                )
                             }
                             NavGroup::Administration if self.current_nav.path == "/admin/users" => {
-                                self.users_view.render(ui, session)
+                                self.users_view.render(ui, session, &self.api)
                             }
                             NavGroup::Administration => {
                                 self.settings_view.render(ui, ctx, session, &self.api)
                             }
-                            NavGroup::Business => self.org_units_view.render(ui, session),
-                            NavGroup::Hr => self.employees_view.render(ui, session),
+                            NavGroup::Business => self.org_units_view.render(ui, session, &self.api),
+                            NavGroup::Hr => self.employees_view.render(ui, session, &self.api),
                             NavGroup::Attendance => self.attendance_view.render(ui, session),
                             NavGroup::Finance => self.finance_view.render(ui, session),
                             NavGroup::Crm => self.crm_view.render(ui, session),
@@ -309,9 +355,13 @@ impl eframe::App for KiyoApp {
                             NavGroup::MeetingRooms => self.rooms_view.render(ui, session),
                             NavGroup::Documents => self.doc_view.render(ui, session),
                             NavGroup::Insurance => self.ins_view.render(ui, session),
-                            NavGroup::Files | NavGroup::EmployeeFiles => {
-                                self.files_view.render(ui, session)
-                            }
+                            NavGroup::Files | NavGroup::EmployeeFiles => self.files_view.render(
+                                ui,
+                                ctx,
+                                session,
+                                &self.api,
+                                self.current_nav.group == NavGroup::EmployeeFiles,
+                            ),
                             NavGroup::Workflows
                             | NavGroup::EmployeeTasks
                             | NavGroup::EmployeeProposals => {
@@ -322,10 +372,17 @@ impl eframe::App for KiyoApp {
                                 self.sig_view.render(ui, session)
                             }
                             NavGroup::Settings | NavGroup::EmployeeSettings => {
-                                self.settings_view.render(ui, ctx, session, &self.api)
+                                if self.current_nav.path.ends_with("/security") {
+                                    self.settings_view
+                                        .render_security(ui, ctx, session, &self.api)
+                                } else {
+                                    self.settings_view.render(ui, ctx, session, &self.api)
+                                }
+                            }
+                            NavGroup::EmployeeProfile => {
+                                self.emp_view.render_profile(ui, session, &self.api)
                             }
                             NavGroup::EmployeeHome
-                            | NavGroup::EmployeeProfile
                             | NavGroup::EmployeeContracts
                             | NavGroup::EmployeeAssets
                             | NavGroup::EmployeeNotifications => {
@@ -348,6 +405,34 @@ impl eframe::App for KiyoApp {
                 self.current_nav = target;
             }
         });
+        if was_security_screen && !self.current_nav.path.ends_with("/security") {
+            self.settings_view.clear_sensitive();
+        }
+    }
+}
+
+impl KiyoApp {
+    pub fn with_activation_link(link_token: Option<String>) -> Self {
+        let mut app = Self {
+            show_activation: true,
+            activation_view: ActivationView::with_link_token(link_token),
+            ..Self::default()
+        };
+        app.login_view.endpoint = crate::models::StorageMode::KiyoCloud
+            .default_endpoint()
+            .to_owned();
+        app
+    }
+
+    fn accept_session(&mut self, session: Session) {
+        if session.user.role == "USER" {
+            self.is_employee_mode = true;
+            self.current_nav = NavItem::employee_home();
+        } else {
+            self.is_employee_mode = false;
+            self.current_nav = NavItem::admin_dashboard();
+        }
+        self.session = Some(session);
     }
 }
 

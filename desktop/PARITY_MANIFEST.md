@@ -11,7 +11,7 @@ Every reference route is accepted only when all of the following are true:
 2. The Rust API owns the required server behavior and authorization.
 3. Every user action has an equivalent result, validation, loading state and error state.
 4. ADMIN and Employee access are verified where relevant.
-5. Reference and app screenshots are compared at 1440x900, 1280x800 and 390x844.
+5. Reference and app screenshots are compared at 1440x900 and 1280x800 for desktop, plus 390x844 for browser.
 
 ## Feature groups
 
@@ -29,4 +29,4 @@ Every reference route is accepted only when all of the following are true:
 
 ## Current status
 
-The independent login, desktop shell, dashboard and initial user management slice exist. No other group is accepted as complete until the acceptance rule has been met.
+The independent login, desktop shell, dashboard and initial user management slice exist. Password change and authenticated file listing/folder creation have been added, but runtime interaction and visual checks remain outstanding. No group is accepted as complete until the acceptance rule has been met.

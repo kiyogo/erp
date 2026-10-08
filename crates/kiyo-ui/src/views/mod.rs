@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod activation;
 pub mod attendance;
 pub mod chat;
 pub mod crm;

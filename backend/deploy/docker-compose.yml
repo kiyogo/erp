@@ -15,7 +15,7 @@ services:
       - KIYO_API_DB_PATH=/app/data/kiyo.sqlite
       - KIYO_API_STORAGE_PATH=/app/data/files
       - KIYO_STATIC_DIR=/app/dist
-      - KIYO_JWT_SECRET=${KIYO_JWT_SECRET:-change-this-very-long-secret-key-32-chars-minimum}
+      - KIYO_JWT_SECRET=${KIYO_JWT_SECRET:?set-a-unique-secret-at-least-32-characters}
       - KIYO_BOOTSTRAP_ADMIN_EMAIL=${KIYO_BOOTSTRAP_ADMIN_EMAIL:?set-an-admin-email}
       - KIYO_BOOTSTRAP_ADMIN_PASSWORD=${KIYO_BOOTSTRAP_ADMIN_PASSWORD:?set-a-strong-password}
     volumes:

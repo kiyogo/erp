@@ -9,24 +9,24 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Docker-brightgreen)](#)
 
-*Giải pháp phần mềm quản trị doanh nghiệp độc lập 100% (tương tự mô hình aaPanel / On-Premise) — Triển khai trực tiếp lên máy chủ riêng, tự trỏ tên miền, toàn quyền kiểm soát dữ liệu và vận hành không phụ thuộc bên thứ 3.*
+*Ứng dụng đang được chuyển từ `legacy/` sang Rust. Kiến trúc đích là self-hosted; chưa đủ parity để triển khai production.*
 
 </div>
 
 ---
 
-## 🌟 ĐẶC ĐIỂM NỔI BẬT
+## Trạng thái triển khai
 
-- 🔒 **Tự trị & Bảo mật dữ liệu 100%**: Cơ sở dữ liệu SQLite/PostgreSQL và hệ thống tệp tin lưu trữ hoàn toàn trên máy chủ của bạn. Không gửi bất kỳ dữ liệu định danh hay token nào ra ngoài.
-- ⚡ **Backend Rust Hiệu năng cao**: Xây dựng trên nền tảng **Rust + Axum + Tokio**, khởi động tức thì, tiêu thụ cực ít RAM/CPU và miễn nhiễm với lỗi rò rỉ bộ nhớ.
-- 🎨 **Một giao diện Rust dùng chung**: `kiyo-ui` viết bằng **Rust + egui**, build được thành ứng dụng native Windows, Linux, macOS và WebAssembly, không nhân đôi màn hình giữa các nền tảng.
-- 📄 **Canvas Document Editor độc quyền**: Bộ soạn thảo văn bản WYSIWYG chạy 100% trên **HTML5 Canvas 2D Dual-Layer**, hỗ trợ phân trang toán học (Deterministic Multi-page), gõ tiếng Việt Telex/VNI, bảng biểu và lịch sử giao dịch Atomic Undo/Redo.
-- 👤 **Sinh trắc học & eKYC số**: Quét và bóc tách thông tin thẻ CCCD (OCR `tesseract.js` + quét QR `jsqr`), đối chiếu khuôn mặt & kiểm tra người thật (Face Liveness bằng `TensorFlow.js` / `BlazeFace`).
-- 🚀 **Phục vụ trọn gói All-in-One**: Một binary Rust duy nhất vừa xử lý API vừa phục vụ trực tiếp giao diện WebAssembly, không bắt buộc cài đặt Node.js/Nginx cho môi trường chạy nhanh.
+- `backend/` là Rust/Axum với SQLite và lưu tệp trên máy chủ; **không có PostgreSQL**.
+- `crates/kiyo-ui/` là UI Rust/egui dùng chung cho `desktop/` và `web/`; bản web vẽ trong canvas.
+- Đăng nhập, đổi mật khẩu và danh sách/tạo thư mục đang được nối API thật. Nhiều màn hình khác vẫn là scaffold hoặc dùng dữ liệu minh họa.
+- Document editor, cộng tác, chat, eKYC, chữ ký số, chia sẻ file và nhiều phân hệ nghiệp vụ **chưa đạt parity** với `legacy/`.
+- API và bundle web là hai artifact build riêng; server Rust có thể phục vụ bundle tĩnh sau khi build.
+- [Ma trận chuyển đổi](docs/MIGRATION_MATRIX.md) ghi bằng chứng và việc còn thiếu. Chưa kiểm chứng chạy thực tế trên Linux/macOS hoặc triển khai production.
 
 ---
 
-## 📦 CÁC PHÂN HỆ NGHIỆP VỤ CHÍNH
+## 📦 CÁC PHÂN HỆ NGHIỆP VỤ MỤC TIÊU (CHƯA ĐẦY ĐỦ)
 
 | Phân hệ | Chức năng chính |
 | :--- | :--- |
@@ -42,7 +42,7 @@
 ## 📁 CẤU TRÚC THƯ MỤC DỰ ÁN
 
 ```text
-kiyodn/
+apwdnt/
 ├── backend/                  # Rust API + Auth + SQLite + File Storage
 │   ├── Cargo.toml            # Cấu hình Crate 'kiyo-server'
 │   ├── src/main.rs           # Core Entrypoint (Axum router, SQLite DB, JWT Auth, Static File Server)
@@ -84,41 +84,34 @@ kiyodn/
 ```bash
 cargo run -p kiyo-server
 ```
-> Server sẽ tự động khởi tạo database tại `data/kiyo.sqlite` và tạo tài khoản Admin mặc định (`admin@kiyo.local`). Mặc định lắng nghe tại: `http://localhost:3001`.
+> Server dùng SQLite tại `data/kiyo-cloud.sqlite` nếu chưa đặt `KIYO_API_DB_PATH`, tạo tài khoản admin khi database trống và mặc định lắng nghe cổng 3001. Trước lần khởi động đầu tiên (kể cả debug), phải đặt `KIYO_BOOTSTRAP_ADMIN_PASSWORD` (12–256 ký tự) và `KIYO_JWT_SECRET` (ít nhất 32 ký tự) trong môi trường; mật khẩu không được in vào log.
 
 ### 2. Khởi chạy Desktop native:
 ```bash
 cargo run -p kiyo-admin-desktop
 ```
 
-### 3. Khởi chạy WebAssembly:
+### 3. Build và chạy WebAssembly cùng backend:
 ```bash
 cd web
-trunk serve
+trunk build
+cd ..
+# Đặt KIYO_STATIC_DIR=web/dist trong môi trường của tiến trình backend.
+cargo run -p kiyo-server
 ```
-> WebAssembly dùng cùng `crates/kiyo-ui` với desktop và gọi backend qua `/api/v1`.
+> Mở `http://localhost:3001` khi backend đang phục vụ `web/dist`. WebAssembly dùng cùng `crates/kiyo-ui` với desktop và gọi API tương đối `/api/v1`. `trunk serve` riêng lẻ chưa được cấu hình proxy API. Để phát triển khác origin, đặt `KIYO_CORS_ORIGIN` bằng đúng origin của dev server; mặc định backend không phát CORS cho origin khác.
 
 ---
 
-## 🚀 HƯỚNG DẪN TRIỂN KHAI CHO KHÁCH HÀNG (PRODUCTION / ON-PREMISE)
+## 🚀 BẢN NHÁP TRIỂN KHAI (CHƯA KIỂM CHỨNG PRODUCTION)
+
+Các script trong `backend/deploy/` là bản nháp. Cần kiểm tra bảo mật, dịch vụ, TLS, sao lưu/khôi phục và luồng cài đặt trên hệ điều hành đích trước khi dùng cho dữ liệu thật.
 
 ### Cách 1: Cài đặt tự động trên Linux (Ubuntu / Debian / CentOS / Rocky)
-1. Build mã nguồn trước hoặc tải gói Release:
-   ```bash
-# Build WebAssembly UI
-cd web
-trunk build --release
-# Quay lại root rồi build backend
-cd ..
-# Build Backend
-cargo build -p kiyo-server --release
-   ```
-2. Copy binary `kiyo-server`, thư mục `dist` và `backend/deploy` lên máy chủ.
-3. Chạy script cài đặt 1 chạm:
-   ```bash
-   sudo bash deploy/install.sh
-   ```
-4. Kiểm tra trạng thái dịch vụ:
+1. Build từ repository: `cd web && trunk build --release`, sau đó quay lại root và chạy `cargo build -p kiyo-server --release`.
+2. Tạo gói staging gồm `target/release/kiyo-server`, `web/dist/` (đặt tên `dist/`) và `backend/deploy/install.sh`. Script Linux tìm binary và `dist/` **trong thư mục hiện hành**, không tự lấy từ `target/` hay `web/`.
+3. Kiểm tra script, biến môi trường và quyền truy cập dữ liệu trước khi chạy. Từ chính thư mục staging, có thể thử `sudo bash install.sh` trên máy thử; chưa có bằng chứng chạy thành công trên Linux production.
+4. Kiểm tra trạng thái dịch vụ thử nghiệm:
    ```bash
    systemctl status kiyo
    journalctl -u kiyo -f
@@ -127,7 +120,7 @@ cargo build -p kiyo-server --release
 ---
 
 ### Cách 2: Cài đặt trên Windows Server
-Mở PowerShell dưới quyền Administrator và thực thi:
+Script Windows hiện mới tạo `.env` và copy artifact; tiến trình chạy thủ công không tự đọc `.env`, nên cần nạp các biến môi trường tương ứng trước khi khởi động. Mở PowerShell dưới quyền Administrator và chỉ thử trên máy thử sau khi đã kiểm tra script:
 ```powershell
 powershell -ExecutionPolicy Bypass -File backend\deploy\install.ps1
 ```
@@ -162,14 +155,15 @@ docker compose -f backend/deploy/docker-compose.yml up -d --build
 
 | Biến môi trường | Mặc định | Mô tả |
 | :--- | :--- | :--- |
-| `KIYO_API_HOST` | `0.0.0.0` | Địa chỉ IP máy chủ lắng nghe kết nối |
+| `KIYO_API_HOST` | `127.0.0.1` | Địa chỉ IP máy chủ lắng nghe; chỉ đặt `0.0.0.0` khi đã cấu hình bảo vệ mạng/TLS |
 | `KIYO_API_PORT` | `3001` | Cổng dịch vụ Web & API |
-| `KIYO_API_DB_PATH` | `data/kiyo.sqlite` | Vị trí lưu trữ cơ sở dữ liệu SQLite |
+| `KIYO_API_DB_PATH` | `data/kiyo-cloud.sqlite` | Vị trí lưu trữ cơ sở dữ liệu SQLite |
 | `KIYO_API_STORAGE_PATH`| `data/files` | Thư mục lưu trữ tệp tin upload / Cloud Drive |
-| `KIYO_STATIC_DIR` | `dist` | Thư mục chứa bundle WebAssembly/static web |
-| `KIYO_JWT_SECRET` | *(Random trên Prod)* | Khóa bí mật mã hóa JWT Token (tối thiểu 32 ký tự) |
+| `KIYO_STATIC_DIR` | `dist` nếu tồn tại, nếu không là `static` | Thư mục chứa bundle WebAssembly/static web; khi build từ `web/`, đặt `web/dist` |
+| `KIYO_CORS_ORIGIN` | không đặt | Một origin HTTP(S) được cho phép gọi API từ trình duyệt khác origin; không chấp nhận `*` |
+| `KIYO_JWT_SECRET` | *(Bắt buộc mọi môi trường)* | Khóa bí mật ký JWT (tối thiểu 32 ký tự) |
 | `KIYO_BOOTSTRAP_ADMIN_EMAIL` | `admin@kiyo.local` | Email của tài khoản Super Admin ban đầu |
-| `KIYO_BOOTSTRAP_ADMIN_PASSWORD` | *(Auto-generated)* | Mật khẩu tài khoản Super Admin ban đầu |
+| `KIYO_BOOTSTRAP_ADMIN_PASSWORD` | *(Bắt buộc lúc tạo database ban đầu)* | Mật khẩu tài khoản Super Admin ban đầu, 12–256 ký tự |
 
 ---
 
