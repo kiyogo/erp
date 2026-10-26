@@ -1632,7 +1632,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
                   <div>
                     <span style={{ color: '#64748B' }}>Độ trùng khớp khuôn mặt:</span>
                     <div style={{ fontWeight: 700, color: viewingIdentity.faceMatchScore ? '#16A34A' : '#94A3B8' }}>
-                      {viewingIdentity.faceMatchScore ? `${viewingIdentity.faceMatchScore}% (Biometric FaceMatch OK)` : 'Chưa có dữ liệu'}
+                      {viewingIdentity.faceMatchScore ? `${viewingIdentity.faceMatchScore}%` : 'Chưa có dữ liệu'}
                     </div>
                   </div>
                 </div>

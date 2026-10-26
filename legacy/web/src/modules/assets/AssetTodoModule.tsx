@@ -648,7 +648,7 @@ export const AssetTodoModule: React.FC = () => {
               <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 10, background: '#F8FAFC' }}>
                 <div style={{ fontSize: 11, color: '#64748B' }}>THỜI GIAN THỰC HIỆN</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', marginTop: 2 }}>
-                  {detailItem.actualHours > 0 ? `${detailItem.actualHours} giờ (Thực tế)` : `${detailItem.estimatedHours} giờ (Dự kiến)`}
+                  {detailItem.actualHours > 0 ? `Thực tế: ${detailItem.actualHours} giờ` : `Dự kiến: ${detailItem.estimatedHours} giờ`}
                 </div>
                 <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Cán bộ: {detailItem.assignedStaff}</div>
               </div>

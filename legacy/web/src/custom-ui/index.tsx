@@ -3135,8 +3135,8 @@ export const Modal: ModalComponent = ({
             boxSizing: 'border-box',
             zIndex: 10002,
             overflow: 'visible',
-            padding: 8,
-            gap: 8,
+            padding: 16,
+            gap: 16,
             border: 'none',
             ...style,
             top: undefined,
@@ -3189,8 +3189,8 @@ export const Modal: ModalComponent = ({
           )}
 
           {title && (
-            <div className="ant-modal-header" style={{ padding: 0, fontWeight: 600, fontSize: 15, lineHeight: '22px', border: 'none', borderBottom: 'none', margin: 0, ...(styles?.header || {}) }}>
-              <div className="ant-modal-title" style={{ color: styles?.header?.color || 'var(--antd-text)', fontSize: 15, fontWeight: 600, lineHeight: '22px' }}>{title}</div>
+            <div className="ant-modal-header" style={{ padding: 0, fontWeight: 600, fontSize: 16, lineHeight: '24px', border: 'none', borderBottom: 'none', margin: 0, ...(styles?.header || {}) }}>
+              <div className="ant-modal-title" style={{ color: styles?.header?.color || 'var(--antd-text, #0F172A)', fontSize: 16, fontWeight: 600, lineHeight: '24px', margin: 0, padding: 0 }}>{title}</div>
             </div>
           )}
 
@@ -3208,6 +3208,9 @@ export const Modal: ModalComponent = ({
               pointerEvents: isBusy ? 'none' : 'auto',
               border: 'none',
               margin: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
               ...bodyStyle,
               ...(styles?.body || {}),
             }}
@@ -3218,7 +3221,7 @@ export const Modal: ModalComponent = ({
           </div>
 
           {footer !== null && (
-            <div className="ant-modal-footer" style={{ padding: 0, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 8, border: 'none', borderTop: 'none', margin: 0, ...(styles?.footer || {}) }}>
+            <div className="ant-modal-footer" style={{ padding: 0, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 12, border: 'none', borderTop: 'none', margin: 0, ...(styles?.footer || {}) }}>
               {footer !== undefined ? (
                 footer
               ) : (

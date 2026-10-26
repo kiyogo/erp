@@ -3670,7 +3670,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
               <div
                 className="w-[90px] h-[18px] flex items-center cursor-pointer select-none touch-none px-1"
                 onPointerDown={handleZoomSliderPointerDown}
-                title={`Thu phóng: ${zoom}% (Kéo để điều chỉnh)`}
+                title={`Thu phóng: ${zoom}%`}
               >
                 <div className="w-full h-[4px] bg-[#CBD5E1] rounded-full relative">
                   <div className="h-full bg-[#0F6CBD] rounded-full" style={{ width: `${Math.max(0, Math.min(100, (zoom - 10) / 190 * 100))}%` }} />

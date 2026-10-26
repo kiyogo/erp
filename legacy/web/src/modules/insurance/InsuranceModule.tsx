@@ -309,7 +309,7 @@ export const InsuranceModule: React.FC = () => {
             {currentMonthPayable.toLocaleString('vi-VN')} ₫
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>
-            {hasContributionData ? `${currentContribution?.period} · tỷ lệ cấu hình 32% (DN 21.5% + NLĐ 10.5%)` : 'Chưa có dữ liệu payroll để tính kỳ đóng bảo hiểm'}
+            {hasContributionData ? `${currentContribution?.period} · tỷ lệ cấu hình 32%, trong đó DN 21.5% và NLĐ 10.5%` : 'Chưa có dữ liệu payroll để tính kỳ đóng bảo hiểm'}
           </div>
         </div>
 

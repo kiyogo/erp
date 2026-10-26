@@ -442,7 +442,7 @@ export const CertificatesModule: React.FC = () => {
               <Button
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đã lập hồ sơ tài trợ ôn thi gia hạn (Recertification) cho ${selectedCert.employeeName}`)}
+                onClick={() => message.success(`Đã lập hồ sơ tài trợ ôn thi gia hạn cho ${selectedCert.employeeName}`)}
               >
                 Cấp Kinh Phí Thi Gia Hạn
               </Button>

@@ -1634,7 +1634,7 @@ const Files: React.FC = () => {
 
       <Modal title={t('files.modalPermTitle')} open={permOpen} onOk={handlePermission} onCancel={() => setPermOpen(false)} okText={t('common.save')} cancelText={t('common.cancel')}>
         <Form form={permForm} layout="vertical" style={{ marginTop: 12 }}>
-          <Form.Item name="permission" label={`${t('files.columnPermission')} (ex: 755, 644)`}><Input placeholder="755" /></Form.Item>
+          <Form.Item name="permission" label={t('files.columnPermission')}><Input placeholder="755" /></Form.Item>
           <Form.Item name="owner" label={t('common.owner')}><Input placeholder="www-data" /></Form.Item>
           <Form.Item name="group" label={t('common.group')}><Input placeholder="www-data" /></Form.Item>
         </Form>

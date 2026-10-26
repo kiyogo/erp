@@ -1760,11 +1760,11 @@ textarea.ant-input {
 }
 
 /* ============================================================
-   Dialog & Modal System: 100% Divider Line Removal & Uniform 8px Spacing
+   Dialog & Modal System: 100% Divider Line Removal & Uniform 16px Spacing
    ============================================================ */
 .ant-modal {
-  padding: 8px !important;
-  gap: 8px !important;
+  padding: 16px !important;
+  gap: 16px !important;
   display: flex !important;
   flex-direction: column !important;
   border: none !important;
@@ -1790,15 +1790,39 @@ textarea.ant-input {
   margin: 0 !important;
 }
 
+.ant-modal-title {
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 16px !important;
+  line-height: 24px !important;
+  color: var(--antd-text, #0F172A) !important;
+}
+
 .ant-modal-body {
   padding: 0 !important;
   margin: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 16px !important;
+}
+
+.ant-modal form,
+.ant-modal .ant-form,
+.ant-modal .ant-modal-body > form,
+.ant-modal .ant-modal-body > .ant-form {
+  margin: 0 !important;
+  margin-top: 0 !important;
+  padding: 0 !important;
+  padding-top: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 16px !important;
 }
 
 .ant-modal-footer {
   padding: 0 !important;
   margin: 0 !important;
-  gap: 8px !important;
+  gap: 12px !important;
   display: flex !important;
   justify-content: flex-end !important;
   align-items: center !important;
@@ -1810,19 +1834,22 @@ textarea.ant-input {
 
 .ant-modal .k-form-grid-2,
 .ant-modal .k-form-grid-3,
-.ant-modal .k-form-grid-4 {
-  gap: 8px !important;
+.ant-modal .k-form-grid-4,
+.ant-modal [style*="gridTemplateColumns"],
+.ant-modal [style*="grid-template-columns"] {
+  gap: 16px !important;
 }
 
 .ant-modal .ant-form-item {
-  margin-bottom: 8px !important;
+  margin-bottom: 0 !important;
 }
 
 .ant-modal .ant-modal-body > div[style*="flexDirection: column"],
 .ant-modal .ant-modal-body > div[style*="flex-direction: column"],
 .ant-modal .ant-modal-body > div[style*="flexDirection: 'column'"] {
-  gap: 8px !important;
+  gap: 16px !important;
   padding-top: 0 !important;
+  margin-top: 0 !important;
 }
 
 .ant-modal-body::-webkit-scrollbar,

@@ -312,8 +312,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         footer={null}
         width={640}
       >
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Form form={form} layout="vertical" onFinish={handleCreate}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <Form.Item name="type" label="Loại chứng từ" rules={[{ required: true }]}>
               <Select
                 options={[
@@ -340,7 +340,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             <Input placeholder="Ví dụ: Thu tiền quyết toán hợp đồng phần mềm hoặc Chi trả tiền thuê văn phòng..." />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <Form.Item name="amount" label="Số tiền thanh toán (VNĐ)" rules={[{ required: true }]}>
               <Input type="number" min={1000} step={500000} />
             </Form.Item>
@@ -349,7 +349,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <Form.Item name="recipientOrPayer" label="Đối tác / Người nộp hoặc nhận" rules={[{ required: true }]}>
               <Input placeholder="Tên khách hàng, đối tác hoặc nhân sự" />
             </Form.Item>

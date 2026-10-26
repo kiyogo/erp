@@ -991,7 +991,7 @@ export function generateWordViewerHtml(
           <button type="button" class="r-btn" onclick="document.execCommand('hiliteColor',false,'#FEF08A')" title="Tô sáng"><span style="background:#FEF08A;color:#000;padding:0 2px;">🖍</span></button>
         </div>
       </div>
-      <div class="ribbon-group-label">Phông chữ (Font)</div>
+      <div class="ribbon-group-label">Phông chữ</div>
     </div>
 
     <!-- Paragraph Group (Clean SVG Icons) -->
@@ -1022,7 +1022,7 @@ export function generateWordViewerHtml(
           </button>
         </div>
       </div>
-      <div class="ribbon-group-label">Đoạn văn (Paragraph)</div>
+      <div class="ribbon-group-label">Đoạn văn</div>
     </div>
 
     <!-- Admin Blocks -->
@@ -1039,7 +1039,7 @@ export function generateWordViewerHtml(
   <div class="word-ribbon-bar" id="ribbonInsert" style="display:none;">
     <!-- Table Grid Popup -->
     <div class="ribbon-group" style="position:relative;">
-      <button type="button" class="r-pill" onclick="toggleTableMenu(event)">📊 Chèn Bảng (Grid ▾)</button>
+      <button type="button" class="r-pill" onclick="toggleTableMenu(event)">📊 Chèn Bảng</button>
       <div id="tableGridPopup" style="display:none; position:absolute; top:100%; left:0; z-index:100099; background:#FFFFFF; border:1px solid #CBD5E1; border-radius:6px; padding:10px; width:220px; box-shadow:0 8px 24px rgba(0,0,0,0.15);" onclick="event.stopPropagation()">
         <div id="gridTitle" style="font-size:12px; font-weight:bold; color:#0F172A; margin-bottom:6px;">Chọn kích thước bảng</div>
         <div id="tableGridCells" style="display:grid; grid-template-columns:repeat(8, 20px); gap:4px;"></div>
@@ -1117,7 +1117,7 @@ export function generateWordViewerHtml(
 
   <!-- Bottom Status Bar -->
   <div class="word-status-bar">
-    <div><span id="pageIndicator">Trang 1 / 1</span> • <span id="docStats">Đang đếm từ...</span> • Tiếng Việt (100% Chuẩn Văn Bản)</div>
+    <div><span id="pageIndicator">Trang 1 / 1</span> • <span id="docStats">Đang đếm từ...</span> • Tiếng Việt</div>
     <div>Thu phóng: 100%</div>
   </div>
 

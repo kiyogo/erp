@@ -117,7 +117,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           action: onToggleRuler,
         },
         { type: 'divider' },
-        { label: `${Math.round(zoom * 100)}% (Thu phóng)`, action: () => {} },
+        { label: `${Math.round(zoom * 100)}%`, action: () => {} },
         { label: '  50%', action: () => onSetZoom(0.5) },
         { label: '  75%', action: () => onSetZoom(0.75) },
         { label: '  90%', action: () => onSetZoom(0.9) },

@@ -60,7 +60,7 @@ export const CloudDriveModule: React.FC = () => {
 
   useEffect(() => {
     dataService.fetchOrgUnitsList().then((units) => {
-      setOrgUnitOptions(units.map((u) => ({ label: `${u} (Chỉ riêng đơn vị)`, value: u })));
+      setOrgUnitOptions(units.map((u) => ({ label: `${u} — Chỉ riêng đơn vị`, value: u })));
     });
   }, []);
 

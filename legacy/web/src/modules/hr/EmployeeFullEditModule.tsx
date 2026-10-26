@@ -5688,7 +5688,7 @@ export const EmployeeFullEditModule: React.FC = () => {
           </div>
         }
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="k-form-grid-2">
             <div>
               <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
