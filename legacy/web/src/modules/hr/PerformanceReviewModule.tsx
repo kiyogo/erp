@@ -104,7 +104,8 @@ export const PerformanceReviewModule: React.FC = () => {
 
   const totalBonus = data.reduce((sum, item) => sum + (Number(item.kpiBonus) || 0), 0);
   const excellentCount = data.filter((d) => d.grade?.startsWith('A+')).length;
-  const avgScore = data.length > 0 ? (data.reduce((sum, item) => sum + item.managerScore, 0) / data.length).toFixed(1) : '0.0';
+  const scored = data.filter(item => item.managerScore !== null && item.managerScore !== undefined && Number.isFinite(Number(item.managerScore)));
+  const avgScore = scored.length ? (scored.reduce((sum, item) => sum + Number(item.managerScore), 0) / scored.length).toFixed(1) : 'Chưa có điểm';
 
   const handleCreate = async (values: any) => {
     if (saving) return;
@@ -211,6 +212,7 @@ export const PerformanceReviewModule: React.FC = () => {
       key: 'grade',
       width: 150,
       render: (grade: string) => {
+        grade = grade || 'Chưa xếp loại';
         let color = 'default';
         if (grade.startsWith('A+')) color = 'gold';
         else if (grade.startsWith('A')) color = 'green';
@@ -389,10 +391,10 @@ export const PerformanceReviewModule: React.FC = () => {
               <Input placeholder="Ví dụ: Quý 4 / 2026" />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban" rules={[{ required: true }]}>
-              <Select
+              {deptOptions.length ? <Select
                 options={deptOptions}
                 placeholder="Chọn phòng ban..."
-              />
+              /> : <Input placeholder="Nhập phòng ban tại kỳ đánh giá" />}
             </Form.Item>
           </div>
 

@@ -48,7 +48,7 @@ async function fixture(failLoad = false) {
   const input = value => nodes().find(node => node.type === ui.Input && node.props.value === value);
   const tick = () => new Promise(resolve => setImmediate(resolve));
   render(); await tick(); render();
-  return { render, button, input, nodes, text, ui, writes, messages, downloads, tick, release: () => release(), failSave: value => { failSave = value; } };
+  return { render, button, input, nodes, text: (node = tree) => text(node), ui, writes, messages, downloads, tick, release: () => release(), failSave: value => { failSave = value; } };
 }
 
 test('company settings load real fields, await persistence, preserve failure state and export actual profile without passwords', async () => {

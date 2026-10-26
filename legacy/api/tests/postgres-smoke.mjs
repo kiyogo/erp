@@ -95,6 +95,10 @@ try {
   const word = await fetch(`${base}/files/${contract.fileNodeId}/download`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(word.status, 200);
   assert.equal(Buffer.from(await word.arrayBuffer()).readUInt32LE(0), 0x04034b50); completed++;
+  await request('/collections/hr_performance_reviews', 'POST', { record: { key: 'pg-review', code: 'PG-DG-1', employeeId: login.user.id, evaluatorId: login.user.id, department: 'PG', period: 'PG period', selfScore: 0, managerScore: 100, productivityScore: 0, disciplineScore: 0, innovationScore: 0, kpiBonus: 0 } }, 201);
+  const review = (await request('/collections/hr_performance_reviews/pg-review', 'PATCH', { patch: { status: 'Đã hoàn tất đánh giá' } })).record;
+  assert.equal(review.managerScore, 0); assert.equal(review.grade, 'C (Cần cải thiện)'); assert.equal(review.approvedById, login.user.id);
+  await request('/collections/hr_performance_reviews/pg-review', 'DELETE', undefined, 422); completed++;
   const sessions = await request('/admin/sessions');
   const current = sessions.data.find(item => item.current);
   assert.ok(current);
