@@ -148,7 +148,7 @@ export function buildPkcs7Signature(
 ): Uint8Array {
   const sDate = signingDate || new Date();
   const dBytes = digestBytes || new Uint8Array(32).fill(0x5a);
-  const caProvider = providerName || 'VIETTEL-CA (Tập đoàn Viettel)';
+  const caProvider = providerName || 'VIETTEL-CA';
 
   // 1. OIDs
   const oidSignedData = derOid('1.2.840.113549.1.7.2');
@@ -277,7 +277,7 @@ export async function signPdfFile(
   let basePdfBytes = pdfBytes;
   const signingDate = new Date();
   const certNumber = `5401 0108 9998 ${String(Date.now()).slice(-4)}`;
-  const caProvider = options?.provider || 'VIETTEL-CA (Tập đoàn Viettel)';
+  const caProvider = options?.provider || 'VIETTEL-CA';
 
   // Loại bỏ dấu tiếng Việt cho các trường PDF ASCII cơ bản
   const cleanSigner = signerName

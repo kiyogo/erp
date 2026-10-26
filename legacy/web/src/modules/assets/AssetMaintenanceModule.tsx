@@ -36,7 +36,7 @@ export interface MaintenanceItem {
   assetCodes: string;
   location: string;
   frequency: 'Hàng tháng' | 'Hàng quý (3 tháng)' | 'Định kỳ 6 tháng' | 'Hàng năm';
-  maintenanceType: 'Phòng ngừa định kỳ (PM)' | 'Kiểm định an toàn PCCC & Điện' | 'Nâng cấp bảo trì Firmware / Patch OS';
+  maintenanceType: 'Phòng ngừa định kỳ' | 'Kiểm định an toàn PCCC & Điện' | 'Nâng cấp bảo trì Firmware / Patch OS';
   slaLevel: 'SLA Platinum (4h)' | 'SLA Gold (8h)' | 'SLA Standard (24h)';
   lastDate: string;
   nextDate: string;
@@ -45,7 +45,7 @@ export interface MaintenanceItem {
   checklist: ChecklistTask[];
   estimatedBudget: number;
   actualCost: number;
-  status: 'Đã hoàn thành đúng lịch' | 'Sắp đến hạn (Trong 7 ngày)' | 'Quá hạn bảo dưỡng' | 'Đang tiến hành bảo dưỡng';
+  status: 'Đã hoàn thành đúng lịch' | 'Sắp đến hạn' | 'Quá hạn bảo dưỡng' | 'Đang tiến hành bảo dưỡng';
   healthScore: number;
   certificateCode: string;
   notes: string;
@@ -94,7 +94,7 @@ export const AssetMaintenanceModule: React.FC = () => {
     form.setFieldsValue({
       maintCode: `BD-2026-Q${data.length + 1}-0${data.length + 1}`,
       frequency: 'Hàng quý (3 tháng)',
-      maintenanceType: 'Phòng ngừa định kỳ (PM)',
+      maintenanceType: 'Phòng ngừa định kỳ',
       slaLevel: 'SLA Gold (8h)',
       location: 'Phòng Máy Chủ IDC Keangnam',
       responsibleEngineer: 'Trần Tuấn Anh (CTO)',
@@ -225,7 +225,7 @@ export const AssetMaintenanceModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Điểm sức khỏe hệ thống (Health)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Điểm sức khỏe hệ thống</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {avgHealthScore} / 100 điểm
           </div>
@@ -259,7 +259,7 @@ export const AssetMaintenanceModule: React.FC = () => {
             options={[
               { label: 'Tất cả trạng thái', value: 'all' },
               { label: 'Đã hoàn thành đúng lịch', value: 'Đã hoàn thành đúng lịch' },
-              { label: 'Sắp đến hạn (Trong 7 ngày)', value: 'Sắp đến hạn (Trong 7 ngày)' },
+              { label: 'Sắp đến hạn', value: 'Sắp đến hạn (Trong 7 ngày)' },
               { label: 'Quá hạn bảo dưỡng', value: 'Quá hạn bảo dưỡng' },
             ]}
           />
@@ -278,7 +278,7 @@ export const AssetMaintenanceModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất kế hoạch & lịch bảo dưỡng định kỳ (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất kế hoạch & lịch bảo dưỡng định kỳ')}>
             Xuất Excel
           </Button>
           <Button
@@ -328,7 +328,7 @@ export const AssetMaintenanceModule: React.FC = () => {
               ),
             },
             {
-              title: 'Kỳ bảo dưỡng (Lần trước ➔ Kế tiếp)',
+              title: 'Kỳ bảo dưỡng',
               key: 'dates',
               width: 200,
               render: (_: any, r: MaintenanceItem) => (
@@ -445,9 +445,9 @@ export const AssetMaintenanceModule: React.FC = () => {
             <Form.Item name="slaLevel" label="Cấp độ cam kết SLA" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'SLA Platinum (Ứng cứu 4h)', value: 'SLA Platinum (4h)' },
-                  { label: 'SLA Gold (Ứng cứu 8h)', value: 'SLA Gold (8h)' },
-                  { label: 'SLA Standard (Ứng cứu 24h)', value: 'SLA Standard (24h)' },
+                  { label: 'SLA Platinum', value: 'SLA Platinum (4h)' },
+                  { label: 'SLA Gold', value: 'SLA Gold (8h)' },
+                  { label: 'SLA Standard', value: 'SLA Standard (24h)' },
                 ]}
               />
             </Form.Item>
@@ -469,7 +469,7 @@ export const AssetMaintenanceModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="assetCodes" label="Mã các tài sản liên kết (Cách nhau bằng dấu phẩy)">
+            <Form.Item name="assetCodes" label="Mã các tài sản liên kết">
               <Input placeholder="Ví dụ: TS-FW-01, TS-FW-02" />
             </Form.Item>
           </div>
@@ -481,7 +481,7 @@ export const AssetMaintenanceModule: React.FC = () => {
             <Form.Item name="maintenanceType" label="Loại hình bảo dưỡng">
               <Select
                 options={[
-                  { label: 'Phòng ngừa định kỳ (PM)', value: 'Phòng ngừa định kỳ (PM)' },
+                  { label: 'Phòng ngừa định kỳ', value: 'Phòng ngừa định kỳ (PM)' },
                   { label: 'Kiểm định an toàn PCCC & Điện', value: 'Kiểm định an toàn PCCC & Điện' },
                   { label: 'Nâng cấp bảo trì Firmware / Patch OS', value: 'Nâng cấp bảo trì Firmware / Patch OS' },
                 ]}
@@ -545,7 +545,7 @@ export const AssetMaintenanceModule: React.FC = () => {
             {/* Health Score & Cert */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, background: '#F0FDF4' }}>
-                <div style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>ĐIỂM SỨC KHỎE (HEALTH)</div>
+                <div style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>ĐIỂM SỨC KHỎE</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 2 }}>
                   {detailItem.healthScore} / 100
                 </div>
@@ -644,7 +644,7 @@ export const AssetMaintenanceModule: React.FC = () => {
 
             <div>
               <label style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', display: 'block', marginBottom: 8 }}>
-                Checklist kiểm tra kỹ thuật (Đánh dấu các mục hoàn thành):
+                Checklist kiểm tra kỹ thuật:
               </label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 {checklistState.map((task, idx) => (

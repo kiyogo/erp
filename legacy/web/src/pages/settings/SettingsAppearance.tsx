@@ -161,7 +161,7 @@ export const SettingsAppearance: React.FC = () => {
     setDraft(defaultSettings);
     saveSettings(defaultSettings);
     setApplicationLanguage('vi');
-    message.info('Đã hoàn tác về cấu hình mặc định (Giao diện Sáng).');
+    message.info('Đã hoàn tác về cấu hình mặc định.');
   };
 
   const isDark = settings.theme === 'dark';
@@ -230,7 +230,7 @@ export const SettingsAppearance: React.FC = () => {
           </SettingCard>
 
           {/* 4. Kiểu menu Sidebar */}
-          <SettingCard icon={<MenuOutlined />} title="Kiểu menu Sidebar" description="Chuyển ngay giữa menu thả nổi (Flyout) và menu mở rộng (Accordion)." dark={isDark}>
+          <SettingCard icon={<MenuOutlined />} title="Kiểu menu Sidebar" description="Chuyển ngay giữa menu thả nổi và menu mở rộng." dark={isDark}>
             <OptionButton icon={<MenuOutlined />} label="Accordion" selected={draft.sidebarMenuMode === 'accordion'} onClick={() => applySettingLive({ sidebarMenuMode: 'accordion' })} dark={isDark} />
             <OptionButton icon={<MenuOutlined />} label="Flyout" selected={draft.sidebarMenuMode === 'flyout'} onClick={() => applySettingLive({ sidebarMenuMode: 'flyout' })} dark={isDark} />
           </SettingCard>

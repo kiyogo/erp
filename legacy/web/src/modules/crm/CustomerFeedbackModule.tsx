@@ -227,7 +227,7 @@ export const CustomerFeedbackModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ số hài lòng khách hàng (CSAT)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ số hài lòng khách hàng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
             <StarFilled style={{ fontSize: 22 }} /> {avgRating} / 5.0 sao
           </div>
@@ -264,7 +264,7 @@ export const CustomerFeedbackModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả phản ánh' },
-            { key: '5sao', label: '5 Sao (Rất hài lòng)', icon: <StarOutlined style={{ color: '#F59E0B' }} /> },
+            { key: '5sao', label: '5 Sao', icon: <StarOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Đang xử lý', label: 'Đang xử lý', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Khẩn cấp', label: 'Khẩn cấp', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
           ].map((tab) => (
@@ -307,7 +307,7 @@ export const CustomerFeedbackModule: React.FC = () => {
                 feedbackCode: `FB-2026-0${data.length + 1}`,
                 rating: 5,
                 priority: 'Cao',
-                assignedStaff: 'Lê Hoàng Yến (Sales Lead)',
+                assignedStaff: 'Lê Hoàng Yến',
                 resolutionAction: 'Đã liên hệ trực tiếp và cập nhật phương án khắc phục',
               });
               setModalOpen(true);
@@ -340,11 +340,11 @@ export const CustomerFeedbackModule: React.FC = () => {
             <Form.Item name="rating" label="Đánh giá sao CSAT" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: '5 Sao (Rất hài lòng)', value: 5 },
-                  { label: '4 Sao (Hài lòng)', value: 4 },
-                  { label: '3 Sao (Bình thường)', value: 3 },
-                  { label: '2 Sao (Không hài lòng)', value: 2 },
-                  { label: '1 Sao (Rất thất vọng)', value: 1 },
+                  { label: '5 Sao', value: 5 },
+                  { label: '4 Sao', value: 4 },
+                  { label: '3 Sao', value: 3 },
+                  { label: '2 Sao', value: 2 },
+                  { label: '1 Sao', value: 1 },
                 ]}
               />
             </Form.Item>
@@ -371,9 +371,9 @@ export const CustomerFeedbackModule: React.FC = () => {
             <Form.Item name="priority" label="Độ ưu tiên" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Khẩn cấp (Xử lý ngay lập tức)', value: 'Khẩn cấp' },
-                  { label: 'Cao (Xử lý trong 4 giờ)', value: 'Cao' },
-                  { label: 'Trung bình (Xử lý trong 24 giờ)', value: 'Trung bình' },
+                  { label: 'Khẩn cấp', value: 'Khẩn cấp' },
+                  { label: 'Cao', value: 'Cao' },
+                  { label: 'Trung bình', value: 'Trung bình' },
                 ]}
               />
             </Form.Item>
@@ -397,7 +397,7 @@ export const CustomerFeedbackModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Phản Ánh & Biên Bản Xử Lý */}
       <Drawer
-        title="Biên Bản Tiếp Nhận &amp; Xử Lý Ý Kiến Khách Hàng (CSAT)"
+        title="Biên Bản Tiếp Nhận &amp; Xử Lý Ý Kiến Khách Hàng"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={580}
@@ -424,7 +424,7 @@ export const CustomerFeedbackModule: React.FC = () => {
             {/* Satisfaction Rating */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>
-                Đánh Giá Hài Lòng Khách Hàng (CSAT):
+                Đánh Giá Hài Lòng Khách Hàng:
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#F59E0B', fontSize: 16 }}>
                 {[...Array(5)].map((_, i) => (

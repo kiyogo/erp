@@ -52,7 +52,7 @@ export class InteractionRenderer {
     if (options.findHighlights) {
       for (const h of options.findHighlights) {
         if (h.pageIndex === pageIndex) {
-          ctx.fillStyle = h.isActive ? 'rgba(255, 152, 0, 0.55)' : 'rgba(255, 235, 59, 0.45)';
+          ctx.fillStyle = h.isActive ? 'rgba' : 'rgba';
           ctx.fillRect(h.rect.x, h.rect.y, h.rect.width, h.rect.height);
           if (h.isActive) {
             ctx.strokeStyle = '#E65100';
@@ -79,7 +79,7 @@ export class InteractionRenderer {
     // 3. Local Selection Highlights
     const pageSelections = options.selectionRects;
     if (pageSelections.length > 0) {
-      ctx.fillStyle = 'rgba(180, 215, 255, 0.45)'; // Google Docs selection blue
+      ctx.fillStyle = 'rgba'; // Google Docs selection blue
       for (const s of pageSelections) {
         ctx.fillRect(s.rect.x, s.rect.y, s.rect.width, s.rect.height);
       }

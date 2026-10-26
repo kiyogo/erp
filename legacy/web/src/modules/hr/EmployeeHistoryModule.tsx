@@ -573,7 +573,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
     } else {
       setBankOptions([
         { value: 'Vietcombank', label: 'Vietcombank (VCB)' },
-        { value: 'Techcombank', label: 'Techcombank (TCB)' },
+        { value: 'Techcombank', label: 'Techcombank' },
         { value: 'MBBank', label: 'MBBank (MB)' },
         { value: 'BIDV', label: 'BIDV' },
         { value: 'VietinBank', label: 'VietinBank' },
@@ -1198,7 +1198,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hồ sơ xác thực danh tính (eKYC)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hồ sơ xác thực danh tính</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {identityData.filter((i) => i.status === 'Đã xác thực').length} / {identityData.length} Đã xác thực
           </div>
@@ -1244,7 +1244,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
                 { label: 'Nghỉ việc / Thôi việc', value: 'Nghỉ việc' },
                 { label: 'Kỷ luật & Sự cố', value: 'Kỷ luật sự cố' },
                 { label: 'Ngân hàng / Thay đổi STK', value: 'Ngân hàng' },
-                { label: 'Xác thực danh tính (eKYC / CCCD)', value: 'Xác thực danh tính' },
+                { label: 'Xác thực danh tính', value: 'Xác thực danh tính' },
               ]}
             />
           )}
@@ -1419,7 +1419,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             </div>
             <div>
               <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#334155' }}>
-                Chủ tài khoản (viết hoa)
+                Chủ tài khoản
               </label>
               <Input
                 placeholder="NGUYEN VAN A"
@@ -1670,7 +1670,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       >
         <Form form={form} layout="vertical" onFinish={handleCreateHistory} style={{ marginTop: 12 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeId" label="Nhân viên (Mã · Họ tên)" rules={[{ required: true }]}>
+            <Form.Item name="employeeId" label="Nhân viên" rules={[{ required: true }]}>
               <Select showSearch placeholder="Chọn nhân viên" options={historyEmployees.map(employee => ({ value: employee.key, label: `${employee.code} · ${employee.name}` }))} onChange={employeeId => { const employee = historyEmployees.find(item => item.key === employeeId); form.setFieldsValue({ employeeName: employee?.name || '' }); }} />
             </Form.Item>
             <Form.Item name="employeeName" label="Họ và tên" rules={[{ required: true }]}>
@@ -1696,7 +1696,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="oldValue" label="Giá trị cũ (nếu có)">
+            <Form.Item name="oldValue" label="Giá trị cũ">
               <Input placeholder="VD: Chức vụ cũ, Phòng cũ..." maxLength={1000} />
             </Form.Item>
             <Form.Item name="newValue" label="Giá trị mới" rules={[{ required: true }]}>
@@ -1706,10 +1706,10 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="decisionNumber" label="Số Quyết định">
-              <Input placeholder="Số quyết định thực tế (nếu có)" maxLength={160} />
+              <Input placeholder="Số quyết định thực tế" maxLength={160} />
             </Form.Item>
             <Form.Item name="signer" label="Người ký">
-              <Input placeholder="Người ký quyết định thực tế (nếu có)" maxLength={200} />
+              <Input placeholder="Người ký quyết định thực tế" maxLength={200} />
             </Form.Item>
           </div>
 

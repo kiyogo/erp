@@ -249,7 +249,7 @@ export const UniformsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tồn kho đồng phục dự phòng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            120 Chiếc (Đủ size S-XXL)
+            120 Chiếc
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Luôn sẵn sàng cấp phát cho nhân sự mới</div>
         </div>
@@ -300,7 +300,7 @@ export const UniformsModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 code: `DP-2026/0${data.length + 1}`,
-                itemType: 'Áo Polo Doanh Nghiệp KIYOVN (Vải Cá Sấu Cotton)',
+                itemType: 'Áo Polo Doanh Nghiệp KIYOVN',
                 size: 'L',
                 quantity: 2,
                 department: 'Phòng Ban Kỹ Thuật',
@@ -349,26 +349,26 @@ export const UniformsModule: React.FC = () => {
           <Form.Item name="itemType" label="Loại đồng phục" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Áo Polo Doanh Nghiệp KIYOVN (Vải Cá Sấu Cotton)', value: 'Áo Polo Doanh Nghiệp KIYOVN' },
-                { label: 'Áo Hoodie & Polo Kỹ Thuật (Chống Tĩnh Điện IDC)', value: 'Áo Hoodie & Polo Kỹ Thuật' },
+                { label: 'Áo Polo Doanh Nghiệp KIYOVN', value: 'Áo Polo Doanh Nghiệp KIYOVN' },
+                { label: 'Áo Hoodie & Polo Kỹ Thuật', value: 'Áo Hoodie & Polo Kỹ Thuật' },
                 { label: 'Áo Sơ Mi & Vest Đồng Phục Công Sở Cao Cấp', value: 'Áo Sơ Mi & Vest Đồng Phục' },
               ]}
             />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="size" label="Kích cỡ (Size)" rules={[{ required: true }]}>
+            <Form.Item name="size" label="Kích cỡ" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Size S (Dưới 55kg)', value: 'S' },
-                  { label: 'Size M (55 - 65kg)', value: 'M' },
-                  { label: 'Size L (65 - 75kg)', value: 'L' },
-                  { label: 'Size XL (75 - 85kg)', value: 'XL' },
-                  { label: 'Size XXL (Trên 85kg)', value: 'XXL' },
+                  { label: 'Size S', value: 'S' },
+                  { label: 'Size M', value: 'M' },
+                  { label: 'Size L', value: 'L' },
+                  { label: 'Size XL', value: 'XL' },
+                  { label: 'Size XXL', value: 'XXL' },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="quantity" label="Số lượng cấp (Bộ)" rules={[{ required: true }]}>
+            <Form.Item name="quantity" label="Số lượng cấp" rules={[{ required: true }]}>
               <Input type="number" min={1} max={5} />
             </Form.Item>
           </div>
@@ -423,7 +423,7 @@ export const UniformsModule: React.FC = () => {
                   <strong>{selectedUniform.itemType}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Kích cỡ (Size chuẩn):</span>
+                  <span style={{ color: '#64748B' }}>Kích cỡ:</span>
                   <Tag color="geekblue" style={{ fontWeight: 700 }}>Size {selectedUniform.size}</Tag>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>

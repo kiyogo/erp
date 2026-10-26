@@ -471,7 +471,7 @@ export const AdminDropMenuModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="code" label={isPositionsGroup ? 'Mã chức danh' : 'Mã định danh'}>
-              <Input autoComplete="off" placeholder="Nhập mã (tùy chọn, không bắt buộc)..." allowClear />
+              <Input autoComplete="off" placeholder="Nhập mã..." allowClear />
             </Form.Item>
 
             <Form.Item name="order" label="Thứ tự hiển thị">
@@ -579,7 +579,7 @@ export const AdminDropMenuModule: React.FC = () => {
                 />
 
                 <span style={{ fontSize: 12, color: '#64748B' }}>
-                  (Bấm ô màu để mở phổ màu tự do)
+                  
                 </span>
               </div>
             </div>

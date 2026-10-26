@@ -108,7 +108,7 @@ export const DocumentArchivesModule: React.FC = () => {
       let file = uploadedScan;
       if (scanFile && !file) {
         if (scanFile.size < 1 || scanFile.size > 50 * 1024 * 1024) throw new Error('Tệp scan phải có dữ liệu và không quá 50 MB.');
-        if (!/\.(pdf|png|jpe?g|webp|tiff?)$/i.test(scanFile.name)) throw new Error('Chọn tệp PDF hoặc ảnh scan (PNG, JPG, WEBP, TIFF).');
+        if (!/\.(pdf|png|jpe?g|webp|tiff?)$/i.test(scanFile.name)) throw new Error('Chọn tệp PDF hoặc ảnh scan.');
         const workspace = await filesApi.list(undefined, false, true);
         if (!workspace.data.context?.parentId) throw new Error('Không tìm thấy thư mục được phép lưu tệp.');
         const uploaded = await filesApi.upload(scanFile, scanFile.name, workspace.data.context.parentId, 'doc_archives');
@@ -391,7 +391,7 @@ export const DocumentArchivesModule: React.FC = () => {
             Vào sổ văn thư
           </Button>
 
-          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('So_van_thu.xlsx', generateValidXlsxBlob([['Số vào sổ', 'Loại sổ', 'Số ký hiệu gốc', 'Thể loại', 'Đối tác', 'Trích yếu', 'Người ký', 'Chức danh', 'Người xử lý', 'Ngày văn bản', 'Ngày vào sổ', 'Hạn xử lý', 'Độ khẩn', 'Mức bảo mật', 'Số trang', 'Tệp scan gốc', 'Dung lượng (byte)', 'Trạng thái'], ...filteredData.map((record) => [record.bookNumber, record.dispatchType, record.originalCode, record.docType, record.partner, record.subject, record.signer, record.signerPosition, record.receiverOrAuthor, record.docDate, record.dateReceivedOrIssued, record.slaDeadline || '', record.urgency, record.securityLevel, record.pageCount ?? null, record.fileNodeId ? record.fileScan : '', record.fileSizeBytes ?? 0, displayStatus(record)])]))}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('So_van_thu.xlsx', generateValidXlsxBlob([['Số vào sổ', 'Loại sổ', 'Số ký hiệu gốc', 'Thể loại', 'Đối tác', 'Trích yếu', 'Người ký', 'Chức danh', 'Người xử lý', 'Ngày văn bản', 'Ngày vào sổ', 'Hạn xử lý', 'Độ khẩn', 'Mức bảo mật', 'Số trang', 'Tệp scan gốc', 'Dung lượng', 'Trạng thái'], ...filteredData.map((record) => [record.bookNumber, record.dispatchType, record.originalCode, record.docType, record.partner, record.subject, record.signer, record.signerPosition, record.receiverOrAuthor, record.docDate, record.dateReceivedOrIssued, record.slaDeadline || '', record.urgency, record.securityLevel, record.pageCount ?? null, record.fileNodeId ? record.fileScan : '', record.fileSizeBytes ?? 0, displayStatus(record)])]))}>
             Xuất Sổ
           </Button>
         </div>
@@ -404,7 +404,7 @@ export const DocumentArchivesModule: React.FC = () => {
 
       {/* MODAL: Đăng Ký Vào Sổ Văn Thư */}
       <Modal
-        title={editingRecord ? 'Chỉnh sửa hồ sơ văn thư' : 'Đăng Ký Vào Sổ Văn Thư (Đến / Đi)'}
+        title={editingRecord ? 'Chỉnh sửa hồ sơ văn thư' : 'Đăng Ký Vào Sổ Văn Thư'}
         open={modalOpen}
         onCancel={() => { if (!saving) setModalOpen(false); }}
         footer={null}
@@ -425,7 +425,7 @@ export const DocumentArchivesModule: React.FC = () => {
           }}
           style={{ marginTop: 14 }}
         >
-          <Form.Item name="bookNumber" label="Số vào sổ (để trống để cấp tự động)">
+          <Form.Item name="bookNumber" label="Số vào sổ">
             <Input readOnly={!!editingRecord} />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
@@ -513,7 +513,7 @@ export const DocumentArchivesModule: React.FC = () => {
             <Input type="date" />
           </Form.Item>
 
-          <Form.Item label="Tệp scan gốc (PDF hoặc ảnh, tối đa 50 MB)">
+          <Form.Item label="Tệp scan gốc">
             <Input key={fileInputKey} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff" disabled={saving} onChange={(event) => { setScanFile(event.target.files?.[0] || null); setUploadedScan(null); }} />
             <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>{uploadedScan ? `Đã tải lên kho: ${uploadedScan.name} (${formatFileSize(uploadedScan.sizeBytes)})` : scanFile ? `${scanFile.name} (${formatFileSize(scanFile.size)})` : editingRecord?.fileNodeId ? `Tệp hiện tại: ${editingRecord.fileScan}` : 'Chưa chọn tệp scan. Hồ sơ vẫn có thể lưu để bổ sung sau.'}</div>
           </Form.Item>

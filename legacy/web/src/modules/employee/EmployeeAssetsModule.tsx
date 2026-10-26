@@ -296,7 +296,7 @@ export const EmployeeAssetsModule: React.FC = () => {
               options={[
                 { label: 'Bảo trì / Sửa chữa phần cứng', value: 'Bảo trì sửa chữa' },
                 { label: 'Đổi mới thiết bị do xuống cấp', value: 'Đổi mới thiết bị' },
-                { label: 'Nâng cấp cấu hình (RAM, SSD, Card)', value: 'Nâng cấp cấu hình' },
+                { label: 'Nâng cấp cấu hình', value: 'Nâng cấp cấu hình' },
                 { label: 'Bàn giao hoàn trả lại công ty', value: 'Hoàn trả lại công ty' },
               ]}
             />

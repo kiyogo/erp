@@ -567,7 +567,7 @@ export const EmployeeFilesModule: React.FC = () => {
               <div style={{ background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 8, padding: '12px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#065F46', fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
                   <SafetyCertificateOutlined style={{ color: '#059669', fontSize: 16 }} />
-                  <span>Xác thực chữ ký số điện tử hợp lệ (PKI Root CA)</span>
+                  <span>Xác thực chữ ký số điện tử hợp lệ</span>
                 </div>
                 <div style={{ fontSize: 12, color: '#047857', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <div>Người ký: <span style={{ color: '#065F46' }}>Chưa đồng bộ</span></div>

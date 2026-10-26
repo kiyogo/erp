@@ -192,7 +192,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
   const [bankForm, setBankForm] = useState({
     employeeCode: `NV-${String(Date.now()).slice(-5)}`,
     employeeName: '',
-    bankName: 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
+    bankName: 'Ngân hàng TMCP Ngoại Thương VN',
     accountNumber: '',
     accountHolder: '',
     branch: '',
@@ -469,7 +469,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
     setBankForm({
       employeeCode: selectedEmp ? selectedEmp.code : currentEmpCode,
       employeeName: selectedEmp ? selectedEmp.name : currentEmpName,
-      bankName: 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
+      bankName: 'Ngân hàng TMCP Ngoại Thương VN',
       accountNumber: '',
       accountHolder: '',
       branch: '',
@@ -1377,7 +1377,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
                         const val = `${shortBank} - ${b?.accountNumber || ''}`;
                         return {
                           value: val,
-                          label: `${val}${b?.isPrimary ? ' (Chính)' : ''}`,
+                          label: `${val}${b?.isPrimary ? '' : ''}`,
                         };
                       });
                       const currentVal = form.getFieldValue('partyBBank');
@@ -1408,7 +1408,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
                   label="Mã định danh *"
                   rules={[{ required: true, message: 'Vui lòng nhập mã định danh' }]}
                 >
-                  <Input placeholder="Nhập mã định danh (NV-84920 / CG-001...)" />
+                  <Input placeholder="Nhập mã định danh" />
                 </Form.Item>
 
                 <Form.Item name="partyBIdNumber" label="Số căn cước công dân">
@@ -1463,7 +1463,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
                         const val = `${shortBank} - ${b?.accountNumber || ''}`;
                         return {
                           value: val,
-                          label: `${val}${b?.isPrimary ? ' (Chính)' : ''}`,
+                          label: `${val}${b?.isPrimary ? '' : ''}`,
                         };
                       });
                       const currentVal = form.getFieldValue('partyBBank');

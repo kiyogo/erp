@@ -243,11 +243,11 @@ export const AdminUsersModule: React.FC = () => {
       ),
     },
     {
-      title: 'Vai trò (Role)',
+      title: 'Vai trò',
       dataIndex: 'role',
       key: 'role',
       render: (r: string) => {
-        return <Tag color={r === 'ADMIN' ? 'purple' : 'cyan'}>{r === 'ADMIN' ? 'Quản trị viên (ADMIN)' : r === 'USER' ? 'Nhân viên (USER)' : r}</Tag>;
+        return <Tag color={r === 'ADMIN' ? 'purple' : 'cyan'}>{r === 'ADMIN' ? 'Quản trị viên' : r === 'USER' ? 'Nhân viên' : r}</Tag>;
       },
     },
     {
@@ -336,7 +336,7 @@ export const AdminUsersModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quản trị viên hệ thống (ADMIN)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quản trị viên hệ thống</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
             {adminCount} tài khoản
           </div>
@@ -448,8 +448,8 @@ export const AdminUsersModule: React.FC = () => {
           <Form.Item name="role" label="Vai trò hệ thống" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Quản trị viên (ADMIN)', value: 'ADMIN' },
-                { label: 'Nhân viên (USER)', value: 'USER' },
+                { label: 'Quản trị viên', value: 'ADMIN' },
+                { label: 'Nhân viên', value: 'USER' },
               ]}
             />
           </Form.Item>
@@ -460,7 +460,7 @@ export const AdminUsersModule: React.FC = () => {
               placeholder={departmentOptions.length ? 'Chọn phòng ban...' : 'Chưa có danh mục phòng ban'}
             />
           </Form.Item>
-          <Form.Item name="position" label="Chức danh công việc (không thay đổi quyền hệ thống)">
+          <Form.Item name="position" label="Chức danh công việc">
             <Input placeholder="Ví dụ: Ban Giám Đốc, Kế Toán Trưởng, Trưởng Phòng Nhân Sự..." />
           </Form.Item>
           <Form.Item name="twoFactor" label="Chính sách xác thực 2 bước (2FA)" initialValue="unsupported">

@@ -29,7 +29,7 @@ export interface EnterpriseSupplierEval {
   priceScore: number; // Max 20
   serviceScore: number; // Max 10
   totalScore: number; // Max 100
-  tier: 'Hạng A (Chiến lược)' | 'Hạng B (Đạt chuẩn)' | 'Hạng C (Cần cải thiện)';
+  tier: 'Hạng A' | 'Hạng B' | 'Hạng C';
   evalPeriod: string;
   evaluator: string;
   strengths?: string;
@@ -72,9 +72,9 @@ export const SupplierEvaluationModule: React.FC = () => {
     const p = Number(values.priceScore) || 18;
     const s = Number(values.serviceScore) || 8;
     const total = q + d + p + s;
-    let tr: EnterpriseSupplierEval['tier'] = 'Hạng B (Đạt chuẩn)';
-    if (total >= 90) tr = 'Hạng A (Chiến lược)';
-    else if (total < 75) tr = 'Hạng C (Cần cải thiện)';
+    let tr: EnterpriseSupplierEval['tier'] = 'Hạng B';
+    if (total >= 90) tr = 'Hạng A';
+    else if (total < 75) tr = 'Hạng C';
 
     const newEval: EnterpriseSupplierEval = {
       ...values,
@@ -133,7 +133,7 @@ export const SupplierEvaluationModule: React.FC = () => {
       ),
     },
     {
-      title: 'Chi tiết điểm thành phần (CL / TĐ / Giá / DV)',
+      title: 'Chi tiết điểm thành phần',
       key: 'breakdown',
       width: 250,
       render: (_: any, record: EnterpriseSupplierEval) => (
@@ -200,7 +200,7 @@ export const SupplierEvaluationModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhà cung cấp Hạng A (Chiến lược)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhà cung cấp Hạng A</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {tierACount} đối tác
           </div>
@@ -208,7 +208,7 @@ export const SupplierEvaluationModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhà cung cấp Hạng B (Đạt chuẩn)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhà cung cấp Hạng B</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {tierBCount} đối tác
           </div>
@@ -220,7 +220,7 @@ export const SupplierEvaluationModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: tierCCount > 0 ? '#DC2626' : '#64748B', marginTop: 4 }}>
             {tierCCount} đối tác
           </div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Dưới 75 điểm (Cần cảnh báo)</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Dưới 75 điểm</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -237,9 +237,9 @@ export const SupplierEvaluationModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả đánh giá' },
-            { key: 'Hạng A', label: 'Hạng A (Chiến lược)', icon: <StarFilled style={{ color: '#F59E0B' }} /> },
-            { key: 'Hạng B', label: 'Hạng B (Đạt chuẩn)', icon: <InfoCircleOutlined style={{ color: '#3B82F6' }} /> },
-            { key: 'Hạng C', label: 'Hạng C (Cần cải thiện)', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
+            { key: 'Hạng A', label: 'Hạng A', icon: <StarFilled style={{ color: '#F59E0B' }} /> },
+            { key: 'Hạng B', label: 'Hạng B', icon: <InfoCircleOutlined style={{ color: '#3B82F6' }} /> },
+            { key: 'Hạng C', label: 'Hạng C', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -326,16 +326,16 @@ export const SupplierEvaluationModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-            <Form.Item name="qualityScore" label="CL (max 40)" rules={[{ required: true }]}>
+            <Form.Item name="qualityScore" label="CL" rules={[{ required: true }]}>
               <Input type="number" min={0} max={40} />
             </Form.Item>
-            <Form.Item name="deliveryScore" label="TĐ (max 30)" rules={[{ required: true }]}>
+            <Form.Item name="deliveryScore" label="TĐ" rules={[{ required: true }]}>
               <Input type="number" min={0} max={30} />
             </Form.Item>
-            <Form.Item name="priceScore" label="Giá (max 20)" rules={[{ required: true }]}>
+            <Form.Item name="priceScore" label="Giá" rules={[{ required: true }]}>
               <Input type="number" min={0} max={20} />
             </Form.Item>
-            <Form.Item name="serviceScore" label="DV (max 10)" rules={[{ required: true }]}>
+            <Form.Item name="serviceScore" label="DV" rules={[{ required: true }]}>
               <Input type="number" min={0} max={10} />
             </Form.Item>
           </div>
@@ -366,7 +366,7 @@ export const SupplierEvaluationModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Đánh Giá Năng Lực NCC */}
       <Drawer
-        title="Biên Bản Đánh Giá Năng Lực Nhà Cung Cấp (ISO 9001:2015)"
+        title="Biên Bản Đánh Giá Năng Lực Nhà Cung Cấp"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={580}
@@ -398,7 +398,7 @@ export const SupplierEvaluationModule: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 2 }}>
-                    <span>1. Chất lượng sản phẩm &amp; Kỹ thuật (Tối đa 40đ):</span>
+                    <span>1. Chất lượng sản phẩm &amp; Kỹ thuật:</span>
                     <strong style={{ color: '#16A34A' }}>{selectedEval.qualityScore} / 40 đ</strong>
                   </div>
                   <Progress percent={(selectedEval.qualityScore / 40) * 100} strokeColor="#16A34A" size="small" showInfo={false} />
@@ -406,7 +406,7 @@ export const SupplierEvaluationModule: React.FC = () => {
 
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 2 }}>
-                    <span>2. Tiến độ giao hàng &amp; Cam kết SLA (Tối đa 30đ):</span>
+                    <span>2. Tiến độ giao hàng &amp; Cam kết SLA:</span>
                     <strong style={{ color: '#2563EB' }}>{selectedEval.deliveryScore} / 30 đ</strong>
                   </div>
                   <Progress percent={(selectedEval.deliveryScore / 30) * 100} strokeColor="#2563EB" size="small" showInfo={false} />
@@ -414,7 +414,7 @@ export const SupplierEvaluationModule: React.FC = () => {
 
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 2 }}>
-                    <span>3. Giá cả &amp; Chính sách công nợ (Tối đa 20đ):</span>
+                    <span>3. Giá cả &amp; Chính sách công nợ:</span>
                     <strong style={{ color: '#D97706' }}>{selectedEval.priceScore} / 20 đ</strong>
                   </div>
                   <Progress percent={(selectedEval.priceScore / 20) * 100} strokeColor="#D97706" size="small" showInfo={false} />
@@ -422,7 +422,7 @@ export const SupplierEvaluationModule: React.FC = () => {
 
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 2 }}>
-                    <span>4. Dịch vụ sau bán hàng &amp; Bảo hành (Tối đa 10đ):</span>
+                    <span>4. Dịch vụ sau bán hàng &amp; Bảo hành:</span>
                     <strong style={{ color: '#7C3AED' }}>{selectedEval.serviceScore} / 10 đ</strong>
                   </div>
                   <Progress percent={(selectedEval.serviceScore / 10) * 100} strokeColor="#7C3AED" size="small" showInfo={false} />

@@ -91,7 +91,7 @@ export const AdminAuditLogsModule: React.FC = () => {
       ),
     },
     {
-      title: 'Hành động (Action)',
+      title: 'Hành động',
       dataIndex: 'action',
       key: 'action',
       render: (a: string, record: EnterpriseAuditLog) => {
@@ -104,7 +104,7 @@ export const AdminAuditLogsModule: React.FC = () => {
       },
     },
     {
-      title: 'Phân hệ (Module)',
+      title: 'Phân hệ',
       dataIndex: 'module',
       key: 'module',
       width: 170,
@@ -166,7 +166,7 @@ export const AdminAuditLogsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian lưu trữ pháp lý</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            10 Năm (Chuẩn ISO)
+            10 Năm
           </div>
           <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Sẵn sàng phục vụ thanh tra kiểm toán</div>
         </div>
@@ -239,7 +239,7 @@ export const AdminAuditLogsModule: React.FC = () => {
 
       {/* DRAWER: Dấu Vết Số Chi Tiết */}
       <Drawer
-        title="Dấu Vết Kiểm Toán Số &amp; Pháp Lý (Forensic Audit Trail)"
+        title="Dấu Vết Kiểm Toán Số &amp; Pháp Lý"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={600}
@@ -264,7 +264,7 @@ export const AdminAuditLogsModule: React.FC = () => {
             {/* Operator info */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Chủ Thể Thực Hiện (Operator):
+                Chủ Thể Thực Hiện:
               </div>
               <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
                 <div>Tài khoản đăng nhập: <strong style={{ color: '#009688' }}>{selectedLog.user}</strong></div>
@@ -289,7 +289,7 @@ export const AdminAuditLogsModule: React.FC = () => {
             {/* Snapshot Difference */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Bản Chụp Trạng Thái Dữ Liệu (Data Snapshot Delta):
+                Bản Chụp Trạng Thái Dữ Liệu:
               </div>
               <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div>

@@ -445,7 +445,7 @@ export const TwoStepVerificationModule: React.FC = () => {
     {
       key: 'backup-codes',
       icon: <NumberOutlined style={{ fontSize: 18, color: '#009688' }} />,
-      title: 'Mã dự phòng (Backup Codes)',
+      title: 'Mã dự phòng',
       status: backupCodes.length > 0 ? (
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#1E293B', fontWeight: 500, fontSize: 12.5 }}>
           <CheckCircleFilled style={{ color: '#16A34A', fontSize: 14 }} />
@@ -511,7 +511,7 @@ export const TwoStepVerificationModule: React.FC = () => {
                 Chưa có khóa bảo mật nào
               </div>
               <div style={{ fontSize: 13, color: '#64748B', maxWidth: 440, margin: '0 auto 16px', lineHeight: 1.5 }}>
-                Bạn có thể thêm khóa bảo mật phần cứng (FIDO2 / YubiKey) hoặc sinh trắc học thiết bị (Touch ID, Windows Hello) để xác thực nhanh chóng và an toàn.
+                Bạn có thể thêm khóa bảo mật phần cứng hoặc sinh trắc học thiết bị để xác thực nhanh chóng và an toàn.
               </div>
             </div>
           ) : (
@@ -555,7 +555,7 @@ export const TwoStepVerificationModule: React.FC = () => {
           </Button>
 
           <Modal
-            title="Thêm Khóa Bảo Mật Mới (Passkey)"
+            title="Thêm Khóa Bảo Mật Mới"
             open={isAddPasskeyModalOpen}
             onCancel={() => {
               setIsAddPasskeyModalOpen(false);
@@ -573,7 +573,7 @@ export const TwoStepVerificationModule: React.FC = () => {
                 Tên khóa bảo mật
               </label>
               <Input
-                placeholder="Nhập tên khóa (ví dụ: YubiKey 5C NFC, Touch ID)..."
+                placeholder="Nhập tên khóa..."
                 value={newPasskeyName}
                 onChange={(e) => setNewPasskeyName(e.target.value)}
                 onPressEnter={handleAddPasskey}
@@ -911,7 +911,7 @@ export const TwoStepVerificationModule: React.FC = () => {
                 <Input
                   value={tempPhone}
                   onChange={(e) => setTempPhone(e.target.value)}
-                  placeholder="Nhập số điện thoại (ví dụ: 0912345678)..."
+                  placeholder="Nhập số điện thoại..."
                   style={{ borderRadius: 8 }}
                 />
                 <Button type="primary" onClick={handleSavePhone} style={{ backgroundColor: '#009688', borderColor: '#009688', borderRadius: 8 }}>
@@ -1051,7 +1051,7 @@ export const TwoStepVerificationModule: React.FC = () => {
         >
           <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 20, display: 'flex', alignItems: 'center' }}>
             <NumberOutlined style={{ color: '#009688', fontSize: 18, marginRight: 8 }} />
-            Mã Khôi Phục Dự Phòng (Backup Codes)
+            Mã Khôi Phục Dự Phòng
           </div>
 
           {backupCodes.length === 0 ? (

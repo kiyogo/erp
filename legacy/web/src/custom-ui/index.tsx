@@ -3135,6 +3135,9 @@ export const Modal: ModalComponent = ({
             boxSizing: 'border-box',
             zIndex: 10002,
             overflow: 'visible',
+            padding: 8,
+            gap: 8,
+            border: 'none',
             ...style,
             top: undefined,
           }}
@@ -3186,7 +3189,7 @@ export const Modal: ModalComponent = ({
           )}
 
           {title && (
-            <div className="ant-modal-header" style={{ padding: '8px 16px 8px 16px', fontWeight: 600, fontSize: 15, lineHeight: '22px', borderBottom: '1px solid var(--antd-border, #F1F5F9)', ...(styles?.header || {}) }}>
+            <div className="ant-modal-header" style={{ padding: 0, fontWeight: 600, fontSize: 15, lineHeight: '22px', border: 'none', borderBottom: 'none', margin: 0, ...(styles?.header || {}) }}>
               <div className="ant-modal-title" style={{ color: styles?.header?.color || 'var(--antd-text)', fontSize: 15, fontWeight: 600, lineHeight: '22px' }}>{title}</div>
             </div>
           )}
@@ -3194,7 +3197,7 @@ export const Modal: ModalComponent = ({
           <div
             className="ant-modal-body"
             style={{
-              padding: footer !== null ? '14px 16px 10px 16px' : '14px 16px 16px 16px',
+              padding: 0,
               overflowY: bodyStyle?.overflowY !== undefined ? bodyStyle.overflowY : 'auto',
               overflowX: 'hidden',
               flex: 1,
@@ -3203,6 +3206,8 @@ export const Modal: ModalComponent = ({
               minWidth: 0,
               boxSizing: 'border-box',
               pointerEvents: isBusy ? 'none' : 'auto',
+              border: 'none',
+              margin: 0,
               ...bodyStyle,
               ...(styles?.body || {}),
             }}
@@ -3213,7 +3218,7 @@ export const Modal: ModalComponent = ({
           </div>
 
           {footer !== null && (
-            <div className="ant-modal-footer" style={{ padding: '10px 16px 16px 16px', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10, borderTop: '1px solid var(--antd-border, #F1F5F9)', ...(styles?.footer || {}) }}>
+            <div className="ant-modal-footer" style={{ padding: 0, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 8, border: 'none', borderTop: 'none', margin: 0, ...(styles?.footer || {}) }}>
               {footer !== undefined ? (
                 footer
               ) : (
@@ -3426,7 +3431,7 @@ export const Drawer: React.FC<any> = ({ title, open, onClose, width = 378, child
           pointerEvents: 'auto',
         }}
       >
-        <div className="ant-drawer-header" style={{ padding: '16px 24px', borderBottom: '1px solid var(--antd-border, #E2E8F0)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="ant-drawer-header" style={{ padding: '16px 24px', border: 'none', borderBottom: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="ant-drawer-title" style={{ fontWeight: 600, fontSize: 16 }}>{title}</div>
           <button
             type="button"
@@ -3440,11 +3445,11 @@ export const Drawer: React.FC<any> = ({ title, open, onClose, width = 378, child
             </svg>
           </button>
         </div>
-        <div className="ant-drawer-body" style={{ flex: 1, padding: '20px 24px 28px 24px', overflowY: 'auto', overflowX: 'hidden', minWidth: 0 }}>
+        <div className="ant-drawer-body" style={{ flex: 1, padding: '20px 24px 28px 24px', overflowY: 'auto', overflowX: 'hidden', minWidth: 0, border: 'none' }}>
           {children}
         </div>
         {footer && (
-          <div className="ant-drawer-footer" style={{ padding: '14px 24px 20px 24px', borderTop: '1px solid var(--antd-border, #E2E8F0)', background: '#fff' }}>
+          <div className="ant-drawer-footer" style={{ padding: '14px 24px 20px 24px', border: 'none', borderTop: 'none', background: '#fff' }}>
             {footer}
           </div>
         )}
@@ -5080,7 +5085,7 @@ export const FileUploadDialog: React.FC<FileUploadDialogProps> = ({
                           transition: 'background 0.1s',
                         }}
                         onMouseEnter={e => {
-                          if (!isSelected) e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.04)';
+                          if (!isSelected) e.currentTarget.style.backgroundColor = 'rgba';
                         }}
                         onMouseLeave={e => {
                           if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
@@ -5311,8 +5316,8 @@ const createMessage = (
     msgEl.style.background = '#fff';
     msgEl.style.padding = '9px 16px';
     msgEl.style.borderRadius = '8px';
-    msgEl.style.border = '1px solid rgba(0, 0, 0, 0.06)';
-    msgEl.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)';
+    msgEl.style.border = '1px solid rgba';
+    msgEl.style.boxShadow = '0 8px 24px rgba, 0 2px 6px rgba';
     msgEl.style.display = 'inline-flex';
     msgEl.style.alignItems = 'center';
     msgEl.style.justifyContent = 'center';
@@ -5322,8 +5327,8 @@ const createMessage = (
     msgEl.style.maxWidth = 'min(500px, calc(100vw - 32px))';
     msgEl.style.boxSizing = 'border-box';
     msgEl.style.pointerEvents = 'auto';
-    msgEl.style.transition = 'all 0.3s cubic-bezier(0.645, 0.045, 0.355, 1)';
-    msgEl.style.transform = 'translateY(-20px)';
+    msgEl.style.transition = 'all 0.3s cubic-bezier';
+    msgEl.style.transform = 'translateY';
     msgEl.style.opacity = '0';
   }
 
@@ -5358,11 +5363,11 @@ const createMessage = (
   if (!isUpdate) {
     messageContainer.appendChild(msgEl);
     setTimeout(() => {
-      msgEl.style.transform = 'translateY(0)';
+      msgEl.style.transform = 'translateY';
       msgEl.style.opacity = '1';
     }, 10);
   } else {
-    msgEl.style.transform = 'scale(1.05)';
+    msgEl.style.transform = 'scale';
     setTimeout(() => {
       msgEl.style.transform = 'scale(1)';
     }, 120);
@@ -5380,7 +5385,7 @@ const createMessage = (
 
   return new Promise((resolve) => {
     const removeMsg = () => {
-    msgEl.style.transform = 'translateY(-20px)';
+    msgEl.style.transform = 'translateY';
     msgEl.style.opacity = '0';
     setTimeout(() => {
       msgEl.remove();

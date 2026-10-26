@@ -1065,7 +1065,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
                 value: person.id,
                 label: `${person.name && person.name !== 'undefined' ? person.name : 'Nhân viên'} (${person.employeeCode || person.id})${
                   (!isEmployee && selectedUnit) || (isEmployee && childManagedUnits.some(u => normalizeName(u.name) === normalizeName(selectedUnit)))
-                    ? ' (Trưởng đơn vị)'
+                    ? ''
                     : ''
                 }`,
               }))}
@@ -1097,7 +1097,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
             <Form.Item name="status" label="Trạng thái">
               <Select options={['Chưa bắt đầu', 'Đang thực hiện', 'Chờ nghiệm thu', 'Hoàn thành', 'Tạm dừng'].map((item) => ({ label: item, value: item }))} />
             </Form.Item>
-            <Form.Item name="progress" label="Tiến độ (%)">
+            <Form.Item name="progress" label="Tiến độ">
               <Input type="number" min={0} max={100} />
             </Form.Item>
           </div>
@@ -1403,7 +1403,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
                 rows={4}
                 value={reportContent}
                 onChange={(event: any) => setReportContent(event.target.value)}
-                placeholder="Nêu chi tiết khối lượng công việc đã hoàn thành, vướng mắc phát sinh (nếu có)..."
+                placeholder="Nêu chi tiết khối lượng công việc đã hoàn thành, vướng mắc phát sinh..."
               />
             </div>
 
@@ -1429,7 +1429,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
                   Bấm chọn hoặc kéo thả file vào đây
                 </div>
                 <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
-                  Hỗ trợ tải mọi định dạng file (Word, Excel, PDF, Hình ảnh, ZIP...)
+                  Hỗ trợ tải mọi định dạng file
                 </div>
               </Upload.Dragger>
 

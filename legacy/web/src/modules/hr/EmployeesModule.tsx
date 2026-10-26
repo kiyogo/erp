@@ -699,7 +699,7 @@ export const EmployeesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhân sự chính thức (Ký HĐLĐ)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhân sự chính thức</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {officialEmployees} ({Math.round((officialEmployees / totalEmployees) * 100 || 100)}%)
           </div>
@@ -1007,7 +1007,7 @@ export const EmployeesModule: React.FC = () => {
         {targetEmpForEmail && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
             <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 6, padding: '10px 14px', fontSize: 13 }}>
-              <div style={{ color: '#475569', marginBottom: 2 }}>Người nhận (To):</div>
+              <div style={{ color: '#475569', marginBottom: 2 }}>Người nhận:</div>
               <div style={{ fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span>{targetEmpForEmail.name}</span>
                 <span style={{ color: '#009688', fontWeight: 600 }}>({targetEmpForEmail.code})</span>

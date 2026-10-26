@@ -27,15 +27,15 @@ export interface ModulePermissionRow {
 }
 
 const DEFAULT_PERMISSIONS: ModulePermissionRow[] = [
-  { key: '1', module: 'Bảng điều khiển & Giám sát (Dashboard)', category: 'Tổng quan', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '2', module: 'Nhân sự, Hồ sơ & Hợp đồng (HR & Contracts)', category: 'Vận hành', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '3', module: 'Tài chính, Thu chi & Dòng tiền (Finance & Cash)', category: 'Tài chính', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '4', module: 'Bảo hiểm xã hội & Chế độ phúc lợi (Insurance)', category: 'Nhân sự', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '5', module: 'Tài sản cố định & Kho linh kiện (Assets & Warehouse)', category: 'Kho vận', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '6', module: 'Quy trình trình ký điện tử (Approval Workflows)', category: 'Văn thư', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '7', module: 'Văn thư & Chữ ký số HSM (Digital Documents)', category: 'Pháp lý', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '8', module: 'Kế hoạch chiến lược & Nhiệm vụ (Plans & OKRs)', category: 'Kế hoạch', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '9', module: 'Quản trị hệ thống & Kiểm toán số (System & Audits)', category: 'Hạ tầng', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '1', module: 'Bảng điều khiển & Giám sát', category: 'Tổng quan', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '2', module: 'Nhân sự, Hồ sơ & Hợp đồng', category: 'Vận hành', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '3', module: 'Tài chính, Thu chi & Dòng tiền', category: 'Tài chính', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '4', module: 'Bảo hiểm xã hội & Chế độ phúc lợi', category: 'Nhân sự', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '5', module: 'Tài sản cố định & Kho linh kiện', category: 'Kho vận', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '6', module: 'Quy trình trình ký điện tử', category: 'Văn thư', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '7', module: 'Văn thư & Chữ ký số HSM', category: 'Pháp lý', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '8', module: 'Kế hoạch chiến lược & Nhiệm vụ', category: 'Kế hoạch', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
+  { key: '9', module: 'Quản trị hệ thống & Kiểm toán số', category: 'Hạ tầng', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
 ];
 
 import { useEffect } from 'react';
@@ -87,7 +87,7 @@ export const AdminPermissionsModule: React.FC = () => {
         exportData: true,
       }))
     );
-    message.info('Đã chuyển vai trò về chế độ Chỉ Xem & Xuất báo cáo (Read-Only)!');
+    message.info('Đã chuyển vai trò về chế độ Chỉ Xem & Xuất báo cáo!');
   };
 
   const handleSave = () => {
@@ -131,21 +131,21 @@ export const AdminPermissionsModule: React.FC = () => {
       ),
     },
     {
-      title: 'Xem (Read)',
+      title: 'Xem',
       key: 'read',
       align: 'center' as const,
       width: 100,
       render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'read'),
     },
     {
-      title: 'Thêm mới (Create)',
+      title: 'Thêm mới',
       key: 'create',
       align: 'center' as const,
       width: 110,
       render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'create'),
     },
     {
-      title: 'Chỉnh sửa (Edit)',
+      title: 'Chỉnh sửa',
       key: 'edit',
       align: 'center' as const,
       width: 110,
@@ -159,14 +159,14 @@ export const AdminPermissionsModule: React.FC = () => {
       render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'delete'),
     },
     {
-      title: 'Ký duyệt (Approve)',
+      title: 'Ký duyệt',
       key: 'approve',
       align: 'center' as const,
       width: 120,
       render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'approve'),
     },
     {
-      title: 'Xuất tệp (Export)',
+      title: 'Xuất tệp',
       key: 'exportData',
       align: 'center' as const,
       width: 110,
@@ -220,11 +220,11 @@ export const AdminPermissionsModule: React.FC = () => {
             onChange={setSelectedRole}
             style={{ width: 300 }}
             options={[
-              { label: '👑 Super Admin (Toàn quyền hệ thống)', value: 'ROLE_SUPER_ADMIN' },
-              { label: '🏛️ Ban Giám Đốc (Executive Director)', value: 'ROLE_DIRECTOR' },
-              { label: '💰 Kế Toán Trưởng (Chief Accountant)', value: 'ROLE_CHIEF_ACCOUNTANT' },
-              { label: '👥 Trưởng Phòng Nhân Sự (HR Manager)', value: 'ROLE_HR_MANAGER' },
-              { label: '👤 Nhân Viên Tiêu Chuẩn (Employee)', value: 'ROLE_STAFF' },
+              { label: '👑 Super Admin', value: 'ROLE_SUPER_ADMIN' },
+              { label: '🏛️ Ban Giám Đốc', value: 'ROLE_DIRECTOR' },
+              { label: '💰 Kế Toán Trưởng', value: 'ROLE_CHIEF_ACCOUNTANT' },
+              { label: '👥 Trưởng Phòng Nhân Sự', value: 'ROLE_HR_MANAGER' },
+              { label: '👤 Nhân Viên Tiêu Chuẩn', value: 'ROLE_STAFF' },
             ]}
           />
         </div>
@@ -234,7 +234,7 @@ export const AdminPermissionsModule: React.FC = () => {
             Cấp toàn quyền
           </Button>
           <Button size="small" onClick={handleReadOnly}>
-            Chỉ xem (Read-Only)
+            Chỉ xem
           </Button>
           <Button
             icon={<PrinterOutlined />}

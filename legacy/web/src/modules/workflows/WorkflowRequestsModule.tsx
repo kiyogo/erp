@@ -310,7 +310,7 @@ export const WorkflowRequestsModule: React.FC = () => {
             style={{ width: 280, borderRadius: 6 }}
             allowClear
           />
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách hàng chờ trình ký (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách hàng chờ trình ký')}>
             Xuất Excel
           </Button>
           <Button
@@ -453,7 +453,7 @@ export const WorkflowRequestsModule: React.FC = () => {
 
       {/* MODAL: Ký Số Điện Tử Phê Duyệt (Digital E-Signature / Token PKI) */}
       <Modal
-        title="Xác Thực Ký Số Điện Tử Hồ Sơ (E-Signature PKI)"
+        title="Xác Thực Ký Số Điện Tử Hồ Sơ"
         open={signModalOpen}
         onCancel={() => setSignModalOpen(false)}
         footer={null}
@@ -532,7 +532,7 @@ export const WorkflowRequestsModule: React.FC = () => {
             {signMethod === 'token_pki' && (
               <div>
                 <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
-                  Mã PIN Thiết Bị Token (6 số):
+                  Mã PIN Thiết Bị Token:
                 </label>
                 <Input.Password
                   value={tokenPin}
@@ -760,7 +760,7 @@ export const WorkflowRequestsModule: React.FC = () => {
             {detailItem.digitalSignatureInfo && (
               <div style={{ border: '2px solid #16A34A', background: '#F0FDF4', borderRadius: 8, padding: 14 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#166534', fontWeight: 800, fontSize: 13 }}>
-                  <SafetyCertificateOutlined style={{ fontSize: 20 }} /> CHỨNG THƯ KÝ SỐ ĐIỆN TỬ HỢP LỆ (DIGITAL SIGNATURE STAMP)
+                  <SafetyCertificateOutlined style={{ fontSize: 20 }} /> CHỨNG THƯ KÝ SỐ ĐIỆN TỬ HỢP LỆ
                 </div>
                 <div style={{ fontSize: 12, color: '#166534', marginTop: 6 }}>
                   <div>Người ký: <strong>{detailItem.digitalSignatureInfo.signerName}</strong></div>

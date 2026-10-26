@@ -77,7 +77,7 @@ export const PayrollModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tổng Hợp Dữ Liệu Chấm Công &amp; Ngày Công Thực Tế ({selectedMonth})</h3>
             <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng chấm công tổng hợp')}>
-              Xuất Bảng Công (Excel)
+              Xuất Bảng Công
             </Button>
           </div>
           <div className="transparent-table-card">
@@ -145,9 +145,9 @@ export const PayrollModule: React.FC = () => {
       {isTax && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Bảng Khấu Trừ Thuế Thu Nhập Cá Nhân (TNCN) Tháng {selectedMonth}</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Bảng Khấu Trừ Thuế Thu Nhập Cá Nhân Tháng {selectedMonth}</h3>
             <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng khấu trừ thuế TNCN')}>
-              Xuất Bảng Thuế (Excel)
+              Xuất Bảng Thuế
             </Button>
           </div>
           <div className="transparent-table-card">
@@ -171,7 +171,7 @@ export const PayrollModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Lập Lệnh Chi Trả Lương Tự Động Qua Ngân Hàng (E-Banking Batch Transfer)</h3>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Lập Lệnh Chi Trả Lương Tự Động Qua Ngân Hàng</h3>
               <p style={{ margin: '4px 0 0 0', fontSize: 12.5, color: '#64748B' }}>
                 Tạo lô chuyển tiền tự động từ TK Vietcombank Doanh nghiệp sang tài khoản cán bộ nhân viên
               </p>
@@ -193,7 +193,7 @@ export const PayrollModule: React.FC = () => {
                 { title: 'Mã NV', dataIndex: 'employeeCode', key: 'employeeCode', render: (c: string) => <strong>{c}</strong> },
                 { title: 'Tên người thụ hưởng', dataIndex: 'employeeName', key: 'employeeName', render: (n: string) => <strong style={{ color: '#1E293B' }}>{n}</strong> },
                 { title: 'Ngân hàng & Số tài khoản', key: 'bank', render: (_: any, r: any, idx: number) => <div><strong>Vietcombank</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>0011 0042 88{idx + 10}</div></div> },
-                { title: 'Số tiền chi trả (Net)', dataIndex: 'netSalary', key: 'netSalary', render: (v: number) => <strong style={{ color: '#16A34A', fontSize: 13.5 }}>{v.toLocaleString('vi-VN')} ₫</strong> },
+                { title: 'Số tiền chi trả', dataIndex: 'netSalary', key: 'netSalary', render: (v: number) => <strong style={{ color: '#16A34A', fontSize: 13.5 }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Nội dung chuyển khoản', key: 'msg', render: (_: any, r: PayrollRecord) => `KIYOVN Chi tra luong Thang 08-2026 cho ${r.employeeName}` },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s === 'Đã chi trả' ? 'success' : 'warning'}>{s}</Tag> },
                 {
@@ -217,12 +217,12 @@ export const PayrollModule: React.FC = () => {
           <Card title={`Bút Toán Hạch Toán Kế Toán Lương Tháng ${selectedMonth}`} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
               {[
-                { desc: '1. Tính tiền lương phải trả cho nhân viên khối công nghệ', debit: 'Nợ TK 6422 (Kỹ thuật)', credit: 'Có TK 3341', amount: '125.000.000 ₫' },
-                { desc: '2. Tính tiền lương phải trả cho nhân viên khối văn phòng & QLDN', debit: 'Nợ TK 6421 (Bán hàng & QLDN)', credit: 'Có TK 3341', amount: '85.000.000 ₫' },
+                { desc: '1. Tính tiền lương phải trả cho nhân viên khối công nghệ', debit: 'Nợ TK 6422', credit: 'Có TK 3341', amount: '125.000.000 ₫' },
+                { desc: '2. Tính tiền lương phải trả cho nhân viên khối văn phòng & QLDN', debit: 'Nợ TK 6421', credit: 'Có TK 3341', amount: '85.000.000 ₫' },
                 { desc: '3. Trích các khoản bảo hiểm theo lương phần DN chịu (21.5%)', debit: 'Nợ TK 6421, 6422', credit: 'Có TK 3383, 3384, 3386', amount: '45.150.000 ₫' },
                 { desc: '4. Khấu trừ bảo hiểm trừ vào lương người lao động (10.5%)', debit: 'Nợ TK 3341', credit: 'Có TK 3383, 3384, 3386', amount: '22.050.000 ₫' },
                 { desc: '5. Khấu trừ thuế TNCN tạm tính trừ vào lương', debit: 'Nợ TK 3341', credit: 'Có TK 3335', amount: '12.450.000 ₫' },
-                { desc: '6. Chi trả lương thực lĩnh qua tài khoản ngân hàng', debit: 'Nợ TK 3341', credit: 'Có TK 1121 (Vietcombank)', amount: `${totalPayroll.toLocaleString('vi-VN')} ₫` },
+                { desc: '6. Chi trả lương thực lĩnh qua tài khoản ngân hàng', debit: 'Nợ TK 3341', credit: 'Có TK 1121', amount: `${totalPayroll.toLocaleString('vi-VN')} ₫` },
               ].map((bt, idx) => (
                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                   <div>
@@ -259,8 +259,8 @@ export const PayrollModule: React.FC = () => {
                 style={{ width: 160 }}
               />
             </div>
-            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng thanh toán tiền lương (Excel)')}>
-              Xuất Bảng Lương (Excel)
+            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng thanh toán tiền lương')}>
+              Xuất Bảng Lương
             </Button>
           </div>
 
@@ -307,7 +307,7 @@ export const PayrollModule: React.FC = () => {
                   ),
                 },
                 {
-                  title: 'Khấu trừ (BH+Thuế)',
+                  title: 'Khấu trừ',
                   key: 'deductions',
                   render: (_: any, record: PayrollRecord) => (
                     <span style={{ color: '#DC2626' }}>
@@ -316,7 +316,7 @@ export const PayrollModule: React.FC = () => {
                   ),
                 },
                 {
-                  title: 'Thực lĩnh (Net)',
+                  title: 'Thực lĩnh',
                   dataIndex: 'netSalary',
                   key: 'netSalary',
                   render: (val: number) => (
@@ -411,7 +411,7 @@ export const PayrollModule: React.FC = () => {
               </div>
               <div style={{ height: 1, background: '#E2E8F0', margin: '8px 0' }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, color: '#009688' }}>
-                <span>LƯƠNG THỰC LĨNH (NET):</span>
+                <span>LƯƠNG THỰC LĨNH:</span>
                 <span>{selectedRecord.netSalary.toLocaleString('vi-VN')} ₫</span>
               </div>
             </div>

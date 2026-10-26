@@ -102,7 +102,7 @@ export const PageSetupDialog: React.FC<PageSetupDialogProps> = ({
                   checked={orientation === 'portrait'}
                   onChange={() => setOrientation('portrait')}
                 />
-                Dọc (Portrait)
+                Dọc
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
                 <input
@@ -112,7 +112,7 @@ export const PageSetupDialog: React.FC<PageSetupDialogProps> = ({
                   checked={orientation === 'landscape'}
                   onChange={() => setOrientation('landscape')}
                 />
-                Ngang (Landscape)
+                Ngang
               </label>
             </div>
           </div>
@@ -146,11 +146,11 @@ export const PageSetupDialog: React.FC<PageSetupDialogProps> = ({
           {/* Margins */}
           <div>
             <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#3C4043', marginBottom: 6 }}>
-              Lề trang (px / pt)
+              Lề trang
             </label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div>
-                <span style={{ fontSize: 12, color: '#5F6368' }}>Trên (Top):</span>
+                <span style={{ fontSize: 12, color: '#5F6368' }}>Trên:</span>
                 <input
                   type="number"
                   value={marginTop}
@@ -159,7 +159,7 @@ export const PageSetupDialog: React.FC<PageSetupDialogProps> = ({
                 />
               </div>
               <div>
-                <span style={{ fontSize: 12, color: '#5F6368' }}>Dưới (Bottom):</span>
+                <span style={{ fontSize: 12, color: '#5F6368' }}>Dưới:</span>
                 <input
                   type="number"
                   value={marginBottom}
@@ -168,7 +168,7 @@ export const PageSetupDialog: React.FC<PageSetupDialogProps> = ({
                 />
               </div>
               <div>
-                <span style={{ fontSize: 12, color: '#5F6368' }}>Trái (Left):</span>
+                <span style={{ fontSize: 12, color: '#5F6368' }}>Trái:</span>
                 <input
                   type="number"
                   value={marginLeft}
@@ -177,7 +177,7 @@ export const PageSetupDialog: React.FC<PageSetupDialogProps> = ({
                 />
               </div>
               <div>
-                <span style={{ fontSize: 12, color: '#5F6368' }}>Phải (Right):</span>
+                <span style={{ fontSize: 12, color: '#5F6368' }}>Phải:</span>
                 <input
                   type="number"
                   value={marginRight}

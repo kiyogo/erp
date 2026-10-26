@@ -207,7 +207,7 @@ export const AssetsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giá trị còn lại (Net Book Value)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giá trị còn lại</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalNetBookValue.toLocaleString('vi-VN')} ₫
           </div>
@@ -236,7 +236,7 @@ export const AssetsModule: React.FC = () => {
                 {[
                   { name: 'Phương tiện & Vận chuyển', count: 1, val: 1480000000, color: '#2563EB' },
                   { name: 'Máy chủ & Hạ tầng IDC', count: 1, val: 240000000, color: '#009688' },
-                  { name: 'Thiết bị IT (Laptop/PC/Màn hình)', count: 3, val: 173500000, color: '#F59E0B' },
+                  { name: 'Thiết bị IT', count: 3, val: 173500000, color: '#F59E0B' },
                   { name: 'Nội thất văn phòng', count: 1, val: 45000000, color: '#8B5CF6' },
                 ].map((cat, idx) => {
                   const pct = Math.round((cat.val / totalOriginalPrice) * 100);
@@ -284,7 +284,7 @@ export const AssetsModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Nhật Ký &amp; Lịch Sử Luân Chuyển Khai Thác Tài Sản Toàn Công Ty</h3>
             <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất nhật ký sử dụng tài sản')}>
-              Xuất Nhật Ký (Excel)
+              Xuất Nhật Ký
             </Button>
           </div>
           <div className="transparent-table-card">
@@ -505,7 +505,7 @@ export const AssetsModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã tài sản (Định danh)" rules={[{ required: true, message: 'Nhập mã TS' }]}>
+            <Form.Item name="code" label="Mã tài sản" rules={[{ required: true, message: 'Nhập mã TS' }]}>
               <Input placeholder="Ví dụ: TS-IT-030" />
             </Form.Item>
             <Form.Item name="barcode" label="Mã Barcode / QR Quét" rules={[{ required: true, message: 'Nhập mã Barcode' }]}>
@@ -549,14 +549,14 @@ export const AssetsModule: React.FC = () => {
             <Form.Item name="originalPrice" label="Nguyên giá mua vào (VNĐ)" rules={[{ required: true, message: 'Nhập nguyên giá' }]}>
               <Input type="number" min={0} step={1000000} placeholder="Ví dụ: 35000000" />
             </Form.Item>
-            <Form.Item name="depreciationMonths" label="Thời gian khấu hao (Tháng)" rules={[{ required: true }]}>
+            <Form.Item name="depreciationMonths" label="Thời gian khấu hao" rules={[{ required: true }]}>
               <Input type="number" min={1} placeholder="36 tháng" />
             </Form.Item>
             <Form.Item name="status" label="Trạng thái hiện tại" rules={[{ required: true }]}>
               <Select
                 options={[
                   { label: 'Đang sử dụng', value: 'Đang sử dụng' },
-                  { label: 'Trong kho (Sẵn sàng cấp)', value: 'Trong kho' },
+                  { label: 'Trong kho', value: 'Trong kho' },
                   { label: 'Đang sửa chữa', value: 'Đang sửa chữa' },
                   { label: 'Chờ thanh lý', value: 'Chờ thanh lý' },
                   { label: 'Đã thanh lý', value: 'Đã thanh lý' },

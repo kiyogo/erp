@@ -217,7 +217,7 @@ export const EnterpriseServicesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Doanh thu dịch vụ định kỳ (MRR)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Doanh thu dịch vụ định kỳ</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
             {totalMRR.toLocaleString('vi-VN')} ₫
           </div>
@@ -382,7 +382,7 @@ export const EnterpriseServicesModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleRegister} style={{ marginTop: 14 }}>
           <Form.Item name="contactPerson" label="Người đại diện doanh nghiệp" rules={[{ required: true, message: 'Nhập họ tên' }]}>
-            <Input placeholder="Ví dụ: Nguyễn Văn Minh (Tổng Giám Đốc)" />
+            <Input placeholder="Ví dụ: Nguyễn Văn Minh" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="phone" label="Số điện thoại liên hệ" rules={[{ required: true }]}>
@@ -392,13 +392,13 @@ export const EnterpriseServicesModule: React.FC = () => {
               <Input placeholder="ceo@doanhnghiep.com" />
             </Form.Item>
           </div>
-          <Form.Item name="duration" label="Thời hạn hợp đồng cam kết" initialValue="12 tháng (Chiết khấu 15%)">
+          <Form.Item name="duration" label="Thời hạn hợp đồng cam kết" initialValue="12 tháng">
             <Select
               options={[
-                { label: '6 tháng (Thanh toán định kỳ)', value: '6 tháng' },
-                { label: '12 tháng (Chiết khấu 15%)', value: '12 tháng' },
-                { label: '24 tháng (Chiết khấu 25% + Tặng 1 tháng)', value: '24 tháng' },
-                { label: '36 tháng (Gói Enterprise VIP)', value: '36 tháng' },
+                { label: '6 tháng', value: '6 tháng' },
+                { label: '12 tháng', value: '12 tháng' },
+                { label: '24 tháng', value: '24 tháng' },
+                { label: '36 tháng', value: '36 tháng' },
               ]}
             />
           </Form.Item>

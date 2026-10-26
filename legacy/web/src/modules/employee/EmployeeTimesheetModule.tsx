@@ -89,7 +89,7 @@ export const EmployeeTimesheetModule: React.FC = () => {
       render: (d: string) => <span style={{ fontWeight: 600, color: '#212121' }}>{d}</span>,
     },
     {
-      title: 'Giờ vào (Check-in)',
+      title: 'Giờ vào',
       dataIndex: 'checkIn',
       key: 'checkIn',
       render: (t: string) => (
@@ -99,7 +99,7 @@ export const EmployeeTimesheetModule: React.FC = () => {
       ),
     },
     {
-      title: 'Giờ ra (Check-out)',
+      title: 'Giờ ra',
       dataIndex: 'checkOut',
       key: 'checkOut',
       render: (t: string) => (
@@ -330,11 +330,11 @@ export const EmployeeTimesheetModule: React.FC = () => {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div style={{ background: '#F1F5F9', padding: 10, borderRadius: 6 }}>
-                  <div style={{ fontSize: 11, color: '#64748B' }}>Giờ vào (Check-in)</div>
+                  <div style={{ fontSize: 11, color: '#64748B' }}>Giờ vào</div>
                   <div style={{ fontSize: 16, fontWeight: 700, color: '#16A34A', marginTop: 2 }}>{selectedRecord.checkIn}</div>
                 </div>
                 <div style={{ background: '#F1F5F9', padding: 10, borderRadius: 6 }}>
-                  <div style={{ fontSize: 11, color: '#64748B' }}>Giờ ra (Check-out)</div>
+                  <div style={{ fontSize: 11, color: '#64748B' }}>Giờ ra</div>
                   <div style={{ fontSize: 16, fontWeight: 700, color: '#1E40AF', marginTop: 2 }}>{selectedRecord.checkOut}</div>
                 </div>
               </div>

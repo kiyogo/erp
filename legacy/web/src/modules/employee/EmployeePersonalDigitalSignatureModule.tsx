@@ -738,7 +738,7 @@ export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
                       Nhấn để tải lên ảnh chữ ký
                     </div>
                     <div style={{ fontSize: 11, color: '#64748B' }}>
-                      Hỗ trợ PNG, JPG (Khuyên dùng ảnh nền trắng hoặc trong suốt)
+                      Hỗ trợ PNG, JPG
                     </div>
                   </button>
                 </div>

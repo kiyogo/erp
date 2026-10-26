@@ -24,7 +24,7 @@ export interface EnterpriseIncidentRecord {
   code: string;
   incidentTitle: string;
   affectedSystem: string;
-  severity: 'P1 - Khẩn cấp (Toàn hệ thống)' | 'P2 - Cao (Ảnh hưởng dịch vụ)' | 'P3 - Trung bình';
+  severity: 'P1 - Khẩn cấp' | 'P2 - Cao' | 'P3 - Trung bình';
   occurredAt: string;
   resolvedAt: string;
   handler: string;
@@ -155,7 +155,7 @@ export const IncidentsModule: React.FC = () => {
       ),
     },
     {
-      title: 'Mức độ (Severity)',
+      title: 'Mức độ',
       dataIndex: 'severity',
       key: 'severity',
       width: 170,
@@ -168,13 +168,13 @@ export const IncidentsModule: React.FC = () => {
       },
     },
     {
-      title: 'Gián đoạn (Downtime)',
+      title: 'Gián đoạn',
       dataIndex: 'downtimeMinutes',
       key: 'downtimeMinutes',
       width: 150,
       render: (min: number) => (
         <span style={{ fontWeight: 800, color: min > 0 ? '#DC2626' : '#16A34A', fontSize: 13.5 }}>
-          {min > 0 ? `${min} phút gián đoạn` : '0 phút (Seamless)'}
+          {min > 0 ? `${min} phút gián đoạn` : '0 phút'}
         </span>
       ),
       sorter: (a: EnterpriseIncidentRecord, b: EnterpriseIncidentRecord) => a.downtimeMinutes - b.downtimeMinutes,
@@ -268,9 +268,9 @@ export const IncidentsModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả sự cố' },
-            { key: 'P1', label: 'Sự cố P1 (Khẩn cấp)', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
-            { key: 'P2', label: 'Sự cố P2 (Cao)', icon: <ExclamationCircleOutlined style={{ color: '#F97316' }} /> },
-            { key: 'P3', label: 'Sự cố P3 (Trung bình)', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
+            { key: 'P1', label: 'Sự cố P1', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
+            { key: 'P2', label: 'Sự cố P2', icon: <ExclamationCircleOutlined style={{ color: '#F97316' }} /> },
+            { key: 'P3', label: 'Sự cố P3', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
             { key: 'Đang xử lý', label: 'Đang ứng cứu', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
           ].map((tab) => (
             <Button
@@ -310,7 +310,7 @@ export const IncidentsModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 code: `INC-2026-${String(Date.now()).slice(-3)}`,
-                severity: 'P2 - Cao (Ảnh hưởng dịch vụ)',
+                severity: 'P2 - Cao',
                 handler: 'Trần Tuấn Anh (CTO)',
               });
               setModalOpen(true);
@@ -329,7 +329,7 @@ export const IncidentsModule: React.FC = () => {
 
       {/* MODAL: Tạo sự cố mới */}
       <Modal
-        title="Báo Cáo Sự Cố Kỹ Thuật Hạ Tầng Khẩn Cấp (NOC Alert)"
+        title="Báo Cáo Sự Cố Kỹ Thuật Hạ Tầng Khẩn Cấp"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -343,8 +343,8 @@ export const IncidentsModule: React.FC = () => {
             <Form.Item name="severity" label="Mức độ nghiêm trọng" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'P1 - Khẩn cấp (Toàn hệ thống)', value: 'P1 - Khẩn cấp (Toàn hệ thống)' },
-                  { label: 'P2 - Cao (Ảnh hưởng dịch vụ)', value: 'P2 - Cao (Ảnh hưởng dịch vụ)' },
+                  { label: 'P1 - Khẩn cấp', value: 'P1 - Khẩn cấp (Toàn hệ thống)' },
+                  { label: 'P2 - Cao', value: 'P2 - Cao (Ảnh hưởng dịch vụ)' },
                   { label: 'P3 - Trung bình', value: 'P3 - Trung bình' },
                 ]}
               />
@@ -356,14 +356,14 @@ export const IncidentsModule: React.FC = () => {
           </Form.Item>
 
           <Form.Item name="affectedSystem" label="Hệ thống / Dịch vụ bị gián đoạn" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Cụm máy chủ xác thực Auth Cluster (IDC Tân Thuận)" />
+            <Input placeholder="Ví dụ: Cụm máy chủ xác thực Auth Cluster" />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="handler" label="Chỉ huy ứng cứu (Incident Lead)" rules={[{ required: true }]}>
+            <Form.Item name="handler" label="Chỉ huy ứng cứu" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="rootCause" label="Nguyên nhân sơ bộ (Root Cause)" initialValue="Đang tiến hành phân tích log">
+            <Form.Item name="rootCause" label="Nguyên nhân sơ bộ" initialValue="Đang tiến hành phân tích log">
               <Input />
             </Form.Item>
           </div>
@@ -379,7 +379,7 @@ export const IncidentsModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Sự Cố & Báo Cáo Post-Mortem RCA */}
       <Drawer
-        title="Báo Cáo Phân Tích Nguyên Nhân Gốc Rễ Sự Cố (ITIL RCA Post-Mortem)"
+        title="Báo Cáo Phân Tích Nguyên Nhân Gốc Rễ Sự Cố"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={620}
@@ -419,7 +419,7 @@ export const IncidentsModule: React.FC = () => {
             {/* Root Cause Analysis */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AuditOutlined /> Phân Tích Nguyên Nhân Gốc Rễ (RCA):
+                <AuditOutlined /> Phân Tích Nguyên Nhân Gốc Rễ:
               </div>
               <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
                 {selectedIncident.rootCause}
@@ -429,7 +429,7 @@ export const IncidentsModule: React.FC = () => {
             {/* Incident Timeline */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <ClockCircleOutlined /> Nhật Ký Diễn Biến Ứng Cứu (Timeline):
+                <ClockCircleOutlined /> Nhật Ký Diễn Biến Ứng Cứu:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {selectedIncident.timeline?.map((item, idx) => (
@@ -444,7 +444,7 @@ export const IncidentsModule: React.FC = () => {
             {/* Corrective Action Items */}
             <div style={{ border: '1px solid #BBF7D0', borderRadius: 8, padding: 14, background: '#F0FDF4' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <CheckCircleOutlined /> Kế Hoạch Hành Động Khắc Phục Phòng Ngừa (CAPA):
+                <CheckCircleOutlined /> Kế Hoạch Hành Động Khắc Phục Phòng Ngừa:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {selectedIncident.actionItems?.map((act, idx) => (

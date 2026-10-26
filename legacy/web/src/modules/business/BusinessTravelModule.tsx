@@ -260,7 +260,7 @@ export const BusinessTravelModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đề xuất chờ phê duyệt (SLA 24h)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đề xuất chờ phê duyệt</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {pendingCount} đề xuất mới
           </div>
@@ -358,8 +358,8 @@ export const BusinessTravelModule: React.FC = () => {
             <Form.Item name="tripType" label="Loại chuyến đi" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Nội địa (Việt Nam)', value: 'Nội địa' },
-                  { label: 'Quốc tế (Nước ngoài)', value: 'Quốc tế' },
+                  { label: 'Nội địa', value: 'Nội địa' },
+                  { label: 'Quốc tế', value: 'Quốc tế' },
                 ]}
               />
             </Form.Item>

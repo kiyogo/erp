@@ -139,7 +139,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
       ),
     },
     {
-      title: 'Lãi suất (%/năm & Tháng)',
+      title: 'Lãi suất',
       key: 'interestRate',
       width: 190,
       render: (_: any, record: EnterpriseLoanItem) => (
@@ -225,7 +225,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Xếp hạng tín dụng doanh nghiệp</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            Hạng AAA (Rất uy tín)
+            Hạng AAA
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Được cấp hạn mức tín chấp tối đa</div>
         </div>
@@ -324,7 +324,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           </div>
 
           <Form.Item name="bankName" label="Tên tổ chức tín dụng / Ngân hàng" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Ngân Hàng TMCP Ngoại Thương Việt Nam (Vietcombank)" />
+            <Input placeholder="Ví dụ: Ngân Hàng TMCP Ngoại Thương Việt Nam" />
           </Form.Item>
 
           <Form.Item name="purpose" label="Mục đích sử dụng vốn vay" rules={[{ required: true }]}>
@@ -335,7 +335,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
             <Form.Item name="principalAmount" label="Số tiền gốc giải ngân (VNĐ)" rules={[{ required: true }]}>
               <Input type="number" min={0} step={100000000} />
             </Form.Item>
-            <Form.Item name="interestRate" label="Lãi suất vay (%/năm)" rules={[{ required: true }]}>
+            <Form.Item name="interestRate" label="Lãi suất vay" rules={[{ required: true }]}>
               <Input type="number" min={1} max={25} step={0.1} />
             </Form.Item>
           </div>
@@ -426,7 +426,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
             {/* Repayment Schedule Simulation */}
             <div style={{ border: '1px solid #BBF7D0', borderRadius: 8, padding: 14, background: '#F0FDF4' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
-                Nghĩa Vụ Thanh Toán Kỳ Tới (Gốc + Lãi):
+                Nghĩa Vụ Thanh Toán Kỳ Tới:
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
                 <span>Ngày thanh toán: <strong>15/09/2026</strong></span>
@@ -441,7 +441,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => message.success(`Đã xuất bảng lịch trả nợ phân kỳ khế ước ${selectedLoan.contractCode}`)}
             >
-              Xuất Bảng Phân Kỳ Lịch Trả Nợ (Excel)
+              Xuất Bảng Phân Kỳ Lịch Trả Nợ
             </Button>
           </div>
         )}

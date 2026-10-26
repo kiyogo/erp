@@ -152,12 +152,12 @@ export const TimesheetSummaryModule: React.FC = () => {
       ),
     },
     {
-      title: 'Nghỉ phép (P) / Không lương',
+      title: 'Nghỉ phép / Không lương',
       key: 'leaves',
       width: 170,
       render: (_: any, record: EnterpriseTimesheetSummaryItem) => (
         <div style={{ fontSize: 12 }}>
-          <span style={{ color: '#D97706', fontWeight: 600 }}>{record.paidLeaveDays} Phép năm (P)</span>
+          <span style={{ color: '#D97706', fontWeight: 600 }}>{record.paidLeaveDays} Phép năm</span>
           {record.unpaidLeaveDays > 0 && (
             <div style={{ color: '#DC2626' }}>{record.unpaidLeaveDays} Không lương</div>
           )}
@@ -165,7 +165,7 @@ export const TimesheetSummaryModule: React.FC = () => {
       ),
     },
     {
-      title: 'Giờ làm thêm OT (x1.5 / x2.0)',
+      title: 'Giờ làm thêm OT',
       key: 'ot',
       width: 180,
       render: (_: any, record: EnterpriseTimesheetSummaryItem) => (
@@ -352,22 +352,22 @@ export const TimesheetSummaryModule: React.FC = () => {
           <Form.Item name="month" label="Tháng chấm công" rules={[{ required: true }]}><Input type="month" /></Form.Item>
           <Form.Item name="standardDays" label="Ngày công chuẩn" rules={[{ required: true }]}><Input type="number" min={0.5} max={31} step={0.5} /></Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="actualDays" label="Công thực tế (ngày)" rules={[{ required: true }]}>
+            <Form.Item name="actualDays" label="Công thực tế" rules={[{ required: true }]}>
               <Input type="number" min={0} max={31} />
             </Form.Item>
-            <Form.Item name="paidLeaveDays" label="Phép hưởng lương (P)">
+            <Form.Item name="paidLeaveDays" label="Phép hưởng lương">
               <Input type="number" min={0} max={10} />
             </Form.Item>
-            <Form.Item name="unpaidLeaveDays" label="Nghỉ không lương (KL)">
+            <Form.Item name="unpaidLeaveDays" label="Nghỉ không lương">
               <Input type="number" min={0} max={10} />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="otHoursWeekday" label="Giờ OT ngày thường (hệ số x1.5)">
+            <Form.Item name="otHoursWeekday" label="Giờ OT ngày thường">
               <Input type="number" step={0.5} />
             </Form.Item>
-            <Form.Item name="otHoursWeekend" label="Giờ OT cuối tuần (hệ số x2.0)">
+            <Form.Item name="otHoursWeekend" label="Giờ OT cuối tuần">
               <Input type="number" step={0.5} />
             </Form.Item>
           </div>
@@ -420,15 +420,15 @@ export const TimesheetSummaryModule: React.FC = () => {
                   <strong style={{ color: '#16A34A' }}>{selectedSummary.actualDays} Ngày</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Nghỉ phép hưởng 100% lương (P):</span>
+                  <span style={{ color: '#64748B' }}>Nghỉ phép hưởng 100% lương:</span>
                   <strong style={{ color: '#D97706' }}>{selectedSummary.paidLeaveDays} Ngày</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Nghỉ không lương (KL):</span>
+                  <span style={{ color: '#64748B' }}>Nghỉ không lương:</span>
                   <span style={{ color: '#DC2626' }}>{selectedSummary.unpaidLeaveDays} Ngày</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 8 }}>
-                  <span style={{ color: '#0F172A', fontWeight: 700 }}>Tổng công thanh toán lương (P + Thực tế):</span>
+                  <span style={{ color: '#0F172A', fontWeight: 700 }}>Tổng công thanh toán lương:</span>
                   <strong style={{ color: '#009688', fontSize: 14 }}>{selectedSummary.totalPayDays} / 22 Công</strong>
                 </div>
               </div>
@@ -441,11 +441,11 @@ export const TimesheetSummaryModule: React.FC = () => {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>OT Ngày thường (Hệ số x150% lương giờ):</span>
+                  <span>OT Ngày thường:</span>
                   <strong>{selectedSummary.otHoursWeekday} Giờ</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>OT Cuối tuần (Hệ số x200% lương giờ):</span>
+                  <span>OT Cuối tuần:</span>
                   <strong>{selectedSummary.otHoursWeekend} Giờ</strong>
                 </div>
               </div>

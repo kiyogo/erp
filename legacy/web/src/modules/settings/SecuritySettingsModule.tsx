@@ -338,7 +338,7 @@ export const SecuritySettingsModule: React.FC = () => {
               }}
               style={{ backgroundColor: '#009688', borderColor: '#009688', borderRadius: 6, fontWeight: 500 }}
             >
-              Xác minh 2 bước (2SV)
+              Xác minh 2 bước
             </Button>
           </div>
         </div>
@@ -352,7 +352,7 @@ export const SecuritySettingsModule: React.FC = () => {
           <div style={{ fontSize: 12.5, color: '#212121', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontWeight: 600 }}>Windows 11 · Chrome 128.0</div>
-              <div style={{ fontSize: 11, color: '#757575' }}>Địa chỉ IP: 113.190.234.12 (Hà Nội, VN) · Đang hoạt động</div>
+              <div style={{ fontSize: 11, color: '#757575' }}>Địa chỉ IP: 113.190.234.12 · Đang hoạt động</div>
             </div>
             <span style={{ color: '#2E7D32', fontSize: 12, fontWeight: 600 }}>Thiết bị này</span>
           </div>
@@ -381,12 +381,12 @@ export const SecuritySettingsModule: React.FC = () => {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
           <div style={{ background: '#F0FDFA', border: '1px solid #CCFBF1', padding: 12, borderRadius: 6, fontSize: 12.5, color: '#0F766E' }}>
-            <LockOutlined style={{ color: '#009688', marginRight: 6 }} /><strong>Mã PIN bảo mật 6 số</strong> được dùng để xác thực nhanh cho mọi thao tác quan trọng trên web (Ký số, Duyệt chi, Xem phiếu lương, Bàn giao tài sản, Phê duyệt quy trình).
+            <LockOutlined style={{ color: '#009688', marginRight: 6 }} /><strong>Mã PIN bảo mật 6 số</strong> được dùng để xác thực nhanh cho mọi thao tác quan trọng trên web.
           </div>
 
           <div>
             <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
-              Mã PIN mới (6 chữ số) <span style={{ color: '#EF4444' }}>*</span>
+              Mã PIN mới <span style={{ color: '#EF4444' }}>*</span>
             </label>
             <Input.Password
               placeholder="VD: 123456"
@@ -443,7 +443,7 @@ export const SecuritySettingsModule: React.FC = () => {
             <Input
               value={newPasskeyDeviceName}
               onChange={e => setNewPasskeyDeviceName(e.target.value)}
-              placeholder="Nhập tên thiết bị (VD: Laptop cá nhân)..."
+              placeholder="Nhập tên thiết bị..."
               autoFocus
             />
           </div>
@@ -475,7 +475,7 @@ export const SecuritySettingsModule: React.FC = () => {
               <SafetyCertificateOutlined /> Passkey là gì?
             </div>
             <div style={{ fontSize: 12.5, color: '#134E4A', lineHeight: 1.6 }}>
-              Passkey là công nghệ xác thực sinh trắc học chuẩn mã hóa FIDO2 / WebAuthn. Cho phép bạn đăng nhập nhanh và xác thực an toàn bằng vân tay, khuôn mặt (Windows Hello, Touch ID, Face ID) trên thiết bị của mình mà không cần nhớ mật khẩu.
+              Passkey là công nghệ xác thực sinh trắc học chuẩn mã hóa FIDO2 / WebAuthn. Cho phép bạn đăng nhập nhanh và xác thực an toàn bằng vân tay, khuôn mặt trên thiết bị của mình mà không cần nhớ mật khẩu.
             </div>
           </div>
 

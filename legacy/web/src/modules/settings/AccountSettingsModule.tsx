@@ -52,7 +52,7 @@ export const AccountSettingsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cấp độ bảo mật tài khoản</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <SafetyCertificateOutlined /> Cực Cao (Level 4)
+            <SafetyCertificateOutlined /> Cực Cao
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã xác thực FIDO2 &amp; OTP phần cứng</div>
         </div>
@@ -176,7 +176,7 @@ export const AccountSettingsModule: React.FC = () => {
 
             <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Xác thực 2 bước (MFA / FIDO2)</div>
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Xác thực 2 bước</div>
                 <div style={{ fontSize: 12, color: '#64748B' }}>Bắt buộc nhập mã OTP hoặc vân tay khi đăng nhập từ thiết bị mới</div>
               </div>
               <Tag color="success">Đã kích hoạt</Tag>
@@ -184,7 +184,7 @@ export const AccountSettingsModule: React.FC = () => {
 
             <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Chữ ký số Cloud HSM (VNPT-CA)</div>
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Chữ ký số Cloud HSM</div>
                 <div style={{ fontSize: 12, color: '#64748B' }}>Dùng ký duyệt văn bản điện tử và ủy nhiệm chi ngân hàng tự động</div>
               </div>
               <Tag color="cyan">Sẵn sàng ký số</Tag>
@@ -216,7 +216,7 @@ export const AccountSettingsModule: React.FC = () => {
 
             <div style={{ padding: '10px 14px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#0F172A' }}>Ký số phê duyệt Hợp đồng HD-2026-ACB-01 (2.45 tỷ)</div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: '#0F172A' }}>Ký số phê duyệt Hợp đồng HD-2026-ACB-01</div>
                 <div style={{ fontSize: 11.5, color: '#64748B' }}>IP: 113.190.234.12 · Token HSM Verified · Hôm nay 15:12:45</div>
               </div>
               <Tag color="blue">Ký số HSM</Tag>

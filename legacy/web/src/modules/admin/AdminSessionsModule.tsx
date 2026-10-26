@@ -124,7 +124,7 @@ export const AdminSessionsModule: React.FC = () => {
       render: (_: any, record: EnterpriseSessionRecord) => (
         <div>
           <div style={{ fontWeight: 700, color: '#009688', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <UserOutlined /> {record.user}{record.current ? ' (Phiên hiện tại)' : ''}
+            <UserOutlined /> {record.user}{record.current ? '' : ''}
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{record.role}</div>
         </div>
@@ -259,7 +259,7 @@ export const AdminSessionsModule: React.FC = () => {
             { key: 'all', label: 'Tất cả phiên' },
             { key: 'active', label: 'Đang hoạt động', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
             { key: 'idle', label: 'Phiên treo / Chờ', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'admin', label: 'Quản trị viên (Admin)', icon: <LockOutlined style={{ color: '#009688' }} /> },
+            { key: 'admin', label: 'Quản trị viên', icon: <LockOutlined style={{ color: '#009688' }} /> },
             { key: 'vpn', label: 'Mạng ngoài', icon: <GlobalOutlined style={{ color: '#06B6D4' }} /> },
             { key: 'revoked', label: 'Đã thu hồi' },
             { key: 'expired', label: 'Đã hết hạn' },
@@ -313,7 +313,7 @@ export const AdminSessionsModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Phiên Truy Cập */}
       <Drawer
-        title="Giám Sát Chi Tiết Phiên Làm Việc (Session Audit)"
+        title="Giám Sát Chi Tiết Phiên Làm Việc"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={580}

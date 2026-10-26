@@ -119,10 +119,10 @@ export const EInvoiceModule: React.FC = () => {
 
       {/* VIEW: CREATE (Lập hóa đơn điện tử mới trực tiếp) */}
       {isCreate && (
-        <Card title="Lập Mới & Ký Số Hóa Đơn Điện Tử Trực Tuyến (Nghị định 123 / Thông tư 78)" style={{ borderRadius: 8, border: '1px solid #E2E8F0', maxWidth: 840 }}>
+        <Card title="Lập Mới & Ký Số Hóa Đơn Điện Tử Trực Tuyến" style={{ borderRadius: 8, border: '1px solid #E2E8F0', maxWidth: 840 }}>
           <Form form={createForm} layout="vertical" onFinish={handleCreate}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Form.Item name="invoiceNumber" label="Số hóa đơn (Tự động tăng)" initialValue={`00000${data.length + 140}`} rules={[{ required: true }]}>
+              <Form.Item name="invoiceNumber" label="Số hóa đơn" initialValue={`00000${data.length + 140}`} rules={[{ required: true }]}>
                 <Input disabled />
               </Form.Item>
               <Form.Item name="symbol" label="Ký hiệu & Mẫu số" initialValue="1/001 - C26TKY" rules={[{ required: true }]}>
@@ -130,10 +130,10 @@ export const EInvoiceModule: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 14 }}>
-              <Form.Item name="buyerName" label="Tên đơn vị mua hàng (Doanh nghiệp/Tổ chức)" rules={[{ required: true, message: 'Nhập tên đơn vị mua' }]}>
+              <Form.Item name="buyerName" label="Tên đơn vị mua hàng" rules={[{ required: true, message: 'Nhập tên đơn vị mua' }]}>
                 <Input placeholder="Ví dụ: Tập Đoàn Viễn Thông Quân Đội" />
               </Form.Item>
-              <Form.Item name="buyerTaxCode" label="Mã số thuế (MST)" rules={[{ required: true, message: 'Nhập MST' }]}>
+              <Form.Item name="buyerTaxCode" label="Mã số thuế" rules={[{ required: true, message: 'Nhập MST' }]}>
                 <Input placeholder="0100109106" />
               </Form.Item>
             </div>
@@ -147,9 +147,9 @@ export const EInvoiceModule: React.FC = () => {
               <Form.Item name="vatRate" label="Thuế suất GTGT" initialValue="10%">
                 <Select
                   options={[
-                    { label: '10% (Thuế suất chuẩn)', value: '10%' },
-                    { label: '8% (Nghị quyết giảm thuế)', value: '8%' },
-                    { label: '0% (Xuất khẩu / Dịch vụ quốc tế)', value: '0%' },
+                    { label: '10%', value: '10%' },
+                    { label: '8%', value: '8%' },
+                    { label: '0%', value: '0%' },
                     { label: 'Không chịu thuế GTGT', value: 'Không chịu thuế' },
                   ]}
                 />
@@ -213,8 +213,8 @@ export const EInvoiceModule: React.FC = () => {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
             {[
-              { name: 'Mẫu Hóa đơn Giá trị gia tăng (Có mã CQT)', template: '1/001', symbol: 'C26TKY', registered: '15/01/2026', cqtAccept: 'Chấp nhận theo Tờ khai 01/ĐKTĐ-HĐĐT', status: 'Đang sử dụng' },
-              { name: 'Mẫu Hóa đơn Bán hàng (Khu phi thuế quan)', template: '2/001', symbol: 'C26BKY', registered: '15/01/2026', cqtAccept: 'Chấp nhận theo Tờ khai 01/ĐKTĐ-HĐĐT', status: 'Đang sử dụng' },
+              { name: 'Mẫu Hóa đơn Giá trị gia tăng', template: '1/001', symbol: 'C26TKY', registered: '15/01/2026', cqtAccept: 'Chấp nhận theo Tờ khai 01/ĐKTĐ-HĐĐT', status: 'Đang sử dụng' },
+              { name: 'Mẫu Hóa đơn Bán hàng', template: '2/001', symbol: 'C26BKY', registered: '15/01/2026', cqtAccept: 'Chấp nhận theo Tờ khai 01/ĐKTĐ-HĐĐT', status: 'Đang sử dụng' },
             ].map((tmpl, idx) => (
               <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
@@ -249,9 +249,9 @@ export const EInvoiceModule: React.FC = () => {
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Kết quả tra cứu nhanh:</div>
               <div style={{ fontSize: 13, color: '#475569', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Hóa đơn số: <strong>00000142</strong> (Ký hiệu: <strong>1/001 - C26TKY</strong>)</div>
-                <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Đơn vị bán: <strong>CÔNG TY CP CÔNG NGHỆ KIYOVN</strong> (MST: 0109887766)</div>
-                <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Đơn vị mua: <strong>Tập Đoàn Công Nghệ F-Global</strong> (MST: 0102345678)</div>
-                <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Trạng thái CQT: <Tag color="success">Đã cấp mã CQT hợp lệ (Mã: 0026A88910F)</Tag></div>
+                <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Đơn vị bán: <strong>CÔNG TY CP CÔNG NGHỆ KIYOVN</strong> </div>
+                <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Đơn vị mua: <strong>Tập Đoàn Công Nghệ F-Global</strong> </div>
+                <div><CheckOutlined style={{ color: '#16A34A', marginRight: 6 }} />Trạng thái CQT: <Tag color="success">Đã cấp mã CQT hợp lệ</Tag></div>
               </div>
             </div>
           </Card>
@@ -262,8 +262,8 @@ export const EInvoiceModule: React.FC = () => {
       {isReports && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Báo Cáo Tình Hình Sử Dụng Hóa Đơn (Mẫu BC26/AC)</h3>
-            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo BC26/AC (XML/Excel)!')}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Báo Cáo Tình Hình Sử Dụng Hóa Đơn</h3>
+            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo BC26/AC!')}>
               Xuất XML nộp CQT
             </Button>
           </div>

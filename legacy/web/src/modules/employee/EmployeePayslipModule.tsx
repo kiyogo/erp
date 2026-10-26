@@ -109,7 +109,7 @@ export const EmployeePayslipModule: React.FC = () => {
       ),
     },
     {
-      title: 'Thực lĩnh (Net)',
+      title: 'Thực lĩnh',
       dataIndex: 'netSalary',
       key: 'netSalary',
       render: (v: number) => (
@@ -173,7 +173,7 @@ export const EmployeePayslipModule: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <Input
           prefix={<SearchOutlined style={{ color: '#bbb' }} />}
-          placeholder="Tìm theo kỳ lương (ví dụ: Tháng 08/2026)..."
+          placeholder="Tìm theo kỳ lương..."
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           style={{ width: 320, borderRadius: 6 }}
@@ -250,7 +250,7 @@ export const EmployeePayslipModule: React.FC = () => {
               <span style={{ color: '#2E7D32', fontWeight: 500 }}>+{selectedPayslip.allowance.toLocaleString('vi-VN')} ₫</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid #F0F0F0' }}>
-              <span style={{ color: '#757575' }}>Thưởng hiệu suất công việc (KPI):</span>
+              <span style={{ color: '#757575' }}>Thưởng hiệu suất công việc:</span>
               <span style={{ color: '#2E7D32', fontWeight: 600 }}>+{selectedPayslip.bonusKPI.toLocaleString('vi-VN')} ₫</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid #F0F0F0' }}>
@@ -258,7 +258,7 @@ export const EmployeePayslipModule: React.FC = () => {
               <span style={{ color: '#C62828', fontWeight: 500 }}>-{selectedPayslip.insuranceDeduction.toLocaleString('vi-VN')} ₫</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid #F0F0F0' }}>
-              <span style={{ color: '#757575' }}>Khấu trừ Thuế thu nhập cá nhân (TNCN):</span>
+              <span style={{ color: '#757575' }}>Khấu trừ Thuế thu nhập cá nhân:</span>
               <span style={{ color: '#C62828', fontWeight: 500 }}>-{selectedPayslip.personalTax.toLocaleString('vi-VN')} ₫</span>
             </div>
             <div
@@ -271,7 +271,7 @@ export const EmployeePayslipModule: React.FC = () => {
                 marginTop: 6,
               }}
             >
-              <span style={{ fontWeight: 600, color: '#00796B', fontSize: 15 }}>Tổng số tiền thực lĩnh (NET):</span>
+              <span style={{ fontWeight: 600, color: '#00796B', fontSize: 15 }}>Tổng số tiền thực lĩnh:</span>
               <span style={{ fontWeight: 800, color: '#009688', fontSize: 18 }}>
                 {selectedPayslip.netSalary.toLocaleString('vi-VN')} ₫
               </span>
@@ -342,7 +342,7 @@ export const EmployeePayslipModule: React.FC = () => {
 
           <div>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#424242' }}>
-              Số tài khoản ngân hàng (STK) <span style={{ color: 'red' }}>*</span>
+              Số tài khoản ngân hàng <span style={{ color: 'red' }}>*</span>
             </div>
             <Input
               prefix={<CreditCardOutlined style={{ color: '#9E9E9E' }} />}
@@ -359,7 +359,7 @@ export const EmployeePayslipModule: React.FC = () => {
             <Input
               value={bankForm?.accountHolder || ''}
               onChange={(e) => setBankForm(prev => ({ ...prev, accountHolder: e.target.value.toUpperCase() }))}
-              placeholder="VD: NGUYEN VAN MINH (Viết hoa không dấu)"
+              placeholder="VD: NGUYEN VAN MINH"
             />
           </div>
 

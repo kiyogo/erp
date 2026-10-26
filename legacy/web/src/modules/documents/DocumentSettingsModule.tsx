@@ -65,7 +65,7 @@ export const DocumentSettingsModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy tắc sinh số ký hiệu (NĐ 30)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy tắc sinh số ký hiệu</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {rules.length} bộ mẫu quy chuẩn
           </div>
@@ -75,7 +75,7 @@ export const DocumentSettingsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chứng thư số CA &amp; Con dấu mộc</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            Viettel-CA HSM (Valid)
+            Viettel-CA HSM
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Khóa chuẩn RSA-2048 · Hạn: 2028</div>
         </div>
@@ -178,7 +178,7 @@ export const DocumentSettingsModule: React.FC = () => {
                   render: (t: string) => <strong style={{ color: '#0F172A', fontSize: 13.5 }}>{t}</strong>,
                 },
                 {
-                  title: 'Cấu trúc định dạng mẫu (Template Pattern)',
+                  title: 'Cấu trúc định dạng mẫu',
                   dataIndex: 'prefixPattern',
                   key: 'prefixPattern',
                   render: (p: string) => (
@@ -228,7 +228,7 @@ export const DocumentSettingsModule: React.FC = () => {
 
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 18 }}>
             <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: '0 0 10px 0', color: '#0F172A' }}>
-              Quy tắc mã hóa tên viết tắt các phòng ban (NĐ 30/2020/NĐ-CP):
+              Quy tắc mã hóa tên viết tắt các phòng ban:
             </h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
               <div style={{ padding: '8px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
@@ -268,13 +268,13 @@ export const DocumentSettingsModule: React.FC = () => {
               </div>
               <div style={{ fontSize: 12, color: '#15803D', marginTop: 4 }}>Mã số thuế: 0109988776</div>
               <div style={{ fontSize: 12, color: '#15803D' }}>
-                Tổ chức cấp phát: <strong>Tập đoàn Viễn thông Quân đội (Viettel-CA Root)</strong>
+                Tổ chức cấp phát: <strong>Tập đoàn Viễn thông Quân đội</strong>
               </div>
               <div style={{ fontSize: 11.5, color: '#166534', marginTop: 6, fontFamily: 'monospace' }}>
                 Serial: 5404 8892 1102 7741 9901 · Khóa: RSA 2048-bit
               </div>
               <div style={{ fontSize: 11.5, color: '#166534' }}>
-                Thời hạn hiệu lực: <strong>2023-01-01 ➔ 2028-12-31 (Còn 2 năm 4 tháng)</strong>
+                Thời hạn hiệu lực: <strong>2023-01-01 ➔ 2028-12-31</strong>
               </div>
             </div>
 
@@ -282,18 +282,18 @@ export const DocumentSettingsModule: React.FC = () => {
               <Form.Item name="pkiMode" label="Phương thức kết nối chữ ký số doanh nghiệp">
                 <Select
                   options={[
-                    { label: 'Viettel-CA HSM Server (Ký tự động qua API Gateway)', value: 'hsm' },
-                    { label: 'Viettel-CA USB Token (Ký thủ công cắm tại máy chủ văn thư)', value: 'token' },
+                    { label: 'Viettel-CA HSM Server', value: 'hsm' },
+                    { label: 'Viettel-CA USB Token', value: 'token' },
                     { label: 'VNPT SmartCA Corporate', value: 'vnpt' },
                   ]}
                 />
               </Form.Item>
 
-              <Form.Item name="autoTsa" label="Tự động đóng dấu thời gian điện tử (TSA RFC 3161)">
+              <Form.Item name="autoTsa" label="Tự động đóng dấu thời gian điện tử">
                 <Select
                   options={[
-                    { label: 'Bật (Bộ TT&TT TSA Server - Căn cứ pháp lý không thể chối bỏ)', value: 'yes' },
-                    { label: 'Tắt (Sử dụng giờ hệ thống cục bộ)', value: 'no' },
+                    { label: 'Bật', value: 'yes' },
+                    { label: 'Tắt', value: 'no' },
                   ]}
                 />
               </Form.Item>
@@ -320,7 +320,7 @@ export const DocumentSettingsModule: React.FC = () => {
                   Con dấu Pháp nhân Doanh nghiệp KIYOVN
                 </div>
                 <div style={{ fontSize: 12, color: '#B91C1C', marginTop: 2 }}>
-                  Tệp: <code>kiyo_official_seal_transparent.png</code> (Độ phân giải 600 DPI)
+                  Tệp: <code>kiyo_official_seal_transparent.png</code> 
                 </div>
                 <div style={{ fontSize: 11.5, color: '#7F1D1D', marginTop: 2 }}>
                   Tọa độ đóng mộc mặc định: <strong>Góc dưới bên phải chữ ký Người đại diện pháp luật</strong>
@@ -341,8 +341,8 @@ export const DocumentSettingsModule: React.FC = () => {
               <Form.Item label="Kích thước con dấu đóng lên tệp PDF xuất bản" initialValue="standard">
                 <Select
                   options={[
-                    { label: 'Kích thước tiêu chuẩn (Đường kính 3.6 cm - Chuẩn NĐ 30)', value: 'standard' },
-                    { label: 'Kích thước nhỏ (Đường kính 3.0 cm)', value: 'small' },
+                    { label: 'Kích thước tiêu chuẩn', value: 'standard' },
+                    { label: 'Kích thước nhỏ', value: 'small' },
                   ]}
                 />
               </Form.Item>
@@ -424,14 +424,14 @@ export const DocumentSettingsModule: React.FC = () => {
       {activeTab === 'retention' && (
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
           <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 14px 0', color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <CalendarOutlined style={{ color: '#009688' }} /> Bảng Thời Hạn Bảo Quản Tài Liệu (Thông tư 02/2019/TT-BNV)
+            <CalendarOutlined style={{ color: '#009688' }} /> Bảng Thời Hạn Bảo Quản Tài Liệu
           </h3>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <strong style={{ color: '#0F172A' }}>1. Quyết định thành lập, Quy chế tổ chức, Điều lệ &amp; Nghị quyết HĐQT</strong>
-                <Tag color="purple">Bảo quản vĩnh viễn (Permanent)</Tag>
+                <Tag color="purple">Bảo quản vĩnh viễn</Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 Lưu trữ song song bản cứng tại Két an toàn Tầng 4 Keangnam và bản mềm mã hóa trên Cloud Vault.

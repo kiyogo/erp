@@ -535,7 +535,7 @@ export class EkycEngine {
         resolve({
           hasCard: true,
           isValid: true,
-          message: 'Đã nhận diện mặt sau CCCD (Chip điện tử & MRZ)!',
+          message: 'Đã nhận diện mặt sau CCCD!',
           data: {
             idNumber: currentData?.idNumber || '',
             name: currentData?.name || '',

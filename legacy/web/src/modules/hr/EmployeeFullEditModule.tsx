@@ -444,7 +444,7 @@ const SECTION_DETAILED_OPTIONS: SectionDefinition[] = [
       { key: 'sexualOrientation', label: 'Xu hướng tính dục' },
       { key: 'selfBackground', label: 'Bản thân' },
       { key: 'familyBackground', label: 'Gia đình' },
-      { key: 'avatar', label: 'Ảnh đại diện (Avatar)' },
+      { key: 'avatar', label: 'Ảnh đại diện' },
     ],
   },
   {
@@ -533,7 +533,7 @@ const SECTION_DETAILED_OPTIONS: SectionDefinition[] = [
       { key: 'selfBackground', label: 'Thành phần bản thân' },
       { key: 'householdNumber', label: 'Số sổ hộ khẩu' },
       { key: 'householdCode', label: 'Mã số hộ gia đình' },
-      { key: 'relatives', label: 'Danh sách người thân (Bố, Mẹ, Con, Vợ/Chồng...)' },
+      { key: 'relatives', label: 'Danh sách người thân' },
     ],
   },
   {
@@ -553,8 +553,8 @@ const SECTION_DETAILED_OPTIONS: SectionDefinition[] = [
       { key: 'militaryService', label: 'Nghĩa vụ quân sự' },
       { key: 'healthStatus', label: 'Tình trạng sức khỏe' },
       { key: 'bloodGroup', label: 'Nhóm máu' },
-      { key: 'height', label: 'Chiều cao (cm)' },
-      { key: 'weight', label: 'Cân nặng (kg)' },
+      { key: 'height', label: 'Chiều cao' },
+      { key: 'weight', label: 'Cân nặng' },
     ],
   },
   {
@@ -565,12 +565,12 @@ const SECTION_DETAILED_OPTIONS: SectionDefinition[] = [
       { key: 'tailoringGender', label: 'Giới tính may đo' },
       { key: 'height', label: 'Chiều cao' },
       { key: 'weight', label: 'Cân nặng' },
-      { key: 'shirtLetter', label: 'Cỡ áo (Size)' },
-      { key: 'pantsLetter', label: 'Cỡ quần/váy (Size)' },
+      { key: 'shirtLetter', label: 'Cỡ áo' },
+      { key: 'pantsLetter', label: 'Cỡ quần/váy' },
       { key: 'ppeLetter', label: 'Cỡ bảo hộ / Giày' },
-      { key: 'chest', label: 'Số đo Vòng 1 (Ngực)' },
-      { key: 'waist', label: 'Số đo Vòng 2 (Eo)' },
-      { key: 'butt', label: 'Số đo Vòng 3 (Mông)' },
+      { key: 'chest', label: 'Số đo Vòng 1' },
+      { key: 'waist', label: 'Số đo Vòng 2' },
+      { key: 'butt', label: 'Số đo Vòng 3' },
       { key: 'shoulder', label: 'Rộng vai' },
       { key: 'arm', label: 'Dài tay' },
       { key: 'pants', label: 'Dài quần / váy' },
@@ -1070,7 +1070,7 @@ export const EmployeeFullEditModule: React.FC = () => {
     // Hỗ trợ tối đa các định dạng ảnh phổ biến
     const isImageFormat = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg|tiff?|avif|heic|heif|ico)$/i.test(file.name);
     if (!isImageFormat) {
-      message.error('Định dạng tệp không được hỗ trợ! Vui lòng chọn tệp hình ảnh (PNG, JPG, WEBP, GIF, BMP, SVG, TIFF, AVIF, HEIC, ICO).');
+      message.error('Định dạng tệp không được hỗ trợ! Vui lòng chọn tệp hình ảnh.');
       return;
     }
 
@@ -1672,7 +1672,7 @@ export const EmployeeFullEditModule: React.FC = () => {
         } else if (Array.isArray(employee.bankAccounts) && employee.bankAccounts.length > 0) {
           loadedBanks = employee.bankAccounts;
         } else if (employee.bankAccount || details.bankAccount || employee.bankName || details.bankName) {
-          const bName = employee.bankName || details.bankName || 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)';
+          const bName = employee.bankName || details.bankName || 'Ngân hàng TMCP Ngoại Thương VN';
           const bAcc = employee.bankAccount || details.bankAccount || '';
           if (bAcc || bName) {
             loadedBanks = [
@@ -1920,7 +1920,7 @@ export const EmployeeFullEditModule: React.FC = () => {
   const [isBankViewModalOpen, setIsBankViewModalOpen] = useState(false);
   const [viewingBankAccount, setViewingBankAccount] = useState<BankAccount | null>(null);
   const [bankAccountForm, setBankAccountForm] = useState<Partial<BankAccount>>({
-    bankName: 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
+    bankName: 'Ngân hàng TMCP Ngoại Thương VN',
     accountNumber: '',
     accountHolder: '',
     branch: '',
@@ -1933,7 +1933,7 @@ export const EmployeeFullEditModule: React.FC = () => {
   const handleOpenAddBank = () => {
     setEditingBankAccount(null);
     setBankAccountForm({
-      bankName: 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
+      bankName: 'Ngân hàng TMCP Ngoại Thương VN',
       accountNumber: '',
       accountHolder: (formData?.name || '').toUpperCase(),
       branch: '',
@@ -4618,7 +4618,7 @@ export const EmployeeFullEditModule: React.FC = () => {
                     <BaseInput.Password
                       value={newPassword}
                       onChange={e => setNewPassword(e.target.value)}
-                      placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
+                      placeholder="Nhập mật khẩu mới"
                     />
                   </div>
                   <div style={{ marginBottom: 16 }}>
@@ -5465,7 +5465,7 @@ export const EmployeeFullEditModule: React.FC = () => {
           <div className="k-form-grid-2">
             <div>
               <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>
-                Số tài khoản (STK) <span style={{ color: '#EF4444' }}>*</span>
+                Số tài khoản <span style={{ color: '#EF4444' }}>*</span>
               </label>
               <BaseInput
                 disabled={isEmployeePortal && editingBankAccount !== null && editingBankAccount.status !== 'Từ chối'}
@@ -5613,7 +5613,7 @@ export const EmployeeFullEditModule: React.FC = () => {
                 <div style={{ fontSize: 14, fontWeight: 600, color: '#1E293B' }}>{viewingBankAccount?.bankName || '--'}</div>
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: 12, color: '#64748B', marginBottom: 2 }}>Số tài khoản (STK)</label>
+                <label style={{ display: 'block', fontSize: 12, color: '#64748B', marginBottom: 2 }}>Số tài khoản</label>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#009688' }}>{viewingBankAccount?.accountNumber || '--'}</div>
               </div>
               <div>
@@ -5688,7 +5688,7 @@ export const EmployeeFullEditModule: React.FC = () => {
           </div>
         }
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div className="k-form-grid-2">
             <div>
               <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
@@ -5946,7 +5946,7 @@ export const EmployeeFullEditModule: React.FC = () => {
                       Nhấn để tải lên ảnh chữ ký
                     </div>
                     <div style={{ fontSize: 11, color: '#64748B' }}>
-                      Hỗ trợ định dạng PNG, JPG (Khuyên dùng ảnh nền trắng hoặc trong suốt)
+                      Hỗ trợ định dạng PNG, JPG
                     </div>
                   </button>
                 </div>
@@ -6383,7 +6383,7 @@ export const EmployeeFullEditModule: React.FC = () => {
       <Modal
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 16, fontWeight: 600, color: '#0F172A' }}>
-            <HddOutlined style={{ color: '#0284C7' }} /> Hạn mức dung lượng lưu trữ (Storage Quota)
+            <HddOutlined style={{ color: '#0284C7' }} /> Hạn mức dung lượng lưu trữ
           </div>
         }
         open={isStorageModalOpen}

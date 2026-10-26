@@ -36,7 +36,7 @@ export interface EnterpriseRawLogItem {
   temperature?: string;
   gpsCoordinates?: string;
   rawPayload?: string;
-  status: 'Dữ liệu hợp lệ' | 'Bản ghi trùng lặp (Đã lọc)' | 'Cần kiểm tra';
+  status: 'Dữ liệu hợp lệ' | 'Bản ghi trùng lặp' | 'Cần kiểm tra';
 }
 
 const INITIAL_RAW_LOGS: EnterpriseRawLogItem[] = [];
@@ -63,7 +63,7 @@ export const TimesheetRawDataModule: React.FC = () => {
   const [selectedLog, setSelectedLog] = useState<EnterpriseRawLogItem | null>(null);
 
   const validCount = data.filter((d) => d.status === 'Dữ liệu hợp lệ').length;
-  const duplicateCount = data.filter((d) => d.status === 'Bản ghi trùng lặp (Đã lọc)').length;
+  const duplicateCount = data.filter((d) => d.status === 'Bản ghi trùng lặp').length;
 
   const handleSync = async () => {
     try {
@@ -76,7 +76,7 @@ export const TimesheetRawDataModule: React.FC = () => {
     if (saving) return;
     setSaving(true);
     try {
-      if (record.status === 'Bản ghi trùng lặp (Đã lọc)') throw new Error('Không thể ghi nhận công cho bản ghi trùng lặp.');
+      if (record.status === 'Bản ghi trùng lặp') throw new Error('Không thể ghi nhận công cho bản ghi trùng lặp.');
       await collectionsApi.update('attendance_raw_data', record.key, { status: 'Dữ liệu hợp lệ' });
       await dataService.refreshGenericData('attendance_raw_data');
       message.success('Đã xác nhận bản ghi hợp lệ trên hệ thống.'); setDrawerOpen(false);
@@ -158,7 +158,7 @@ export const TimesheetRawDataModule: React.FC = () => {
       render: (status: string) => {
         let color = 'default';
         if (status === 'Dữ liệu hợp lệ') color = 'success';
-        if (status === 'Bản ghi trùng lặp (Đã lọc)') color = 'default';
+        if (status === 'Bản ghi trùng lặp') color = 'default';
         if (status === 'Cần kiểm tra') color = 'warning';
         return <Tag color={color}>{status}</Tag>;
       },
@@ -203,7 +203,7 @@ export const TimesheetRawDataModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bản ghi trùng lặp (Lọc thông minh)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bản ghi trùng lặp</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#64748B', marginTop: 4 }}>
             {duplicateCount} Bản ghi
           </div>

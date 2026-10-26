@@ -1759,3 +1759,87 @@ textarea.ant-input {
   padding: 0 !important;
 }
 
+/* ============================================================
+   Dialog & Modal System: 100% Divider Line Removal & Uniform 8px Spacing
+   ============================================================ */
+.ant-modal {
+  padding: 8px !important;
+  gap: 8px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border: none !important;
+  box-sizing: border-box !important;
+}
+
+.ant-modal-header,
+.ant-modal-footer,
+.ant-modal-body,
+.ant-drawer-header,
+.ant-drawer-footer,
+.ant-drawer-body {
+  border: none !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  border-left: none !important;
+  border-right: none !important;
+  box-shadow: none !important;
+}
+
+.ant-modal-header {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.ant-modal-body {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.ant-modal-footer {
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 8px !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+}
+
+.ant-modal-footer .ant-btn {
+  margin: 0 !important;
+}
+
+.ant-modal .k-form-grid-2,
+.ant-modal .k-form-grid-3,
+.ant-modal .k-form-grid-4 {
+  gap: 8px !important;
+}
+
+.ant-modal .ant-form-item {
+  margin-bottom: 8px !important;
+}
+
+.ant-modal .ant-modal-body > div[style*="flexDirection: column"],
+.ant-modal .ant-modal-body > div[style*="flex-direction: column"],
+.ant-modal .ant-modal-body > div[style*="flexDirection: 'column'"] {
+  gap: 8px !important;
+  padding-top: 0 !important;
+}
+
+.ant-modal-body::-webkit-scrollbar,
+.ant-modal-wrap::-webkit-scrollbar {
+  width: 5px !important;
+  height: 5px !important;
+}
+
+.ant-modal-body::-webkit-scrollbar-track,
+.ant-modal-wrap::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.ant-modal-body::-webkit-scrollbar-thumb,
+.ant-modal-wrap::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3) !important;
+  border-radius: 4px !important;
+}
+
+

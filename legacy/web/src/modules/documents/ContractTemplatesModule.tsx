@@ -359,7 +359,7 @@ export const ContractTemplatesModule: React.FC = () => {
 
         <div style={{ marginTop: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <strong style={{ color: '#0F172A', fontSize: 14 }}>Trường hợp đồng hiển thị (Trường tự thêm)</strong>
+            <strong style={{ color: '#0F172A', fontSize: 14 }}>Trường hợp đồng hiển thị</strong>
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -390,7 +390,7 @@ export const ContractTemplatesModule: React.FC = () => {
             <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 6, padding: '10px 12px', marginBottom: 10 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <FileTextOutlined style={{ color: '#009688' }} />
-                <span>Mã trường khả dụng dùng trong Nội dung mẫu (nhấp để tự động chèn vào con trỏ):</span>
+                <span>Mã trường khả dụng dùng trong Nội dung mẫu:</span>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {availableTemplateTokens.map((token) => (
@@ -450,7 +450,7 @@ export const ContractTemplatesModule: React.FC = () => {
             <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
               <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left', color: '#475569' }}>
                 <th style={{ padding: '12px 16px', background: '#F8FAFC' }}>Tên trường</th>
-                <th style={{ padding: '12px 16px', background: '#F8FAFC' }}>Mã chèn mẫu (Token)</th>
+                <th style={{ padding: '12px 16px', background: '#F8FAFC' }}>Mã chèn mẫu</th>
                 <th style={{ padding: '12px 16px', background: '#F8FAFC' }}>Kiểu dữ liệu</th>
                 <th style={{ padding: '12px 16px', background: '#F8FAFC' }}>Gợi ý nhập</th>
                 <th style={{ padding: '12px 16px', background: '#F8FAFC' }}>Bắt buộc</th>

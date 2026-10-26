@@ -35,7 +35,7 @@ export interface EnterpriseDocItem {
   issuedDate: string;
   effectiveDate: string;
   expirationDate: string;
-  securityLevel: 'Tuyệt mật (BOD Only)' | 'Mật (Confidential)' | 'Nội bộ công ty' | 'Công khai';
+  securityLevel: 'Tuyệt mật' | 'Mật' | 'Nội bộ công ty' | 'Công khai';
   storageLocation: string;
   fileFormat: string;
   fileNodeId?: string;
@@ -438,8 +438,8 @@ export const DocumentsModule: React.FC = () => {
             style={{ width: 170 }}
             options={[
               { label: 'Tất cả mức bảo mật', value: 'all' },
-              { label: 'Tuyệt mật (BOD Only)', value: 'Tuyệt mật (BOD Only)' },
-              { label: 'Mật (Confidential)', value: 'Mật (Confidential)' },
+              { label: 'Tuyệt mật', value: 'Tuyệt mật (BOD Only)' },
+              { label: 'Mật', value: 'Mật (Confidential)' },
               { label: 'Nội bộ công ty', value: 'Nội bộ công ty' },
             ]}
           />
@@ -529,8 +529,8 @@ export const DocumentsModule: React.FC = () => {
                 options={[
                   { label: 'Công khai', value: 'Công khai' },
                   { label: 'Nội bộ công ty', value: 'Nội bộ công ty' },
-                  { label: 'Mật (Confidential)', value: 'Mật (Confidential)' },
-                  { label: 'Tuyệt mật (BOD Only)', value: 'Tuyệt mật (BOD Only)' },
+                  { label: 'Mật', value: 'Mật (Confidential)' },
+                  { label: 'Tuyệt mật', value: 'Tuyệt mật (BOD Only)' },
                 ]}
               />
             </Form.Item>
@@ -561,7 +561,7 @@ export const DocumentsModule: React.FC = () => {
             <Form.Item name="storageLocation" label="Vị trí lưu kho vật lý & Cloud">
               <Input placeholder="Ví dụ: Kệ A1-Box 02 Keangnam Landmark 72" />
             </Form.Item>
-            <Form.Item name="tags" label="Thẻ từ khóa tìm kiếm (phân cách bằng dấu phẩy)">
+            <Form.Item name="tags" label="Thẻ từ khóa tìm kiếm">
               <Input placeholder="ISO 27001, An toàn, Keangnam" />
             </Form.Item>
           </div>
@@ -573,10 +573,10 @@ export const DocumentsModule: React.FC = () => {
           <Form.Item name="status" label="Trạng thái hồ sơ" rules={[{ required: true }]}>
             <Select options={['Dự thảo thẩm định', 'Mới ban hành', 'Đang hiệu lực', 'Hết hiệu lực / Lưu kho'].map(value => ({ value, label: value }))} />
           </Form.Item>
-          <Form.Item name="expirationDate" label="Ngày hết hiệu lực (để trống nếu vĩnh viễn)">
+          <Form.Item name="expirationDate" label="Ngày hết hiệu lực">
             <Input type="date" />
           </Form.Item>
-          <label style={{ display: 'block', marginTop: 12 }}>Tệp gốc đính kèm (PDF, DOCX, XLSX, ảnh; tối đa 50 MB)
+          <label style={{ display: 'block', marginTop: 12 }}>Tệp gốc đính kèm
             <input type="file" accept=".pdf,.docx,.xlsx,image/*" onChange={event => {
               const file = event.target.files?.[0] || null;
               if (file && file.size > 50 * 1024 * 1024) { message.error('Tệp tối đa 50 MB.'); event.target.value = ''; return; }

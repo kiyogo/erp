@@ -21,7 +21,7 @@ export interface EnterpriseFixedAsset {
   key: string;
   code: string;
   name: string;
-  category: 'Máy móc & Thiết bị CNTT' | 'Tài sản vô hình (Phần mềm)' | 'Phương tiện vận tải' | 'Nhà cửa & Vật kiến trúc';
+  category: 'Máy móc & Thiết bị CNTT' | 'Tài sản vô hình' | 'Phương tiện vận tải' | 'Nhà cửa & Vật kiến trúc';
   originalValue: number; // Nguyên giá
   depreciationMonths: number; // Thời gian trích khấu hao (tháng)
   monthlyDepreciation: number; // Khấu hao mỗi tháng
@@ -153,7 +153,7 @@ export const FixedAssetsModule: React.FC = () => {
       ),
     },
     {
-      title: 'Giá trị còn lại (Book Value)',
+      title: 'Giá trị còn lại',
       dataIndex: 'bookValue',
       key: 'bookValue',
       width: 180,
@@ -220,7 +220,7 @@ export const FixedAssetsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giá trị còn lại thực tế (Net Book Value)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giá trị còn lại thực tế</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalBookValue.toLocaleString('vi-VN')} ₫
           </div>
@@ -319,7 +319,7 @@ export const FixedAssetsModule: React.FC = () => {
               <Select
                 options={[
                   { label: 'Máy móc & Thiết bị CNTT', value: 'Máy móc & Thiết bị CNTT' },
-                  { label: 'Tài sản vô hình (Phần mềm)', value: 'Tài sản vô hình (Phần mềm)' },
+                  { label: 'Tài sản vô hình', value: 'Tài sản vô hình (Phần mềm)' },
                   { label: 'Phương tiện vận tải', value: 'Phương tiện vận tải' },
                   { label: 'Nhà cửa & Vật kiến trúc', value: 'Nhà cửa & Vật kiến trúc' },
                 ]}
@@ -335,7 +335,7 @@ export const FixedAssetsModule: React.FC = () => {
             <Form.Item name="originalValue" label="Nguyên giá tài sản (VNĐ)" rules={[{ required: true }]}>
               <Input type="number" min={0} step={10000000} />
             </Form.Item>
-            <Form.Item name="depreciationMonths" label="Thời gian khấu hao (tháng)" rules={[{ required: true }]}>
+            <Form.Item name="depreciationMonths" label="Thời gian khấu hao" rules={[{ required: true }]}>
               <Input type="number" min={1} max={240} />
             </Form.Item>
           </div>
@@ -411,7 +411,7 @@ export const FixedAssetsModule: React.FC = () => {
                   <strong style={{ color: '#DC2626' }}>{selectedAsset.accumulatedDepreciation.toLocaleString('vi-VN')} ₫</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Giá trị còn lại (Book Value):</span>
+                  <span style={{ color: '#64748B' }}>Giá trị còn lại:</span>
                   <strong style={{ color: '#16A34A', fontSize: 15 }}>{selectedAsset.bookValue.toLocaleString('vi-VN')} ₫</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>

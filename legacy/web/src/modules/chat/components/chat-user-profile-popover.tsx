@@ -174,7 +174,7 @@ export function ChatUserProfilePopover({
               <div className="text-[10px] font-bold text-[#949ba4] uppercase mb-1">Trạng thái</div>
               <div className="flex items-center gap-1.5 text-[#23a55a]">
                 <span className="w-2 h-2 rounded-full bg-[#23a55a]" />
-                <span className="font-medium">Trực tuyến (Online)</span>
+                <span className="font-medium">Trực tuyến</span>
               </div>
             </div>
           </div>

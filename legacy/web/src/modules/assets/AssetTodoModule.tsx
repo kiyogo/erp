@@ -36,8 +36,8 @@ export interface AssetTodoItem {
   taskCode: string;
   taskTitle: string;
   taskCategory: 'Cấp phát / Bàn giao' | 'Thu hồi tài sản' | 'Bảo dưỡng / Kiểm định' | 'Sửa chữa & Thay thế' | 'Kiểm kê đối soát' | 'Thanh lý & Tiêu hủy' | 'Đề xuất mua sắm';
-  priority: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Trung bình (P3)' | 'Thấp (P4)';
-  slaStatus: 'Trong hạn SLA' | 'Sắp chạm hạn SLA (Dưới 4h)' | 'Trễ hạn SLA';
+  priority: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Trung bình (P3)' | 'Thấp';
+  slaStatus: 'Trong hạn SLA' | 'Sắp chạm hạn SLA' | 'Trễ hạn SLA';
   deadline: string;
   assignedStaff: string;
   requester: string;
@@ -110,7 +110,7 @@ export const AssetTodoModule: React.FC = () => {
       key: String(Date.now()),
       estimatedHours: Number(values.estimatedHours) || 2,
       actualHours: 0,
-      slaStatus: values.priority.includes('P1') ? 'Sắp chạm hạn SLA (Dưới 4h)' : 'Trong hạn SLA',
+      slaStatus: values.priority.includes('P1') ? 'Sắp chạm hạn SLA' : 'Trong hạn SLA',
       status: 'Chờ xử lý',
       checklist: [
         { item: 'Tiếp nhận thông tin và kiểm tra hiện trạng thiết bị', done: false },
@@ -274,7 +274,7 @@ export const AssetTodoModule: React.FC = () => {
               { label: 'Khẩn cấp (P1)', value: 'Khẩn cấp (P1)' },
               { label: 'Cao (P2)', value: 'Cao (P2)' },
               { label: 'Trung bình (P3)', value: 'Trung bình (P3)' },
-              { label: 'Thấp (P4)', value: 'Thấp (P4)' },
+              { label: 'Thấp', value: 'Thấp (P4)' },
             ]}
           />
         </div>
@@ -285,7 +285,7 @@ export const AssetTodoModule: React.FC = () => {
             <Radio.Button value="kanban"><AppstoreOutlined /> Kanban</Radio.Button>
           </Radio.Group>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo nhiệm vụ quản trị tài sản (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo nhiệm vụ quản trị tài sản')}>
             Xuất Excel
           </Button>
           <Button
@@ -560,10 +560,10 @@ export const AssetTodoModule: React.FC = () => {
             <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Khẩn cấp (P1 - SLA 2h)', value: 'Khẩn cấp (P1)' },
-                  { label: 'Cao (P2 - Trong ngày)', value: 'Cao (P2)' },
-                  { label: 'Trung bình (P3 - 3 ngày)', value: 'Trung bình (P3)' },
-                  { label: 'Thấp (P4 - Tuần)', value: 'Thấp (P4)' },
+                  { label: 'Khẩn cấp', value: 'Khẩn cấp (P1)' },
+                  { label: 'Cao', value: 'Cao (P2)' },
+                  { label: 'Trung bình', value: 'Trung bình (P3)' },
+                  { label: 'Thấp', value: 'Thấp (P4)' },
                 ]}
               />
             </Form.Item>
@@ -581,7 +581,7 @@ export const AssetTodoModule: React.FC = () => {
               <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
             </Form.Item>
             <Form.Item name="assignedStaff" label="Cán bộ phụ trách thực hiện" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Văn Hải (IT Admin)" />
+              <Input placeholder="Ví dụ: Nguyễn Văn Hải" />
             </Form.Item>
           </div>
 
@@ -589,10 +589,10 @@ export const AssetTodoModule: React.FC = () => {
             <Form.Item name="location" label="Vị trí / Phòng ban thực hiện" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Keangnam Landmark 72 Tầng 14" />
             </Form.Item>
-            <Form.Item name="deadline" label="Hạn hoàn thành (Deadline)" rules={[{ required: true }]}>
+            <Form.Item name="deadline" label="Hạn hoàn thành" rules={[{ required: true }]}>
               <Input placeholder="2026-08-28 17:00" />
             </Form.Item>
-            <Form.Item name="estimatedHours" label="Dự kiến (Giờ)">
+            <Form.Item name="estimatedHours" label="Dự kiến">
               <Input type="number" min={0.5} step={0.5} />
             </Form.Item>
           </div>
@@ -727,7 +727,7 @@ export const AssetTodoModule: React.FC = () => {
 
             <div>
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
-                Thời gian thực tế xử lý (Giờ):
+                Thời gian thực tế xử lý:
               </label>
               <Input
                 type="number"

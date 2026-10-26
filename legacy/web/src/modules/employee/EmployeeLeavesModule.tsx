@@ -292,7 +292,7 @@ export const EmployeeLeavesModule: React.FC = () => {
               options={[
                 { label: 'Nghỉ phép năm hưởng nguyên lương', value: 'Nghỉ phép năm' },
                 { label: 'Nghỉ ốm đau có giấy chứng nhận y tế', value: 'Nghỉ ốm BHXH' },
-                { label: 'Nghỉ việc riêng hưởng nguyên lương (Hiếu, Hỷ)', value: 'Nghỉ việc riêng có lương' },
+                { label: 'Nghỉ việc riêng hưởng nguyên lương', value: 'Nghỉ việc riêng có lương' },
                 { label: 'Nghỉ không hưởng lương', value: 'Nghỉ không lương' },
                 { label: 'Nghỉ chế độ thai sản / Khám thai', value: 'Nghỉ thai sản' },
               ]}

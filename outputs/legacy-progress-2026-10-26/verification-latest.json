@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-26T19:44:58.3119829+07:00",
+  "apiTests": 75,
+  "webDomainTests": 38,
+  "postgresFlows": 15,
+  "typecheck": "passed",
+  "build": "passed",
+  "browser": {
+    "companyEmptyNameRejected": "passed",
+    "performanceRequiredFields": "passed",
+    "backupCreateDownload": "passed",
+    "canvasOpened": "passed",
+    "performanceNoInventedScores": "passed",
+    "backupZipCrc": "passed",
+    "backupDownloadedFile": "C:/Users/sonng/Downloads/SNAP-20261026-2FA8751D.zip",
+    "documentRequiredFields": "passed",
+    "login": "passed",
+    "backupSha256": "bf30a4c2c8730295639a29c09c83fc8070c38e4bab5153a7f6aaa7441d7ef107"
+  },
+  "previousProductionRouteScan": 246,
+  "latestFullRouteScan": "not repeated",
+  "externalProviders": "not verified",
+  "completeVideoParity": false
+}

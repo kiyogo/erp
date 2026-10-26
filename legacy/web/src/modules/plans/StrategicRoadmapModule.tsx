@@ -105,7 +105,7 @@ export const StrategicRoadmapModule: React.FC = () => {
       ),
     },
     {
-      title: 'Chỉ số đo lường (Key Result)',
+      title: 'Chỉ số đo lường',
       dataIndex: 'targetMetric',
       key: 'targetMetric',
       width: 260,
@@ -275,7 +275,7 @@ export const StrategicRoadmapModule: React.FC = () => {
 
       {/* Modal Add OKR */}
       <Modal
-        title="Thêm mục tiêu chiến lược then chốt (OKR) mới"
+        title="Thêm mục tiêu chiến lược then chốt mới"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -302,15 +302,15 @@ export const StrategicRoadmapModule: React.FC = () => {
             <Input placeholder="Ví dụ: Mở rộng cụm máy chủ IDC 50 Rack" />
           </Form.Item>
 
-          <Form.Item name="targetMetric" label="Chỉ số kết quả đo lường (Key Result)" rules={[{ required: true, message: 'Nhập chỉ số kết quả' }]}>
-            <Input placeholder="Ví dụ: 50 Rack IDC (Hiện tại: 38 Rack)" />
+          <Form.Item name="targetMetric" label="Chỉ số kết quả đo lường" rules={[{ required: true, message: 'Nhập chỉ số kết quả' }]}>
+            <Input placeholder="Ví dụ: 50 Rack IDC" />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
             <Form.Item name="owner" label="Phụ trách" initialValue="Trần Tuấn Anh" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="progressPct" label="Tiến độ (%)" initialValue={50} rules={[{ required: true }]}>
+            <Form.Item name="progressPct" label="Tiến độ" initialValue={50} rules={[{ required: true }]}>
               <Input type="number" min={0} max={100} />
             </Form.Item>
             <Form.Item name="deadline" label="Hạn chót" initialValue="2026-12-31" rules={[{ required: true }]}>
@@ -366,7 +366,7 @@ export const StrategicRoadmapModule: React.FC = () => {
                   </Tag>
                 </div>
                 <div style={{ marginTop: 6 }}>
-                  <span style={{ color: '#64748B' }}>Key Result (Chỉ số then chốt):</span>
+                  <span style={{ color: '#64748B' }}>Key Result:</span>
                   <div style={{ color: '#0F172A', marginTop: 4, background: '#F8FAFC', padding: 10, borderRadius: 6, fontWeight: 600 }}>
                     {selectedOkr.targetMetric}
                   </div>

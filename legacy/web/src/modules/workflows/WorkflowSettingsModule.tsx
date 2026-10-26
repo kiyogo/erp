@@ -180,7 +180,7 @@ export const WorkflowSettingsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chứng thư số tích hợp (CA Provider)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chứng thư số tích hợp</div>
           <div style={{ fontSize: 20, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
             Viettel-CA HSM
           </div>
@@ -190,7 +190,7 @@ export const WorkflowSettingsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cơ chế leo thang tự động</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            Active (Auto SLA)
+            Active
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tự nhắc nhở Slack &amp; leo cấp khi trễ hạn</div>
         </div>
@@ -458,9 +458,9 @@ export const WorkflowSettingsModule: React.FC = () => {
                 <Form.Item name="caProvider" label="Nhà cung cấp dịch vụ chứng thực chữ ký số (CA)">
                   <Select
                     options={[
-                      { label: 'Viettel-CA (Tập đoàn Viễn thông Quân đội Viettel)', value: 'viettel_ca' },
-                      { label: 'VNPT-CA (Tập đoàn Bưu chính Viễn thông Việt Nam)', value: 'vnpt_ca' },
-                      { label: 'FPT-CA (Công ty TNHH Hệ thống Thông tin FPT)', value: 'fpt_ca' },
+                      { label: 'Viettel-CA', value: 'viettel_ca' },
+                      { label: 'VNPT-CA', value: 'vnpt_ca' },
+                      { label: 'FPT-CA', value: 'fpt_ca' },
                     ]}
                   />
                 </Form.Item>
@@ -468,14 +468,14 @@ export const WorkflowSettingsModule: React.FC = () => {
                 <Form.Item name="encryptionStandard" label="Tiêu chuẩn mã băm & Chữ ký điện tử">
                   <Select
                     options={[
-                      { label: 'SHA-256 with RSA-2048 (Chuẩn quốc tế ISO/IEC 14888)', value: 'rsa_2048' },
-                      { label: 'SHA-384 with RSA-4096 (Bảo mật tối cao Ngân hàng/Tài chính)', value: 'rsa_4096' },
-                      { label: 'ECDSA P-256 (Mã hóa đường cong Elliptic)', value: 'ecdsa_p256' },
+                      { label: 'SHA-256 with RSA-2048', value: 'rsa_2048' },
+                      { label: 'SHA-384 with RSA-4096', value: 'rsa_4096' },
+                      { label: 'ECDSA P-256', value: 'ecdsa_p256' },
                     ]}
                   />
                 </Form.Item>
 
-                <Form.Item name="sessionTimeout" label="Thời gian tự động khóa phiên ký số (Phút)">
+                <Form.Item name="sessionTimeout" label="Thời gian tự động khóa phiên ký số">
                   <Input type="number" min={5} max={60} />
                 </Form.Item>
               </div>
@@ -492,8 +492,8 @@ export const WorkflowSettingsModule: React.FC = () => {
                 <Form.Item name="autoEscalate" label="Tự động leo thang cấp duyệt khi quá hạn SLA">
                   <Select
                     options={[
-                      { label: 'Bật (Tự động gửi hồ sơ lên cấp trên khi trễ hạn)', value: 'yes' },
-                      { label: 'Tắt (Giữ nguyên người duyệt hiện tại)', value: 'no' },
+                      { label: 'Bật', value: 'yes' },
+                      { label: 'Tắt', value: 'no' },
                     ]}
                   />
                 </Form.Item>
@@ -539,10 +539,10 @@ export const WorkflowSettingsModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="slaHours" label="Cam kết SLA (Giờ)" rules={[{ required: true }]}>
+            <Form.Item name="slaHours" label="Cam kết SLA" rules={[{ required: true }]}>
               <Input type="number" min={1} max={72} />
             </Form.Item>
-            <Form.Item name="autoEscalateHours" label="Leo thang sau (Giờ)" rules={[{ required: true }]}>
+            <Form.Item name="autoEscalateHours" label="Leo thang sau" rules={[{ required: true }]}>
               <Input type="number" min={1} max={72} />
             </Form.Item>
             <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]}>
@@ -604,7 +604,7 @@ export const WorkflowSettingsModule: React.FC = () => {
             <Input placeholder="Ví dụ: Mua sắm thiết bị & Hợp đồng dưới 200 Triệu VNĐ" />
           </Form.Item>
 
-          <Form.Item name="reason" label="Lý do ủy quyền (Công tác / Nghỉ phép)" rules={[{ required: true }]}>
+          <Form.Item name="reason" label="Lý do ủy quyền" rules={[{ required: true }]}>
             <Input.TextArea rows={2} placeholder="Nhập lý do chi tiết..." />
           </Form.Item>
 

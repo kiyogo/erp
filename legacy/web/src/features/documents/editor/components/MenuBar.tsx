@@ -121,7 +121,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
         { label: '  50%', action: () => onSetZoom(0.5) },
         { label: '  75%', action: () => onSetZoom(0.75) },
         { label: '  90%', action: () => onSetZoom(0.9) },
-        { label: '  100% (Chuẩn)', action: () => onSetZoom(1.0) },
+        { label: '  100%', action: () => onSetZoom(1.0) },
         { label: '  125%', action: () => onSetZoom(1.25) },
         { label: '  150%', action: () => onSetZoom(1.5) },
         { label: '  200%', action: () => onSetZoom(2.0) },
@@ -163,7 +163,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
         { label: 'Đếm từ...', icon: <Type size={14} />, action: onOpenWordCount },
         { type: 'divider' },
         {
-          label: debugMode ? '✓ Tắt chế độ gỡ lỗi Canvas' : '  Bật chế độ gỡ lỗi Canvas (?editorDebug=1)',
+          label: debugMode ? '✓ Tắt chế độ gỡ lỗi Canvas' : '  Bật chế độ gỡ lỗi Canvas',
           action: onToggleDebugMode,
         },
       ],

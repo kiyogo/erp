@@ -311,7 +311,7 @@ export const LeavePlansModule: React.FC = () => {
             <Form.Item name="leaveType" label="Loại hình nghỉ phép" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Nghỉ phép năm dài ngày (>3 ngày)', value: 'Nghỉ phép năm dài ngày' },
+                  { label: 'Nghỉ phép năm dài ngày', value: 'Nghỉ phép năm dài ngày' },
                   { label: 'Nghỉ thai sản chế độ BHXH (6 tháng)', value: 'Nghỉ thai sản (6 tháng)' },
                   { label: 'Nghỉ kết hôn (3 ngày)', value: 'Nghỉ kết hôn (3 ngày)' },
                   { label: 'Nghỉ việc riêng / Dưỡng sức', value: 'Nghỉ việc riêng / Dưỡng sức' },

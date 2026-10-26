@@ -183,7 +183,7 @@ export const OnboardingModule: React.FC = () => {
 
   const exportReport = () => {
     downloadFile(`Bao_cao_hoi_nhap_${new Date().toISOString().slice(0, 10)}.xlsx`, generateValidXlsxBlob([
-      ['Mã nhân viên', 'Họ tên', 'Vị trí', 'Phòng ban', 'Mentor', 'Ngày bắt đầu', 'Ngày đánh giá', 'Tiến độ (%)', 'Trạng thái', ...onboardingSteps.map(step => step.title), 'Kết quả đánh giá'],
+      ['Mã nhân viên', 'Họ tên', 'Vị trí', 'Phòng ban', 'Mentor', 'Ngày bắt đầu', 'Ngày đánh giá', 'Tiến độ', 'Trạng thái', ...onboardingSteps.map(step => step.title), 'Kết quả đánh giá'],
       ...filteredData.map(task => [task.empCode, task.employeeName, task.position, task.department, task.mentor, task.startDate, task.evaluationDate, task.progress, task.status, ...onboardingChecklist(task).map(item => item.completed ? 'Đã hoàn thành' : 'Chưa hoàn thành'), task.reviewNotes || '']),
     ]));
     message.success('Đã tải báo cáo hội nhập theo bộ lọc hiện tại.');
@@ -426,11 +426,11 @@ export const OnboardingModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="evaluationDate" label="Ngày đánh giá (mặc định sau ngày bắt đầu 60 ngày)"><Input type="date" /></Form.Item>
+          <Form.Item name="evaluationDate" label="Ngày đánh giá"><Input type="date" /></Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="mentor" label="Người hướng dẫn (Mentor / Buddy)" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Hoàng Quốc Dũng (Senior Lead)" />
+            <Form.Item name="mentor" label="Người hướng dẫn" rules={[{ required: true }]}>
+              <Input placeholder="Ví dụ: Hoàng Quốc Dũng" />
             </Form.Item>
             <Form.Item name="mentorPhone" label="Số điện thoại Mentor">
               <Input placeholder="Ví dụ: 0912.345.678" />
@@ -481,7 +481,7 @@ export const OnboardingModule: React.FC = () => {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Người hướng dẫn (Mentor):</span>
+                  <span style={{ color: '#64748B' }}>Người hướng dẫn:</span>
                   <strong style={{ color: '#2563EB' }}>{selectedTask.mentor} ({selectedTask.mentorPhone || 'N/A'})</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>

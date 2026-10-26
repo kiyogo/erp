@@ -79,7 +79,7 @@ export const AdminRolesModule: React.FC = () => {
 
   const columns = [
     {
-      title: 'Mã vai trò (Role Identifier)',
+      title: 'Mã vai trò',
       dataIndex: 'roleCode',
       key: 'roleCode',
       render: (rc: string) => (
@@ -258,7 +258,7 @@ export const AdminRolesModule: React.FC = () => {
         width={560}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <Form.Item name="roleCode" label="Mã vai trò (Role Identifier)" rules={[{ required: true }]}>
+          <Form.Item name="roleCode" label="Mã vai trò" rules={[{ required: true }]}>
             <Input placeholder="Ví dụ: ROLE_PROJECT_MANAGER" />
           </Form.Item>
           <Form.Item name="name" label="Tên vai trò hiển thị" rules={[{ required: true }]}>
@@ -267,9 +267,9 @@ export const AdminRolesModule: React.FC = () => {
           <Form.Item name="category" label="Phân loại nhóm vai trò" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Quản trị (Governance & Executive)', value: 'Quản trị' },
-                { label: 'Nghiệp vụ (Business Operations)', value: 'Nghiệp vụ' },
-                { label: 'Tiêu chuẩn (Standard Personnel)', value: 'Tiêu chuẩn' },
+                { label: 'Quản trị', value: 'Quản trị' },
+                { label: 'Nghiệp vụ', value: 'Nghiệp vụ' },
+                { label: 'Tiêu chuẩn', value: 'Tiêu chuẩn' },
               ]}
             />
           </Form.Item>

@@ -107,7 +107,7 @@ export const WorkflowsModule: React.FC = () => {
       slaTargetHours: 4,
       applicableBudgetLimit: 100000000,
       createdBy: 'Trần Tuấn Anh (CTO)',
-      version: 'v1.0 (2026)',
+      version: 'v1.0',
     });
     setModalOpen(true);
   };
@@ -206,7 +206,7 @@ export const WorkflowsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cam kết thời gian chuẩn (SLA Target)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cam kết thời gian chuẩn</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             ~{avgSLA} Giờ / Quy trình
           </div>
@@ -252,7 +252,7 @@ export const WorkflowsModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục ma trận quy trình (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục ma trận quy trình')}>
             Xuất Excel
           </Button>
           <Button
@@ -410,10 +410,10 @@ export const WorkflowsModule: React.FC = () => {
             <Form.Item name="totalSteps" label="Số cấp phê duyệt" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: '1 Cấp (Quản lý trực tiếp)', value: 1 },
-                  { label: '2 Cấp (Trưởng phòng ➔ Giám đốc)', value: 2 },
-                  { label: '3 Cấp (Trưởng phòng ➔ Khối ➔ CEO)', value: 3 },
-                  { label: '4 Cấp (Phòng ban ➔ Pháp chế ➔ CFO ➔ CEO)', value: 4 },
+                  { label: '1 Cấp', value: 1 },
+                  { label: '2 Cấp', value: 2 },
+                  { label: '3 Cấp', value: 3 },
+                  { label: '4 Cấp', value: 4 },
                 ]}
               />
             </Form.Item>
@@ -431,7 +431,7 @@ export const WorkflowsModule: React.FC = () => {
             <Form.Item name="scope" label="Phạm vi phòng ban áp dụng" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Toàn công ty / Khối Kỹ Thuật" />
             </Form.Item>
-            <Form.Item name="slaTargetHours" label="Cam kết SLA toàn quy trình (Giờ)" rules={[{ required: true }]}>
+            <Form.Item name="slaTargetHours" label="Cam kết SLA toàn quy trình" rules={[{ required: true }]}>
               <Input type="number" min={1} max={72} />
             </Form.Item>
             <Form.Item name="applicableBudgetLimit" label="Hạn mức kinh phí tối đa (VNĐ)">
@@ -444,7 +444,7 @@ export const WorkflowsModule: React.FC = () => {
               <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
             </Form.Item>
             <Form.Item name="version" label="Phiên bản quy trình" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: v1.0 (2026)" />
+              <Input placeholder="Ví dụ: v1.0" />
             </Form.Item>
           </div>
 

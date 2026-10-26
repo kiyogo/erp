@@ -165,3 +165,38 @@ Tài liệu này đặc tả toàn bộ các RESTful API endpoints, phương th�
 - `hr_job_openings`, `hr_recruitment_candidates`: mã vị trí/email trong vị trí không trùng; kiểm tra vị trí và nhân viên xử lý; ứng viên mới ở `applied`, đi theo `screening → interview → offer → hired`, có thể `rejected`; lịch sử chuyển giai đoạn có actor/thời gian máy chủ. CV dùng kho file thật, không phải nội dung tạo mẫu.
 - `hr_onboarding_tasks`: đủ năm khóa checklist chuẩn, tiến độ do máy chủ tính từ boolean; nghiệm thu chỉ khi đủ năm mục và ghi đánh giá; không tự tạo chữ ký hợp đồng.
 - `hr_employee_history`: CRUD từng bản ghi, liên kết nhân viên thật (kể cả đã nghỉ), kiểm tra ngày/loại/nội dung, metadata người tạo/sửa do máy chủ cung cấp; không tự đổi hồ sơ nhân viên khi thêm lịch sử.
+
+## XI. Văn bản, văn thư, khen thưởng và hiệu suất
+
+- `enterprise_documents`: Admin CRUD từng bản ghi. Kiểm tra mã duy nhất, loại/chiều/độ mật/trạng thái, ngày ban hành/hiệu lực/hết hạn. `fileNodeId` là tệp gốc tùy chọn, `wordFileNodeId` là bản DOCX soạn thảo tùy chọn trong `/files`. Backend kiểm tra quyền, đọc bytes và ghi tên/size/SHA-256 thật. Không nhận cờ xác minh CA từ client. PUT thay cả collection bị chặn.
+- `doc_archives`: Admin CRUD; `dispatchType` đến/đi, ngày văn bản/vào sổ/hạn xử lý, độ khẩn/mật và số trang nhập hợp lệ. `bookNumber` trống được cấp theo chiều+năm trong transaction; không trùng số trong cùng sổ/năm. Scan tùy chọn qua `fileNodeId`, metadata từ bytes máy chủ, `digitalVerified=false`. Pending → `Đã giải quyết xong` (đến) hoặc `Đã chuyển phát bưu điện` (đi); không mở lại terminal. Ghi chuyển người xử lý/forwardNote và history actor/time. Trạng thái chuyển phát là ghi nhận nghiệp vụ, không gửi lệnh cho đơn vị vận chuyển. Xóa hồ sơ giữ tệp gốc.
+- `hr_rewards`: Admin; `employeeId` liên kết nhân viên/đại diện thật, `rewardCode` duy nhất, `rewardValue` nguyên không âm, ngày/số quyết định/hình thức hợp lệ. Mới `Chờ duyệt` → `Đã ký quyết định` → `Đã trao giải`; tương thích đọc `Đã trao thưởng` và trạng thái cũ chờ lễ. Duyệt/trao ghi actor/time server; giữ snapshot danh tính đã duyệt. Chặn sửa nội dung hoặc xóa sau duyệt, chặn trao lặp. Đây là phê duyệt nội bộ, không xác nhận chứng thư CA hoặc đã chuyển tiền.
+- `hr_performance_reviews`: Admin; nhân viên/người đánh giá thật, mã và cặp nhân viên+kỳ duy nhất. Tự chấm tùy chọn, điểm quản lý 0–100. Ba trụ cột tùy chọn phải nhập đủ cả ba (60/20/20), khi có đủ backend lấy tổng làm điểm quản lý. Tối đa hai chữ số thập phân. Xếp loại từ tổng: >=95 A+, >=85 A, >=70 B, thấp hơn C. Thưởng đề xuất nguyên không âm, thiếu là 0. Mới `Chờ phê duyệt điểm`; duyệt → `Đã hoàn tất đánh giá` có actor/time/history và không sửa/xóa/chốt lại. Không tạo chứng từ chi hoặc tự chuyển payroll. PUT thay collection bị chặn.
+
+## XII. Hồ sơ công ty và tài khoản
+
+### `GET /api/v1/system/company-profile`, `PUT /api/v1/system/company-profile`
+
+- Chỉ Admin. `{ profile }` gồm tên công ty/fullName/shortName/companyCode/taxCode/businessType, ngày thành lập/cấp đăng ký, số/nơi đăng ký, đại diện/chức danh, địa chỉ/điện thoại/fax/email/website, domain, timezone hiển thị (`Asia/Ho_Chi_Minh` hoặc `UTC`), currency hiển thị (`VND` hoặc `USD`), bankAccountId tùy chọn từ tài khoản hoạt động.
+- PUT gửi toàn profile đã tải cùng `revision`/`updatedAt`; revision cũ trả 409, giữ cấu hình hiện tại. Máy chủ ghi revision+actor/time. Tên công ty bắt buộc, ngày/email/URL/tên miền được xác thực. Dữ liệu nằm trong `system_settings.company_profile`, được dùng khi tạo/cập nhật DOCX hợp đồng. Không tự áp dụng DNS/NTP, đổi múi giờ chấm công hoặc quy đổi sổ quỹ.
+- Email trong SystemSettings dùng lại `/system/email-config`, không ghi vào company profile. Cấu hình đủ thông số không đồng nghĩa đã gửi được email.
+
+### `/api/v1/users`
+
+- GET Admin có `page`/`limit` tối đa 100, trả pagination và profile phòng ban/chức danh/trạng thái kích hoạt; UI duyệt đủ trang.
+- POST/PATCH chỉ chấp nhận role ADMIN/USER; PATCH isActive là boolean. Thông tin hồ sơ cập nhật cùng giao dịch; các trường bị bỏ qua được lấy từ row mới nhất trong khóa lifecycle, không phục hồi mật khẩu/trạng thái cũ.
+- Demote/khóa/xóa/nghỉ việc bảo vệ ít nhất một Admin hoạt động, kiểm tra lại quyền actor sau khi lấy khóa. Không tự vô hiệu hóa hoặc xóa tài khoản đang dùng.
+- DELETE bị chặn 409 nếu tài khoản sở hữu collection nghiệp vụ để tránh cascade mất hồ sơ. Dùng khóa/nghỉ việc để giữ dữ liệu. Các FK hiện có tiếp tục bảo vệ quan hệ khác.
+
+### DOCX hợp đồng
+
+- POST/PUT hợp đồng đồng bộ tệp OOXML thật vào `/files`, trả `fileNodeId`. Chặn code trùng (409); metadata trong transaction, khi cập nhật giữ binary trước đó và đổi storage key.
+- Khởi động chỉ tạo/sửa tệp thiếu hoặc dữ liệu cũ không phải ZIP, giữ bản DOCX hợp lệ. Không tự seed hợp đồng demo khi chạy bình thường; opt-in `SEED_DEMO_DATA=true` vẫn có cho người vận hành. Không tự gán đối tác không rõ cho user đầu tiên.
+
+## XIII. Sao lưu vật lý
+
+- Chỉ Admin: `GET /admin/backups` → `{ data, capabilities }`; `POST /admin/backups { name, type }` → `201 { backup }`; type `Full System`, `Database`, `Storage Blob`.
+- SQLite dùng native snapshot; ZIP chứa CSDL và/hoặc kho file đúng phạm vi + manifest, tên/actor/thời điểm/size/SHA thật. Metadata lưu ngoài collection, generic mutation `admin_backups` bị chặn. PostgreSQL khi chưa cấu hình cơ chế dump chỉ có Storage Blob.
+- `POST /admin/backups/:key/verify` → `{ backup }` có trạng thái và actualChecksum; `GET .../download` xác minh lại trước khi stream ZIP, trả 409 nếu hash lệch, 404 nếu mất file, 422 nếu key/scope không hợp lệ. Không trả stack trong lỗi HTTP.
+- `capabilities.restore=false`, `autoDaily=false`; POST restore trả 409. Không thay dữ liệu đang chạy và không ghi nhận khôi phục thành công.
+- Khóa mã hóa không nằm trong ZIP, cần bảo quản riêng. Snapshot DB và từng file được kiểm tra riêng, chưa có giao dịch bao trùm DB+file. ZIP cổ điển dưới 4 GiB và tối đa 65.534 file; vượt giới hạn thì hủy bản đang tạo, không sinh metadata thành công.

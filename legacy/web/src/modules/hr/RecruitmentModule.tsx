@@ -40,7 +40,7 @@ export interface EnterpriseJobOpening {
   deadline: string;
   recruiter: string;
   experienceReq?: string;
-  status: 'Đang tuyển dụng' | 'Tạm dừng' | 'Đã đóng (Đủ định biên)' | 'Đã đủ chỉ tiêu';
+  status: 'Đang tuyển dụng' | 'Tạm dừng' | 'Đã đóng' | 'Đã đủ chỉ tiêu';
 }
 
 export const recruitmentStages = [
@@ -450,7 +450,7 @@ export const RecruitmentModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian tuyển dụng trung bình (Time-to-Hire)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian tuyển dụng trung bình</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
             {metrics.daysToHire === null ? 'Chưa có dữ liệu' : `${metrics.daysToHire} Ngày`}
           </div>
@@ -525,7 +525,7 @@ export const RecruitmentModule: React.FC = () => {
 
       {/* MODAL: Thêm vị trí mới */}
       <Modal
-        title={editingJob ? 'Cập Nhật Tin Tuyển Dụng (Job Description)' : 'Đăng Tin Tuyển Dụng Vị Trí Mới (Job Description)'}
+        title={editingJob ? 'Cập Nhật Tin Tuyển Dụng' : 'Đăng Tin Tuyển Dụng Vị Trí Mới'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -593,7 +593,7 @@ export const RecruitmentModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Phễu Tuyển Dụng */}
       <Drawer
-        title="Phễu Ứng Viên &amp; Tiến Độ Tuyển Dụng (Recruitment Pipeline)"
+        title="Phễu Ứng Viên &amp; Tiến Độ Tuyển Dụng"
         open={drawerOpen}
         onClose={closeJob}
         width={620}
@@ -608,14 +608,14 @@ export const RecruitmentModule: React.FC = () => {
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 Phòng ban: <strong>{currentJob.department}</strong> · Cấp bậc: <Tag color="blue">{currentJob.level}</Tag>
               </div>
-              <div style={{ marginTop: 10 }}><Select value={currentJob.status} disabled={saving} onChange={(status) => void changeJobStatus(status)} options={['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng (Đủ định biên)', 'Đã đủ chỉ tiêu'].map(status => ({ value: status, label: status }))} /></div>
+              <div style={{ marginTop: 10 }}><Select value={currentJob.status} disabled={saving} onChange={(status) => void changeJobStatus(status)} options={['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng', 'Đã đủ chỉ tiêu'].map(status => ({ value: status, label: status }))} /></div>
               <Button size="small" style={{ marginTop: 10 }} disabled={saving} onClick={() => { setEditingJob(currentJob); form.resetFields(); form.setFieldsValue(currentJob); setModalOpen(true); }}>Chỉnh sửa tin tuyển dụng</Button>
             </div>
 
             {/* Pipeline Stage Funnel */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 12 }}>
-                Phễu Chuyển Đổi Tuyển Dụng (Funnel Metrics):
+                Phễu Chuyển Đổi Tuyển Dụng:
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, textAlign: 'center' }}>
                 <div style={{ background: '#EFF6FF', padding: '10px 6px', borderRadius: 6 }}>
@@ -695,7 +695,7 @@ export const RecruitmentModule: React.FC = () => {
           </div>
           <Form.Item name="notes" label="Ghi chú / kết quả phỏng vấn"><Input.TextArea rows={3} maxLength={5000} /></Form.Item>
           <div style={{ marginBottom: 12 }}>
-            <label htmlFor="recruitment-cv-file" style={{ display: 'block', marginBottom: 6 }}>CV đính kèm (PDF, DOC, DOCX; tối đa 10 MB)</label>
+            <label htmlFor="recruitment-cv-file" style={{ display: 'block', marginBottom: 6 }}>CV đính kèm</label>
             <input key={`${editingCandidate?.key || 'new'}-${candidateModalOpen}`} id="recruitment-cv-file" type="file" accept=".pdf,.doc,.docx" disabled={saving} onChange={event => {
               const file = event.target.files?.[0] || null;
               if (file && (!/\.(pdf|docx?)$/i.test(file.name) || file.size > 10 * 1024 * 1024)) { message.error('Chọn tệp PDF, DOC hoặc DOCX tối đa 10 MB.'); event.target.value = ''; setCvFile(null); return; }

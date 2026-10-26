@@ -39,18 +39,18 @@ export interface SoftwareLicense {
   licenseCode: string;
   softwareName: string;
   vendor: string;
-  category: 'Bộ công cụ Lập trình (DevTools)' | 'Hệ điều hành & Máy chủ (OS/Server)' | 'Nền tảng Đám mây & SaaS' | 'Thiết kế & Đồ họa (Design)' | 'Bảo mật & Giám sát (Security)' | 'Văn phòng & Cộng tác (Workspace)';
-  licenseType: 'Doanh nghiệp (Enterprise)' | 'Theo người dùng (Per User)' | 'Theo máy chủ (Per Core)' | 'Vĩnh viễn (Perpetual)' | 'Thuê bao (SaaS)';
+  category: 'Bộ công cụ Lập trình' | 'Hệ điều hành & Máy chủ' | 'Nền tảng Đám mây & SaaS' | 'Thiết kế & Đồ họa' | 'Bảo mật & Giám sát' | 'Văn phòng & Cộng tác';
+  licenseType: 'Doanh nghiệp' | 'Theo người dùng' | 'Theo máy chủ' | 'Vĩnh viễn' | 'Thuê bao';
   productKey: string;
   seatsAllocated: number;
   seatsTotal: number;
   annualCost: number;
-  billingCycle: 'Hàng năm (Annual)' | 'Hàng tháng (Monthly)' | 'Vĩnh viễn (One-off)';
+  billingCycle: 'Hàng năm' | 'Hàng tháng' | 'Vĩnh viễn';
   purchaseDate: string;
   expireDate: string;
   assignedDepartment: string;
   assignedAdmin: string;
-  complianceAuditStatus: 'Tuân thủ 100% (Compliant)' | 'Cảnh báo quá số ghế (Over-allocated)' | 'Cần gia hạn gấp (Expiring Soon)';
+  complianceAuditStatus: 'Tuân thủ 100%' | 'Cảnh báo quá số ghế' | 'Cần gia hạn gấp';
   status: 'Đang kích hoạt' | 'Sắp hết hạn' | 'Hết hạn';
   allocatedUsers: LicenseUserAllocation[];
   notes: string;
@@ -98,9 +98,9 @@ export const LicensesModule: React.FC = () => {
     form.resetFields();
     form.setFieldsValue({
       licenseCode: `LIC-APP-0${data.length + 1}`,
-      category: 'Bộ công cụ Lập trình (DevTools)',
-      licenseType: 'Theo người dùng (Per User)',
-      billingCycle: 'Hàng năm (Annual)',
+      category: 'Bộ công cụ Lập trình',
+      licenseType: 'Theo người dùng',
+      billingCycle: 'Hàng năm',
       purchaseDate: new Date().toISOString().substring(0, 10),
       expireDate: new Date(Date.now() + 365 * 86400000).toISOString().substring(0, 10),
       seatsAllocated: 5,
@@ -121,7 +121,7 @@ export const LicensesModule: React.FC = () => {
       seatsTotal: total,
       seatsAllocated: allocated,
       annualCost: Number(values.annualCost) || 50000000,
-      complianceAuditStatus: 'Tuân thủ 100% (Compliant)',
+      complianceAuditStatus: 'Tuân thủ 100%',
       status: 'Đang kích hoạt',
       allocatedUsers: [],
     };
@@ -138,7 +138,7 @@ export const LicensesModule: React.FC = () => {
       return;
     }
     if (detailItem.seatsAllocated >= detailItem.seatsTotal) {
-      message.error('Đã hết ghế bản quyền (Seats Limit Reached). Hãy mua thêm!');
+      message.error('Đã hết ghế bản quyền. Hãy mua thêm!');
       return;
     }
 
@@ -194,7 +194,7 @@ export const LicensesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ tối ưu Seats (Utilization)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ tối ưu Seats</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {totalAllocated}/{totalSeats} ghế ({utilizationRate}%)
           </div>
@@ -202,7 +202,7 @@ export const LicensesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cảnh báo sắp hết hạn (&lt; 60 ngày)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cảnh báo sắp hết hạn</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: expiringCount > 0 ? '#D97706' : '#16A34A', marginTop: 4 }}>
             {expiringCount} gói bản quyền
           </div>
@@ -212,7 +212,7 @@ export const LicensesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Mức độ tuân thủ (Compliance Audit)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Mức độ tuân thủ</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             100% Hợp pháp
           </div>
@@ -237,11 +237,11 @@ export const LicensesModule: React.FC = () => {
             style={{ width: 220 }}
             options={[
               { label: 'Tất cả nhóm phần mềm', value: 'all' },
-              { label: 'Bộ công cụ Lập trình (DevTools)', value: 'Bộ công cụ Lập trình (DevTools)' },
-              { label: 'Hệ điều hành & Máy chủ (OS/Server)', value: 'Hệ điều hành & Máy chủ (OS/Server)' },
+              { label: 'Bộ công cụ Lập trình', value: 'Bộ công cụ Lập trình (DevTools)' },
+              { label: 'Hệ điều hành & Máy chủ', value: 'Hệ điều hành & Máy chủ (OS/Server)' },
               { label: 'Nền tảng Đám mây & SaaS', value: 'Nền tảng Đám mây & SaaS' },
-              { label: 'Thiết kế & Đồ họa (Design)', value: 'Thiết kế & Đồ họa (Design)' },
-              { label: 'Văn phòng & Cộng tác (Workspace)', value: 'Văn phòng & Cộng tác (Workspace)' },
+              { label: 'Thiết kế & Đồ họa', value: 'Thiết kế & Đồ họa (Design)' },
+              { label: 'Văn phòng & Cộng tác', value: 'Văn phòng & Cộng tác (Workspace)' },
             ]}
           />
           <Select
@@ -258,7 +258,7 @@ export const LicensesModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo kiểm kê bản quyền phần mềm (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo kiểm kê bản quyền phần mềm')}>
             Xuất Excel
           </Button>
           <Button
@@ -308,7 +308,7 @@ export const LicensesModule: React.FC = () => {
               ),
             },
             {
-              title: 'Số lượng Ghế (Seats)',
+              title: 'Số lượng Ghế',
               key: 'seats',
               width: 170,
               render: (_: any, r: SoftwareLicense) => {
@@ -395,23 +395,23 @@ export const LicensesModule: React.FC = () => {
             <Form.Item name="category" label="Phân nhóm phần mềm" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Bộ công cụ Lập trình (DevTools)', value: 'Bộ công cụ Lập trình (DevTools)' },
-                  { label: 'Hệ điều hành & Máy chủ (OS/Server)', value: 'Hệ điều hành & Máy chủ (OS/Server)' },
+                  { label: 'Bộ công cụ Lập trình', value: 'Bộ công cụ Lập trình (DevTools)' },
+                  { label: 'Hệ điều hành & Máy chủ', value: 'Hệ điều hành & Máy chủ (OS/Server)' },
                   { label: 'Nền tảng Đám mây & SaaS', value: 'Nền tảng Đám mây & SaaS' },
-                  { label: 'Thiết kế & Đồ họa (Design)', value: 'Thiết kế & Đồ họa (Design)' },
-                  { label: 'Bảo mật & Giám sát (Security)', value: 'Bảo mật & Giám sát (Security)' },
-                  { label: 'Văn phòng & Cộng tác (Workspace)', value: 'Văn phòng & Cộng tác (Workspace)' },
+                  { label: 'Thiết kế & Đồ họa', value: 'Thiết kế & Đồ họa (Design)' },
+                  { label: 'Bảo mật & Giám sát', value: 'Bảo mật & Giám sát (Security)' },
+                  { label: 'Văn phòng & Cộng tác', value: 'Văn phòng & Cộng tác (Workspace)' },
                 ]}
               />
             </Form.Item>
             <Form.Item name="licenseType" label="Hình thức cấp phép" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Theo người dùng (Per User)', value: 'Theo người dùng (Per User)' },
-                  { label: 'Doanh nghiệp (Enterprise)', value: 'Doanh nghiệp (Enterprise)' },
-                  { label: 'Theo máy chủ (Per Core)', value: 'Theo máy chủ (Per Core)' },
-                  { label: 'Vĩnh viễn (Perpetual)', value: 'Vĩnh viễn (Perpetual)' },
-                  { label: 'Thuê bao (SaaS)', value: 'Thuê bao (SaaS)' },
+                  { label: 'Theo người dùng', value: 'Theo người dùng (Per User)' },
+                  { label: 'Doanh nghiệp', value: 'Doanh nghiệp (Enterprise)' },
+                  { label: 'Theo máy chủ', value: 'Theo máy chủ (Per Core)' },
+                  { label: 'Vĩnh viễn', value: 'Vĩnh viễn (Perpetual)' },
+                  { label: 'Thuê bao', value: 'Thuê bao (SaaS)' },
                 ]}
               />
             </Form.Item>
@@ -440,9 +440,9 @@ export const LicensesModule: React.FC = () => {
             <Form.Item name="billingCycle" label="Kỳ thanh toán" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Hàng năm (Annual)', value: 'Hàng năm (Annual)' },
-                  { label: 'Hàng tháng (Monthly)', value: 'Hàng tháng (Monthly)' },
-                  { label: 'Vĩnh viễn (One-off)', value: 'Vĩnh viễn (One-off)' },
+                  { label: 'Hàng năm', value: 'Hàng năm (Annual)' },
+                  { label: 'Hàng tháng', value: 'Hàng tháng (Monthly)' },
+                  { label: 'Vĩnh viễn', value: 'Vĩnh viễn (One-off)' },
                 ]}
               />
             </Form.Item>
@@ -478,7 +478,7 @@ export const LicensesModule: React.FC = () => {
 
       {/* DRAWER: Hồ sơ License & Danh sách Phân Bổ Ghế (Seat Ledger) */}
       <Drawer
-        title="Hồ Sơ Bản Quyền &amp; Sổ Phân Bổ Ghế (Seat Ledger)"
+        title="Hồ Sơ Bản Quyền &amp; Sổ Phân Bổ Ghế"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={680}

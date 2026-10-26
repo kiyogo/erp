@@ -260,7 +260,7 @@ export const ShiftsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Ca_lam_viec.xlsx', generateValidXlsxBlob([['Mã ca', 'Tên ca', 'Khung giờ', 'Giờ làm', 'Ngày công', 'Giờ nghỉ', 'Cho phép muộn (phút)', 'Phụ cấp đêm (%)', 'Đối tượng', 'Trạng thái'], ...filteredData.map((item) => [item.shiftCode, item.shiftName, item.timeRange, item.workingHours, item.workUnits, item.breakTime, item.allowGraceMinutes, item.nightAllowancePct, item.applicableTo, item.status])]))}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Ca_lam_viec.xlsx', generateValidXlsxBlob([['Mã ca', 'Tên ca', 'Khung giờ', 'Giờ làm', 'Ngày công', 'Giờ nghỉ', 'Cho phép muộn', 'Phụ cấp đêm', 'Đối tượng', 'Trạng thái'], ...filteredData.map((item) => [item.shiftCode, item.shiftName, item.timeRange, item.workingHours, item.workUnits, item.breakTime, item.allowGraceMinutes, item.nightAllowancePct, item.applicableTo, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -325,13 +325,13 @@ export const ShiftsModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="timeRange" label="Khung giờ (HH:mm - HH:mm)" rules={[{ required: true }]}>
+            <Form.Item name="timeRange" label="Khung giờ" rules={[{ required: true }]}>
               <Input placeholder="08:00 - 17:30" />
             </Form.Item>
             <Form.Item name="workingHours" label="Số giờ làm việc" rules={[{ required: true }]}>
               <Input type="number" step={0.5} min={1} max={12} />
             </Form.Item>
-            <Form.Item name="allowGraceMinutes" label="Cho phép đi muộn (phút)">
+            <Form.Item name="allowGraceMinutes" label="Cho phép đi muộn">
               <Input type="number" step={5} min={0} max={60} />
             </Form.Item>
           </div>
@@ -340,7 +340,7 @@ export const ShiftsModule: React.FC = () => {
             <Form.Item name="breakTime" label="Thời gian nghỉ giữa giờ" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: 12:00 - 13:30 (1.5h)" />
             </Form.Item>
-            <Form.Item name="nightAllowancePct" label="Phụ cấp ca đêm (%)">
+            <Form.Item name="nightAllowancePct" label="Phụ cấp ca đêm">
               <Input type="number" step={5} min={0} max={100} />
             </Form.Item>
           </div>

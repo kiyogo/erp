@@ -4,6 +4,18 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-26, tiếp tục] - Tệp gốc, quản trị, hồ sơ công ty và đánh giá
+
+- DocumentsModule/DocumentArchivesModule: CRUD từng bản ghi, tệp gốc thật, metadata/hash từ máy chủ, số văn thư theo sổ/năm chống trùng, chuyển xử lý/hoàn tất có lịch sử, XLSX/PDF/clipboard thật. Word upload/download vào kho máy chủ, lưu chờ callback; IndexedDB chờ commit và truyền lỗi lên editor, chặn save đồng thời. Giữ Canvas.
+- RewardsModule: người nhận thật; chờ duyệt → duyệt nội bộ → trao, metadata actor/time từ server; snapshot người nhận không đổi sau phê duyệt; chặn sửa/xóa quyết định đã duyệt; báo cáo thật, không tự xác nhận CA/eNPS.
+- AdminUsersModule + backend: phân trang đầy đủ, profile/role/status/activation/password qua API, không giả MFA. Chốt giao dịch theo trạng thái mới, chống phục hồi mật khẩu/khóa cũ khi cập nhật đồng thời, bảo vệ Admin cuối và hồ sơ nghiệp vụ khi xóa tài khoản.
+- AdminBackupModule + `api/backups.mjs`, `db.backupTo`: SQLite snapshot thực + ZIP kho file/manifest/checksum, quyền Admin, xác minh trước khi tải, chặn tệp bị đổi. Giữ các mục khôi phục/lịch ở trạng thái chưa hỗ trợ rõ ràng; PostgreSQL chưa có cơ chế dump, không tạo metadata giả. ZIP đã tạo/tải qua UI và kiểm tra CRC/SHA/manifest.
+- `api/document-files.mjs`, contract sync/API/UI: OOXML DOCX có Unicode, dữ liệu thật thay người ký/địa chỉ cố định; giữ bytes trước cập nhật, không ghi đè Word hợp lệ lúc khởi động. Không tự gán đối tác không xác định cho user đầu tiên. Tải Word qua kho file, giữ xuất TXT theo mẫu. Dừng tự seed demo khi khởi động bình thường, giữ dữ liệu cũ.
+- SystemSettingsModule + `/system/company-profile`: các trường tên/pháp nhân/đăng ký/đại diện/liên hệ, website/tên miền, tùy chọn múi giờ/tiền tệ và ngân hàng mặc định lưu máy chủ có revision. Dùng profile khi sinh hợp đồng. SMTP dùng API cấu hình hiện tại, không giả kết nối; PDF/thời gian phản hồi lấy từ dữ liệu thật. Không tự đổi DNS/NTP hoặc quy đổi sổ quỹ.
+- PerformanceReviewModule: nhân viên/người đánh giá thật; không điền điểm/tiền/nhận xét mặc định. Điểm 0 và điểm thiếu phân biệt; tổng/xếp loại tính server, ba trụ cột có bounds; CRUD phiếu chờ duyệt, khóa kết quả sau chốt, actor/history và báo cáo thật. Thưởng là đề xuất, chưa chuyển payroll hoặc tạo chứng từ chi.
+- HTTP error handler không trả stack; nhận đúng lỗi 4xx của backup manager và xử lý download bị ngắt sau khi đã gửi headers.
+- Kiểm tra mốc mới: 75 API + 38 web/domain đạt, 15 workflow PostgreSQL thật đạt, TypeScript/build đạt; bundle còn lớn. Ghi bằng chứng `*-latest.txt`, screenshot và tiến độ; chưa nghiệm thu toàn bộ video/txt, tất cả route/nút mới hoặc nhà cung cấp bên ngoài.
+
 ## [2026-10-26] - Luồng nghiệp vụ thật, xác thực và kiểm thử hai database
 
 - Giữ React/custom UI, Node HTTP, service/collections, schema hiện tại và Canvas. Không sửa lại các thay đổi KTable/smart-table hoặc dự án Rust có sẵn trước task.

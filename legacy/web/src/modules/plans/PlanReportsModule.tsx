@@ -66,7 +66,7 @@ const REPORT_DATA: PlanReportItem[] = [
   {
     key: '2',
     department: 'Phòng R&D Công Nghệ AI',
-    leader: 'Đặng Đình Long (Tech Lead)',
+    leader: 'Đặng Đình Long',
     totalPlans: 4,
     completedPlans: 3,
     approvedBudget: 1800000000,
@@ -82,7 +82,7 @@ const REPORT_DATA: PlanReportItem[] = [
   {
     key: '3',
     department: 'Khối Kinh Doanh & CRM',
-    leader: 'Lê Hoàng Yến (CMO)',
+    leader: 'Lê Hoàng Yến',
     totalPlans: 5,
     completedPlans: 4,
     approvedBudget: 1200000000,
@@ -98,7 +98,7 @@ const REPORT_DATA: PlanReportItem[] = [
   {
     key: '4',
     department: 'Phòng Nhân Sự & Đào Tạo',
-    leader: 'Vũ Quốc Bảo (HR Head)',
+    leader: 'Vũ Quốc Bảo',
     totalPlans: 3,
     completedPlans: 3,
     approvedBudget: 850000000,
@@ -218,7 +218,7 @@ export const PlanReportsModule: React.FC = () => {
       ),
     },
     {
-      title: 'Kế hoạch (Đạt/Tổng)',
+      title: 'Kế hoạch',
       key: 'plans',
       render: (_: any, record: PlanReportItem) => {
         const pct = Math.round((record.completedPlans / record.totalPlans) * 100);
@@ -340,8 +340,8 @@ export const PlanReportsModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả đơn vị' },
-            { key: 'excellent', label: 'Xuất sắc (KPI ≥ 95)', icon: <StarFilled style={{ color: '#F59E0B' }} /> },
-            { key: 'good', label: 'Đạt chuẩn (KPI 90-94)', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'excellent', label: 'Xuất sắc', icon: <StarFilled style={{ color: '#F59E0B' }} /> },
+            { key: 'good', label: 'Đạt chuẩn', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'top_budget', label: 'Ngân sách > 1 Tỷ', icon: <DollarOutlined style={{ color: '#10B981' }} /> },
           ].map((tab) => (
             <Button
@@ -544,7 +544,7 @@ export const PlanReportsModule: React.FC = () => {
             <Input placeholder="Ví dụ: Khối Vận Hành & Khai Thác" />
           </Form.Item>
           <Form.Item name="leader" label="Lãnh đạo phụ trách" rules={[{ required: true, message: 'Vui lòng nhập người phụ trách' }]}>
-            <Input placeholder="Ví dụ: Nguyễn Văn Hải (Trưởng khối)" />
+            <Input placeholder="Ví dụ: Nguyễn Văn Hải" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="totalPlans" label="Tổng kế hoạch" initialValue={4}>
@@ -555,14 +555,14 @@ export const PlanReportsModule: React.FC = () => {
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="approvedBudget" label="Ngân sách phê duyệt (₫)" initialValue={1000000000}>
+            <Form.Item name="approvedBudget" label="Ngân sách phê duyệt" initialValue={1000000000}>
               <Input type="number" />
             </Form.Item>
-            <Form.Item name="actualSpent" label="Chi phí thực tế (₫)" initialValue={950000000}>
+            <Form.Item name="actualSpent" label="Chi phí thực tế" initialValue={950000000}>
               <Input type="number" />
             </Form.Item>
           </div>
-          <Form.Item name="kpiScore" label="Điểm KPI đánh giá (thang 100)" initialValue={95}>
+          <Form.Item name="kpiScore" label="Điểm KPI đánh giá" initialValue={95}>
             <Input type="number" />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>

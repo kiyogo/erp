@@ -327,7 +327,7 @@ export const TrainingModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="durationHours" label="Thời lượng (Giờ)">
+            <Form.Item name="durationHours" label="Thời lượng">
               <Input type="number" min={1} />
             </Form.Item>
             <Form.Item name="participantsCount" label="Chỉ tiêu học viên">

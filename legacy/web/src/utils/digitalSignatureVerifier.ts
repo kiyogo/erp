@@ -54,7 +54,7 @@ export interface VerifiedSignature {
   ocspUrls?: string[];        // Máy chủ OCSP
 
   // 6. Tiêu chuẩn & Vùng chứa kỹ thuật (Container & Compliance)
-  standard: 'PAdES (ISO 32000-1)' | 'CAdES-BES (ETSI)' | 'XMLDSig (W3C)' | 'PKCS#7 / CMS' | 'Office OpenXML Signature';
+  standard: 'PAdES (ISO 32000-1)' | 'CAdES-BES' | 'XMLDSig (W3C)' | 'PKCS#7 / CMS' | 'Office OpenXML Signature';
   subFilter?: string;         // adbe.pkcs7.detached / ETSI.CAdES.detached
   filter?: string;            // Adobe.PPKLite
   byteRange?: string;         // [0, 12500, 24500, 98200]
@@ -82,26 +82,26 @@ export interface VerificationResult {
 // 1. BẢNG ÁNH XẠ NHÀ CUNG CẤP CA ĐƯỢC BỘ TT&TT CẤP PHÉP (NEAC)
 // ============================================================================
 const VIETNAM_CA_MAP: Array<{ match: string[]; officialName: string; org: string; ocsp?: string; crl?: string }> = [
-  { match: ['VIETTEL', 'VIETTEL-CA', 'TẬP ĐOÀN CÔNG NGHIỆP - VIỄN THÔNG QUÂN ĐỘI'], officialName: 'VIETTEL-CA', org: 'Tập đoàn Công nghiệp - Viễn thông Quân đội (Viettel)', ocsp: 'http://ocsp.viettel-ca.vn', crl: 'http://crl.viettel-ca.vn/crl/viettel-ca.crl' },
-  { match: ['VNPT', 'VNPT-CA', 'TẬP ĐOÀN BƯU CHÍNH VIỄN THÔNG'], officialName: 'VNPT-CA (VNPT SmartCA)', org: 'Tập đoàn Bưu chính Viễn thông Việt Nam (VNPT)', ocsp: 'http://ocsp.vnpt-ca.vn', crl: 'http://crl.vnpt-ca.vn/vnpt-ca.crl' },
-  { match: ['FPT', 'FPT-CA', 'FPT INFORMATION SYSTEM', 'HỆ THỐNG THÔNG TIN FPT'], officialName: 'FPT-CA (FPT.eSign)', org: 'Công ty TNHH Hệ thống Thông tin FPT', ocsp: 'http://ocsp.fpt-ca.vn', crl: 'http://crl.fpt-ca.vn/fpt-ca.crl' },
+  { match: ['VIETTEL', 'VIETTEL-CA', 'TẬP ĐOÀN CÔNG NGHIỆP - VIỄN THÔNG QUÂN ĐỘI'], officialName: 'VIETTEL-CA', org: 'Tập đoàn Công nghiệp - Viễn thông Quân đội', ocsp: 'http://ocsp.viettel-ca.vn', crl: 'http://crl.viettel-ca.vn/crl/viettel-ca.crl' },
+  { match: ['VNPT', 'VNPT-CA', 'TẬP ĐOÀN BƯU CHÍNH VIỄN THÔNG'], officialName: 'VNPT-CA', org: 'Tập đoàn Bưu chính Viễn thông Việt Nam', ocsp: 'http://ocsp.vnpt-ca.vn', crl: 'http://crl.vnpt-ca.vn/vnpt-ca.crl' },
+  { match: ['FPT', 'FPT-CA', 'FPT INFORMATION SYSTEM', 'HỆ THỐNG THÔNG TIN FPT'], officialName: 'FPT-CA', org: 'Công ty TNHH Hệ thống Thông tin FPT', ocsp: 'http://ocsp.fpt-ca.vn', crl: 'http://crl.fpt-ca.vn/fpt-ca.crl' },
   { match: ['BKAV', 'BKAV-CA', 'BKAV CORPORATION'], officialName: 'BKAV-CA', org: 'Công ty Cổ phần BKAV', ocsp: 'http://ocsp.bkavca.vn', crl: 'http://crl.bkavca.vn/bkavca.crl' },
-  { match: ['MISA', 'MISA-CA', 'MISA ESIGN', 'MISA JSC'], officialName: 'MISA-CA (MISA eSign)', org: 'Công ty Cổ phần MISA', ocsp: 'http://ocsp.esign.misa.vn', crl: 'http://crl.esign.misa.vn/misa-ca.crl' },
-  { match: ['SMARTSIGN', 'VINA-CA', 'VINA CA', 'SMART SIGN'], officialName: 'SMARTSIGN (VINA-CA)', org: 'Công ty Cổ phần Chữ ký số ViNa', ocsp: 'http://ocsp.smartsign.com.vn', crl: 'http://crl.smartsign.com.vn/smartsign.crl' },
-  { match: ['CA2', 'NACENCOMM', 'NATIONAL CENTER FOR ENTERPRISE AND COMPUTER'], officialName: 'CA2 (Nacencomm)', org: 'Công ty Cổ phần Công nghệ Thẻ Nacencomm', ocsp: 'http://ocsp.ca2.vn', crl: 'http://crl.ca2.vn/ca2.crl' },
+  { match: ['MISA', 'MISA-CA', 'MISA ESIGN', 'MISA JSC'], officialName: 'MISA-CA', org: 'Công ty Cổ phần MISA', ocsp: 'http://ocsp.esign.misa.vn', crl: 'http://crl.esign.misa.vn/misa-ca.crl' },
+  { match: ['SMARTSIGN', 'VINA-CA', 'VINA CA', 'SMART SIGN'], officialName: 'SMARTSIGN', org: 'Công ty Cổ phần Chữ ký số ViNa', ocsp: 'http://ocsp.smartsign.com.vn', crl: 'http://crl.smartsign.com.vn/smartsign.crl' },
+  { match: ['CA2', 'NACENCOMM', 'NATIONAL CENTER FOR ENTERPRISE AND COMPUTER'], officialName: 'CA2', org: 'Công ty Cổ phần Công nghệ Thẻ Nacencomm', ocsp: 'http://ocsp.ca2.vn', crl: 'http://crl.ca2.vn/ca2.crl' },
   { match: ['TRUSTCA', 'SAVIS', 'SAVIS TECHNOLOGY'], officialName: 'TrustCA', org: 'Công ty Cổ phần Công nghệ SAVIS', ocsp: 'http://ocsp.trustca.vn', crl: 'http://crl.trustca.vn/trustca.crl' },
   { match: ['SAFE-CA', 'SAFECA', 'TS24', 'TS24 CORP'], officialName: 'Safe-CA', org: 'Công ty Cổ phần TS24', ocsp: 'http://ocsp.safeca.vn', crl: 'http://crl.safeca.vn/safeca.crl' },
   { match: ['FAST-CA', 'FASTCA', 'FAST CA'], officialName: 'FastCA', org: 'Công ty Cổ phần Chữ ký số FastCA', ocsp: 'http://ocsp.fastca.vn', crl: 'http://crl.fastca.vn/fastca.crl' },
   { match: ['EASYCA', 'EASY-CA', 'SOFTDREAMS'], officialName: 'EasyCA', org: 'Công ty Cổ phần Đầu tư Công nghệ và Thương mại Softdreams', ocsp: 'http://ocsp.easyca.vn', crl: 'http://crl.easyca.vn/easyca.crl' },
   { match: ['EFY', 'EFY-CA', 'EFY VIETNAM'], officialName: 'EFY-CA', org: 'Công ty Cổ phần Công nghệ Tin học EFY Việt Nam', ocsp: 'http://ocsp.efy.com.vn', crl: 'http://crl.efy.com.vn/efy-ca.crl' },
   { match: ['NC-CA', 'NCCA', 'DỮ LIỆU SỐ QUỐC GIA'], officialName: 'NC-CA', org: 'Công ty Cổ phần Dữ liệu số Quốc gia', ocsp: 'http://ocsp.ncca.vn', crl: 'http://crl.ncca.vn/ncca.crl' },
-  { match: ['ONE-CA', 'ONECA', 'NEWTEL', 'NEW-TELECOM'], officialName: 'One-CA (NewTel-CA)', org: 'Công ty Cổ phần Viễn thông New-Telecom', ocsp: 'http://ocsp.newtel-ca.vn', crl: 'http://crl.newtel-ca.vn/newtel-ca.crl' },
+  { match: ['ONE-CA', 'ONECA', 'NEWTEL', 'NEW-TELECOM'], officialName: 'One-CA', org: 'Công ty Cổ phần Viễn thông New-Telecom', ocsp: 'http://ocsp.newtel-ca.vn', crl: 'http://crl.newtel-ca.vn/newtel-ca.crl' },
   { match: ['MATBAO', 'MAT BAO', 'MẮT BÃO'], officialName: 'MatBao-CA', org: 'Công ty Cổ phần Mắt Bão', ocsp: 'http://ocsp.matbao-ca.vn', crl: 'http://crl.matbao-ca.vn/matbao-ca.crl' },
   { match: ['LCS', 'LCS-CA'], officialName: 'LCS-CA', org: 'Công ty TNHH MTV Giải pháp Công nghệ LCS' },
   { match: ['HILO', 'HILO-CA'], officialName: 'HILO-CA', org: 'Công ty Cổ phần Dịch vụ T-VAN HILO' },
   { match: ['I-CA', 'ICA'], officialName: 'I-CA', org: 'Công ty Cổ phần I-CA' },
-  { match: ['BAN CƠ YẾU', 'VGCA', 'GOVERNMENT CIPHER', 'BAN CO YEU'], officialName: 'Ban Cơ yếu Chính phủ (VGCA)', org: 'Cục Chứng thực số & Bảo mật thông tin - Ban Cơ yếu Chính phủ' },
-  { match: ['NEAC', 'NATIONAL ROOT CA', 'ROOT CA QUỐC GIA', 'BỘ THÔNG TIN'], officialName: 'NEAC (Root CA Quốc gia)', org: 'Trung tâm Chứng thực điện tử quốc gia - Bộ TT&TT' },
+  { match: ['BAN CƠ YẾU', 'VGCA', 'GOVERNMENT CIPHER', 'BAN CO YEU'], officialName: 'Ban Cơ yếu Chính phủ', org: 'Cục Chứng thực số & Bảo mật thông tin - Ban Cơ yếu Chính phủ' },
+  { match: ['NEAC', 'NATIONAL ROOT CA', 'ROOT CA QUỐC GIA', 'BỘ THÔNG TIN'], officialName: 'NEAC', org: 'Trung tâm Chứng thực điện tử quốc gia - Bộ TT&TT' },
   { match: ['KIYO', 'KIYOVN'], officialName: 'KIYO GROUP', org: 'Tập đoàn Công nghệ KIYOVN' },
 ];
 
@@ -438,13 +438,13 @@ function parseX509Extensions(bytes: Uint8Array, offset: number, length: number):
         const bs = readASN1(valBytes, 0);
         if (bs && bs.bytes.length >= 2) {
           const bits = bs.bytes[1];
-          if (bits & 0x80) keyUsage.push('Digital Signature (Chữ ký số điện tử)');
-          if (bits & 0x40) keyUsage.push('Non-Repudiation (Chống chối bỏ)');
-          if (bits & 0x20) keyUsage.push('Key Encipherment (Mã hóa khóa)');
-          if (bits & 0x10) keyUsage.push('Data Encipherment (Mã hóa dữ liệu)');
+          if (bits & 0x80) keyUsage.push('Digital Signature');
+          if (bits & 0x40) keyUsage.push('Non-Repudiation');
+          if (bits & 0x20) keyUsage.push('Key Encipherment');
+          if (bits & 0x10) keyUsage.push('Data Encipherment');
           if (bits & 0x08) keyUsage.push('Key Agreement');
-          if (bits & 0x04) { keyUsage.push('Key Cert Sign (Ký chứng thư số)'); isCA = true; }
-          if (bits & 0x02) keyUsage.push('CRL Sign (Ký danh sách thu hồi)');
+          if (bits & 0x04) { keyUsage.push('Key Cert Sign'); isCA = true; }
+          if (bits & 0x02) keyUsage.push('CRL Sign');
         }
       }
       // 2.5.29.37 = Extended Key Usage
@@ -454,11 +454,11 @@ function parseX509Extensions(bytes: Uint8Array, offset: number, length: number):
           const oids = getChildren(valBytes, seq.dataOffset, seq.length);
           for (const o of oids) {
             const eOid = decodeOID(o.bytes);
-            if (eOid === '1.2.840.113583.1.1.5') extKeyUsage.push('Adobe PDF Document Signing (Ký văn bản PDF)');
-            else if (eOid === '1.3.6.1.5.5.7.3.2') extKeyUsage.push('Client Authentication (Xác thực người dùng)');
-            else if (eOid === '1.3.6.1.5.5.7.3.4') extKeyUsage.push('Secure Email (Bảo mật thư điện tử)');
-            else if (eOid === '1.3.6.1.5.5.7.3.3') extKeyUsage.push('Code Signing (Ký mã nguồn ứng dụng)');
-            else if (eOid === '1.3.6.1.5.5.7.3.8') extKeyUsage.push('Time Stamping (Dấu thời gian)');
+            if (eOid === '1.2.840.113583.1.1.5') extKeyUsage.push('Adobe PDF Document Signing');
+            else if (eOid === '1.3.6.1.5.5.7.3.2') extKeyUsage.push('Client Authentication');
+            else if (eOid === '1.3.6.1.5.5.7.3.4') extKeyUsage.push('Secure Email');
+            else if (eOid === '1.3.6.1.5.5.7.3.3') extKeyUsage.push('Code Signing');
+            else if (eOid === '1.3.6.1.5.5.7.3.8') extKeyUsage.push('Time Stamping');
             else extKeyUsage.push(eOid);
           }
         }
@@ -581,8 +581,8 @@ export function parseX509Certificate(bytes: Uint8Array, offset: number = 0): Par
     }
 
     // Extensions [3] EXPLICIT
-    let keyUsage: string[] = ['Digital Signature (Chữ ký số điện tử)', 'Non-Repudiation (Chống chối bỏ)'];
-    let extKeyUsage: string[] = ['Adobe PDF Document Signing (Ký văn bản PDF)', 'Client Authentication (Xác thực người dùng)'];
+    let keyUsage: string[] = ['Digital Signature', 'Non-Repudiation'];
+    let extKeyUsage: string[] = ['Adobe PDF Document Signing', 'Client Authentication'];
     let crlUrls: string[] = [];
     let ocspUrls: string[] = [];
     let isCA = false;
@@ -744,8 +744,8 @@ function convertToVerifiedSignature(
 
   const signedAt = formatVNTime(customSigningTime || cert.validFrom || new Date());
   const timeSource = customSigningTime
-    ? 'Dấu thời gian mã hóa (Cryptographic Timestamping TSA / PKCS#9 SigningTime)'
-    : 'Thời gian phát hành chứng thư số (Certificate Validity Start)';
+    ? 'Dấu thời gian mã hóa'
+    : 'Thời gian phát hành chứng thư số';
 
   const crlDistributionPoints = cert.crlUrls.length > 0 ? cert.crlUrls : (defaultCrl ? [defaultCrl] : undefined);
   const ocspUrls = cert.ocspUrls.length > 0 ? cert.ocspUrls : (defaultOcsp ? [defaultOcsp] : undefined);
@@ -766,7 +766,7 @@ function convertToVerifiedSignature(
     issuerOrg: caOrg,
     issuerUnitDept: issuer.OU,
     issuerCountry: issuer.C === 'VN' ? 'Việt Nam (VN)' : issuer.C || 'Việt Nam (VN)',
-    issuerAuthority: 'Trung tâm Chứng thực điện tử quốc gia (NEAC) - Bộ Thông tin & Truyền thông',
+    issuerAuthority: 'Trung tâm Chứng thực điện tử quốc gia - Bộ Thông tin & Truyền thông',
 
     certNumber: cert.serialNumber,
     certNumberDec: cert.serialNumberDec,

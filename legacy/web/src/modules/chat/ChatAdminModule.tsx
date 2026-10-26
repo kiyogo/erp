@@ -17,9 +17,9 @@ interface ChannelItem {
   key: string;
   channelCode: string;
   channelName: string;
-  category: 'Kênh Chung Toàn Cty' | 'Kênh Phòng Ban' | 'Kênh Dự Án Trọng Điểm' | 'Kênh Ban Lãnh Đạo (Bảo mật)';
+  category: 'Kênh Chung Toàn Cty' | 'Kênh Phòng Ban' | 'Kênh Dự Án Trọng Điểm' | 'Kênh Ban Lãnh Đạo';
   memberCount: number;
-  encryption: 'Mã hóa đầu cuối AES-256 (E2EE)' | 'Mã hóa tiêu chuẩn TLS 1.3';
+  encryption: 'Mã hóa đầu cuối AES-256' | 'Mã hóa tiêu chuẩn TLS 1.3';
   moderator: string;
   retentionDays: number;
   status: 'Đang hoạt động' | 'Khóa tạm thời';
@@ -236,13 +236,13 @@ export const ChatAdminModule: React.FC = () => {
                   { label: 'Kênh Chung Toàn Cty', value: 'Kênh Chung Toàn Cty' },
                   { label: 'Kênh Phòng Ban', value: 'Kênh Phòng Ban' },
                   { label: 'Kênh Dự Án Trọng Điểm', value: 'Kênh Dự Án Trọng Điểm' },
-                  { label: 'Kênh Ban Lãnh Đạo (Bảo mật)', value: 'Kênh Ban Lãnh Đạo (Bảo mật)' },
+                  { label: 'Kênh Ban Lãnh Đạo', value: 'Kênh Ban Lãnh Đạo (Bảo mật)' },
                 ]}
               />
             </Form.Item>
           </div>
 
-          <Form.Item name="channelName" label="Tên kênh chat (bắt đầu bằng #)" rules={[{ required: true, message: 'Nhập tên kênh' }]}>
+          <Form.Item name="channelName" label="Tên kênh chat" rules={[{ required: true, message: 'Nhập tên kênh' }]}>
             <Input placeholder="Ví dụ: #du-an-minepanel-ui" />
           </Form.Item>
 
@@ -256,15 +256,15 @@ export const ChatAdminModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="encryption" label="Mức độ mã hóa" initialValue="Mã hóa đầu cuối AES-256 (E2EE)">
+            <Form.Item name="encryption" label="Mức độ mã hóa" initialValue="Mã hóa đầu cuối AES-256">
               <Select
                 options={[
-                  { label: 'Mã hóa đầu cuối AES-256 (E2EE)', value: 'Mã hóa đầu cuối AES-256 (E2EE)' },
+                  { label: 'Mã hóa đầu cuối AES-256', value: 'Mã hóa đầu cuối AES-256 (E2EE)' },
                   { label: 'Mã hóa tiêu chuẩn TLS 1.3', value: 'Mã hóa tiêu chuẩn TLS 1.3' },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="retentionDays" label="Lưu trữ (ngày)" initialValue={180}>
+            <Form.Item name="retentionDays" label="Lưu trữ" initialValue={180}>
               <Input type="number" min={30} max={1000} />
             </Form.Item>
           </div>

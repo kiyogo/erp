@@ -354,7 +354,7 @@ export const HeadcountModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="quota" label="Chỉ tiêu định biên (Quota)" rules={[{ required: true }]}>
+            <Form.Item name="quota" label="Chỉ tiêu định biên" rules={[{ required: true }]}>
               <Input type="number" min={1} />
             </Form.Item>
             <Form.Item name="actual" label="Hiện diện thực tế" rules={[{ required: true }]}>

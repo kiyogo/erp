@@ -85,7 +85,7 @@ export const TimesheetModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lượt nghỉ phép hưởng lương (P)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lượt nghỉ phép hưởng lương</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {approvedLeaves.length} Lượt phép
           </div>
@@ -130,23 +130,23 @@ export const TimesheetModule: React.FC = () => {
           {/* Legend */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: '#334155' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 12, height: 12, background: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: 2 }} /> CC (Có điểm danh)
+              <span style={{ width: 12, height: 12, background: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: 2 }} /> CC
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 12, height: 12, background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 2 }} /> P (Nghỉ phép)
+              <span style={{ width: 12, height: 12, background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 2 }} /> P
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 12, height: 12, background: '#FFEDD5', border: '1px solid #FED7AA', borderRadius: 2 }} /> M (Đi muộn)
+              <span style={{ width: 12, height: 12, background: '#FFEDD5', border: '1px solid #FED7AA', borderRadius: 2 }} /> M
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 12, height: 12, background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 2 }} /> OT (Làm thêm)
+              <span style={{ width: 12, height: 12, background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 2 }} /> OT
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 12, height: 12, background: '#F1F5F9', border: '1px solid #CBD5E1', borderRadius: 2 }} /> — (Chưa có dữ liệu)
+              <span style={{ width: 12, height: 12, background: '#F1F5F9', border: '1px solid #CBD5E1', borderRadius: 2 }} /> —
             </span>
           </div>
 
-          <Button icon={<DownloadOutlined />} onClick={() => downloadFile(`Bang_cham_cong_${selectedMonth}.xlsx`, generateValidXlsxBlob([['Mã NV', 'Nhân viên', 'Phòng ban', ...daysInMonth.map((day) => `${selectedMonth}-${String(day).padStart(2, '0')}`), 'Ngày có cặp điểm danh', 'OT duyệt (giờ)'], ...filteredEmployees.map((employee) => [employee.code, employee.name, employee.department, ...daysInMonth.map((day) => getAttendanceStatus(day, employee).code), daysInMonth.reduce((sum, day) => sum + getAttendanceStatus(day, employee).days, 0), employeeOtHours(employee)])]))}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile(`Bang_cham_cong_${selectedMonth}.xlsx`, generateValidXlsxBlob([['Mã NV', 'Nhân viên', 'Phòng ban', ...daysInMonth.map((day) => `${selectedMonth}-${String(day).padStart(2, '0')}`), 'Ngày có cặp điểm danh', 'OT duyệt'], ...filteredEmployees.map((employee) => [employee.code, employee.name, employee.department, ...daysInMonth.map((day) => getAttendanceStatus(day, employee).code), daysInMonth.reduce((sum, day) => sum + getAttendanceStatus(day, employee).days, 0), employeeOtHours(employee)])]))}>
             Xuất Excel
           </Button>
         </div>
@@ -302,7 +302,7 @@ export const TimesheetModule: React.FC = () => {
             {/* Key checkin log snapshot */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-                Nhật Ký Điểm Danh Đã Lưu (7 Ngày Gần Nhất):
+                Nhật Ký Điểm Danh Đã Lưu:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
                 {recentLogs(selectedEmp.emp).map((item, idx) => (

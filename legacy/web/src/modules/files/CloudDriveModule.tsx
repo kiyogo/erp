@@ -247,7 +247,7 @@ export const CloudDriveModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cơ chế sao lưu dự phòng (Backup)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cơ chế sao lưu dự phòng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             Snapshot 00:00
           </div>
@@ -319,7 +319,7 @@ export const CloudDriveModule: React.FC = () => {
       {/* MODAL: Tải tệp tin lên */}
       <FileUploadDialog open={filePickerOpen} onClose={() => setFilePickerOpen(false)} onSelect={(selected) => { const file = selected[0]; setSelectedUploadFile(file); form.setFieldsValue({ fileName: file.name }); }} title="Chọn tệp cho Cloud Drive" multiple={false} confirmText="Chọn tệp" />
       <Modal
-        title="Tải Tệp Tin Lên Đám Mây Doanh Nghiệp (Cloud Drive)"
+        title="Tải Tệp Tin Lên Đám Mây Doanh Nghiệp"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -362,7 +362,7 @@ export const CloudDriveModule: React.FC = () => {
             <Select
               placeholder="Chọn phân quyền..."
               options={[
-                { label: 'Toàn bộ nội bộ (All Staff)', value: 'Toàn bộ nội bộ' },
+                { label: 'Toàn bộ nội bộ', value: 'Toàn bộ nội bộ' },
                 ...orgUnitOptions,
               ]}
             />
@@ -379,7 +379,7 @@ export const CloudDriveModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Tệp Tin Metadata */}
       <Drawer
-        title="Thông Tin Tệp Tin &amp; Kiểm Tra Toàn Vẹn (Cloud Metadata)"
+        title="Thông Tin Tệp Tin &amp; Kiểm Tra Toàn Vẹn"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={580}

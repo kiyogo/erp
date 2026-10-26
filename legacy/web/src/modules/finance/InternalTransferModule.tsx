@@ -171,7 +171,7 @@ export const InternalTransferModule: React.FC = () => {
       ),
     },
     {
-      title: 'Tài khoản nguồn (Xuất) ➔ Tài khoản đích (Nhận)',
+      title: 'Tài khoản nguồn ➔ Tài khoản đích',
       key: 'accounts',
       render: (_: any, record: EnterpriseInternalTransferRecord) => (
         <div>
@@ -258,7 +258,7 @@ export const InternalTransferModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lệnh đang điều chuyển (Napas/Két)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lệnh đang điều chuyển</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: pendingCount > 0 ? '#D97706' : '#64748B', marginTop: 4 }}>
             {pendingCount} Giao dịch
           </div>
@@ -354,12 +354,12 @@ export const InternalTransferModule: React.FC = () => {
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <p>Ghi nhận điều chuyển vào sổ quỹ sau khi giao dịch thực tế đã được thực hiện. Chọn tài khoản hoặc quỹ đang hoạt động.</p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="sourceAccount" label="Tài khoản nguồn (Xuất tiền)" rules={[{ required: true }]}>
+            <Form.Item name="sourceAccount" label="Tài khoản nguồn" rules={[{ required: true }]}>
               <Select
                 options={accounts.filter(account => account.status === 'Đang hoạt động').map(account => ({ label: `${account.name} — ${account.balance.toLocaleString('vi-VN')} ₫`, value: account.key }))}
               />
             </Form.Item>
-            <Form.Item name="destinationAccount" label="Tài khoản đích (Nhận tiền)" rules={[{ required: true }]}>
+            <Form.Item name="destinationAccount" label="Tài khoản đích" rules={[{ required: true }]}>
               <Select
                 options={accounts.filter(account => account.status === 'Đang hoạt động').map(account => ({ label: `${account.name} — ${account.balance.toLocaleString('vi-VN')} ₫`, value: account.key }))}
               />
@@ -374,7 +374,7 @@ export const InternalTransferModule: React.FC = () => {
               <Select
                 options={[
                   { label: 'Ghi sổ điều chuyển nội bộ', value: 'Ghi sổ nội bộ' },
-                  { label: 'Napas 247 (Tức thì)', value: 'Napas 247' },
+                  { label: 'Napas 247', value: 'Napas 247' },
                   { label: 'CITAD Liên Ngân Hàng', value: 'CITAD Liên Ngân Hàng' },
                   { label: 'Rút séc / Nộp tiền mặt két', value: 'Rút séc / Nộp tiền mặt két' },
                 ]}
@@ -436,11 +436,11 @@ export const InternalTransferModule: React.FC = () => {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ background: '#FEF2F2', padding: '10px 12px', borderRadius: 6, border: '1px solid #FECACA' }}>
-                  <div style={{ fontSize: 11, color: '#991B1B', fontWeight: 700 }}>TÀI KHOẢN NGUỒN (XUẤT TIỀN):</div>
+                  <div style={{ fontSize: 11, color: '#991B1B', fontWeight: 700 }}>TÀI KHOẢN NGUỒN:</div>
                   <strong style={{ color: '#DC2626' }}>{selectedTransfer.sourceAccount}</strong>
                 </div>
                 <div style={{ background: '#F0FDF4', padding: '10px 12px', borderRadius: 6, border: '1px solid #BBF7D0' }}>
-                  <div style={{ fontSize: 11, color: '#166534', fontWeight: 700 }}>TÀI KHOẢN ĐÍCH (NHẬN TIỀN):</div>
+                  <div style={{ fontSize: 11, color: '#166534', fontWeight: 700 }}>TÀI KHOẢN ĐÍCH:</div>
                   <strong style={{ color: '#16A34A' }}>{selectedTransfer.destinationAccount}</strong>
                 </div>
                 <div style={{ marginTop: 6, color: '#475569' }}>

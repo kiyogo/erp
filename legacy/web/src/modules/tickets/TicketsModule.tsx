@@ -291,9 +291,9 @@ export const TicketsModule: React.FC = () => {
             <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Khẩn cấp (Xử lý ngay)', value: 'Khẩn cấp' },
-                  { label: 'Cao (Xử lý trong 2h)', value: 'Cao' },
-                  { label: 'Trung bình (Trong 8h)', value: 'Trung bình' },
+                  { label: 'Khẩn cấp', value: 'Khẩn cấp' },
+                  { label: 'Cao', value: 'Cao' },
+                  { label: 'Trung bình', value: 'Trung bình' },
                   { label: 'Thấp', value: 'Thấp' },
                 ]}
               />
@@ -354,7 +354,7 @@ export const TicketsModule: React.FC = () => {
             {/* SLA Priority Card */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Cam Kết Mức Độ Dịch Vụ (SLA ServiceDesk):
+                Cam Kết Mức Độ Dịch Vụ:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
                 <div>Thời điểm gửi yêu cầu: <strong>{selectedTicket.createdDate}</strong></div>

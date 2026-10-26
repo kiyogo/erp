@@ -47,7 +47,7 @@ export class CameraService {
         error: {
           code: 'UNSUPPORTED',
           message: isHttpNetwork
-            ? 'Trình duyệt yêu cầu kết nối HTTPS (hoặc localhost) để mở Camera trực tiếp. Vui lòng bấm nút "Tải ảnh lên / Chụp ảnh" bên dưới để sử dụng máy ảnh của điện thoại.'
+            ? 'Trình duyệt yêu cầu kết nối HTTPS để mở Camera trực tiếp. Vui lòng bấm nút "Tải ảnh lên / Chụp ảnh" bên dưới để sử dụng máy ảnh của điện thoại.'
             : 'Trình duyệt của bạn đang chặn mở camera trực tiếp. Vui lòng sử dụng tính năng chụp/tải ảnh bên dưới.',
         },
       };
@@ -106,7 +106,7 @@ export class CameraService {
 
     if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
       code = 'PERMISSION_DENIED';
-      message = 'Quyền truy cập camera bị từ chối. Vui lòng nhấn Cho phép (Allow) quyền camera trên trình duyệt.';
+      message = 'Quyền truy cập camera bị từ chối. Vui lòng nhấn Cho phép quyền camera trên trình duyệt.';
     } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
       code = 'NOT_FOUND';
       message = 'Không tìm thấy camera trên thiết bị của bạn. Vui lòng sử dụng nút chụp/tải ảnh.';

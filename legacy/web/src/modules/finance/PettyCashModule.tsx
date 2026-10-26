@@ -274,7 +274,7 @@ export const PettyCashModule: React.FC = () => {
             { key: 'all', label: 'Tất cả phiếu quỹ' },
             { key: 'Đã chi tiền mặt', label: 'Đã chi tiền', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
             { key: 'Tạm ứng chờ quyết toán', label: 'Tạm ứng chờ quyết toán', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'Đã hoàn ứng vào quỹ', label: 'Đã hoàn ứng (+)', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
+            { key: 'Đã hoàn ứng vào quỹ', label: 'Đã hoàn ứng', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -347,7 +347,7 @@ export const PettyCashModule: React.FC = () => {
                 options={[
                   { label: 'Chi tiền mặt trực tiếp', value: 'Đã chi tiền mặt' },
                   { label: 'Tạm ứng tiền mặt chờ quyết toán', value: 'Tạm ứng chờ quyết toán' },
-                  { label: 'Hoàn ứng nộp tiền vào quỹ (+)', value: 'Đã hoàn ứng vào quỹ' },
+                  { label: 'Hoàn ứng nộp tiền vào quỹ', value: 'Đã hoàn ứng vào quỹ' },
                 ]}
               />
             </Form.Item>

@@ -401,7 +401,7 @@ export const ShiftAssignmentModule: React.FC = () => {
 
       <Modal title="Yêu cầu đổi ca" open={swapOpen} onCancel={() => setSwapOpen(false)} footer={null} width={540}>
         <Form form={swapForm} layout="vertical" onFinish={handleRequestSwap}>
-          <Form.Item name="swapTargetKey" label="Lịch phân ca muốn đổi (cùng khoảng hiệu lực)" rules={[{ required: true }]}>
+          <Form.Item name="swapTargetKey" label="Lịch phân ca muốn đổi" rules={[{ required: true }]}>
             <Select options={data.filter((item) => item.key !== selectedAssignment?.key && item.empCode !== selectedAssignment?.empCode && item.status === 'Đang áp dụng' && item.effectiveFrom === selectedAssignment?.effectiveFrom && item.effectiveTo === selectedAssignment?.effectiveTo).map((item) => ({ label: `${item.employeeName} - ${item.shiftName} (${item.workHours})`, value: item.key }))} />
           </Form.Item>
           <Form.Item name="swapReason" label="Lý do đổi ca" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item>

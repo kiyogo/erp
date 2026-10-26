@@ -30,7 +30,7 @@ export interface DisposalItem {
   assetName: string;
   category: string;
   serialNo: string;
-  disposalMethod: 'Bán đấu giá nội bộ CBNV' | 'Bán thanh lý cho đơn vị thu mua ngoài' | 'Tiêu hủy an toàn (Data Wiping / Shredding)' | 'Tặng / Quyên góp từ thiện' | 'Báo mất / Thất lạc do rủi ro';
+  disposalMethod: 'Bán đấu giá nội bộ CBNV' | 'Bán thanh lý cho đơn vị thu mua ngoài' | 'Tiêu hủy an toàn' | 'Tặng / Quyên góp từ thiện' | 'Báo mất / Thất lạc do rủi ro';
   reason: string;
   originalCost: number;
   accumulatedDepreciation: number;
@@ -101,7 +101,7 @@ export const AssetDisposalModule: React.FC = () => {
       councilLeader: 'Hội đồng thanh lý',
       councilMembers: 'Trần Tuấn Anh (CTO), Nguyễn Thị Mai (KTT), Lê Hoàng Yến (HR)',
       securityDataWipeCertified: true,
-      dataWipeOfficer: 'Vũ Minh Trí (Security Lead)',
+      dataWipeOfficer: 'Vũ Minh Trí',
     });
     setModalOpen(true);
   };
@@ -199,7 +199,7 @@ export const AssetDisposalModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lãi ròng thanh lý hạch toán (Net Gain)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lãi ròng thanh lý hạch toán</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             +{totalNetGain.toLocaleString('vi-VN')} ₫
           </div>
@@ -262,7 +262,7 @@ export const AssetDisposalModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất biên bản thanh lý Mẫu 02-TSCĐ (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất biên bản thanh lý Mẫu 02-TSCĐ')}>
             Xuất Mẫu 02-TSCĐ
           </Button>
           <Button
@@ -310,7 +310,7 @@ export const AssetDisposalModule: React.FC = () => {
               ),
             },
             {
-              title: 'Hạch toán Kế toán (Nguyên giá ➔ Thu hồi)',
+              title: 'Hạch toán Kế toán',
               key: 'finance',
               width: 220,
               render: (_: any, r: DisposalItem) => (
@@ -485,7 +485,7 @@ export const AssetDisposalModule: React.FC = () => {
 
       {/* DRAWER: Xem Biên Bản Thanh Lý Mẫu 02-TSCĐ */}
       <Drawer
-        title="Biên Bản Thanh Lý Tài Sản Cố Định (Mẫu Số 02 - TSCĐ)"
+        title="Biên Bản Thanh Lý Tài Sản Cố Định"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={620}
@@ -495,7 +495,7 @@ export const AssetDisposalModule: React.FC = () => {
             {/* Header Document */}
             <div style={{ textAlign: 'center', borderBottom: '2px solid #009688', paddingBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', letterSpacing: 0.5 }}>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
-              <div style={{ fontSize: 10, color: '#64748B' }}>Mẫu số 02 - TSCĐ (Ban hành theo TT 200/2014/TT-BTC)</div>
+              <div style={{ fontSize: 10, color: '#64748B' }}>Mẫu số 02 - TSCĐ</div>
               <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
                 BIÊN BẢN THANH LÝ TÀI SẢN CỐ ĐỊNH
               </div>
@@ -549,7 +549,7 @@ export const AssetDisposalModule: React.FC = () => {
                     <td style={{ padding: '8px 12px', borderBottom: '1px solid #E2E8F0', color: '#DC2626' }}>{detailItem.disposalCost.toLocaleString('vi-VN')} ₫</td>
                   </tr>
                   <tr style={{ background: '#EFF6FF' }}>
-                    <td style={{ padding: '8px 12px', color: '#1E40AF', fontWeight: 700 }}>Lãi ròng thanh lý (TK 711 Thu nhập khác):</td>
+                    <td style={{ padding: '8px 12px', color: '#1E40AF', fontWeight: 700 }}>Lãi ròng thanh lý:</td>
                     <td style={{ padding: '8px 12px', fontWeight: 800, color: detailItem.netGainLoss >= 0 ? '#16A34A' : '#DC2626', fontSize: 14 }}>
                       {detailItem.netGainLoss >= 0 ? `+${detailItem.netGainLoss.toLocaleString('vi-VN')} ₫` : `${detailItem.netGainLoss.toLocaleString('vi-VN')} ₫`}
                     </td>
@@ -560,10 +560,10 @@ export const AssetDisposalModule: React.FC = () => {
 
             {/* Security Data Wipe */}
             <div style={{ background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
-              <strong style={{ color: '#0F172A' }}>III. CHỨNG THỰC AN TOÀN BẢO MẬT DỮ LIỆU (DATA WIPING):</strong>
+              <strong style={{ color: '#0F172A' }}>III. CHỨNG THỰC AN TOÀN BẢO MẬT DỮ LIỆU:</strong>
               <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, color: '#16A34A' }}>
                 <SafetyCertificateOutlined style={{ fontSize: 16 }} />
-                <span>Toàn bộ ổ cứng lưu trữ đã được xóa trắng vĩnh viễn theo chuẩn NIST SP 800-88 Rev 1 (Purge/Cryptographic Erase).</span>
+                <span>Toàn bộ ổ cứng lưu trữ đã được xóa trắng vĩnh viễn theo chuẩn NIST SP 800-88 Rev 1.</span>
               </div>
               <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
                 Cán bộ an ninh thực hiện: <strong>{detailItem.dataWipeOfficer}</strong>

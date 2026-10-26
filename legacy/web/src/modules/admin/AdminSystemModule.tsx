@@ -184,8 +184,8 @@ export const AdminSystemModule: React.FC = () => {
             <Form.Item name="security" label="Bảo mật kết nối" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { value: 'STARTTLS', label: 'STARTTLS (khuyến nghị, cổng 587)' },
-                  { value: 'SSL', label: 'SSL/TLS (cổng 465)' },
+                  { value: 'STARTTLS', label: 'STARTTLS' },
+                  { value: 'SSL', label: 'SSL/TLS' },
                 ]}
               />
             </Form.Item>
@@ -212,7 +212,7 @@ export const AdminSystemModule: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 16, fontWeight: 750, color: '#0F172A', display: 'flex', alignItems: 'center' }}>
             <img src="/google.png" alt="Google" style={{ width: 20, height: 20, marginRight: 8, objectFit: 'contain' }} />
-            Cấu Hình Đăng Nhập Google SSO (Google Identity OAuth 2.0)
+            Cấu Hình Đăng Nhập Google SSO
           </div>
           <Tag color={googleConfig.configured ? 'success' : 'warning'}>
             {googleConfig.configured ? '● Google Client ID đã cấu hình' : '○ Google OAuth chưa cấu hình'}
@@ -222,7 +222,7 @@ export const AdminSystemModule: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message="Khai báo Client Key, Client Secret và Redirect URI đã tạo trên Google Cloud Console (APIs & Services > Credentials) để kích hoạt đăng nhập đơn bằng Google SSO."
+          message="Khai báo Client Key, Client Secret và Redirect URI đã tạo trên Google Cloud Console để kích hoạt đăng nhập đơn bằng Google SSO."
           style={{ marginBottom: 18 }}
         />
 
@@ -230,8 +230,8 @@ export const AdminSystemModule: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0 16px' }}>
             <Form.Item
               name="clientKey"
-              label="Client Key (Google Client ID)"
-              rules={[{ required: true, message: 'Vui lòng nhập Client Key (Google Client ID)!' }]}
+              label="Client Key"
+              rules={[{ required: true, message: 'Vui lòng nhập Client Key!' }]}
             >
               <Input
                 prefix={<KeyOutlined style={{ color: '#009688' }} />}
@@ -241,7 +241,7 @@ export const AdminSystemModule: React.FC = () => {
 
             <Form.Item
               name="clientSecret"
-              label="Client Secret (Google Identity không yêu cầu khóa này)"
+              label="Client Secret"
             >
               <Input.Password
                 prefix={<SafetyCertificateOutlined style={{ color: '#009688' }} />}
@@ -284,7 +284,7 @@ export const AdminSystemModule: React.FC = () => {
               <Select
                 options={[
                   { value: '100', label: 'Bắt buộc 100% Đăng nhập bằng Google OAuth' },
-                  { value: 'optional', label: 'Cho phép đăng nhập linh hoạt (Google hoặc Mật khẩu)' },
+                  { value: 'optional', label: 'Cho phép đăng nhập linh hoạt' },
                 ]}
               />
             </Form.Item>
@@ -313,7 +313,7 @@ export const AdminSystemModule: React.FC = () => {
 
       <div style={{ marginTop: 14, fontSize: 12.5, color: '#64748B', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <CheckCircleOutlined style={{ color: '#009688', marginTop: 2 }} />
-        Mật khẩu SMTP và Chứng thư Google OAuth (Client Key, Client Secret) được bảo mật mã hóa AES-256 tập trung trên máy chủ hệ thống.
+        Mật khẩu SMTP và Chứng thư Google OAuth được bảo mật mã hóa AES-256 tập trung trên máy chủ hệ thống.
       </div>
     </div>
   );

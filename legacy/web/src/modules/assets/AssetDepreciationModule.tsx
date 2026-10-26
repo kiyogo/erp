@@ -38,7 +38,7 @@ export interface DepreciationItem {
   department: string;
   costAccount: string; // TK Nợ: 642, 641, 627
   assetAccount: string; // TK Có: 2141, 2143
-  depreciationMethod: 'Đường thẳng (Straight-Line VAS TT45)' | 'Số dư giảm dần có điều chỉnh' | 'Theo sản lượng / Công suất';
+  depreciationMethod: 'Đường thẳng' | 'Số dư giảm dần có điều chỉnh' | 'Theo sản lượng / Công suất';
   originalCost: number;
   residualValue: number; // Giá trị thanh lý ước tính
   lifeMonths: number;
@@ -133,10 +133,10 @@ export const AssetDepreciationModule: React.FC = () => {
     form.setFieldsValue({
       assetCode: `TS-2026-0${data.length + 10}`,
       category: 'Máy chủ & Hạ tầng IDC',
-      department: 'Trung Tâm Dữ Liệu & Cloud (DC)',
-      costAccount: 'Nợ 6421 (CP Quản lý CNTT)',
-      assetAccount: 'Có 2141 (Hao mòn TSCĐ hữu hình)',
-      depreciationMethod: 'Đường thẳng (Straight-Line VAS TT45)',
+      department: 'Trung Tâm Dữ Liệu & Cloud',
+      costAccount: 'Nợ 6421',
+      assetAccount: 'Có 2141',
+      depreciationMethod: 'Đường thẳng',
       originalCost: 360000000,
       residualValue: 10000000,
       lifeMonths: 36,
@@ -271,7 +271,7 @@ export const AssetDepreciationModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giá trị còn lại (Net Book Value)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giá trị còn lại</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalNetBook.toLocaleString('vi-VN')} ₫
           </div>
@@ -315,7 +315,7 @@ export const AssetDepreciationModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Bảng Tính Phân Bổ Khấu Hao (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Bảng Tính Phân Bổ Khấu Hao')}>
             Xuất Excel
           </Button>
           <Button
@@ -386,7 +386,7 @@ export const AssetDepreciationModule: React.FC = () => {
               ),
             },
             {
-              title: 'Tiến độ trích (Đã trích ➔ Còn lại)',
+              title: 'Tiến độ trích',
               key: 'progress',
               width: 210,
               render: (_: any, r: DepreciationItem) => {
@@ -461,7 +461,7 @@ export const AssetDepreciationModule: React.FC = () => {
 
       {/* MODAL: Thiết lập trích khấu hao mới 100% trường nhập */}
       <Modal
-        title="Thiết Lập Khấu Hao Tài Sản Cố Định (Chuẩn VAS TT45)"
+        title="Thiết Lập Khấu Hao Tài Sản Cố Định"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -508,21 +508,21 @@ export const AssetDepreciationModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="costAccount" label="Tài khoản Nợ (Chi phí)" rules={[{ required: true }]}>
+            <Form.Item name="costAccount" label="Tài khoản Nợ" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Nợ 6421 (CP Quản lý CNTT)', value: 'Nợ 6421 (CP Quản lý CNTT)' },
-                  { label: 'Nợ 6422 (CP Vật liệu CCDC)', value: 'Nợ 6422 (CP Vật liệu & CCDC Văn phòng)' },
-                  { label: 'Nợ 641 (CP Bán Hàng)', value: 'Nợ 641 (CP Bán Hàng)' },
-                  { label: 'Nợ 627 (CP Sản xuất chung)', value: 'Nợ 627 (CP Sản xuất chung)' },
+                  { label: 'Nợ 6421', value: 'Nợ 6421 (CP Quản lý CNTT)' },
+                  { label: 'Nợ 6422', value: 'Nợ 6422 (CP Vật liệu & CCDC Văn phòng)' },
+                  { label: 'Nợ 641', value: 'Nợ 641 (CP Bán Hàng)' },
+                  { label: 'Nợ 627', value: 'Nợ 627 (CP Sản xuất chung)' },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="assetAccount" label="Tài khoản Có (Hao mòn)" rules={[{ required: true }]}>
+            <Form.Item name="assetAccount" label="Tài khoản Có" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Có 2141 (Hao mòn TSCĐ hữu hình)', value: 'Có 2141 (Hao mòn TSCĐ hữu hình)' },
-                  { label: 'Có 2143 (Hao mòn TSCĐ vô hình)', value: 'Có 2143 (Hao mòn TSCĐ vô hình)' },
+                  { label: 'Có 2141', value: 'Có 2141 (Hao mòn TSCĐ hữu hình)' },
+                  { label: 'Có 2143', value: 'Có 2143 (Hao mòn TSCĐ vô hình)' },
                 ]}
               />
             </Form.Item>
@@ -535,7 +535,7 @@ export const AssetDepreciationModule: React.FC = () => {
             <Form.Item name="residualValue" label="Giá trị thanh lý ước tính (VNĐ)">
               <Input type="number" min={0} step={5000000} placeholder="Ví dụ: 10000000" />
             </Form.Item>
-            <Form.Item name="lifeMonths" label="Thời gian trích (Tháng)" rules={[{ required: true }]}>
+            <Form.Item name="lifeMonths" label="Thời gian trích" rules={[{ required: true }]}>
               <Input type="number" min={1} max={120} placeholder="Ví dụ: 36" />
             </Form.Item>
           </div>
@@ -623,7 +623,7 @@ export const AssetDepreciationModule: React.FC = () => {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead style={{ background: '#F1F5F9', position: 'sticky', top: 0 }}>
                     <tr>
-                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #CBD5E1' }}>Kỳ (Tháng/Năm)</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #CBD5E1' }}>Kỳ</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #CBD5E1' }}>Mức trích kỳ này</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #CBD5E1' }}>Lũy kế đã trích</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #CBD5E1' }}>Giá trị còn lại</th>
@@ -688,11 +688,11 @@ export const AssetDepreciationModule: React.FC = () => {
           <div style={{ background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
             <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Phân bổ chi phí theo phòng ban:</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
-              <span>1. Trung Tâm Dữ Liệu DC (Nợ 6421):</span>
+              <span>1. Trung Tâm Dữ Liệu DC:</span>
               <strong style={{ color: '#B45309' }}>17.500.000 ₫</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
-              <span>2. Khối Kỹ Thuật Dev (Nợ 6422):</span>
+              <span>2. Khối Kỹ Thuật Dev:</span>
               <strong style={{ color: '#B45309' }}>11.666.667 ₫</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderTop: '1px solid #E2E8F0', marginTop: 4, paddingTop: 4 }}>

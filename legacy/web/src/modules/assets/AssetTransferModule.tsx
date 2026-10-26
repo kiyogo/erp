@@ -93,10 +93,10 @@ export const AssetTransferModule: React.FC = () => {
       transferCode: `DC-2026-00${data.length + 1}`,
       transferDate: new Date().toISOString().substring(0, 10),
       expectedDeliveryDate: new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10),
-      fromLocation: 'Trụ sở chính Hà Nội (Keangnam Landmark)',
+      fromLocation: 'Trụ sở chính Hà Nội',
       fromDepartment: 'Kho Thiết Bị Hà Nội',
-      fromCustodian: 'Vũ Minh Trí (IT Support)',
-      toLocation: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)',
+      fromCustodian: 'Vũ Minh Trí',
+      toLocation: 'Chi nhánh TP.HCM',
       toDepartment: 'Khối Kinh Doanh & Tiếp Thị',
       toCustodian: 'Phạm Hồng Nhung',
       carrierName: 'Viettel Post Express',
@@ -280,7 +280,7 @@ export const AssetTransferModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ lệnh điều chuyển tài sản (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ lệnh điều chuyển tài sản')}>
             Xuất Excel
           </Button>
           <Button
@@ -327,7 +327,7 @@ export const AssetTransferModule: React.FC = () => {
               ),
             },
             {
-              title: 'Lộ trình điều chuyển (Từ ➔ Đến)',
+              title: 'Lộ trình điều chuyển',
               key: 'route',
               render: (_: any, r: TransferItem) => (
                 <div>
@@ -450,15 +450,15 @@ export const AssetTransferModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ background: '#FEF2F2', padding: 12, borderRadius: 8, border: '1px solid #FECACA' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#991B1B', marginBottom: 8 }}>ĐƠN VỊ XUẤT ĐI (TỪ):</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#991B1B', marginBottom: 8 }}>ĐƠN VỊ XUẤT ĐI:</div>
               <Form.Item name="fromLocation" label="Địa điểm gửi" rules={[{ required: true }]}>
                 <Select
                   options={[
-                    { label: 'Trụ sở chính Hà Nội (Keangnam)', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
+                    { label: 'Trụ sở chính Hà Nội', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
                     { label: 'IDC Viettel Duy Tân Hà Nội', value: 'IDC Viettel Duy Tân Hà Nội' },
-                    { label: 'Chi nhánh TP.HCM (Bitexco)', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
+                    { label: 'Chi nhánh TP.HCM', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
                     { label: 'IDC FPT Tân Thuận Q7', value: 'IDC FPT Tân Thuận Q7' },
-                    { label: 'Chi nhánh Đà Nẵng (Bạch Đằng)', value: 'Chi nhánh Đà Nẵng (Bạch Đằng Complex)' },
+                    { label: 'Chi nhánh Đà Nẵng', value: 'Chi nhánh Đà Nẵng (Bạch Đằng Complex)' },
                   ]}
                 />
               </Form.Item>
@@ -471,14 +471,14 @@ export const AssetTransferModule: React.FC = () => {
             </div>
 
             <div style={{ background: '#F0FDF4', padding: 12, borderRadius: 8, border: '1px solid #BBF7D0' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 8 }}>ĐƠN VỊ TIẾP NHẬN (ĐẾN):</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 8 }}>ĐƠN VỊ TIẾP NHẬN:</div>
               <Form.Item name="toLocation" label="Địa điểm nhận" rules={[{ required: true }]}>
                 <Select
                   options={[
-                    { label: 'Chi nhánh TP.HCM (Bitexco)', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
+                    { label: 'Chi nhánh TP.HCM', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
                     { label: 'IDC FPT Tân Thuận Q7', value: 'IDC FPT Tân Thuận Q7' },
-                    { label: 'Chi nhánh Đà Nẵng (Bạch Đằng)', value: 'Chi nhánh Đà Nẵng (Bạch Đằng Complex)' },
-                    { label: 'Trụ sở chính Hà Nội (Keangnam)', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
+                    { label: 'Chi nhánh Đà Nẵng', value: 'Chi nhánh Đà Nẵng (Bạch Đằng Complex)' },
+                    { label: 'Trụ sở chính Hà Nội', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
                     { label: 'IDC Viettel Duy Tân Hà Nội', value: 'IDC Viettel Duy Tân Hà Nội' },
                   ]}
                 />

@@ -337,22 +337,22 @@ export const InsuranceModule: React.FC = () => {
         <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 18 }}>
             <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 14px 0', color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <SafetyCertificateOutlined style={{ color: '#009688' }} /> Cơ Cấu Tỷ Lệ Đóng BHXH - BHYT - BHTN Năm 2026 (Tổng 32%)
+              <SafetyCertificateOutlined style={{ color: '#009688' }} /> Cơ Cấu Tỷ Lệ Đóng BHXH - BHYT - BHTN Năm 2026
             </h3>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ padding: 12, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, color: '#0F172A' }}>1. Bảo Hiểm Xã Hội (Hưu trí, Tử tuất, Ốm đau, Thai sản)</span>
-                  <span style={{ fontWeight: 800, color: '#009688' }}>25.5% (DN: 17.5% · NLĐ: 8%)</span>
+                  <span style={{ fontWeight: 700, color: '#0F172A' }}>1. Bảo Hiểm Xã Hội</span>
+                  <span style={{ fontWeight: 800, color: '#009688' }}>25.5%</span>
                 </div>
                 <Progress percent={79.6} strokeColor="#009688" size="small" showInfo={false} />
               </div>
 
               <div style={{ padding: 12, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, color: '#0F172A' }}>2. Bảo Hiểm Y Tế (Khám chữa bệnh BHYT)</span>
-                  <span style={{ fontWeight: 800, color: '#2563EB' }}>4.5% (DN: 3.0% · NLĐ: 1.5%)</span>
+                  <span style={{ fontWeight: 700, color: '#0F172A' }}>2. Bảo Hiểm Y Tế</span>
+                  <span style={{ fontWeight: 800, color: '#2563EB' }}>4.5%</span>
                 </div>
                 <Progress percent={14.0} strokeColor="#2563EB" size="small" showInfo={false} />
               </div>
@@ -360,7 +360,7 @@ export const InsuranceModule: React.FC = () => {
               <div style={{ padding: 12, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
                   <span style={{ fontWeight: 700, color: '#0F172A' }}>3. Bảo Hiểm Thất Nghiệp (BHTN)</span>
-                  <span style={{ fontWeight: 800, color: '#7C3AED' }}>2.0% (DN: 1.0% · NLĐ: 1.0%)</span>
+                  <span style={{ fontWeight: 800, color: '#7C3AED' }}>2.0%</span>
                 </div>
                 <Progress percent={6.4} strokeColor="#7C3AED" size="small" showInfo={false} />
               </div>
@@ -400,7 +400,7 @@ export const InsuranceModule: React.FC = () => {
             <Button
               type="primary"
               icon={<DownloadOutlined />}
-              onClick={() => message.success('Đã xuất báo cáo tổng hợp đóng BHXH (Mẫu C12-TS)!')}
+              onClick={() => message.success('Đã xuất báo cáo tổng hợp đóng BHXH!')}
               style={{ backgroundColor: '#009688', borderColor: '#009688', marginTop: 14 }}
               disabled={!hasContributionData}
             >
@@ -813,7 +813,7 @@ export const InsuranceModule: React.FC = () => {
 
       {/* MODAL: Thêm Tăng Giảm (D02-LT) / Chế Độ (01B-HSB) */}
       <Modal
-        title={modalType === 'adjust' ? 'Lập Hồ Sơ Tăng/Giảm Lao Động (Mẫu D02-LT)' : 'Lập Hồ Sơ Đề Nghị Hưởng Chế Độ BHXH'}
+        title={modalType === 'adjust' ? 'Lập Hồ Sơ Tăng/Giảm Lao Động' : 'Lập Hồ Sơ Đề Nghị Hưởng Chế Độ BHXH'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -830,7 +830,7 @@ export const InsuranceModule: React.FC = () => {
                   <Select
                     options={[
                       { label: 'Báo tăng mới lao động', value: 'Báo tăng mới' },
-                      { label: 'Báo giảm hẳn (Nghỉ việc)', value: 'Báo giảm hẳn' },
+                      { label: 'Báo giảm hẳn', value: 'Báo giảm hẳn' },
                       { label: 'Điều chỉnh tăng/giảm mức lương', value: 'Điều chỉnh tăng lương' },
                       { label: 'Nghỉ thai sản', value: 'Nghỉ thai sản' },
                       { label: 'Nghỉ ốm dài ngày', value: 'Nghỉ ốm dài ngày' },
@@ -915,7 +915,7 @@ export const InsuranceModule: React.FC = () => {
 
       {/* DRAWER: Tra Cứu VssID & Sổ BHXH Cá Nhân */}
       <Drawer
-        title="Trích Lục Thông Tin Sổ BHXH &amp; Thẻ BHYT Điện Tử (VssID)"
+        title="Trích Lục Thông Tin Sổ BHXH &amp; Thẻ BHYT Điện Tử"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={600}
@@ -938,11 +938,11 @@ export const InsuranceModule: React.FC = () => {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
                 <div>
-                  <span style={{ color: '#64748B' }}>Số sổ BHXH (10 số):</span>
+                  <span style={{ color: '#64748B' }}>Số sổ BHXH:</span>
                   <div style={{ fontWeight: 700, color: '#2563EB' }}>{selectedLabor.socialInsNumber}</div>
                 </div>
                 <div>
-                  <span style={{ color: '#64748B' }}>Mã thẻ BHYT (15 ký tự):</span>
+                  <span style={{ color: '#64748B' }}>Mã thẻ BHYT:</span>
                   <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedLabor.healthInsNumber}</div>
                 </div>
                 <div>
@@ -959,7 +959,7 @@ export const InsuranceModule: React.FC = () => {
             </div>
 
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Cơ sở khám chữa bệnh ban đầu (KCB):</div>
+              <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Cơ sở khám chữa bệnh ban đầu:</div>
               <div style={{ fontSize: 13, color: '#1E40AF', fontWeight: 600 }}>{selectedLabor.hospitalClinic}</div>
             </div>
 

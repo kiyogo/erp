@@ -108,7 +108,7 @@ export const CostingModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Biên lợi nhuận gộp bình quân</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            +{avgMargin}% (Hiệu quả cao)
+            +{avgMargin}%
           </div>
         </div>
       </div>
@@ -116,7 +116,7 @@ export const CostingModule: React.FC = () => {
       {isContracts && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Theo Hợp Đồng Kinh Tế B2B (Cung Cấp Giải Pháp)</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Theo Hợp Đồng Kinh Tế B2B</h3>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tập hợp chi phí Hợp đồng
             </Button>
@@ -127,10 +127,10 @@ export const CostingModule: React.FC = () => {
               columns={[
                 { title: 'Mã hợp đồng', dataIndex: 'code', key: 'code', render: (c: string) => <strong>{c}</strong> },
                 { title: 'Tên hợp đồng giải pháp', dataIndex: 'projectName', key: 'projectName', render: (p: string) => <strong style={{ color: '#2563EB' }}>{p}</strong> },
-                { title: 'Nhân công trực tiếp (622)', dataIndex: 'directLabor', key: 'directLabor', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Hạ tầng & Cloud (627)', dataIndex: 'infrastructureCost', key: 'infrastructureCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'License phần mềm (621)', dataIndex: 'softwareLicense', key: 'softwareLicense', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Tổng giá thành (Z)', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
+                { title: 'Nhân công trực tiếp', dataIndex: 'directLabor', key: 'directLabor', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'Hạ tầng & Cloud', dataIndex: 'infrastructureCost', key: 'infrastructureCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'License phần mềm', dataIndex: 'softwareLicense', key: 'softwareLicense', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'Tổng giá thành', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Giá trị hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (m: number) => <Tag color="success">+{m}%</Tag> },
               ]}
@@ -142,7 +142,7 @@ export const CostingModule: React.FC = () => {
       {isOrders && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Theo Từng Đơn Đặt Hàng (Job-Order Costing)</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Theo Từng Đơn Đặt Hàng</h3>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tạo thẻ tính giá thành đơn
             </Button>
@@ -156,10 +156,10 @@ export const CostingModule: React.FC = () => {
               columns={[
                 { title: 'Mã Job Đơn hàng', dataIndex: 'order', key: 'order', render: (o: string) => <strong>{o}</strong> },
                 { title: 'Quy cách sản phẩm', dataIndex: 'desc', key: 'desc' },
-                { title: 'Vật tư trực tiếp (621)', dataIndex: 'rawCost', key: 'rawCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Nhân công kỹ thuật (622)', dataIndex: 'laborCost', key: 'laborCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Sản xuất chung (627)', dataIndex: 'overheadCost', key: 'overheadCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Giá thành Job (Z)', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
+                { title: 'Vật tư trực tiếp', dataIndex: 'rawCost', key: 'rawCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'Nhân công kỹ thuật', dataIndex: 'laborCost', key: 'laborCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'Sản xuất chung', dataIndex: 'overheadCost', key: 'overheadCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'Giá thành Job', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Giá bán đơn hàng', dataIndex: 'orderPrice', key: 'orderPrice', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag icon={<CheckOutlined />} color="success">{s}</Tag> },
               ]}
@@ -187,7 +187,7 @@ export const CostingModule: React.FC = () => {
                 { title: 'Địa điểm', dataIndex: 'site', key: 'site' },
                 { title: 'Vật tư thi công', dataIndex: 'rawCost', key: 'rawCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
                 { title: 'Nhân công lắp đặt', dataIndex: 'laborCost', key: 'laborCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Giá thành (Z)', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
+                { title: 'Giá thành', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Giá trị hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s.includes('nghiệm thu') ? 'success' : 'processing'}>{s}</Tag> },
               ]}
@@ -234,7 +234,7 @@ export const CostingModule: React.FC = () => {
                 { title: 'Phân loại', dataIndex: 'category', key: 'category', render: (c: string) => <Tag color="blue">{c}</Tag> },
                 { title: 'Giá thành (VNĐ)', dataIndex: 'totalCost', key: 'totalCost', render: (val: number) => <strong style={{ color: '#DC2626' }}>{val.toLocaleString('vi-VN')} ₫</strong> },
                 { title: 'Doanh thu hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (val: number) => <strong style={{ color: '#009688' }}>{val.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Biên lãi gộp (%)', dataIndex: 'profitMargin', key: 'profitMargin', render: (m: number) => <Tag color="success">+{m}%</Tag> },
+                { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (m: number) => <Tag color="success">+{m}%</Tag> },
               ]}
               pagination={{ pageSize: 10 }}
             />
@@ -258,7 +258,7 @@ export const CostingModule: React.FC = () => {
               <Select
                 options={[
                   { label: 'Hợp đồng kinh tế B2B', value: 'Hợp đồng kinh tế B2B' },
-                  { label: 'Đơn đặt hàng (Job-Order)', value: 'Đơn đặt hàng (Job-Order)' },
+                  { label: 'Đơn đặt hàng', value: 'Đơn đặt hàng (Job-Order)' },
                   { label: 'Công trình thi công', value: 'Công trình thi công' },
                   { label: 'Dịch vụ duy trì SLA', value: 'Dịch vụ duy trì SLA' },
                 ]}

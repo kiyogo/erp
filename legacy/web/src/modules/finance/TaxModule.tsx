@@ -23,7 +23,7 @@ import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '.
 interface TaxFiling {
   key: string;
   code: string;
-  taxType: 'Thuế GTGT (VAT)' | 'Thuế TNDN tạm tính' | 'Thuế TNCN khấu trừ' | 'Lệ phí Môn bài';
+  taxType: 'Thuế GTGT' | 'Thuế TNDN tạm tính' | 'Thuế TNCN khấu trừ' | 'Lệ phí Môn bài';
   period: string;
   taxAuthority: string;
   amountPayable: number;
@@ -131,11 +131,11 @@ export const TaxModule: React.FC = () => {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             {[
-              { name: 'Thuế Giá trị gia tăng (GTGT/VAT)', code: '1701', rate: '8% - 10%', method: 'Khấu trừ theo Quý', status: 'Bắt buộc' },
-              { name: 'Thuế Thu nhập Doanh nghiệp (TNDN)', code: '1052', rate: '20% (Lợi nhuận tính thuế)', method: 'Tạm nộp Quý & Quyết toán năm', status: 'Bắt buộc' },
-              { name: 'Thuế Thu nhập Cá nhân (TNCN)', code: '1001', rate: 'Lũy tiến 5% - 35%', method: 'Khấu trừ theo Tháng/Quý', status: 'Bắt buộc' },
-              { name: 'Lệ phí Môn bài', code: '2862', rate: '2.000.000 ₫/năm', method: 'Nộp 1 lần đầu năm (Hạn 30/01)', status: 'Đã hoàn thành' },
-              { name: 'Thuế Nhà thầu Nước ngoài (FCT)', code: '1054', rate: '5% VAT + 5% TNDN', method: 'Theo từng lần phát sinh (AWS/Google/Meta)', status: 'Áp dụng' },
+              { name: 'Thuế Giá trị gia tăng', code: '1701', rate: '8% - 10%', method: 'Khấu trừ theo Quý', status: 'Bắt buộc' },
+              { name: 'Thuế Thu nhập Doanh nghiệp', code: '1052', rate: '20%', method: 'Tạm nộp Quý & Quyết toán năm', status: 'Bắt buộc' },
+              { name: 'Thuế Thu nhập Cá nhân', code: '1001', rate: 'Lũy tiến 5% - 35%', method: 'Khấu trừ theo Tháng/Quý', status: 'Bắt buộc' },
+              { name: 'Lệ phí Môn bài', code: '2862', rate: '2.000.000 ₫/năm', method: 'Nộp 1 lần đầu năm', status: 'Đã hoàn thành' },
+              { name: 'Thuế Nhà thầu Nước ngoài', code: '1054', rate: '5% VAT + 5% TNDN', method: 'Theo từng lần phát sinh', status: 'Áp dụng' },
             ].map((tax, idx) => (
               <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -192,8 +192,8 @@ export const TaxModule: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             {[
               { deadline: '20/09/2026', title: 'Nộp Tờ khai & Tiền thuế TNCN Tháng 08/2026', scope: 'Thuế TNCN khấu trừ chi trả thu nhập', status: 'Còn 24 ngày', level: 'warning' },
-              { deadline: '30/10/2026', title: 'Nộp Tờ khai GTGT (01/GTGT) Quý 3/2026', scope: 'Thuế GTGT theo quý + Báo cáo BC26', status: 'Còn 64 ngày', level: 'processing' },
-              { deadline: '30/10/2026', title: 'Tạm nộp Thuế TNDN Quý 3/2026 (Tối thiểu 80%)', scope: 'Nghĩa vụ tạm nộp TNDN', status: 'Còn 64 ngày', level: 'processing' },
+              { deadline: '30/10/2026', title: 'Nộp Tờ khai GTGT Quý 3/2026', scope: 'Thuế GTGT theo quý + Báo cáo BC26', status: 'Còn 64 ngày', level: 'processing' },
+              { deadline: '30/10/2026', title: 'Tạm nộp Thuế TNDN Quý 3/2026', scope: 'Nghĩa vụ tạm nộp TNDN', status: 'Còn 64 ngày', level: 'processing' },
               { deadline: '30/01/2027', title: 'Nộp Lệ phí Môn bài Năm 2027', scope: 'Bậc 2: 2.000.000 ₫/năm', status: 'Định kỳ năm', level: 'default' },
             ].map((dl, idx) => (
               <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
@@ -213,7 +213,7 @@ export const TaxModule: React.FC = () => {
       {isOrders && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Giấy Nộp Tiền Vào Ngân Sách Nhà Nước (Mẫu C1-02/NS)</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Giấy Nộp Tiền Vào Ngân Sách Nhà Nước</h3>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => message.info('Mở lập lệnh nộp thuế điện tử eTax')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lập giấy nộp tiền eTax
             </Button>
@@ -221,9 +221,9 @@ export const TaxModule: React.FC = () => {
           <div className="transparent-table-card">
             <KTable
               dataSource={[
-                { id: '1', code: 'C102-2026-081', chapter: '754 (DN Ngoài QD)', itemCode: '1701 - Thuế GTGT', kbn: 'KBNN Cầu Giấy', bank: 'Vietcombank - Cầu Giấy', amount: 145000000, date: '2026-07-28', status: 'CQT đã gạch nợ' },
-                { id: '2', code: 'C102-2026-082', chapter: '754 (DN Ngoài QD)', itemCode: '1052 - Thuế TNDN', kbn: 'KBNN Cầu Giấy', bank: 'Vietcombank - Cầu Giấy', amount: 88000000, date: '2026-07-28', status: 'CQT đã gạch nợ' },
-                { id: '3', code: 'C102-2026-083', chapter: '754 (DN Ngoài QD)', itemCode: '1001 - Thuế TNCN', kbn: 'KBNN Cầu Giấy', bank: 'BIDV - Hà Nội', amount: 42500000, date: '2026-08-18', status: 'CQT đã gạch nợ' },
+                { id: '1', code: 'C102-2026-081', chapter: '754', itemCode: '1701 - Thuế GTGT', kbn: 'KBNN Cầu Giấy', bank: 'Vietcombank - Cầu Giấy', amount: 145000000, date: '2026-07-28', status: 'CQT đã gạch nợ' },
+                { id: '2', code: 'C102-2026-082', chapter: '754', itemCode: '1052 - Thuế TNDN', kbn: 'KBNN Cầu Giấy', bank: 'Vietcombank - Cầu Giấy', amount: 88000000, date: '2026-07-28', status: 'CQT đã gạch nợ' },
+                { id: '3', code: 'C102-2026-083', chapter: '754', itemCode: '1001 - Thuế TNCN', kbn: 'KBNN Cầu Giấy', bank: 'BIDV - Hà Nội', amount: 42500000, date: '2026-08-18', status: 'CQT đã gạch nợ' },
               ]}
               columns={[
                 { title: 'Mã số chứng từ', dataIndex: 'code', key: 'code', render: (c: string) => <strong>{c}</strong> },
@@ -244,19 +244,19 @@ export const TaxModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Alert
             message="Cảnh báo an toàn thuế đầu vào"
-            description="Hệ thống tự động tra cứu mã số thuế (MST) của tất cả nhà cung cấp đầu vào với Danh sách 524 Doanh nghiệp rủi ro cao của Tổng cục Thuế để ngăn ngừa rủi ro hóa đơn bất hợp pháp."
+            description="Hệ thống tự động tra cứu mã số thuế của tất cả nhà cung cấp đầu vào với Danh sách 524 Doanh nghiệp rủi ro cao của Tổng cục Thuế để ngăn ngừa rủi ro hóa đơn bất hợp pháp."
             type="warning"
             showIcon
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Doanh Nghiệp Có Cảnh Báo Rủi Ro Thuế (Tổng Cục Thuế)</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Doanh Nghiệp Có Cảnh Báo Rủi Ro Thuế</h3>
             <Input prefix={<SearchOutlined style={{ color: '#bbb' }} />} placeholder="Tra cứu MST hoặc tên công ty rủi ro..." style={{ width: 340, borderRadius: 6 }} allowClear />
           </div>
           <div className="transparent-table-card">
             <KTable
               dataSource={[
                 { id: '1', taxCode: '0108992113', name: 'Công Ty TNHH Thương Mại Toàn Cầu Nam Phát', reason: 'Không hoạt động tại địa chỉ đăng ký kinh doanh', date: '2026-05-12', action: 'Chặn ghi nhận hóa đơn đầu vào', risk: 'Rất cao' },
-                { id: '2', taxCode: '0314567891', name: 'Công Ty CP Dịch Vụ Tiếp Vận Á Châu Minh', reason: 'Có dấu hiệu mua bán hóa đơn bất hợp pháp (CQT thông báo)', date: '2026-06-20', action: 'Chặn ghi nhận hóa đơn đầu vào', risk: 'Rất cao' },
+                { id: '2', taxCode: '0314567891', name: 'Công Ty CP Dịch Vụ Tiếp Vận Á Châu Minh', reason: 'Có dấu hiệu mua bán hóa đơn bất hợp pháp', date: '2026-06-20', action: 'Chặn ghi nhận hóa đơn đầu vào', risk: 'Rất cao' },
               ]}
               columns={[
                 { title: 'Mã số thuế', dataIndex: 'taxCode', key: 'taxCode', render: (t: string) => <code style={{ color: '#DC2626', fontWeight: 700 }}>{t}</code> },
@@ -388,10 +388,10 @@ export const TaxModule: React.FC = () => {
             <Form.Item name="code" label="Mã hồ sơ thuế" initialValue={`TAX-2026-0${data.length + 1}`} rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="taxType" label="Loại thuế" initialValue="Thuế GTGT (VAT)">
+            <Form.Item name="taxType" label="Loại thuế" initialValue="Thuế GTGT">
               <Select
                 options={[
-                  { label: 'Thuế GTGT (VAT)', value: 'Thuế GTGT (VAT)' },
+                  { label: 'Thuế GTGT', value: 'Thuế GTGT (VAT)' },
                   { label: 'Thuế TNDN tạm tính', value: 'Thuế TNDN tạm tính' },
                   { label: 'Thuế TNCN khấu trừ', value: 'Thuế TNCN khấu trừ' },
                   { label: 'Lệ phí Môn bài', value: 'Lệ phí Môn bài' },

@@ -405,7 +405,7 @@ export const AttendanceAlertsModule: React.FC = () => {
 
             {selectedAlert.status === 'Chờ nhân viên giải trình' && <div>
               <label>Giải trình / Kết luận xử lý<Input.TextArea value={selectedAlert.explanationText || ''} onChange={(event) => setSelectedAlert({ ...selectedAlert, explanationText: event.target.value })} rows={3} /></label>
-              <label>Số tiền ghi nhận xử lý (chưa khấu trừ lương)<Input type="number" min={0} value={selectedAlert.penaltyAmount ?? 0} onChange={(event) => setSelectedAlert({ ...selectedAlert, penaltyAmount: Number(event.target.value) })} /></label>
+              <label>Số tiền ghi nhận xử lý<Input type="number" min={0} value={selectedAlert.penaltyAmount ?? 0} onChange={(event) => setSelectedAlert({ ...selectedAlert, penaltyAmount: Number(event.target.value) })} /></label>
             </div>}
             {/* Actions */}
             {selectedAlert.status === 'Chờ nhân viên giải trình' && (

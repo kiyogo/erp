@@ -194,7 +194,7 @@ export const IdentityVerificationPage: React.FC = () => {
 
     Modal.success({
       title: 'Xác thực sinh trắc học thành công!',
-      content: 'Đã hoàn thành 100% kiểm tra Liveness khuôn mặt (Nhìn thẳng, Quay phải, Quay trái, Ngẩng lên). Đã lưu trữ 1 Video sinh trắc học và 1 Ảnh chân dung.',
+      content: 'Đã hoàn thành 100% kiểm tra Liveness khuôn mặt. Đã lưu trữ 1 Video sinh trắc học và 1 Ảnh chân dung.',
       okText: 'Tiếp tục quét CCCD',
       onOk: () => setSubStep(3),
     });
@@ -370,7 +370,7 @@ export const IdentityVerificationPage: React.FC = () => {
 
     // Chỉ giới hạn loại tệp, không giới hạn dung lượng ở giao diện tải lên.
     if (!file.type.startsWith('image/')) {
-      message.error('Vui lòng chọn tệp định dạng hình ảnh (PNG, JPG, JPEG).');
+      message.error('Vui lòng chọn tệp định dạng hình ảnh.');
       return;
     }
 
@@ -943,7 +943,7 @@ export const IdentityVerificationPage: React.FC = () => {
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>Chụp ảnh Căn cước công dân - Mặt sau</div>
               <div style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>
-                Đặt mặt sau CCCD (phần có chip điện tử &amp; mã QR) trong khung hình
+                Đặt mặt sau CCCD trong khung hình
               </div>
             </div>
 

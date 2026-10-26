@@ -266,7 +266,7 @@ export function ChatNewDMModal({
                 }}
                 onMouseEnter={(e) => {
                   if (!isSelected) {
-                    e.currentTarget.style.backgroundColor = isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.06)';
+                    e.currentTarget.style.backgroundColor = isLight ? 'rgba' : 'rgba';
                   }
                 }}
                 onMouseLeave={(e) => {
@@ -353,7 +353,7 @@ export function ChatNewDMModal({
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.opacity = '1';
-              e.currentTarget.style.backgroundColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.08)';
+              e.currentTarget.style.backgroundColor = isLight ? 'rgba' : 'rgba';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.opacity = '0.85';

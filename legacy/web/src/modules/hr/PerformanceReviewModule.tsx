@@ -38,7 +38,7 @@ export interface EnterprisePerformanceReview {
   innovationScore?: number | null; // 20%
   selfScore?: number | null;
   managerScore: number;
-  grade: 'A+ (Xuất sắc)' | 'A (Tốt)' | 'B (Đạt)' | 'C (Cần cải thiện)';
+  grade: 'A+' | 'A' | 'B' | 'C';
   kpiBonus: number;
   evaluator: string;
   managerComment: string;
@@ -156,7 +156,7 @@ export const PerformanceReviewModule: React.FC = () => {
   };
 
   const exportReviews = () => downloadFile('Danh_gia_hieu_suat.xlsx', generateValidXlsxBlob([
-    ['Mã phiếu', 'Mã nhân viên', 'Nhân viên', 'Phòng ban', 'Chức danh', 'Kỳ', 'Tự chấm', 'Quản lý', 'Năng suất (60)', 'Kỷ luật (20)', 'Sáng tạo (20)', 'Xếp loại', 'Thưởng đề xuất', 'Người đánh giá', 'Nhận xét', 'Trạng thái', 'Người duyệt', 'Ngày duyệt'],
+    ['Mã phiếu', 'Mã nhân viên', 'Nhân viên', 'Phòng ban', 'Chức danh', 'Kỳ', 'Tự chấm', 'Quản lý', 'Năng suất', 'Kỷ luật', 'Sáng tạo', 'Xếp loại', 'Thưởng đề xuất', 'Người đánh giá', 'Nhận xét', 'Trạng thái', 'Người duyệt', 'Ngày duyệt'],
     ...filteredData.map(record => [record.code, record.empCode, record.employeeName, record.department, record.position, record.period, record.selfScore ?? null, record.managerScore, record.productivityScore ?? null, record.disciplineScore ?? null, record.innovationScore ?? null, record.grade, record.kpiBonus, record.evaluator, record.managerComment || '', record.status, record.approvedBy || '', record.approvedAt || '']),
   ]));
   const printReview = (record: EnterprisePerformanceReview) => downloadFile(`${record.code.replace(/[^a-z0-9_-]/gi, '_')}.pdf`, generateValidPdfBlob('PHIEU DANH GIA HIEU SUAT', `${record.code} | ${record.period}`, [record.employeeName, `${record.position} | ${record.department}`, `Tu cham: ${record.selfScore ?? 'Chua co'}`, `Quan ly: ${record.managerScore} / 100 | ${record.grade}`, `Nang suat: ${record.productivityScore ?? 'Chua co'} / 60`, `Ky luat: ${record.disciplineScore ?? 'Chua co'} / 20`, `Sang tao: ${record.innovationScore ?? 'Chua co'} / 20`, `Nguoi danh gia: ${record.evaluator}`, `Nhan xet: ${record.managerComment || 'Chua co'}`, `Thuong de xuat: ${record.kpiBonus} VND`, `Trang thai: ${record.status}`, `Nguoi duyet: ${record.approvedBy || 'Chua ghi nhan'} | ${record.approvedAt || ''}`, 'Phieu danh gia noi bo, chua tao lenh chi tra hoac chuyen bang luong.']));
@@ -286,7 +286,7 @@ export const PerformanceReviewModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phiếu đạt loại A+ (Xuất sắc)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phiếu đạt loại A+</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {excellentCount} phiếu đánh giá
           </div>
@@ -412,10 +412,10 @@ export const PerformanceReviewModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="selfScore" label="Điểm Tự chấm (0-100, nếu có)">
+            <Form.Item name="selfScore" label="Điểm Tự chấm">
               <Input type="number" min={0} max={100} step={0.01} />
             </Form.Item>
-            <Form.Item name="managerScore" label="Điểm Quản lý tổng hợp (0-100)">
+            <Form.Item name="managerScore" label="Điểm Quản lý tổng hợp">
               <Input type="number" min={0} max={100} step={0.01} />
             </Form.Item>
             <Form.Item name="kpiBonus" label="Mức thưởng KPI (VNĐ)">
@@ -425,11 +425,11 @@ export const PerformanceReviewModule: React.FC = () => {
 
           <div style={{ fontSize: 12, color: '#64748B', marginBottom: 10 }}>Có thể nhập đủ ba trụ cột bên dưới để máy chủ tính điểm tổng hợp; nếu chưa có, để trống cả ba và nhập điểm quản lý.</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="productivityScore" label="Năng suất (0-60)"><Input type="number" min={0} max={60} step={0.01} /></Form.Item>
-            <Form.Item name="disciplineScore" label="Kỷ luật (0-20)"><Input type="number" min={0} max={20} step={0.01} /></Form.Item>
-            <Form.Item name="innovationScore" label="Sáng tạo (0-20)"><Input type="number" min={0} max={20} step={0.01} /></Form.Item>
+            <Form.Item name="productivityScore" label="Năng suất"><Input type="number" min={0} max={60} step={0.01} /></Form.Item>
+            <Form.Item name="disciplineScore" label="Kỷ luật"><Input type="number" min={0} max={20} step={0.01} /></Form.Item>
+            <Form.Item name="innovationScore" label="Sáng tạo"><Input type="number" min={0} max={20} step={0.01} /></Form.Item>
           </div>
-          <Form.Item name="evaluatorId" label="Người đánh giá (Quản lý trực tiếp)" rules={[{ required: true }]}>
+          <Form.Item name="evaluatorId" label="Người đánh giá" rules={[{ required: true }]}>
             <Select options={employees.map(employee => ({ value: employee.id, label: `${employee.name} (${employee.employeeCode})` }))} />
           </Form.Item>
 
@@ -480,21 +480,21 @@ export const PerformanceReviewModule: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <span>1. Năng suất &amp; Chất lượng công việc (Tỷ trọng 60%):</span>
+                    <span>1. Năng suất &amp; Chất lượng công việc:</span>
                     <strong style={{ color: '#009688' }}>{selectedReview.productivityScore ?? 'Chưa chấm'} / 60 đ</strong>
                   </div>
                   <Progress percent={Math.round(((selectedReview.productivityScore ?? 0) / 60) * 100)} strokeColor="#009688" size="small" />
                 </div>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <span>2. Tác phong, Kỷ luật &amp; Tiến độ (Tỷ trọng 20%):</span>
+                    <span>2. Tác phong, Kỷ luật &amp; Tiến độ:</span>
                     <strong style={{ color: '#2563EB' }}>{selectedReview.disciplineScore ?? 'Chưa chấm'} / 20 đ</strong>
                   </div>
                   <Progress percent={Math.round(((selectedReview.disciplineScore ?? 0) / 20) * 100)} strokeColor="#2563EB" size="small" />
                 </div>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <span>3. Sáng tạo, Cải tiến &amp; Văn hóa (Tỷ trọng 20%):</span>
+                    <span>3. Sáng tạo, Cải tiến &amp; Văn hóa:</span>
                     <strong style={{ color: '#7C3AED' }}>{selectedReview.innovationScore ?? 'Chưa chấm'} / 20 đ</strong>
                   </div>
                   <Progress percent={Math.round(((selectedReview.innovationScore ?? 0) / 20) * 100)} strokeColor="#7C3AED" size="small" />

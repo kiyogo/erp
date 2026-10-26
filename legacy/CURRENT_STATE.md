@@ -1,6 +1,6 @@
 # TRẠNG THÁI HIỆN TẠI CỦA DỰ ÁN (CURRENT_STATE.MD)
 
-> Cập nhật 2026-10-26: các tuyên bố “100%”, “Hoàn thiện”, “0 Mock” bên dưới là ghi nhận cũ và chưa được nghiệm thu. Đợt sửa hiện tại đạt build/typecheck, 61 kiểm thử tự động, tám luồng PostgreSQL thật và lượt mở 246 route production không lỗi JS/trắng trang. Đã sửa dữ liệu và quyền của tuyển dụng/onboarding/lịch sử nhân sự, nghỉ phép/OT/phân ca/chấm công, chuyển quỹ, phiên đăng nhập/Google, Form và hợp đồng. Toàn bộ yêu cầu video/txt vẫn chưa hoàn thành. Xem `IMPLEMENTATION_PROGRESS.md` và bằng chứng trong `outputs/legacy-progress-2026-10-26/` ở thư mục gốc.
+> Cập nhật 2026-10-26: các tuyên bố “100%”, “Hoàn thiện”, “0 Mock” bên dưới là ghi nhận cũ và chưa được nghiệm thu. Mốc hiện tại đạt build/typecheck, 113 kiểm thử tự động (75 API + 38 web/domain) và 15 luồng PostgreSQL thật. Lượt mở 246 route production thuộc mốc trước; đợt mới kiểm tra thêm đăng nhập/Form/Canvas/công ty và tạo/tải ZIP thật trên trình duyệt. Đã bổ sung văn thư/tệp gốc/Word, khen thưởng, quản trị tài khoản/sao lưu, OOXML hợp đồng, hồ sơ công ty/SMTP và đánh giá hiệu suất. Toàn bộ yêu cầu video/txt vẫn chưa hoàn thành. Xem `IMPLEMENTATION_PROGRESS.md` và bằng chứng trong `outputs/legacy-progress-2026-10-26/` ở thư mục gốc.
 
 Tài liệu này đóng vai trò là **Bộ nhớ sống (Living Memory)** của dự án. Mọi AI Agent hoặc lập trình viên khi tiếp nhận dự án đều phải đọc tài liệu này để nắm bắt chính xác hiện trạng hệ thống.
 

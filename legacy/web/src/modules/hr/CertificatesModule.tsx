@@ -197,7 +197,7 @@ export const CertificatesModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} Chứng chỉ
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>AWS, CNCF, PMI, (ISC)², Microsoft Cloud</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>AWS, CNCF, PMI,², Microsoft Cloud</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -271,7 +271,7 @@ export const CertificatesModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 certCode: `CC-2026-0${data.length + 1}`,
-                issuingOrg: 'Amazon Web Services (AWS)',
+                issuingOrg: 'Amazon Web Services',
                 examFee: 8000000,
                 issueDate: new Date().toISOString().substring(0, 10),
                 expireDate: new Date(Date.now() + 3 * 365 * 86400000).toISOString().substring(0, 10),
@@ -307,12 +307,12 @@ export const CertificatesModule: React.FC = () => {
             <Form.Item name="issuingOrg" label="Tổ chức cấp chứng chỉ" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Amazon Web Services (AWS)', value: 'Amazon Web Services (AWS)' },
-                  { label: 'Cloud Native Computing Foundation (CNCF)', value: 'Cloud Native Computing Foundation (CNCF)' },
-                  { label: 'Project Management Institute (PMI)', value: 'Project Management Institute (PMI)' },
-                  { label: '(ISC)² Cybersecurity', value: '(ISC)²' },
+                  { label: 'Amazon Web Services', value: 'Amazon Web Services (AWS)' },
+                  { label: 'Cloud Native Computing Foundation', value: 'Cloud Native Computing Foundation (CNCF)' },
+                  { label: 'Project Management Institute', value: 'Project Management Institute (PMI)' },
+                  { label: '² Cybersecurity', value: '(ISC)²' },
                   { label: 'Microsoft Azure Certification', value: 'Microsoft' },
-                  { label: 'Google Cloud Platform (GCP)', value: 'Google Cloud' },
+                  { label: 'Google Cloud Platform', value: 'Google Cloud' },
                 ]}
               />
             </Form.Item>
@@ -403,7 +403,7 @@ export const CertificatesModule: React.FC = () => {
                   <strong>{selectedCert.employeeName} ({selectedCert.empCode})</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Số hiệu chứng chỉ (Credential ID):</span>
+                  <span style={{ color: '#64748B' }}>Số hiệu chứng chỉ:</span>
                   <code>{selectedCert.credentialId}</code>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>

@@ -85,7 +85,7 @@ export const WorkflowHistoryModule: React.FC = () => {
       {/* 4 KPI Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhật ký kiểm toán lưu vết (Audit Trail)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhật ký kiểm toán lưu vết</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalAuditLogs.toLocaleString('vi-VN')} giao dịch
           </div>
@@ -155,7 +155,7 @@ export const WorkflowHistoryModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8 }}>
           <Button
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất báo cáo kiểm toán tuân thủ (Compliance Audit Report PDF/Excel)')}
+            onClick={() => message.success('Đã xuất báo cáo kiểm toán tuân thủ')}
           >
             Xuất Báo Cáo Kiểm Toán
           </Button>
@@ -296,7 +296,7 @@ export const WorkflowHistoryModule: React.FC = () => {
 
       {/* DRAWER: Bằng Chứng Ký Số & Chứng Nhận Kiểm Toán Điện Tử */}
       <Drawer
-        title="Bằng Chứng Ký Số &amp; Chứng Nhận Kiểm Toán Pháp Lý (Digital Evidence Certificate)"
+        title="Bằng Chứng Ký Số &amp; Chứng Nhận Kiểm Toán Pháp Lý"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={680}
@@ -332,7 +332,7 @@ export const WorkflowHistoryModule: React.FC = () => {
             <div style={{ border: '2px solid #009688', background: '#F0FDF4', borderRadius: 8, padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#009688', fontWeight: 800, fontSize: 14 }}>
                 <SafetyCertificateOutlined style={{ fontSize: 24 }} />
-                CHỨNG THƯ KÝ SỐ ĐIỆN TỬ HỢP CHUẨN QUỐC GIA (E-SIGNATURE PKI)
+                CHỨNG THƯ KÝ SỐ ĐIỆN TỬ HỢP CHUẨN QUỐC GIA
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12, fontSize: 12 }}>
@@ -363,7 +363,7 @@ export const WorkflowHistoryModule: React.FC = () => {
               </div>
 
               <div style={{ marginTop: 12, borderTop: '1px dashed #CBD5E1', paddingTop: 10 }}>
-                <span style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>MÃ BĂM TOÀN VẸN VĂN BẢN (SHA-256 CHECKSUM):</span>
+                <span style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>MÃ BĂM TOÀN VẸN VĂN BẢN:</span>
                 <div style={{ fontSize: 11, fontFamily: 'monospace', color: '#0F172A', background: '#FFFFFF', padding: '6px 8px', borderRadius: 4, border: '1px solid #E2E8F0', marginTop: 4, wordBreak: 'break-all' }}>
                   {detailItem.sha256Hash}
                 </div>
@@ -405,7 +405,7 @@ export const WorkflowHistoryModule: React.FC = () => {
                 onClick={() => handleVerifyIntegrity(detailItem)}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
-                Đối soát chữ ký số (Verify)
+                Đối soát chữ ký số
               </Button>
             </div>
           </div>

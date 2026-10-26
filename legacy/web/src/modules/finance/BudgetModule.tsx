@@ -115,7 +115,7 @@ export const BudgetModule: React.FC = () => {
           </div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thực tế đã giải ngân (Actual)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thực tế đã giải ngân</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
             {totalSpent.toLocaleString('vi-VN')} ₫
           </div>
@@ -214,7 +214,7 @@ export const BudgetModule: React.FC = () => {
             />
             <div style={{ display: 'flex', gap: 8 }}>
               <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Bao_cao_ngan_sach.xlsx', generateValidXlsxBlob([
-                ['Mã ngân sách', 'Phòng ban', 'Kỳ áp dụng', 'Ngân sách', 'Đã giải ngân', 'Còn lại', 'Tỷ lệ (%)', 'Trạng thái'],
+                ['Mã ngân sách', 'Phòng ban', 'Kỳ áp dụng', 'Ngân sách', 'Đã giải ngân', 'Còn lại', 'Tỷ lệ', 'Trạng thái'],
                 ...filteredData.map(item => [item.code, item.department, item.fiscalYear, item.allocatedBudget, item.actualSpent, item.remainingBudget, item.utilizationRate, item.status]),
               ]))}>
                 Xuất Báo Cáo
@@ -307,7 +307,7 @@ export const BudgetModule: React.FC = () => {
             <Form.Item name="code" label="Mã ngân sách" initialValue={`NS-2026-0${data.length + 1}`} rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="fiscalYear" label="Kỳ áp dụng" initialValue="Năm 2026 (Q3)" rules={[{ required: true }]}>
+            <Form.Item name="fiscalYear" label="Kỳ áp dụng" initialValue="Năm 2026" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
           </div>

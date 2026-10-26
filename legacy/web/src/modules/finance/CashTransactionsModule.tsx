@@ -121,7 +121,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             {record.code}
           </div>
           <Tag color={record.type === 'Thu' ? 'success' : 'error'} style={{ marginTop: 2 }}>
-            {record.type === 'Thu' ? 'Phiếu Thu (+)' : 'Phiếu Chi (-)'}
+            {record.type === 'Thu' ? 'Phiếu Thu' : 'Phiếu Chi'}
           </Tag>
         </div>
       ),
@@ -207,7 +207,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng tiền thực thu (+)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng tiền thực thu</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             +{totalIncome.toLocaleString('vi-VN')} ₫
           </div>
@@ -215,7 +215,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng tiền thực chi (-)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng tiền thực chi</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
             -{totalExpense.toLocaleString('vi-VN')} ₫
           </div>
@@ -223,7 +223,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chênh lệch dòng tiền thuần (Net)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chênh lệch dòng tiền thuần</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: netCashFlow >= 0 ? '#009688' : '#DC2626', marginTop: 4 }}>
             {netCashFlow >= 0 ? '+' : ''}{netCashFlow.toLocaleString('vi-VN')} ₫
           </div>
@@ -244,8 +244,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả phiếu' },
-            { key: 'Thu', label: 'Phiếu Thu (+)', icon: <ArrowDownOutlined style={{ color: '#10B981' }} /> },
-            { key: 'Chi', label: 'Phiếu Chi (-)', icon: <ArrowUpOutlined style={{ color: '#EF4444' }} /> },
+            { key: 'Thu', label: 'Phiếu Thu', icon: <ArrowDownOutlined style={{ color: '#10B981' }} /> },
+            { key: 'Chi', label: 'Phiếu Chi', icon: <ArrowUpOutlined style={{ color: '#EF4444' }} /> },
             { key: 'pending', label: 'Chờ duyệt', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
           ].map((tab) => (
             <Button
@@ -317,12 +317,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             <Form.Item name="type" label="Loại chứng từ" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Phiếu Thu Tiền (+)', value: 'Thu' },
-                  { label: 'Phiếu Chi Tiền (-)', value: 'Chi' },
+                  { label: 'Phiếu Thu Tiền', value: 'Thu' },
+                  { label: 'Phiếu Chi Tiền', value: 'Chi' },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="code" label="Số chứng từ (Mã phiếu)" rules={[{ required: true, whitespace: true }]}>
+            <Form.Item name="code" label="Số chứng từ" rules={[{ required: true, whitespace: true }]}>
               <Input placeholder="Nhập mã chứng từ theo sổ kế toán" />
             </Form.Item>
           </div>
@@ -361,8 +361,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           <Form.Item name="status" label="Trạng thái phê duyệt" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Đã hoàn thành (Đã thực thu/chi)', value: 'Đã hoàn thành' },
-                { label: 'Chờ duyệt (Trình Kế toán trưởng)', value: 'Chờ duyệt' },
+                { label: 'Đã hoàn thành', value: 'Đã hoàn thành' },
+                { label: 'Chờ duyệt', value: 'Chờ duyệt' },
               ]}
             />
           </Form.Item>

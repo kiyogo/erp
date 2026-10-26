@@ -25,7 +25,7 @@ export interface EnterpriseSLACommitment {
   key: string;
   slaCode: string;
   serviceName: string;
-  clientTier: 'Kim Cương (Diamond VIP)' | 'Bạch Kim (Platinum)' | 'Vàng (Gold Enterprise)' | 'Tiêu Chuẩn (Standard)';
+  clientTier: 'Kim Cương' | 'Bạch Kim' | 'Vàng' | 'Tiêu Chuẩn';
   uptimeTarget: number;
   actualUptime: number;
   responseTimeTarget: string;
@@ -204,7 +204,7 @@ export const SLAModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phản hồi sự cố nhanh nhất</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            ≤ 5 Phút (SOC 24/7)
+            ≤ 5 Phút
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tự động kích hoạt On-Call Engineer</div>
         </div>
@@ -260,7 +260,7 @@ export const SLAModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 slaCode: `SLA-NEW-0${data.length + 1}`,
-                clientTier: 'Kim Cương (Diamond VIP)',
+                clientTier: 'Kim Cương',
                 uptimeTarget: 99.99,
                 responseTimeTarget: '≤ 15 phút (24/7/365)',
                 mttrTarget: '≤ 2 giờ',
@@ -281,7 +281,7 @@ export const SLAModule: React.FC = () => {
       </div>
 
       <Modal
-        title="Thiết Lập Cam Kết Chất Lượng Dịch Vụ Mới (SLA Matrix)"
+        title="Thiết Lập Cam Kết Chất Lượng Dịch Vụ Mới"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -295,10 +295,10 @@ export const SLAModule: React.FC = () => {
             <Form.Item name="clientTier" label="Phân hạng khách hàng" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Kim Cương (Diamond VIP)', value: 'Kim Cương (Diamond VIP)' },
-                  { label: 'Bạch Kim (Platinum)', value: 'Bạch Kim (Platinum)' },
-                  { label: 'Vàng (Gold Enterprise)', value: 'Vàng (Gold Enterprise)' },
-                  { label: 'Tiêu Chuẩn (Standard)', value: 'Tiêu Chuẩn (Standard)' },
+                  { label: 'Kim Cương', value: 'Kim Cương (Diamond VIP)' },
+                  { label: 'Bạch Kim', value: 'Bạch Kim (Platinum)' },
+                  { label: 'Vàng', value: 'Vàng (Gold Enterprise)' },
+                  { label: 'Tiêu Chuẩn', value: 'Tiêu Chuẩn (Standard)' },
                 ]}
               />
             </Form.Item>
@@ -307,11 +307,11 @@ export const SLAModule: React.FC = () => {
             <Input placeholder="Ví dụ: Cụm GPU NVIDIA H100 Training Cluster" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="uptimeTarget" label="Cam kết Uptime (%)" rules={[{ required: true }]}>
+            <Form.Item name="uptimeTarget" label="Cam kết Uptime" rules={[{ required: true }]}>
               <Input type="number" step={0.01} min={90} max={100} />
             </Form.Item>
             <Form.Item name="responseTimeTarget" label="Thời gian phản hồi" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: ≤ 15 phút (24/7)" />
+              <Input placeholder="Ví dụ: ≤ 15 phút" />
             </Form.Item>
             <Form.Item name="mttrTarget" label="MTTR Khắc phục tối đa" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: ≤ 2 giờ" />
@@ -356,7 +356,7 @@ export const SLAModule: React.FC = () => {
             {/* Uptime Status */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontWeight: 700, color: '#0F172A' }}>Uptime Thực Tế (Rolling 30 days):</span>
+                <span style={{ fontWeight: 700, color: '#0F172A' }}>Uptime Thực Tế:</span>
                 <strong style={{ color: '#16A34A', fontSize: 15 }}>{selectedSla.actualUptime}%</strong>
               </div>
               <Progress percent={selectedSla.actualUptime} strokeColor="#16A34A" />

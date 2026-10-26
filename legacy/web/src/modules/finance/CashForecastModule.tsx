@@ -26,7 +26,7 @@ export interface EnterpriseForecastRow {
   projectedBalance: number;
   inflowDetails: string;
   outflowDetails: string;
-  safetyStatus: 'An toàn (Vượt ngưỡng tối thiểu)' | 'Cảnh báo hạn mức';
+  safetyStatus: 'An toàn' | 'Cảnh báo hạn mức';
 }
 
 const INITIAL_FORECASTS: EnterpriseForecastRow[] = [];
@@ -67,7 +67,7 @@ export const CashForecastModule: React.FC = () => {
       expectedOutflow: outflow,
       netWeeklyChange: net,
       projectedBalance: newBal,
-      safetyStatus: newBal >= safeLimit ? 'An toàn (Vượt ngưỡng tối thiểu)' : 'Cảnh báo hạn mức',
+      safetyStatus: newBal >= safeLimit ? 'An toàn' : 'Cảnh báo hạn mức',
     };
 
     setData([...data, newRow]);
@@ -88,7 +88,7 @@ export const CashForecastModule: React.FC = () => {
       ),
     },
     {
-      title: 'Dự thu dự kiến (+)',
+      title: 'Dự thu dự kiến',
       dataIndex: 'expectedInflow',
       key: 'expectedInflow',
       width: 170,
@@ -99,7 +99,7 @@ export const CashForecastModule: React.FC = () => {
       ),
     },
     {
-      title: 'Dự chi dự kiến (-)',
+      title: 'Dự chi dự kiến',
       dataIndex: 'expectedOutflow',
       key: 'expectedOutflow',
       width: 170,
@@ -181,9 +181,9 @@ export const CashForecastModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ số thanh toán nhanh (Quick Ratio)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ số thanh toán nhanh</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            2.85x (Rất tốt)
+            2.85x
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Không có rủi ro áp lực thanh khoản ngắn hạn</div>
         </div>
@@ -201,7 +201,7 @@ export const CashForecastModule: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
           <LineChartOutlined style={{ color: '#009688', fontSize: 16 }} />
-          Mô Hình Dự Báo Dòng Tiền 4 Tuần Tới (Tháng 09/2026)
+          Mô Hình Dự Báo Dòng Tiền 4 Tuần Tới
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
@@ -241,8 +241,8 @@ export const CashForecastModule: React.FC = () => {
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <Form.Item name="period" label="Kỳ dự báo (Tuần / Khung ngày)" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Tuần 1 (01/10 - 07/10/2026)" />
+          <Form.Item name="period" label="Kỳ dự báo" rules={[{ required: true }]}>
+            <Input placeholder="Ví dụ: Tuần 1" />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -299,11 +299,11 @@ export const CashForecastModule: React.FC = () => {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Dự thu khách hàng (+):</span>
+                  <span style={{ color: '#64748B' }}>Dự thu khách hàng:</span>
                   <strong style={{ color: '#16A34A', fontSize: 14 }}>+{selectedRow.expectedInflow.toLocaleString('vi-VN')} ₫</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Dự chi nghĩa vụ (-):</span>
+                  <span style={{ color: '#64748B' }}>Dự chi nghĩa vụ:</span>
                   <strong style={{ color: '#DC2626', fontSize: 14 }}>-{selectedRow.expectedOutflow.toLocaleString('vi-VN')} ₫</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 8 }}>
@@ -338,7 +338,7 @@ export const CashForecastModule: React.FC = () => {
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => message.success(`Đã xuất báo cáo chi tiết dự báo dòng tiền ${selectedRow.period}`)}
             >
-              Xuất Báo Cáo Kịch Bản Dòng Tiền (Excel)
+              Xuất Báo Cáo Kịch Bản Dòng Tiền
             </Button>
           </div>
         )}

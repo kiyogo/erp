@@ -46,7 +46,7 @@ export interface ConsumableItem {
   location: string;
   supplier: string;
   monthlyUsageAvg: number;
-  status: 'Đủ tồn kho an toàn' | 'Sắp hết hàng (Cần nhập)' | 'Hết hàng tồn';
+  status: 'Đủ tồn kho an toàn' | 'Sắp hết hàng' | 'Hết hàng tồn';
   stockHistory: ConsumableStockHistory[];
   notes: string;
 }
@@ -118,7 +118,7 @@ export const ConsumablesModule: React.FC = () => {
 
     let st: ConsumableItem['status'] = 'Đủ tồn kho an toàn';
     if (qty === 0) st = 'Hết hàng tồn';
-    else if (qty <= min) st = 'Sắp hết hàng (Cần nhập)';
+    else if (qty <= min) st = 'Sắp hết hàng';
 
     const id = `item-${Date.now()}`;
     const newItem: ConsumableItem = {
@@ -183,7 +183,7 @@ export const ConsumablesModule: React.FC = () => {
 
     let newStatus: ConsumableItem['status'] = 'Đủ tồn kho an toàn';
     if (newQty === 0) newStatus = 'Hết hàng tồn';
-    else if (newQty <= detailItem.minThreshold) newStatus = 'Sắp hết hàng (Cần nhập)';
+    else if (newQty <= detailItem.minThreshold) newStatus = 'Sắp hết hàng';
 
     const newHistory: ConsumableStockHistory = {
       ticketCode: values.ticketCode || `${isImport ? 'NK' : 'XK'}-VPP-001`,
@@ -240,7 +240,7 @@ export const ConsumablesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Dưới định mức an toàn (Safety Stock)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Dưới định mức an toàn</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: lowStockCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>
             {lowStockCount} mặt hàng
           </div>
@@ -297,14 +297,14 @@ export const ConsumablesModule: React.FC = () => {
             options={[
               { label: 'Tất cả trạng thái', value: 'all' },
               { label: 'Đủ tồn kho an toàn', value: 'Đủ tồn kho an toàn' },
-              { label: 'Sắp hết hàng (Cần nhập)', value: 'Sắp hết hàng (Cần nhập)' },
+              { label: 'Sắp hết hàng', value: 'Sắp hết hàng (Cần nhập)' },
               { label: 'Hết hàng tồn', value: 'Hết hàng tồn' },
             ]}
           />
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo xuất-nhập-tồn CCDC & vật tư tiêu hao (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo xuất-nhập-tồn CCDC & vật tư tiêu hao')}>
             Xuất Excel
           </Button>
           <Button
@@ -395,7 +395,7 @@ export const ConsumablesModule: React.FC = () => {
               width: 160,
               render: (s: string) => {
                 let col = 'success';
-                if (s === 'Sắp hết hàng (Cần nhập)') col = 'warning';
+                if (s === 'Sắp hết hàng') col = 'warning';
                 if (s === 'Hết hàng tồn') col = 'error';
                 return <Tag color={col}>{s}</Tag>;
               },
@@ -460,13 +460,13 @@ export const ConsumablesModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="unit" label="Đơn vị tính (ĐVT)" rules={[{ required: true }]}>
+            <Form.Item name="unit" label="Đơn vị tính" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Thùng, Hộp, Cái..." />
             </Form.Item>
           </div>
 
           <Form.Item name="itemName" label="Tên mặt hàng & Quy cách chi tiết" rules={[{ required: true, message: 'Nhập tên mặt hàng' }]}>
-            <Input placeholder="Ví dụ: Bút bi Gel xóa được Pilot Frixion Ball 0.5mm Xanh (Hộp 12 cây)" />
+            <Input placeholder="Ví dụ: Bút bi Gel xóa được Pilot Frixion Ball 0.5mm Xanh" />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1.2fr', gap: 12 }}>
@@ -519,7 +519,7 @@ export const ConsumablesModule: React.FC = () => {
       >
         <Form form={stockForm} layout="vertical" onFinish={handleStockAction} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 12 }}>
-            <Form.Item name="ticketCode" label="Số phiếu (Mẫu 01-VT / 02-VT)" rules={[{ required: true }]}>
+            <Form.Item name="ticketCode" label="Số phiếu" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
             <Form.Item name="actionType" label="Loại nghiệp vụ" rules={[{ required: true }]}>
@@ -527,8 +527,8 @@ export const ConsumablesModule: React.FC = () => {
                 value={stockActionType}
                 onChange={(val) => setStockActionType(val)}
                 options={[
-                  { label: 'Nhập kho thêm vật phẩm (Phiếu 01-VT)', value: 'import' },
-                  { label: 'Xuất kho cấp phát sử dụng (Phiếu 02-VT)', value: 'export' },
+                  { label: 'Nhập kho thêm vật phẩm', value: 'import' },
+                  { label: 'Xuất kho cấp phát sử dụng', value: 'export' },
                 ]}
               />
             </Form.Item>
@@ -549,7 +549,7 @@ export const ConsumablesModule: React.FC = () => {
           </div>
 
           <Form.Item name="receiver" label="Người giao / Cán bộ nhận cấp phát" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Nguyễn Văn Hải (IT Helpdesk)" />
+            <Input placeholder="Ví dụ: Nguyễn Văn Hải" />
           </Form.Item>
 
           <Form.Item name="reason" label="Lý do &amp; Mục đích sử dụng">
@@ -567,7 +567,7 @@ export const ConsumablesModule: React.FC = () => {
 
       {/* DRAWER: Thẻ Kho Chi Tiết (Mẫu 06-VT) & Lịch Sử Cấp Phát */}
       <Drawer
-        title="Thẻ Kho Chi Tiết &amp; Sổ Lịch Sử Xuất - Nhập - Tồn (Mẫu 06-VT)"
+        title="Thẻ Kho Chi Tiết &amp; Sổ Lịch Sử Xuất - Nhập - Tồn"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={680}
@@ -627,7 +627,7 @@ export const ConsumablesModule: React.FC = () => {
             {/* Movement Ledger */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-                <FileTextOutlined /> Nhật Ký Xuất - Nhập Kho (Thẻ Kho Mẫu 06-VT):
+                <FileTextOutlined /> Nhật Ký Xuất - Nhập Kho:
               </div>
               <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #F1F5F9', borderRadius: 6 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

@@ -57,7 +57,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       ...values,
       key: String(Date.now()),
       amount: Number(values.amount) || 10000000,
-      author: 'Nguyễn Thị Mai (Kế toán tổng hợp)',
+      author: 'Nguyễn Thị Mai',
       status: 'Đã ghi sổ cái',
     };
     const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_general_ledger', nextItems);
@@ -91,9 +91,9 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
           </div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cân đối Nợ - Có (Trial Balance)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cân đối Nợ - Có</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            Khớp 100% (Tổng Nợ = Tổng Có)
+            Khớp 100%
           </div>
         </div>
       </div>
@@ -102,16 +102,16 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       {isStatements && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Bộ Báo Cáo Tài Chính Tổng Hợp (Thông tư 200/2014/TT-BTC)</h3>
-            <Button type="primary" icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất toàn bộ BCTC (PDF & XML HTKK)!')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xuất Bộ BCTC (PDF/XML)
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Bộ Báo Cáo Tài Chính Tổng Hợp</h3>
+            <Button type="primary" icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất toàn bộ BCTC!')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Xuất Bộ BCTC
             </Button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             {[
               { code: 'B01 - DN', name: 'Bảng Cân Đối Kế Toán', period: 'Tại ngày 30/06/2026', totalAssets: '14.850.000.000 ₫', status: 'Cân đối' },
               { code: 'B02 - DN', name: 'Báo Cáo Kết Quả Hoạt Động KD', period: 'Lũy kế 6 tháng đầu năm 2026', totalAssets: 'LNTT: +3.250.000.000 ₫', status: 'Có lãi' },
-              { code: 'B03 - DN', name: 'Báo Cáo Lưu Chuyển Tiền Tệ (Trực tiếp)', period: 'Lũy kế 6 tháng đầu năm 2026', totalAssets: 'Dòng tiền thuần: +1.890.000.000 ₫', status: 'Dương' },
+              { code: 'B03 - DN', name: 'Báo Cáo Lưu Chuyển Tiền Tệ', period: 'Lũy kế 6 tháng đầu năm 2026', totalAssets: 'Dòng tiền thuần: +1.890.000.000 ₫', status: 'Dương' },
               { code: 'B09 - DN', name: 'Bản Thuyết Minh BCTC', period: 'Kèm theo BCTC Quý 2/2026', totalAssets: '12 phụ lục chi tiết', status: 'Đầy đủ' },
             ].map((st, idx) => (
               <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
@@ -135,11 +135,11 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
           <Card title="Quy Trình Tự Động Kết Chuyển Xác Định Kết Quả Kinh Doanh (TK 911)" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
               {[
-                { step: '1. Kết chuyển Doanh thu bán hàng & dịch vụ', from: 'Nợ TK 511 (5113)', to: 'Có TK 911', amount: '1.850.000.000 ₫' },
+                { step: '1. Kết chuyển Doanh thu bán hàng & dịch vụ', from: 'Nợ TK 511', to: 'Có TK 911', amount: '1.850.000.000 ₫' },
                 { step: '2. Kết chuyển Giá vốn dịch vụ cung cấp', from: 'Nợ TK 911', to: 'Có TK 632', amount: '620.000.000 ₫' },
-                { step: '3. Kết chuyển Chi phí quản lý doanh nghiệp', from: 'Nợ TK 911', to: 'Có TK 642 (6422, 6424, 6428)', amount: '380.000.000 ₫' },
+                { step: '3. Kết chuyển Chi phí quản lý doanh nghiệp', from: 'Nợ TK 911', to: 'Có TK 642', amount: '380.000.000 ₫' },
                 { step: '4. Kết chuyển Chi phí tài chính & Thuế TNDN', from: 'Nợ TK 911', to: 'Có TK 8211', amount: '170.000.000 ₫' },
-                { step: '5. Kết chuyển Lợi nhuận sau thuế chưa phân phối', from: 'Nợ TK 911', to: 'Có TK 4212 (Lãi)', amount: '680.000.000 ₫' },
+                { step: '5. Kết chuyển Lợi nhuận sau thuế chưa phân phối', from: 'Nợ TK 911', to: 'Có TK 4212', amount: '680.000.000 ₫' },
               ].map((item, idx) => (
                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                   <div>
@@ -174,14 +174,14 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
               dataSource={[
                 { id: '1', emp: 'Trần Tuấn Anh (CTO)', reason: 'Công tác triển khai dự án ACB TP.HCM', advance: 15000000, settled: 14200000, refund: 800000, date: '2026-08-20', status: 'Đã hoàn ứng thừa' },
                 { id: '2', emp: 'Lê Hoàng Yến (HRM)', reason: 'Mua vật tư team building công ty', advance: 20000000, settled: 21500000, refund: -1500000, date: '2026-08-15', status: 'Đã chi bù thêm' },
-                { id: '3', emp: 'Vũ Minh Trí (Sales)', reason: 'Chi phí tiếp khách và gặp đối tác F-Global', advance: 10000000, settled: 0, refund: 0, date: '2026-08-25', status: 'Chưa thanh toán tạm ứng' },
+                { id: '3', emp: 'Vũ Minh Trí', reason: 'Chi phí tiếp khách và gặp đối tác F-Global', advance: 10000000, settled: 0, refund: 0, date: '2026-08-25', status: 'Chưa thanh toán tạm ứng' },
               ]}
               columns={[
                 { title: 'Cán bộ tạm ứng', dataIndex: 'emp', key: 'emp', render: (e: string) => <strong>{e}</strong> },
                 { title: 'Mục đích tạm ứng', dataIndex: 'reason', key: 'reason' },
                 { title: 'Số tiền tạm ứng', dataIndex: 'advance', key: 'advance', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Số thực chi (Hóa đơn)', dataIndex: 'settled', key: 'settled', render: (v: number) => <strong style={{ color: '#0F172A' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Chênh lệch (Hoàn/Chi bù)', key: 'ref', render: (_: any, r: any) => <span style={{ color: r.refund >= 0 ? '#16A34A' : '#DC2626', fontWeight: 600 }}>{r.refund >= 0 ? `+${r.refund.toLocaleString('vi-VN')} ₫` : `${r.refund.toLocaleString('vi-VN')} ₫`}</span> },
+                { title: 'Số thực chi', dataIndex: 'settled', key: 'settled', render: (v: number) => <strong style={{ color: '#0F172A' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
+                { title: 'Chênh lệch', key: 'ref', render: (_: any, r: any) => <span style={{ color: r.refund >= 0 ? '#16A34A' : '#DC2626', fontWeight: 600 }}>{r.refund >= 0 ? `+${r.refund.toLocaleString('vi-VN')} ₫` : `${r.refund.toLocaleString('vi-VN')} ₫`}</span> },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s.includes('Đã') ? 'success' : 'warning'}>{s}</Tag> },
                 { title: 'Thao tác', key: 'act', render: () => <Button size="small">Quyết toán</Button> },
               ]}
@@ -204,7 +204,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             />
             <div style={{ display: 'flex', gap: 8 }}>
               <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Sổ Cái ra Excel')}>
-                Xuất Sổ Cái (Excel)
+                Xuất Sổ Cái
               </Button>
               <Button
                 type="primary"
@@ -276,7 +276,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
 
       {/* Modal Add Entry */}
       <Modal
-        title="Hạch toán chứng từ nghiệp vụ khác (Phiếu kế toán)"
+        title="Hạch toán chứng từ nghiệp vụ khác"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}

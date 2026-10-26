@@ -137,7 +137,7 @@ export const EquityModule: React.FC = () => {
       ),
     },
     {
-      title: 'Tỷ lệ sở hữu (%)',
+      title: 'Tỷ lệ sở hữu',
       dataIndex: 'ownershipPercentage',
       key: 'ownershipPercentage',
       width: 160,
@@ -149,7 +149,7 @@ export const EquityModule: React.FC = () => {
       ),
     },
     {
-      title: 'Giá trị vốn góp (Vốn ĐL)',
+      title: 'Giá trị vốn góp',
       dataIndex: 'capitalValue',
       key: 'capitalValue',
       width: 180,
@@ -325,7 +325,7 @@ export const EquityModule: React.FC = () => {
             <Form.Item name="idNumber" label="Số CCCD / Mã số Doanh nghiệp ĐKKD" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: 001099008812" />
             </Form.Item>
-            <Form.Item name="sharesCount" label="Số lượng cổ phần góp (10.000 ₫/CP)" rules={[{ required: true }]}>
+            <Form.Item name="sharesCount" label="Số lượng cổ phần góp" rules={[{ required: true }]}>
               <Input type="number" min={1000} step={1000} />
             </Form.Item>
           </div>
@@ -345,7 +345,7 @@ export const EquityModule: React.FC = () => {
 
       {/* DRAWER: Giấy Chứng Nhận Cổ Phần & Cổ Tức */}
       <Drawer
-        title="Giấy Chứng Nhận Sở Hữu Cổ Phần (Mẫu Chuẩn)"
+        title="Giấy Chứng Nhận Sở Hữu Cổ Phần"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={580}
@@ -395,7 +395,7 @@ export const EquityModule: React.FC = () => {
             {/* Dividend history */}
             <div style={{ border: '1px solid #BBF7D0', borderRadius: 8, padding: 14, background: '#F0FDF4' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AuditOutlined /> Quyền Nhận Cổ Tức Đợt Tới (Năm 2026):
+                <AuditOutlined /> Quyền Nhận Cổ Tức Đợt Tới:
               </div>
               <div style={{ fontSize: 12.5, color: '#14532D', display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
                 <span>Cổ tức dự kiến chia:</span>

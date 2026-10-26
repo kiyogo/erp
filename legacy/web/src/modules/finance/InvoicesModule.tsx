@@ -13,8 +13,8 @@ import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../
 import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
-const outputSubtype = 'Đầu ra (Bán)';
-const inputSubtype = 'Đầu vào (Mua)';
+const outputSubtype = 'Đầu ra';
+const inputSubtype = 'Đầu vào';
 
 export const InvoicesModule: React.FC = () => {
   const [data, setData] = useState<FinanceDocument[]>([]);
@@ -230,7 +230,7 @@ export const InvoicesModule: React.FC = () => {
             <Form.Item name="subTotal" label="Tiền trước thuế" rules={[{ required: true }]}>
               <Input type="number" min={1} />
             </Form.Item>
-            <Form.Item name="vatRate" label="VAT (%)" rules={[{ required: true }]}>
+            <Form.Item name="vatRate" label="VAT" rules={[{ required: true }]}>
               <Select options={[{ label: '10%', value: 10 }, { label: '8%', value: 8 }, { label: '5%', value: 5 }, { label: '0%', value: 0 }]} />
             </Form.Item>
             <Form.Item name="paidAmount" label="Đã thanh toán">

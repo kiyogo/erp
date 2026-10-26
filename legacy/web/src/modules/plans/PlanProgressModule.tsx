@@ -248,8 +248,8 @@ export const PlanProgressModule: React.FC = () => {
           {[
             { key: 'all', label: 'Tất cả nhiệm vụ' },
             { key: 'completed', label: 'Hoàn thành 100%', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
-            { key: 'fast', label: 'Tiến độ cao (>80%)', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'running', label: 'Đang triển khai (<80%)', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'fast', label: 'Tiến độ cao', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'running', label: 'Đang triển khai', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -316,7 +316,7 @@ export const PlanProgressModule: React.FC = () => {
         <Form form={form} layout="vertical" onFinish={handleUpdateProgress} style={{ marginTop: 14 }}>
           <Form.Item
             name="progressPercent"
-            label="Phần trăm hoàn thành (%)"
+            label="Phần trăm hoàn thành"
             rules={[{ required: true, message: 'Vui lòng nhập phần trăm hoàn thành' }]}
           >
             <Input type="number" min={0} max={100} step={5} placeholder="Nhập từ 0 đến 100%" />

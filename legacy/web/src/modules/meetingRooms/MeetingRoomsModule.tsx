@@ -509,7 +509,7 @@ export const MeetingRoomsModule: React.FC = () => {
                                 (e.target as HTMLElement).style.color = '#94A3B8';
                               }}
                             >
-                              + Trống (Bấm để đặt)
+                              + Trống
                             </button>
                           )}
                         </td>
@@ -535,7 +535,7 @@ export const MeetingRoomsModule: React.FC = () => {
               style={{ width: 340, borderRadius: 6 }}
               allowClear
             />
-            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo lịch sử đặt phòng họp (Excel)!')}>
+            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo lịch sử đặt phòng họp!')}>
               Xuất báo cáo Excel
             </Button>
           </div>
@@ -543,8 +543,8 @@ export const MeetingRoomsModule: React.FC = () => {
             <KTable
               dataSource={[
                 ...bookings,
-                { key: 'h-1', roomName: 'Phòng Họp Diamond (Lớn)', meetingTitle: 'Đại hội đồng Cổ đông Thường niên 2026', booker: 'Nguyễn Văn Minh (CEO)', participantsCount: 20, date: '2026-08-20', timeSlot: '08:30 - 11:30', status: 'Đã hoàn tất' },
-                { key: 'h-2', roomName: 'Phòng Họp Ruby (Vừa)', meetingTitle: 'Phỏng vấn ứng viên Senior DevOps', booker: 'Lê Hoàng Yến (HR)', participantsCount: 3, date: '2026-08-22', timeSlot: '14:00 - 15:00', status: 'Đã hoàn tất' },
+                { key: 'h-1', roomName: 'Phòng Họp Diamond', meetingTitle: 'Đại hội đồng Cổ đông Thường niên 2026', booker: 'Nguyễn Văn Minh (CEO)', participantsCount: 20, date: '2026-08-20', timeSlot: '08:30 - 11:30', status: 'Đã hoàn tất' },
+                { key: 'h-2', roomName: 'Phòng Họp Ruby', meetingTitle: 'Phỏng vấn ứng viên Senior DevOps', booker: 'Lê Hoàng Yến (HR)', participantsCount: 3, date: '2026-08-22', timeSlot: '14:00 - 15:00', status: 'Đã hoàn tất' },
                 { key: 'h-3', roomName: 'Phòng Họp VIP Sapphire', meetingTitle: 'Ký kết hợp đồng đối tác AWS Cloud', booker: 'Trần Tuấn Anh (CTO)', participantsCount: 6, date: '2026-08-24', timeSlot: '10:00 - 11:30', status: 'Đã hoàn tất' },
               ].filter(
                 (b) =>
@@ -573,7 +573,7 @@ export const MeetingRoomsModule: React.FC = () => {
           <Card title="Quy định & Chính sách Đặt phòng họp" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
             <Form form={settingsForm} layout="vertical" initialValues={{ maxDuration: 120, maxAdvanceDays: 14, autoCancelMinutes: 15, autoMeetingLink: true, reminderMinutes: 15 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <Form.Item label="Thời lượng họp tối đa một lượt (Phút)" name="maxDuration">
+                <Form.Item label="Thời lượng họp tối đa một lượt" name="maxDuration">
                   <Input type="number" suffix="phút" />
                 </Form.Item>
                 <Form.Item label="Số ngày được phép đặt trước tối đa" name="maxAdvanceDays">
@@ -637,7 +637,7 @@ export const MeetingRoomsModule: React.FC = () => {
         width={480}
       >
         <Form form={form} layout="vertical" onFinish={handleCreateBooking} style={{ marginTop: 16 }}>
-          <Form.Item name="roomName" label="Chọn phòng họp" initialValue={rooms[0]?.name || 'Phòng Họp Diamond (Lớn)'}>
+          <Form.Item name="roomName" label="Chọn phòng họp" initialValue={rooms[0]?.name || 'Phòng Họp Diamond'}>
             <Select
               options={rooms.map((r) => ({ label: `${r.name} (${r.capacity} chỗ - ${r.location})`, value: r.name }))}
             />
@@ -685,14 +685,14 @@ export const MeetingRoomsModule: React.FC = () => {
             <Input placeholder="Ví dụ: Phòng Họp VIP Sapphire" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="capacity" label="Sức chứa (Người)" initialValue={12} rules={[{ required: true }]}>
+            <Form.Item name="capacity" label="Sức chứa" initialValue={12} rules={[{ required: true }]}>
               <Input type="number" min={2} />
             </Form.Item>
             <Form.Item name="location" label="Vị trí lắp đặt" initialValue="Trụ sở Tầng 4" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
           </div>
-          <Form.Item name="equipment" label="Thiết bị hội nghị (cách nhau dấu phẩy)" initialValue="Màn hình TV 75 inch 4K, Micro Polycom, Bảng viết kính">
+          <Form.Item name="equipment" label="Thiết bị hội nghị" initialValue="Màn hình TV 75 inch 4K, Micro Polycom, Bảng viết kính">
             <Input />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>

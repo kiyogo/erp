@@ -115,7 +115,7 @@ export const EmployeeProfileModule: React.FC<{ initialStep?: number }> = ({ init
   const handleAvatarFile = async (file: File) => {
     if (!file) return;
     if (!file.type.startsWith('image/') && !file.name.match(/\.(png|jpe?g|webp|gif|svg|bmp)$/i)) {
-      message.error('Vui lòng chọn tệp hình ảnh hợp lệ (PNG, JPG, JPEG, WEBP)!');
+      message.error('Vui lòng chọn tệp hình ảnh hợp lệ!');
       return;
     }
     const reader = new FileReader();
@@ -501,7 +501,7 @@ export const EmployeeProfileModule: React.FC<{ initialStep?: number }> = ({ init
         onClose={() => setAvatarPickerOpen(false)}
         accept="image/*"
         multiple={false}
-        title="Chọn ảnh đại diện nhân viên (Avatar)"
+        title="Chọn ảnh đại diện nhân viên"
         confirmText="Cập nhật ảnh đại diện"
         onSelect={(files) => {
           if (files && files[0]) {

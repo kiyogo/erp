@@ -1978,23 +1978,34 @@ td.ant-table-column-sort {
     right: 8px !important;
   }
 
+  .ant-modal {
+    padding: 8px !important;
+    gap: 8px !important;
+  }
+
   .ant-modal-header {
-    padding: 14px 16px 6px 16px !important;
+    padding: 0 !important;
+    border: none !important;
+    border-bottom: none !important;
   }
 
   .ant-modal-body {
-    padding: 8px 16px 16px 16px !important;
+    padding: 0 !important;
+    border: none !important;
     max-width: 100% !important;
     overflow-x: hidden !important;
   }
 
   .ant-modal-footer {
-    padding: 10px 16px 16px 16px !important;
-    justify-content: stretch !important;
+    padding: 0 !important;
+    border: none !important;
+    border-top: none !important;
+    gap: 8px !important;
   }
 
   .ant-modal-footer .ant-btn {
     flex: 1 1 120px !important;
+    margin: 0 !important;
   }
 
   .ant-drawer-content-wrapper {

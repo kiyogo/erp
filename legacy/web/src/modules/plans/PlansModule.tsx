@@ -305,7 +305,7 @@ export const PlansModule: React.FC = () => {
               <Input type="date" />
             </Form.Item>
           </div>
-          <Form.Item name="progress" label="Tiến độ ban đầu (%)" initialValue={0}>
+          <Form.Item name="progress" label="Tiến độ ban đầu" initialValue={0}>
             <Input type="number" min={0} max={100} />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>

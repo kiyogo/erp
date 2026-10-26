@@ -219,7 +219,7 @@ export const CardScanningViewfinder: React.FC<CardScanningViewfinderProps> = ({
                       borderRadius: 4,
                     }}
                   >
-                    MẶT SAU (CHIP &amp; QR)
+                    MẶT SAU
                   </span>
                   <ScanOutlined style={{ color: '#009688', fontSize: 18 }} />
                 </div>

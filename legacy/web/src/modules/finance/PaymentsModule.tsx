@@ -71,7 +71,7 @@ export const PaymentsModule: React.FC = () => {
   if (p === '/finance/payments/create') {
     pageTitle = 'Lập Đề Nghị & Phiếu Yêu Cầu Thanh Toán';
   } else if (p === '/finance/payments/approve') {
-    pageTitle = 'Hàng Chờ Phê Duyệt Thanh Toán (CFO / Kế Toán Trưởng)';
+    pageTitle = 'Hàng Chờ Phê Duyệt Thanh Toán';
     defaultStatusFilter = 'Chờ duyệt';
   } else if (p === '/finance/payments/history') {
     pageTitle = 'Sổ Nhật Ký & Lịch Sử Chi Trả Tiền Mặt / Chuyển Khoản';
@@ -93,7 +93,7 @@ export const PaymentsModule: React.FC = () => {
       amount: Number(values.amount) || 0,
       empCode: values.empCode || 'KY-015',
       createdDate: new Date().toISOString().substring(0, 10),
-      creator: 'Nguyễn Huy Tùng (Kế toán)',
+      creator: 'Nguyễn Huy Tùng',
       status: 'Chờ duyệt',
     };
     const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_payments', nextItems);
@@ -307,7 +307,7 @@ export const PaymentsModule: React.FC = () => {
           {[
             { key: 'all', label: 'Tất cả phiếu chi' },
             { key: 'Chờ duyệt', label: 'Chờ CFO duyệt', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'Đã phê duyệt', label: 'Đã duyệt (Chờ chi)', icon: <InfoCircleOutlined style={{ color: '#3B82F6' }} /> },
+            { key: 'Đã phê duyệt', label: 'Đã duyệt', icon: <InfoCircleOutlined style={{ color: '#3B82F6' }} /> },
             { key: 'Đã thanh toán', label: 'Đã chi tiền', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
             { key: 'Từ chối', label: 'Từ chối', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
           ].map((tab) => (
@@ -374,15 +374,15 @@ export const PaymentsModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="beneficiary" label="Đơn vị / Người nhận tiền (Thụ hưởng)" rules={[{ required: true }]}>
+            <Form.Item name="beneficiary" label="Đơn vị / Người nhận tiền" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Công Ty TNHH Phân Phối Dell VN" />
             </Form.Item>
-            <Form.Item name="taxCode" label="Mã số thuế bên thụ hưởng (nếu có)">
+            <Form.Item name="taxCode" label="Mã số thuế bên thụ hưởng">
               <Input placeholder="Ví dụ: 0303882910" />
             </Form.Item>
           </div>
 
-          <Form.Item name="bankAccountInfo" label="Thông tin tài khoản nhận tiền (Ngân hàng - Số TK)" rules={[{ required: true }]}>
+          <Form.Item name="bankAccountInfo" label="Thông tin tài khoản nhận tiền" rules={[{ required: true }]}>
             <Input placeholder="Ví dụ: Vietcombank CN Ba Đình - 001100388912" />
           </Form.Item>
 
@@ -397,8 +397,8 @@ export const PaymentsModule: React.FC = () => {
             <Form.Item name="paymentMethod" label="Phương thức thanh toán" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Chuyển khoản VCB (Vietcombank)', value: 'Chuyển khoản VCB' },
-                  { label: 'Chuyển khoản TCB (Techcombank)', value: 'Chuyển khoản TCB' },
+                  { label: 'Chuyển khoản VCB', value: 'Chuyển khoản VCB' },
+                  { label: 'Chuyển khoản TCB', value: 'Chuyển khoản TCB' },
                   { label: 'Chi tiền mặt tại quỹ', value: 'Tiền mặt' },
                   { label: 'Thẻ tín dụng doanh nghiệp', value: 'Thẻ tín dụng DN' },
                 ]}

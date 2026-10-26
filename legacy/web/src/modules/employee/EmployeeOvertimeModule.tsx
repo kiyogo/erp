@@ -193,7 +193,7 @@ export const EmployeeOvertimeModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hệ số làm thêm ngày thường</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            150% (x1.5)
+            150%
           </div>
           <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Áp dụng ngoài giờ hành chính</div>
         </div>
@@ -201,7 +201,7 @@ export const EmployeeOvertimeModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hệ số ngày nghỉ cuối tuần</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>
-            200% (x2.0)
+            200%
           </div>
           <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Thứ Bảy &amp; Chủ Nhật theo phê duyệt</div>
         </div>
@@ -209,7 +209,7 @@ export const EmployeeOvertimeModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hệ số ngày Lễ, Tết hưởng lương</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
-            300% (x3.0)
+            300%
           </div>
           <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Phụ cấp đặc thù ca trực hệ thống</div>
         </div>
@@ -287,7 +287,7 @@ export const EmployeeOvertimeModule: React.FC = () => {
 
       {/* Create Modal */}
       <Modal
-        title="Đăng Ký Làm Thêm Giờ (Overtime - OT)"
+        title="Đăng Ký Làm Thêm Giờ"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -297,16 +297,16 @@ export const EmployeeOvertimeModule: React.FC = () => {
           <Form.Item name="date" label="Ngày làm thêm giờ" rules={[{ required: true }]}>
             <Input type="date" />
           </Form.Item>
-          <Form.Item name="timeRange" label="Khung giờ làm thêm (HH:mm - HH:mm)" rules={[{ required: true }]}><Input placeholder="18:00 - 20:00" /></Form.Item>
-          <Form.Item name="hours" label="Số giờ làm thêm dự kiến (tiếng)" rules={[{ required: true }]}>
+          <Form.Item name="timeRange" label="Khung giờ làm thêm" rules={[{ required: true }]}><Input placeholder="18:00 - 20:00" /></Form.Item>
+          <Form.Item name="hours" label="Số giờ làm thêm dự kiến" rules={[{ required: true }]}>
             <Input type="number" min="0.5" step="0.5" placeholder="Ví dụ: 2.5 hoặc 4" />
           </Form.Item>
           <Form.Item name="multiplier" label="Loại ngày làm thêm & Hệ số tính lương" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Làm thêm ngày thường (150% lương)', value: 1.5 },
-                { label: 'Làm thêm ngày nghỉ hàng tuần / Thứ 7 & CN (200% lương)', value: 2 },
-                { label: 'Làm thêm ngày Lễ, Tết có hưởng lương (300% lương)', value: 3 },
+                { label: 'Làm thêm ngày thường', value: 1.5 },
+                { label: 'Làm thêm ngày nghỉ hàng tuần / Thứ 7 & CN', value: 2 },
+                { label: 'Làm thêm ngày Lễ, Tết có hưởng lương', value: 3 },
               ]}
             />
           </Form.Item>

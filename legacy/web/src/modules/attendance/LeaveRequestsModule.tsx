@@ -224,7 +224,7 @@ export const LeaveRequestsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đang chờ phê duyệt (Pending)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đang chờ phê duyệt</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {pendingCount} Đơn chờ duyệt
           </div>
@@ -334,10 +334,10 @@ export const LeaveRequestsModule: React.FC = () => {
             <Form.Item name="leaveType" label="Loại hình nghỉ phép" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Nghỉ phép năm (hưởng 100% lương)', value: 'Nghỉ phép năm' },
-                  { label: 'Nghỉ ốm đau (chế độ BHXH chi trả)', value: 'Nghỉ ốm' },
-                  { label: 'Nghỉ kết hôn (hưởng 3 ngày lương)', value: 'Nghỉ kết hôn' },
-                  { label: 'Nghỉ thai sản (chế độ BHXH)', value: 'Nghỉ thai sản' },
+                  { label: 'Nghỉ phép năm', value: 'Nghỉ phép năm' },
+                  { label: 'Nghỉ ốm đau', value: 'Nghỉ ốm' },
+                  { label: 'Nghỉ kết hôn', value: 'Nghỉ kết hôn' },
+                  { label: 'Nghỉ thai sản', value: 'Nghỉ thai sản' },
                   { label: 'Nghỉ không hưởng lương', value: 'Nghỉ việc riêng không lương' },
                 ]}
               />

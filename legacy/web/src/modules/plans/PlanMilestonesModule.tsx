@@ -225,10 +225,10 @@ export const PlanMilestonesModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả các mốc' },
-            { key: 'Q1/2026', label: 'Quý 1 (Q1)' },
-            { key: 'Q2/2026', label: 'Quý 2 (Q2)' },
-            { key: 'Q3/2026', label: 'Quý 3 (Q3)' },
-            { key: 'Q4/2026', label: 'Quý 4 (Q4)' },
+            { key: 'Q1/2026', label: 'Quý 1' },
+            { key: 'Q2/2026', label: 'Quý 2' },
+            { key: 'Q3/2026', label: 'Quý 3' },
+            { key: 'Q4/2026', label: 'Quý 4' },
             { key: 'done', label: 'Đã nghiệm thu', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
           ].map((tab) => (
             <Button
@@ -290,7 +290,7 @@ export const PlanMilestonesModule: React.FC = () => {
 
       {/* Modal Add Milestone */}
       <Modal
-        title="Thêm mới mốc quan trọng (Milestone)"
+        title="Thêm mới mốc quan trọng"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}

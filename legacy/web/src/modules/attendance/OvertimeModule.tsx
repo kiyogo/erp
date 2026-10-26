@@ -312,7 +312,7 @@ export const OvertimeModule: React.FC = () => {
             { key: 'all', label: 'Tất cả đơn OT' },
             { key: 'Chờ phê duyệt', label: 'Chờ phê duyệt', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Đã duyệt OT', label: 'Đã duyệt OT', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
-            { key: 'weekend', label: 'Cuối tuần (x2.0)', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'weekend', label: 'Cuối tuần', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -408,16 +408,16 @@ export const OvertimeModule: React.FC = () => {
             <Form.Item name="multiplier" label="Loại hình & Hệ số OT" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Ngày thường (x1.5 lương giờ)', value: 1.5 },
-                  { label: 'Nghỉ cuối tuần (x2.0 lương giờ)', value: 2.0 },
-                  { label: 'Nghỉ Lễ Tết (x3.0 lương giờ)', value: 3.0 },
+                  { label: 'Ngày thường', value: 1.5 },
+                  { label: 'Nghỉ cuối tuần', value: 2.0 },
+                  { label: 'Nghỉ Lễ Tết', value: 3.0 },
                 ]}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="timeRange" label="Khung giờ OT (HH:mm - HH:mm)" rules={[{ required: true }]}>
+            <Form.Item name="timeRange" label="Khung giờ OT" rules={[{ required: true }]}>
               <Input placeholder="18:00 - 21:00" />
             </Form.Item>
             <Form.Item name="totalHours" label="Số giờ làm thêm" rules={[{ required: true }]}>
@@ -508,7 +508,7 @@ export const OvertimeModule: React.FC = () => {
             {/* Financial estimate */}
             <div style={{ border: '1px solid #BBF7D0', borderRadius: 8, padding: 14, background: '#F0FDF4' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
-                Dự Toán Chi Trả Tiền Lương Làm Thêm (OT Pay):
+                Dự Toán Chi Trả Tiền Lương Làm Thêm:
               </div>
               <div style={{ fontSize: 12.5, color: '#14532D', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>{selectedRecord.totalHours}h × {selectedRecord.baseHourlyRate.toLocaleString('vi-VN')} ₫ × {selectedRecord.multiplier}:</span>

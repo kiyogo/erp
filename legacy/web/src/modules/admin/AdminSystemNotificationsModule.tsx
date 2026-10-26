@@ -621,7 +621,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalBroadcasts} bản tin
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phát toàn diện đa kênh (In-app, Email, SMS)</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phát toàn diện đa kênh</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -690,7 +690,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
               form.setFieldsValue({
                 type: 'info',
                 targetAudience: 'Tất cả nhân viên',
-                sender: 'Ban Quản Trị Hệ Thống (Admin)',
+                sender: 'Ban Quản Trị Hệ Thống',
                 channels: ['In-app', 'Email'],
               });
               setNotificationType('info');
@@ -806,7 +806,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
               label="Đơn vị phát hành / Người gửi"
               rules={[{ required: true }]}
             >
-              <Input placeholder="Ví dụ: Ban Quản Trị Hệ Thống (DevOps Team)" />
+              <Input placeholder="Ví dụ: Ban Quản Trị Hệ Thống" />
             </Form.Item>
 
             <Form.Item
@@ -1150,7 +1150,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
 
                   <Form.Item
                     name="body"
-                    label={<span style={{ fontWeight: 600, color: '#334155' }}>Nội dung thư (Hỗ trợ thẻ HTML & Văn bản)</span>}
+                    label={<span style={{ fontWeight: 600, color: '#334155' }}>Nội dung thư</span>}
                     rules={[{ required: true, message: 'Vui lòng nhập nội dung thư' }]}
                   >
                     <Input.TextArea
@@ -1172,7 +1172,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
               ) : (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 12, color: '#64748B', marginBottom: 6 }}>
-                    Chỉnh sửa trực tiếp mã nguồn HTML. Hệ thống sẽ tự động lọc và loại bỏ các mã độc XSS (như script, onerror, iframe...) trước khi gửi.
+                    Chỉnh sửa trực tiếp mã nguồn HTML. Hệ thống sẽ tự động lọc và loại bỏ các mã độc XSS trước khi gửi.
                   </div>
                   <Input.TextArea
                     rows={14}
@@ -1202,7 +1202,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid #E2E8F0' }}>
               <div style={{ fontWeight: 700, color: '#0F172A', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <EyeOutlined style={{ color: '#009688' }} />
-                <span>Xem trước email (Realtime)</span>
+                <span>Xem trước email</span>
               </div>
               <div style={{ display: 'flex', gap: 4, background: '#E2E8F0', padding: 3, borderRadius: 6 }}>
                 <Button

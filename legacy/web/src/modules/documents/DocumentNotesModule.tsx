@@ -284,7 +284,7 @@ export const DocumentNotesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hành động giao việc (Action Items)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hành động giao việc</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {data.reduce((acc, cur) => acc + cur.actionItems.length, 0)} đầu việc
           </div>
@@ -448,7 +448,7 @@ export const DocumentNotesModule: React.FC = () => {
             <Input.TextArea rows={3} placeholder="Nội dung chỉ đạo..." />
           </Form.Item>
 
-          <Form.Item name="rawActions" label="Các đầu việc cụ thể (Mỗi dòng một đầu việc)">
+          <Form.Item name="rawActions" label="Các đầu việc cụ thể">
             <Input.TextArea rows={3} placeholder="Ví dụ:&#10;Khảo sát cấu hình switch hiện tại&#10;Báo giá thiết bị Cisco Catalyst 9500&#10;Lập phương án bảo trì không gián đoạn dịch vụ" />
           </Form.Item>
 
@@ -511,7 +511,7 @@ export const DocumentNotesModule: React.FC = () => {
                   <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedNote.createdDate}</div>
                 </div>
                 <div>
-                  <span style={{ color: '#64748B' }}>Hạn chót (Deadline):</span>
+                  <span style={{ color: '#64748B' }}>Hạn chót:</span>
                   <div style={{ fontWeight: 700, color: '#DC2626' }}>{selectedNote.deadline}</div>
                 </div>
               </div>
@@ -592,7 +592,7 @@ export const DocumentNotesModule: React.FC = () => {
                 onClick={() => message.success(`Đã gửi cảnh báo nhắc nhở tiến độ đến ${selectedNote.assignedToDept} qua Slack`)}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
-                Nhắc Nhở Thực Thi (Slack)
+                Nhắc Nhở Thực Thi
               </Button>
             </div>
           </div>

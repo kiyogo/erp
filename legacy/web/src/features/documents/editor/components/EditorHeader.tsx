@@ -73,7 +73,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
       return (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#D93025', fontSize: 12 }}>
           <CloudOff size={14} />
-          <span>Ngoại tuyến (Đã lưu cục bộ)</span>
+          <span>Ngoại tuyến</span>
         </span>
       );
     }

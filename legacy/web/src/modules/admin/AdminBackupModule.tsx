@@ -290,9 +290,9 @@ export const AdminBackupModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả bản lưu' },
-            { key: 'full', label: 'Toàn hệ thống (Full)', icon: <SafetyCertificateOutlined style={{ color: '#10B981' }} /> },
+            { key: 'full', label: 'Toàn hệ thống', icon: <SafetyCertificateOutlined style={{ color: '#10B981' }} /> },
             { key: 'db', label: 'Cơ sở dữ liệu (DB)', icon: <DatabaseOutlined style={{ color: '#6366F1' }} /> },
-            { key: 'blob', label: 'Kho tài liệu (Blob)', icon: <FolderOutlined style={{ color: '#3B82F6' }} /> },
+            { key: 'blob', label: 'Kho tài liệu', icon: <FolderOutlined style={{ color: '#3B82F6' }} /> },
             { key: 'auto', label: 'Tự động định kỳ', icon: <ThunderboltOutlined style={{ color: '#F59E0B' }} /> },
           ].map((tab) => (
             <Button
@@ -421,7 +421,7 @@ export const AdminBackupModule: React.FC = () => {
                 <CloudServerOutlined /> Thông Số Hạ Tầng Lưu Trữ:
               </div>
               <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
-                <div>Dung lượng ZIP (không nén): <strong style={{ color: '#1E40AF' }}>{formatFileSize(selectedBackup.sizeBytes)}</strong></div>
+                <div>Dung lượng ZIP: <strong style={{ color: '#1E40AF' }}>{formatFileSize(selectedBackup.sizeBytes)}</strong></div>
                 <div>Phân loại: <Tag color="blue">{selectedBackup.type}</Tag></div>
                 <div>Vị trí lưu trữ vật lý: <strong>{selectedBackup.location}</strong></div>
                 <div>Thời gian phục hồi ước tính (RTO): <strong style={{ color: '#16A34A' }}>{selectedBackup.rtoEstimated}</strong></div>
@@ -431,7 +431,7 @@ export const AdminBackupModule: React.FC = () => {
             {/* Checksum SHA-256 */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <SafetyCertificateOutlined /> Mã Băm Toàn Vẹn (SHA-256 Checksum):
+                <SafetyCertificateOutlined /> Mã Băm Toàn Vẹn:
               </div>
               <div style={{ fontFamily: 'monospace', fontSize: 11.5, color: '#0F172A', wordBreak: 'break-all', background: '#F1F5F9', padding: 8, borderRadius: 4 }}>
                 {selectedBackup.checksumSha256}

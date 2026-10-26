@@ -48,7 +48,7 @@ export interface MaterialItem {
   warehouseLocation: string;
   compatibleAssets: string;
   warrantyMonths: number;
-  status: 'Đủ tồn kho an toàn' | 'Cảnh báo sắp hết (Dưới mức tối thiểu)' | 'Hết hàng tồn (Out of Stock)';
+  status: 'Đủ tồn kho an toàn' | 'Cảnh báo sắp hết' | 'Hết hàng tồn';
   notes: string;
   stockHistory: StockHistoryItem[];
 }
@@ -116,9 +116,9 @@ export const AssetMaterialsModule: React.FC = () => {
   const handleCreate = async (values: any) => {
     const qty = Number(values.stockQty) || 0;
     const min = Number(values.minThreshold) || 4;
-    let st: 'Đủ tồn kho an toàn' | 'Cảnh báo sắp hết (Dưới mức tối thiểu)' | 'Hết hàng tồn (Out of Stock)' = 'Đủ tồn kho an toàn';
-    if (qty === 0) st = 'Hết hàng tồn (Out of Stock)';
-    else if (qty <= min) st = 'Cảnh báo sắp hết (Dưới mức tối thiểu)';
+    let st: 'Đủ tồn kho an toàn' | 'Cảnh báo sắp hết' | 'Hết hàng tồn' = 'Đủ tồn kho an toàn';
+    if (qty === 0) st = 'Hết hàng tồn';
+    else if (qty <= min) st = 'Cảnh báo sắp hết';
 
     const id = `mat-${Date.now()}`;
     const newItem: MaterialItem = {
@@ -165,7 +165,7 @@ export const AssetMaterialsModule: React.FC = () => {
       date: new Date().toISOString().substring(0, 10),
       amount: 2,
       unitPrice: item.unitPrice,
-      targetAsset: defaultType === 'export' ? 'TS-SRV-001 (Server Node 1)' : 'Nhập mua bổ sung theo PO',
+      targetAsset: defaultType === 'export' ? 'TS-SRV-001' : 'Nhập mua bổ sung theo PO',
       handler: 'Thủ kho linh kiện',
       reason: defaultType === 'export' ? 'Thay thế linh kiện bảo trì định kỳ' : 'Nhập hàng từ nhà cung cấp',
     });
@@ -178,9 +178,9 @@ export const AssetMaterialsModule: React.FC = () => {
     const isImport = values.actionType === 'import';
     const newQty = isImport ? selectedItem.stockQty + changeQty : Math.max(0, selectedItem.stockQty - changeQty);
 
-    let nextStatus: 'Đủ tồn kho an toàn' | 'Cảnh báo sắp hết (Dưới mức tối thiểu)' | 'Hết hàng tồn (Out of Stock)' = 'Đủ tồn kho an toàn';
-    if (newQty === 0) nextStatus = 'Hết hàng tồn (Out of Stock)';
-    else if (newQty <= selectedItem.minThreshold) nextStatus = 'Cảnh báo sắp hết (Dưới mức tối thiểu)';
+    let nextStatus: 'Đủ tồn kho an toàn' | 'Cảnh báo sắp hết' | 'Hết hàng tồn' = 'Đủ tồn kho an toàn';
+    if (newQty === 0) nextStatus = 'Hết hàng tồn';
+    else if (newQty <= selectedItem.minThreshold) nextStatus = 'Cảnh báo sắp hết';
 
     const newHistoryRow: StockHistoryItem = {
       id: String(Date.now()),
@@ -239,7 +239,7 @@ export const AssetMaterialsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Dưới định mức tồn an toàn (Safety Stock)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Dưới định mức tồn an toàn</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: lowCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>
             {lowCount} mã linh kiện
           </div>
@@ -249,7 +249,7 @@ export const AssetMaterialsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ sẵn sàng phụ tùng (SLA Parts)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ sẵn sàng phụ tùng</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             98.5% sẵn sàng
           </div>
@@ -283,8 +283,8 @@ export const AssetMaterialsModule: React.FC = () => {
             options={[
               { label: 'Tất cả trạng thái tồn', value: 'all' },
               { label: 'Đủ tồn kho an toàn', value: 'Đủ tồn kho an toàn' },
-              { label: 'Cảnh báo sắp hết (Dưới Min)', value: 'Cảnh báo sắp hết (Dưới mức tối thiểu)' },
-              { label: 'Hết hàng tồn (0)', value: 'Hết hàng tồn (Out of Stock)' },
+              { label: 'Cảnh báo sắp hết', value: 'Cảnh báo sắp hết (Dưới mức tối thiểu)' },
+              { label: 'Hết hàng tồn', value: 'Hết hàng tồn (Out of Stock)' },
             ]}
           />
           <Select
@@ -303,7 +303,7 @@ export const AssetMaterialsModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Báo Cáo Xuất - Nhập - Tồn Kho Vật Tư (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Báo Cáo Xuất - Nhập - Tồn Kho Vật Tư')}>
             Xuất Báo Cáo Tồn
           </Button>
           <Button
@@ -469,7 +469,7 @@ export const AssetMaterialsModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="unit" label="Đơn vị tính (ĐVT)" rules={[{ required: true }]}>
+            <Form.Item name="unit" label="Đơn vị tính" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Thanh, Ổ, Cái, Sợi..." />
             </Form.Item>
           </div>
@@ -510,7 +510,7 @@ export const AssetMaterialsModule: React.FC = () => {
             <Form.Item name="compatibleAssets" label="Thiết bị / Dòng máy tương thích">
               <Input placeholder="Ví dụ: Dell PowerEdge R750xs, R650, R740" />
             </Form.Item>
-            <Form.Item name="warrantyMonths" label="Bảo hành (Tháng)">
+            <Form.Item name="warrantyMonths" label="Bảo hành">
               <Input type="number" min={0} placeholder="Ví dụ: 36" />
             </Form.Item>
           </div>
@@ -537,8 +537,8 @@ export const AssetMaterialsModule: React.FC = () => {
             <Form.Item name="actionType" label="Loại nghiệp vụ kho" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Nhập kho bổ sung (Mẫu 01-VT)', value: 'import' },
-                  { label: 'Xuất kho thay thế/sửa chữa (Mẫu 02-VT)', value: 'export' },
+                  { label: 'Nhập kho bổ sung', value: 'import' },
+                  { label: 'Xuất kho thay thế/sửa chữa', value: 'export' },
                 ]}
               />
             </Form.Item>
@@ -565,7 +565,7 @@ export const AssetMaterialsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="handler" label="Người thực hiện / Thủ kho" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Văn Hải (Thủ kho)" />
+              <Input placeholder="Ví dụ: Nguyễn Văn Hải" />
             </Form.Item>
             <Form.Item name="reason" label="Lý do nhập/xuất">
               <Input placeholder="Ví dụ: Thay thế ổ hỏng, bảo dưỡng định kỳ..." />
@@ -583,7 +583,7 @@ export const AssetMaterialsModule: React.FC = () => {
 
       {/* DRAWER: Xem Thẻ Kho Chi Tiết & Lịch Sử Xuất Nhập Tồn */}
       <Drawer
-        title="Thẻ Kho Vật Tư &amp; Phụ Tùng (Mẫu Số 06 - VT)"
+        title="Thẻ Kho Vật Tư &amp; Phụ Tùng"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={650}

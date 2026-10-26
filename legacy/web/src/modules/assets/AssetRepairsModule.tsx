@@ -28,8 +28,8 @@ export interface RepairItem {
   serialNo: string;
   requester: string;
   department: string;
-  severity: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Trung bình (P3)' | 'Thấp (P4)';
-  repairUnit: 'Nội bộ IT Cty' | 'Trung tâm bảo hành chính hãng' | 'Đơn vị dịch vụ ngoài (3rd Party)';
+  severity: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Trung bình (P3)' | 'Thấp';
+  repairUnit: 'Nội bộ IT Cty' | 'Trung tâm bảo hành chính hãng' | 'Đơn vị dịch vụ ngoài';
   vendor: string;
   vendorContact: string;
   issueDescription: string;
@@ -259,13 +259,13 @@ export const AssetRepairsModule: React.FC = () => {
               { label: 'Khẩn cấp (P1)', value: 'Khẩn cấp (P1)' },
               { label: 'Cao (P2)', value: 'Cao (P2)' },
               { label: 'Trung bình (P3)', value: 'Trung bình (P3)' },
-              { label: 'Thấp (P4)', value: 'Thấp (P4)' },
+              { label: 'Thấp', value: 'Thấp (P4)' },
             ]}
           />
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo chi phí sửa chữa tài sản (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo chi phí sửa chữa tài sản')}>
             Xuất Excel
           </Button>
           <Button
@@ -334,7 +334,7 @@ export const AssetRepairsModule: React.FC = () => {
                 <div>
                   <div style={{ fontSize: 12, color: '#64748B' }}>Dự toán: {r.estimatedCost.toLocaleString('vi-VN')} ₫</div>
                   <strong style={{ color: '#16A34A', fontSize: 13 }}>
-                    Thực tế: {r.actualCost > 0 ? `${r.actualCost.toLocaleString('vi-VN')} ₫` : '0 ₫ (Bảo hành)'}
+                    Thực tế: {r.actualCost > 0 ? `${r.actualCost.toLocaleString('vi-VN')} ₫` : '0 ₫'}
                   </strong>
                   <div style={{ fontSize: 11, color: '#64748B' }}>Nguồn: {r.costBearing}</div>
                 </div>
@@ -431,7 +431,7 @@ export const AssetRepairsModule: React.FC = () => {
                   { label: 'Khẩn cấp (P1) - Dừng hệ thống', value: 'Khẩn cấp (P1)' },
                   { label: 'Cao (P2) - Ảnh hưởng lớn', value: 'Cao (P2)' },
                   { label: 'Trung bình (P3) - Lỗi cục bộ', value: 'Trung bình (P3)' },
-                  { label: 'Thấp (P4) - Sự cố nhỏ', value: 'Thấp (P4)' },
+                  { label: 'Thấp - Sự cố nhỏ', value: 'Thấp (P4)' },
                 ]}
               />
             </Form.Item>
@@ -440,7 +440,7 @@ export const AssetRepairsModule: React.FC = () => {
                 options={[
                   { label: 'Trung tâm bảo hành chính hãng', value: 'Trung tâm bảo hành chính hãng' },
                   { label: 'Nội bộ IT Cty khắc phục', value: 'Nội bộ IT Cty' },
-                  { label: 'Đơn vị dịch vụ ngoài (3rd Party)', value: 'Đơn vị dịch vụ ngoài (3rd Party)' },
+                  { label: 'Đơn vị dịch vụ ngoài', value: 'Đơn vị dịch vụ ngoài (3rd Party)' },
                 ]}
               />
             </Form.Item>
@@ -693,7 +693,7 @@ export const AssetRepairsModule: React.FC = () => {
                 style={{ fontSize: 15, fontWeight: 700, color: '#16A34A' }}
               />
               <span style={{ fontSize: 11.5, color: '#64748B', marginTop: 4, display: 'block' }}>
-                * Dự toán ban đầu: {completeTarget.estimatedCost.toLocaleString('vi-VN')} ₫ (Nhập 0 đ nếu bảo hành miễn phí)
+                * Dự toán ban đầu: {completeTarget.estimatedCost.toLocaleString('vi-VN')} ₫
               </span>
             </div>
 

@@ -279,7 +279,7 @@ export function ChatInputBar({
             type="button"
             onClick={handleSend}
             disabled={!canSend}
-            title="Gửi tin nhắn (Enter)"
+            title="Gửi tin nhắn"
             style={{
               padding: '6px',
               borderRadius: '99px',

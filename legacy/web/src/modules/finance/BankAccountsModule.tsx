@@ -385,7 +385,7 @@ export const BankAccountsModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <Form.Item name="bankName" label="Tên ngân hàng" rules={[{ required: true, message: 'Nhập tên ngân hàng' }]}>
-            <Input placeholder="Ví dụ: Ngân hàng TMCP Ngoại Thương VN (Vietcombank)" />
+            <Input placeholder="Ví dụ: Ngân hàng TMCP Ngoại Thương VN" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="accountNumber" label="Số tài khoản" rules={[{ required: true, message: 'Nhập số tài khoản' }]}>
@@ -420,10 +420,10 @@ export const BankAccountsModule: React.FC = () => {
       >
         <Form form={transferForm} layout="vertical" onFinish={handleTransfer} style={{ marginTop: 16 }}>
           <p>Ghi nhận điều chuyển vào sổ quỹ sau khi giao dịch thực tế đã được thực hiện.</p>
-          <Form.Item name="fromAccount" label="Tài khoản nguồn (Trích tiền)" rules={[{ required: true }]}>
+          <Form.Item name="fromAccount" label="Tài khoản nguồn" rules={[{ required: true }]}>
             <Select options={data.filter(d => d.status === 'Đang hoạt động').map(d => ({ label: `${d.bankName} (${d.accountNumber})`, value: d.key }))} />
           </Form.Item>
-          <Form.Item name="toAccount" label="Tài khoản đích (Nhận tiền)" rules={[{ required: true }]}>
+          <Form.Item name="toAccount" label="Tài khoản đích" rules={[{ required: true }]}>
             <Select options={data.filter(d => d.status === 'Đang hoạt động').map(d => ({ label: `${d.bankName} (${d.accountNumber})`, value: d.key }))} />
           </Form.Item>
           <Form.Item name="amount" label="Số tiền chuyển (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền' }]}>

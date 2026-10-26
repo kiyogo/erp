@@ -42,7 +42,7 @@ interface DigitalCert {
   certNumber: string;
   provider: string;
   subjectName: string;
-  signType: 'USB Token' | 'Cloud CA (Ký từ xa)' | 'HSM Server';
+  signType: 'USB Token' | 'Cloud CA' | 'HSM Server';
   authorizedSigner: string;
   validFrom: string;
   validTo: string;
@@ -178,7 +178,7 @@ export const DigitalSignatureModule: React.FC = () => {
       ),
     },
     {
-      title: 'Chủ thể chứng thư (Subject)',
+      title: 'Chủ thể chứng thư',
       dataIndex: 'subjectName',
       key: 'subjectName',
     },
@@ -256,7 +256,7 @@ export const DigitalSignatureModule: React.FC = () => {
               </h3>
               {!isEmployeeVerifyRoute && (
                 <p style={{ color: '#64748B', fontSize: 13, marginTop: 6, maxWidth: 680, margin: '6px auto 16px' }}>
-                  Hỗ trợ phân tích nhị phân X.509 v3, PKCS#7 / CMS, PAdES, XMLDSig của Viettel-CA, VNPT-CA, FPT-CA, BKAV, MISA eSign và toàn bộ các nhà cung cấp CA được Bộ TT&TT (NEAC) cấp phép.
+                  Hỗ trợ phân tích nhị phân X.509 v3, PKCS#7 / CMS, PAdES, XMLDSig của Viettel-CA, VNPT-CA, FPT-CA, BKAV, MISA eSign và toàn bộ các nhà cung cấp CA được Bộ TT&TT cấp phép.
                 </p>
               )}
 
@@ -292,7 +292,7 @@ export const DigitalSignatureModule: React.FC = () => {
                   {verifyingFile ? verifyingFile.name : isEmployeeVerifyRoute ? 'Chọn hoặc kéo thả tệp' : 'Kéo thả tệp tin vào đây hoặc bấm để chọn tệp'}
                 </div>
                 <div style={{ fontSize: 12, color: '#64748B' }}>
-                  {isEmployeeVerifyRoute ? 'PDF, XML, DOCX, XLSX, P7S, CER' : <><span>Hỗ trợ tệp: </span><strong>PDF (ISO 32000-1), XML (Hóa đơn/Thuế XMLDSig), Word/Excel (DOCX/XLSX), P7S, CER</strong></>}
+                  {isEmployeeVerifyRoute ? 'PDF, XML, DOCX, XLSX, P7S, CER' : <><span>Hỗ trợ tệp: </span><strong>PDF (ISO 32000-1), XML, Word/Excel, P7S, CER</strong></>}
                 </div>
                 {verifyingFile && (
                   <div style={{ marginTop: 8, fontSize: 12.5, color: '#009688', fontWeight: 600 }}>
@@ -395,16 +395,16 @@ export const DigitalSignatureModule: React.FC = () => {
                           {/* 1. CHỦ THỂ KÝ (SIGNER / SUBJECT) */}
                           <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 16px' }}>
                             <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1E293B', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 7, borderBottom: '1px solid #E2E8F0', paddingBottom: 6 }}>
-                              <UserOutlined style={{ color: '#2563EB', fontSize: 16 }} /> 1. Chủ thể chữ ký số (Ký bởi)
+                              <UserOutlined style={{ color: '#2563EB', fontSize: 16 }} /> 1. Chủ thể chữ ký số
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 9, fontSize: 12.5 }}>
                               <div>
-                                <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tên người / Doanh nghiệp ký (Subject CN):</span>
+                                <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tên người / Doanh nghiệp ký:</span>
                                 <strong style={{ color: '#2563EB', fontSize: 13.5 }}>{sig.signerName}</strong>
                               </div>
                               {sig.signerTaxCode && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Mã số thuế / Mã định danh (MST / Tax Code):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Mã số thuế / Mã định danh:</span>
                                   <strong style={{ color: '#0F172A', background: '#F1F5F9', padding: '2px 6px', borderRadius: 4 }}>
                                     {sig.signerTaxCode}
                                   </strong>
@@ -412,13 +412,13 @@ export const DigitalSignatureModule: React.FC = () => {
                               )}
                               {sig.signerOrg && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tổ chức / Công ty (Organization - O):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tổ chức / Công ty:</span>
                                   <span style={{ color: '#1E293B', fontWeight: 500 }}>{sig.signerOrg}</span>
                                 </div>
                               )}
                               {sig.signerUnit && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Phòng ban / Đơn vị trực thuộc (OU):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Phòng ban / Đơn vị trực thuộc:</span>
                                   <span style={{ color: '#1E293B' }}>{sig.signerUnit}</span>
                                 </div>
                               )}
@@ -456,22 +456,22 @@ export const DigitalSignatureModule: React.FC = () => {
                           {/* 2. NHÀ CUNG CẤP CA (ISSUER) */}
                           <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 16px' }}>
                             <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1E293B', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 7, borderBottom: '1px solid #E2E8F0', paddingBottom: 6 }}>
-                              <BankOutlined style={{ color: '#009688', fontSize: 16 }} /> 2. Đơn vị chứng thực số (Cấp bởi CA)
+                              <BankOutlined style={{ color: '#009688', fontSize: 16 }} /> 2. Đơn vị chứng thực số
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 9, fontSize: 12.5 }}>
                               <div>
-                                <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tên nhà cung cấp dịch vụ CA (Issuer CN):</span>
+                                <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tên nhà cung cấp dịch vụ CA:</span>
                                 <strong style={{ color: '#009688', fontSize: 13.5 }}>{sig.issuerUnit}</strong>
                               </div>
                               {sig.issuerOrg && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tổ chức phát hành (Issuer O):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Tổ chức phát hành:</span>
                                   <span style={{ color: '#1E293B', fontWeight: 500 }}>{sig.issuerOrg}</span>
                                 </div>
                               )}
                               {sig.issuerUnitDept && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Phòng ban CA (Issuer OU):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Phòng ban CA:</span>
                                   <span style={{ color: '#1E293B' }}>{sig.issuerUnitDept}</span>
                                 </div>
                               )}
@@ -485,13 +485,13 @@ export const DigitalSignatureModule: React.FC = () => {
                               </div>
                               {sig.ocspUrls && sig.ocspUrls.length > 0 && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Máy chủ kiểm tra trực tuyến (OCSP):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Máy chủ kiểm tra trực tuyến:</span>
                                   <span style={{ color: '#2563EB', wordBreak: 'break-all', fontSize: 11.5 }}>{sig.ocspUrls.join(', ')}</span>
                                 </div>
                               )}
                               {sig.crlDistributionPoints && sig.crlDistributionPoints.length > 0 && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Danh sách thu hồi (CRL Distribution Point):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Danh sách thu hồi:</span>
                                   <span style={{ color: '#2563EB', wordBreak: 'break-all', fontSize: 11.5 }}>{sig.crlDistributionPoints.join(', ')}</span>
                                 </div>
                               )}
@@ -514,11 +514,11 @@ export const DigitalSignatureModule: React.FC = () => {
                               </div>
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Hiệu lực từ (Not Before):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Hiệu lực từ:</span>
                                   <span style={{ color: '#1E293B', fontWeight: 500 }}>{sig.validFrom}</span>
                                 </div>
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Hết hạn vào (Not After):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Hết hạn vào:</span>
                                   <span style={{ color: sig.isCertExpired ? '#DC2626' : '#059669', fontWeight: 600 }}>{sig.validTo}</span>
                                 </div>
                               </div>
@@ -530,13 +530,13 @@ export const DigitalSignatureModule: React.FC = () => {
                               </div>
                               {sig.reason && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Lý do ký (Signing Reason):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Lý do ký:</span>
                                   <span style={{ color: '#1E293B' }}>{sig.reason}</span>
                                 </div>
                               )}
                               {sig.location && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Địa điểm ký (Location):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Địa điểm ký:</span>
                                   <span style={{ color: '#1E293B' }}>{sig.location}</span>
                                 </div>
                               )}
@@ -550,7 +550,7 @@ export const DigitalSignatureModule: React.FC = () => {
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 9, fontSize: 12.5 }}>
                               <div>
-                                <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Số Serial Chứng thư (Hex):</span>
+                                <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Số Serial Chứng thư:</span>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                   <code style={{ color: '#009688', fontWeight: 700, fontSize: 12.5, wordBreak: 'break-all' }}>{sig.certNumber}</code>
                                   <Tooltip title="Sao chép Serial">
@@ -560,7 +560,7 @@ export const DigitalSignatureModule: React.FC = () => {
                               </div>
                               {sig.certNumberDec && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Số Serial dạng Thập phân (Decimal):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Số Serial dạng Thập phân:</span>
                                   <code style={{ color: '#475569', fontSize: 11.5 }}>{sig.certNumberDec}</code>
                                 </div>
                               )}
@@ -578,13 +578,13 @@ export const DigitalSignatureModule: React.FC = () => {
                               </div>
                               {sig.subFilter && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Bộ lọc bao gói (Filter / SubFilter):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Bộ lọc bao gói:</span>
                                   <span style={{ fontSize: 11.5, color: '#475569' }}>/Filter /{sig.filter} /SubFilter /{sig.subFilter}</span>
                                 </div>
                               )}
                               {sig.byteRange && (
                                 <div>
-                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Phạm vi byte ký (ByteRange):</span>
+                                  <span style={{ color: '#64748B', display: 'block', fontSize: 11.5 }}>Phạm vi byte ký:</span>
                                   <code style={{ fontSize: 11, color: '#475569' }}>{sig.byteRange}</code>
                                 </div>
                               )}
@@ -596,7 +596,7 @@ export const DigitalSignatureModule: React.FC = () => {
                         {/* MỤC ĐÍCH SỬ DỤNG KHÓA (KEY USAGE & EXTENDED KEY USAGE) */}
                         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                           <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0F172A' }}>
-                            Mục đích sử dụng khóa (Key Usage & Extended Key Usage - RFC 5280):
+                            Mục đích sử dụng khóa:
                           </div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                             {sig.keyUsage.map((u, kIdx) => (
@@ -612,7 +612,7 @@ export const DigitalSignatureModule: React.FC = () => {
                         <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '12px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                              <span style={{ fontSize: 11.5, color: '#64748B', fontWeight: 600 }}>Mã băm SHA-256 (Fingerprint):</span>
+                              <span style={{ fontSize: 11.5, color: '#64748B', fontWeight: 600 }}>Mã băm SHA-256:</span>
                               <Tooltip title="Sao chép SHA-256">
                                 <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => copyToClipboard(sig.thumbprintSha256, 'Mã băm SHA-256')} />
                               </Tooltip>
@@ -623,7 +623,7 @@ export const DigitalSignatureModule: React.FC = () => {
                           </div>
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                              <span style={{ fontSize: 11.5, color: '#64748B', fontWeight: 600 }}>Mã băm SHA-1 (Fingerprint):</span>
+                              <span style={{ fontSize: 11.5, color: '#64748B', fontWeight: 600 }}>Mã băm SHA-1:</span>
                               <Tooltip title="Sao chép SHA-1">
                                 <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => copyToClipboard(sig.thumbprintSha1, 'Mã băm SHA-1')} />
                               </Tooltip>
@@ -699,15 +699,15 @@ export const DigitalSignatureModule: React.FC = () => {
             <Select
               options={[
                 { label: 'KIYO GROUP', value: 'KIYO GROUP' },
-                { label: 'Viettel-CA (Tập đoàn Viettel)', value: 'Viettel-CA (Tập đoàn Viettel)' },
-                { label: 'VNPT-CA (Tập đoàn VNPT)', value: 'VNPT-CA (Tập đoàn VNPT)' },
-                { label: 'FPT-CA (Hệ thống thông tin FPT)', value: 'FPT-CA (Hệ thống thông tin FPT)' },
+                { label: 'Viettel-CA', value: 'Viettel-CA (Tập đoàn Viettel)' },
+                { label: 'VNPT-CA', value: 'VNPT-CA (Tập đoàn VNPT)' },
+                { label: 'FPT-CA', value: 'FPT-CA (Hệ thống thông tin FPT)' },
                 { label: 'Bkav-CA', value: 'Bkav-CA' },
-                { label: 'MISA-CA (MISA eSign)', value: 'MISA-CA (MISA eSign)' },
-                { label: 'SmartSign (VINA-CA)', value: 'SmartSign (VINA-CA)' },
-                { label: 'Safe-CA (TS24)', value: 'Safe-CA (TS24)' },
+                { label: 'MISA-CA', value: 'MISA-CA (MISA eSign)' },
+                { label: 'SmartSign', value: 'SmartSign (VINA-CA)' },
+                { label: 'Safe-CA', value: 'Safe-CA (TS24)' },
                 { label: 'FastCA', value: 'FastCA' },
-                { label: 'EasyCA (Softdreams)', value: 'EasyCA (Softdreams)' },
+                { label: 'EasyCA', value: 'EasyCA (Softdreams)' },
               ]}
             />
           </Form.Item>
@@ -716,10 +716,10 @@ export const DigitalSignatureModule: React.FC = () => {
             <Form.Item name="certNumber" label="Số serial chứng thư" rules={[{ required: true, message: 'Nhập số serial' }]}>
               <Input placeholder="5401 0108..." />
             </Form.Item>
-            <Form.Item name="signType" label="Loại hình ký số" initialValue="Cloud CA (Ký từ xa)">
+            <Form.Item name="signType" label="Loại hình ký số" initialValue="Cloud CA">
               <Select
                 options={[
-                  { label: 'Cloud CA (Ký từ xa)', value: 'Cloud CA (Ký từ xa)' },
+                  { label: 'Cloud CA', value: 'Cloud CA (Ký từ xa)' },
                   { label: 'USB Token', value: 'USB Token' },
                   { label: 'HSM Server', value: 'HSM Server' },
                 ]}
@@ -727,7 +727,7 @@ export const DigitalSignatureModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="authorizedSigner" label="Người được phân quyền ký số" initialValue="Nguyễn Huy Tùng (Quản trị hệ thống)" rules={[{ required: true }]}>
+          <Form.Item name="authorizedSigner" label="Người được phân quyền ký số" initialValue="Nguyễn Huy Tùng" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
 

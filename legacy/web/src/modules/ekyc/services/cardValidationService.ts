@@ -510,7 +510,7 @@ export class CardValidationService {
           score: 95,
           sharpnessScore: sharpness,
           brightnessScore: brightness,
-          message: 'Đã nhận diện mặt sau thẻ Căn cước (Chip điện tử & MRZ)!',
+          message: 'Đã nhận diện mặt sau thẻ Căn cước!',
           rawOcrText: ocrBackText,
           extractedData: {
             idNumber: currentData?.idNumber || '064210005343',

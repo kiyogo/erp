@@ -228,7 +228,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục quy chuẩn cấu hình hệ thống (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục quy chuẩn cấu hình hệ thống')}>
             Xuất Excel
           </Button>
           <Button
@@ -400,7 +400,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
             <Form.Item name="budgetLimit" label="Hạn mức kinh phí tối đa (VNĐ)">
               <Input type="number" min={0} step={5000000} placeholder="Ví dụ: 25000000" />
             </Form.Item>
-            <Form.Item name="depreciationMonthsDefault" label="Khấu hao mặc định (Tháng)">
+            <Form.Item name="depreciationMonthsDefault" label="Khấu hao mặc định">
               <Input type="number" min={0} placeholder="Ví dụ: 24" />
             </Form.Item>
             <Form.Item name="prefixPattern" label="Pattern sinh mã">
@@ -409,7 +409,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
           </div>
 
           <Form.Item name="responsiblePerson" label="Người phụ trách kiểm soát / Ban hành" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Lê Hoàng Yến (HR Manager)" />
+            <Input placeholder="Ví dụ: Lê Hoàng Yến" />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
@@ -474,7 +474,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
             {detailItem.prefixPattern && (
               <div style={{ border: '1px solid #009688', borderRadius: 8, padding: 14, background: '#F0FDF4' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#009688', fontWeight: 700, fontSize: 13 }}>
-                  <ThunderboltOutlined /> TRÌNH THỬ NGHIỆM SINH MÃ TỰ ĐỘNG (LIVE TESTER)
+                  <ThunderboltOutlined /> TRÌNH THỬ NGHIỆM SINH MÃ TỰ ĐỘNG
                 </div>
                 <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
                   Cấu trúc Pattern: <code>{detailItem.prefixPattern}</code>

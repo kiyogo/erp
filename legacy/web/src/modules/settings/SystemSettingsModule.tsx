@@ -171,7 +171,7 @@ export const SystemSettingsModule: React.FC = () => {
                 <Input aria-label="Tên pháp nhân công ty" aria-required="true" value={profile.companyName} onChange={(e) => changeProfile('companyName', e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Mã số thuế doanh nghiệp (MST)</label>
+                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Mã số thuế doanh nghiệp</label>
                 <Input aria-label="Mã số thuế doanh nghiệp" value={profile.taxCode} onChange={(e) => changeProfile('taxCode', e.target.value)} />
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
@@ -191,11 +191,11 @@ export const SystemSettingsModule: React.FC = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
               <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Tên miền chính thức (Domain)</label>
+                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Tên miền chính thức</label>
                 <Input value={profile.domain} onChange={event => changeProfile('domain', event.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Múi giờ hiển thị (Timezone)</label>
+                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Múi giờ hiển thị</label>
                 <Select
                   value={profile.timezone}
                   onChange={value => changeProfile('timezone', value)}
@@ -213,7 +213,7 @@ export const SystemSettingsModule: React.FC = () => {
         {activeTab === 'smtp' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <MailOutlined style={{ color: '#009688' }} /> Cổng Mail Server SMTP (Thông Báo Tự Động)
+              <MailOutlined style={{ color: '#009688' }} /> Cổng Mail Server SMTP
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
@@ -235,7 +235,7 @@ export const SystemSettingsModule: React.FC = () => {
               </div>
               <label>Tài khoản SMTP<Input aria-label="Tài khoản SMTP" value={emailConfig.username} onChange={event => setEmailConfig(previous => ({ ...previous, username: event.target.value }))} /></label>
               <label>Tên người gửi<Input aria-label="Tên người gửi" value={emailConfig.senderName} onChange={event => setEmailConfig(previous => ({ ...previous, senderName: event.target.value }))} /></label>
-              <label>Mật khẩu SMTP mới (để trống để giữ mật khẩu hiện tại)<Input.Password aria-label="Mật khẩu SMTP mới" value={emailConfig.password || ''} onChange={event => setEmailConfig(previous => ({ ...previous, password: event.target.value }))} /></label>
+              <label>Mật khẩu SMTP mới<Input.Password aria-label="Mật khẩu SMTP mới" value={emailConfig.password || ''} onChange={event => setEmailConfig(previous => ({ ...previous, password: event.target.value }))} /></label>
               <label>Bảo mật kết nối<Select value={emailConfig.security} onChange={value => setEmailConfig(previous => ({ ...previous, security: value as 'SSL' | 'STARTTLS' }))} options={[{ value: 'STARTTLS', label: 'STARTTLS' }, { value: 'SSL', label: 'SSL/TLS' }]} /></label>
               <label>Bật cổng gửi thư<Select value={emailConfig.enabled ? 'enabled' : 'disabled'} onChange={value => setEmailConfig(previous => ({ ...previous, enabled: value === 'enabled' }))} options={[{ value: 'enabled', label: 'Bật' }, { value: 'disabled', label: 'Tắt' }]} /></label>
               <label>URL cổng nhân viên<Input aria-label="URL cổng nhân viên" value={emailConfig.portalUrl} onChange={event => setEmailConfig(previous => ({ ...previous, portalUrl: event.target.value }))} /></label>
@@ -257,8 +257,8 @@ export const SystemSettingsModule: React.FC = () => {
                   onChange={value => changeProfile('currency', value)}
                   style={{ width: '100%' }}
                   options={[
-                    { label: 'VND (₫ - Đồng Việt Nam)', value: 'VND' },
-                    { label: 'USD ($ - Đô la Mỹ)', value: 'USD' },
+                    { label: 'VND', value: 'VND' },
+                    { label: 'USD', value: 'USD' },
                   ]}
                 />
               </div>

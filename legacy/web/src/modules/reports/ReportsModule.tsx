@@ -271,7 +271,7 @@ export const ReportsModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 type: 'Tài chính',
-                author: 'Nguyễn Thị Mai (Kế toán trưởng)',
+                author: 'Nguyễn Thị Mai',
                 format: 'PDF + Excel',
               });
               setModalOpen(true);
@@ -321,7 +321,7 @@ export const ReportsModule: React.FC = () => {
           <Form.Item name="format" label="Định dạng trích xuất dữ liệu">
             <Select
               options={[
-                { label: 'Cả 2 định dạng (PDF Báo cáo + Excel Số liệu)', value: 'PDF + Excel' },
+                { label: 'Cả 2 định dạng', value: 'PDF + Excel' },
                 { label: 'Chỉ file PDF Báo cáo', value: 'PDF' },
                 { label: 'Chỉ file Excel Bảng tính (.xlsx)', value: 'Excel' },
               ]}
@@ -364,7 +364,7 @@ export const ReportsModule: React.FC = () => {
             {/* Executive Summary */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AuditOutlined /> Tóm Tắt Điều Hành (Executive Summary):
+                <AuditOutlined /> Tóm Tắt Điều Hành:
               </div>
               <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
                 {selectedReport.executiveSummary}
@@ -374,7 +374,7 @@ export const ReportsModule: React.FC = () => {
             {/* Key Metrics */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <RiseOutlined /> Các Chỉ Số Quan Trọng (Key Highlights):
+                <RiseOutlined /> Các Chỉ Số Quan Trọng:
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 {selectedReport.keyMetrics?.map((m, idx) => (

@@ -126,9 +126,9 @@ export const InventoryModule: React.FC = () => {
             <Card title="Phân Bổ Giá Trị Tồn Kho Theo Địa Điểm Kho" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {[
-                  { name: 'Kho IDC Viettel Pháp Vân (Hà Nội)', value: 149300000, percent: 68.5, color: '#009688' },
-                  { name: 'Kho IDC FPT Tân Thuận (TP.HCM)', value: 68000000, percent: 31.2, color: '#2563EB' },
-                  { name: 'Kho Trụ Sở Chính (Hà Nội)', value: 720000, percent: 0.3, color: '#F59E0B' },
+                  { name: 'Kho IDC Viettel Pháp Vân', value: 149300000, percent: 68.5, color: '#009688' },
+                  { name: 'Kho IDC FPT Tân Thuận', value: 68000000, percent: 31.2, color: '#2563EB' },
+                  { name: 'Kho Trụ Sở Chính', value: 720000, percent: 0.3, color: '#F59E0B' },
                 ].map((wh, idx) => (
                   <div key={idx}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 12.5 }}>
@@ -142,13 +142,13 @@ export const InventoryModule: React.FC = () => {
             </Card>
 
             {/* Chart 2: Tốc độ luân chuyển hàng tồn kho */}
-            <Card title="Tốc Độ Luân Chuyển Hàng Tồn Kho (Days of Inventory)" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <Card title="Tốc Độ Luân Chuyển Hàng Tồn Kho" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {[
-                  { category: 'RAM & CPU Server', days: '14 ngày', turnover: '26.1 vòng/năm', speed: 'Rất nhanh (A)' },
-                  { category: 'Ổ cứng SSD Enterprise', days: '21 ngày', turnover: '17.4 vòng/năm', speed: 'Nhanh (A)' },
-                  { category: 'Switch & Router Cisco', days: '45 ngày', turnover: '8.1 vòng/năm', speed: 'Trung bình (B)' },
-                  { category: 'Cáp quang & Patch cord', days: '60 ngày', turnover: '6.0 vòng/năm', speed: 'Chậm (C)' },
+                  { category: 'RAM & CPU Server', days: '14 ngày', turnover: '26.1 vòng/năm', speed: 'Rất nhanh' },
+                  { category: 'Ổ cứng SSD Enterprise', days: '21 ngày', turnover: '17.4 vòng/năm', speed: 'Nhanh' },
+                  { category: 'Switch & Router Cisco', days: '45 ngày', turnover: '8.1 vòng/năm', speed: 'Trung bình' },
+                  { category: 'Cáp quang & Patch cord', days: '60 ngày', turnover: '6.0 vòng/năm', speed: 'Chậm' },
                 ].map((item, idx) => (
                   <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 12px', borderRadius: 6 }}>
                     <div>
@@ -171,7 +171,7 @@ export const InventoryModule: React.FC = () => {
       {isImport && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Phiếu Nhập Kho Vật Tư &amp; Linh Kiện (Stock In)</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Phiếu Nhập Kho Vật Tư &amp; Linh Kiện</h3>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tạo phiếu nhập kho
             </Button>
@@ -200,7 +200,7 @@ export const InventoryModule: React.FC = () => {
       {isExport && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Phiếu Xuất Kho Cho Dự Án &amp; Khách Hàng (Stock Out)</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Phiếu Xuất Kho Cho Dự Án &amp; Khách Hàng</h3>
             <Button type="primary" icon={<ArrowUpOutlined />} onClick={() => setModalOpen(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tạo phiếu xuất kho
             </Button>
@@ -270,7 +270,7 @@ export const InventoryModule: React.FC = () => {
                 { title: 'Địa điểm kho', dataIndex: 'warehouse', key: 'warehouse', render: (w: string) => <strong>{w}</strong> },
                 { title: 'Số lượng sổ sách', dataIndex: 'bookQty', key: 'bookQty' },
                 { title: 'Số lượng thực tế', dataIndex: 'actualQty', key: 'actualQty' },
-                { title: 'Chênh lệch', dataIndex: 'diff', key: 'diff', render: () => <Tag color="success">0 (Không lệch)</Tag> },
+                { title: 'Chênh lệch', dataIndex: 'diff', key: 'diff', render: () => <Tag color="success">0</Tag> },
                 { title: 'Cán bộ kiểm kê', dataIndex: 'inspector', key: 'inspector' },
                 { title: 'Kết quả', dataIndex: 'status', key: 'status', render: (s: string) => <Tag icon={<CheckOutlined />} color="success">{s}</Tag> },
               ]}
@@ -298,7 +298,7 @@ export const InventoryModule: React.FC = () => {
             <Form.Item name="category" label="Nhóm danh mục" initialValue="Linh kiện phần cứng">
               <Input />
             </Form.Item>
-            <Form.Item name="unit" label="Đơn vị tính (ĐVT)" initialValue="Chiếc">
+            <Form.Item name="unit" label="Đơn vị tính" initialValue="Chiếc">
               <Input />
             </Form.Item>
           </div>
@@ -313,9 +313,9 @@ export const InventoryModule: React.FC = () => {
           <Form.Item name="warehouse" label="Lưu trữ tại kho" initialValue="Kho IDC Viettel">
             <Select
               options={[
-                { label: 'Kho IDC Viettel Pháp Vân (Hà Nội)', value: 'Kho IDC Viettel' },
-                { label: 'Kho IDC FPT Tân Thuận (TP.HCM)', value: 'Kho IDC FPT Tân Thuận' },
-                { label: 'Kho Trụ Sở Chính (Hà Nội)', value: 'Kho Trụ Sở Hà Nội' },
+                { label: 'Kho IDC Viettel Pháp Vân', value: 'Kho IDC Viettel' },
+                { label: 'Kho IDC FPT Tân Thuận', value: 'Kho IDC FPT Tân Thuận' },
+                { label: 'Kho Trụ Sở Chính', value: 'Kho Trụ Sở Hà Nội' },
               ]}
             />
           </Form.Item>

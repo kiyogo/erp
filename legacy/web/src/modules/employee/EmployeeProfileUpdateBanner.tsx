@@ -74,10 +74,10 @@ export const EmployeeProfileUpdateBanner: React.FC = () => {
           transition: 'all 0.15s ease',
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
+          e.currentTarget.style.boxShadow = '0 2px 8px rgba';
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.03)';
+          e.currentTarget.style.boxShadow = '0 1px 3px rgba';
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>

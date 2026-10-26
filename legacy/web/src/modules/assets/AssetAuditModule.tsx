@@ -118,7 +118,7 @@ export const AssetAuditModule: React.FC = () => {
       startDate: new Date().toISOString().substring(0, 10),
       endDate: new Date(Date.now() + 5 * 86400000).toISOString().substring(0, 10),
       auditorLeader: 'Trần Tuấn Anh (CTO)',
-      auditorMembers: 'Nguyễn Thị Mai (Kế toán), Lê Hoàng Yến (HR)',
+      auditorMembers: 'Nguyễn Thị Mai, Lê Hoàng Yến (HR)',
       bookCount: 80,
       actualCount: 0,
       bookValue: 1800000000,
@@ -329,7 +329,7 @@ export const AssetAuditModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất biên bản kiểm kê Mẫu 05-TSCĐ (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất biên bản kiểm kê Mẫu 05-TSCĐ')}>
             Xuất Mẫu 05-TSCĐ
           </Button>
           <Button
@@ -399,12 +399,12 @@ export const AssetAuditModule: React.FC = () => {
               ),
             },
             {
-              title: 'Chênh lệch (+/-)',
+              title: 'Chênh lệch',
               key: 'diff',
               width: 140,
               render: (_: any, r: AuditItem) => {
                 if (r.discrepancy === 0) {
-                  return <Tag color="success">Khớp 100% (0)</Tag>;
+                  return <Tag color="success">Khớp 100%</Tag>;
                 }
                 return (
                   <div>
@@ -541,7 +541,7 @@ export const AssetAuditModule: React.FC = () => {
               <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
             </Form.Item>
             <Form.Item name="auditorMembers" label="Thành viên ban kiểm kê" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Thị Mai (Kế toán), Lê Hoàng Yến (HR)" />
+              <Input placeholder="Ví dụ: Nguyễn Thị Mai, Lê Hoàng Yến (HR)" />
             </Form.Item>
           </div>
 
@@ -627,7 +627,7 @@ export const AssetAuditModule: React.FC = () => {
 
       {/* DRAWER: Xem Biên Bản Kiểm Kê Mẫu 05-TSCĐ */}
       <Drawer
-        title="Biên Bản Kiểm Kê Tài Sản Cố Định (Mẫu Số 05 - TSCĐ)"
+        title="Biên Bản Kiểm Kê Tài Sản Cố Định"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={620}
@@ -637,7 +637,7 @@ export const AssetAuditModule: React.FC = () => {
             {/* Header Document */}
             <div style={{ textAlign: 'center', borderBottom: '2px solid #009688', paddingBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', letterSpacing: 0.5 }}>CÔNG TY CP CÔNG NGHỆ KIYOVN</div>
-              <div style={{ fontSize: 10, color: '#64748B' }}>Mẫu số 05 - TSCĐ (Ban hành theo TT 200/2014/TT-BTC)</div>
+              <div style={{ fontSize: 10, color: '#64748B' }}>Mẫu số 05 - TSCĐ</div>
               <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
                 BIÊN BẢN KIỂM KÊ TÀI SẢN CỐ ĐỊNH &amp; CCDC
               </div>
@@ -662,16 +662,16 @@ export const AssetAuditModule: React.FC = () => {
                     <th style={{ padding: '8px 6px', border: '1px solid #E2E8F0' }}>Chỉ tiêu kiểm kê</th>
                     <th style={{ padding: '8px 6px', border: '1px solid #E2E8F0' }}>Theo sổ sách</th>
                     <th style={{ padding: '8px 6px', border: '1px solid #E2E8F0' }}>Thực tế kiểm đếm</th>
-                    <th style={{ padding: '8px 6px', border: '1px solid #E2E8F0' }}>Chênh lệch (+/-)</th>
+                    <th style={{ padding: '8px 6px', border: '1px solid #E2E8F0' }}>Chênh lệch</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td style={{ padding: '8px 6px', border: '1px solid #E2E8F0', fontWeight: 600 }}>Số lượng tài sản (Cái)</td>
+                    <td style={{ padding: '8px 6px', border: '1px solid #E2E8F0', fontWeight: 600 }}>Số lượng tài sản</td>
                     <td style={{ padding: '8px 6px', border: '1px solid #E2E8F0', textAlign: 'center' }}>{detailItem.bookCount}</td>
                     <td style={{ padding: '8px 6px', border: '1px solid #E2E8F0', textAlign: 'center', fontWeight: 700, color: '#16A34A' }}>{detailItem.actualCount}</td>
                     <td style={{ padding: '8px 6px', border: '1px solid #E2E8F0', textAlign: 'center', fontWeight: 700, color: detailItem.discrepancy === 0 ? '#16A34A' : '#DC2626' }}>
-                      {detailItem.discrepancy === 0 ? '0 (Khớp)' : detailItem.discrepancy}
+                      {detailItem.discrepancy === 0 ? '0' : detailItem.discrepancy}
                     </td>
                   </tr>
                   <tr>

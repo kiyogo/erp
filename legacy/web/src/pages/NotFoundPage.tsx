@@ -168,13 +168,13 @@ export const NotFoundPage: React.FC = () => {
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = '#009688';
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(0, 150, 136, 0.1)';
+                  e.currentTarget.style.transform = 'translateY';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.borderColor = '#E2E8F0';
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)';
+                  e.currentTarget.style.transform = 'translateY';
+                  e.currentTarget.style.boxShadow = '0 1px 3px rgba';
                 }}
               >
                 <div

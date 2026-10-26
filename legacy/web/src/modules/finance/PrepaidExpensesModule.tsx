@@ -79,7 +79,7 @@ export const PrepaidExpensesModule: React.FC = () => {
       monthlyAmount: monthly,
       allocatedAmount: allocated,
       remainingAmount: rem,
-      accountCode: months > 12 ? 'TK 2422 (Dài hạn)' : 'TK 2421 (Ngắn hạn)',
+      accountCode: months > 12 ? 'TK 2422' : 'TK 2421',
       status: rem <= 0 ? 'Đã phân bổ hết' : 'Đang phân bổ',
     };
     const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_prepaid', nextItems);
@@ -299,7 +299,7 @@ export const PrepaidExpensesModule: React.FC = () => {
 
       {/* MODAL: Thêm mới CPTT */}
       <Modal
-        title="Thêm Mới Khoản Chi Phí Trả Trước (CPTT - TK 242)"
+        title="Thêm Mới Khoản Chi Phí Trả Trước"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -416,11 +416,11 @@ export const PrepaidExpensesModule: React.FC = () => {
             {/* Accounting debit/credit notes */}
             <div style={{ border: '1px solid #BFDBFE', borderRadius: 8, padding: 14, background: '#EFF6FF' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1D4ED8', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AuditOutlined /> Định Khoản Kế Toán Hàng Tháng (Thông tư 200):
+                <AuditOutlined /> Định Khoản Kế Toán Hàng Tháng:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 }}>
-                <div><strong>Nợ TK 642</strong> (Chi phí quản lý doanh nghiệp): <strong>{selectedExpense.monthlyAmount.toLocaleString('vi-VN')} ₫</strong></div>
-                <div><strong>Có TK 242</strong> (Chi phí trả trước): <strong>{selectedExpense.monthlyAmount.toLocaleString('vi-VN')} ₫</strong></div>
+                <div><strong>Nợ TK 642</strong> : <strong>{selectedExpense.monthlyAmount.toLocaleString('vi-VN')} ₫</strong></div>
+                <div><strong>Có TK 242</strong> : <strong>{selectedExpense.monthlyAmount.toLocaleString('vi-VN')} ₫</strong></div>
               </div>
             </div>
 
@@ -429,7 +429,7 @@ export const PrepaidExpensesModule: React.FC = () => {
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => message.success(`Đã xuất sổ chi tiết phân bổ TK 242 của ${selectedExpense.code}`)}
             >
-              Xuất Sổ Chi Tiết TK 242 (Excel)
+              Xuất Sổ Chi Tiết TK 242
             </Button>
           </div>
         )}

@@ -1,0 +1,10 @@
+✔ company settings load real fields, await persistence, preserve failure state and export actual profile without passwords (18.2665ms)
+✔ SMTP tab saves through the real email endpoint and failed company reads cannot overwrite existing settings (15.6039ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1025.2233

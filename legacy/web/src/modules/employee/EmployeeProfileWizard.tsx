@@ -1062,7 +1062,7 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
   const [isBankModalOpen, setIsBankModalOpen] = useState(false);
   const [editingBank, setEditingBank] = useState<BankAccount | null>(null);
   const [bankForm, setBankForm] = useState<Partial<BankAccount>>({
-    bankName: 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
+    bankName: 'Ngân hàng TMCP Ngoại Thương VN',
     accountNumber: '',
     accountHolder: 'NGUYỄN HUY TÙNG',
     branch: '',
@@ -1184,7 +1184,7 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
           },
         });
       } catch (error: any) {
-        console.warn('Backend updateMyProfile warning (proceeding with local storage):', error);
+        console.warn('Backend updateMyProfile warning:', error);
       }
 
       // Save display name & avatar
@@ -1260,7 +1260,7 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
   const handleOpenAddBank = () => {
     setEditingBank(null);
     setBankForm({
-      bankName: 'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
+      bankName: 'Ngân hàng TMCP Ngoại Thương VN',
       accountNumber: '',
       accountHolder: formData.name ? formData.name.toUpperCase() : 'NGUYỄN HUY TÙNG',
       branch: '',
@@ -1460,7 +1460,7 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
                 placeholder="Nhập tên hiển thị tài khoản..."
               />
               <div style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 4 }}>
-                Tên này dùng để hiển thị trên góc phải tài khoản (có thể đặt bất cứ tên nào, không phụ thuộc hồ sơ nhân viên)
+                Tên này dùng để hiển thị trên góc phải tài khoản
               </div>
             </div>
           </div>
@@ -2189,7 +2189,7 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>Chụp ảnh Căn cước công dân - Mặt sau</div>
                   <div style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>
-                    Đặt mặt sau CCCD (phần có chip điện tử &amp; dòng mã MRZ) trong khung hình
+                    Đặt mặt sau CCCD trong khung hình
                   </div>
                 </div>
 
@@ -2739,11 +2739,11 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
               <Select value={formData.bloodType} onChange={val => handleChange('bloodType', val)} options={BLOOD_TYPE_OPTIONS} />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Chiều cao (m)</label>
+              <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Chiều cao</label>
               <Input value={formData.heightM} onChange={e => handleChange('heightM', e.target.value)} placeholder="VD: 1.75" />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Cân nặng (kg)</label>
+              <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Cân nặng</label>
               <Input value={formData.weightKg} onChange={e => handleChange('weightKg', e.target.value)} placeholder="VD: 68" />
             </div>
 
@@ -2840,37 +2840,37 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
 
               <div className="k-form-grid-3">
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Rộng vai (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Rộng vai</label>
                   <Input value={formData.shoulderWidth} onChange={e => handleChange('shoulderWidth', e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Dài tay (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Dài tay</label>
                   <Input value={formData.sleeveLength} onChange={e => handleChange('sleeveLength', e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Dài áo (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Dài áo</label>
                   <Input value={formData.shirtLength} onChange={e => handleChange('shirtLength', e.target.value)} />
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng ngực (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng ngực</label>
                   <Input value={formData.chestCircumference} onChange={e => handleChange('chestCircumference', e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng eo (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng eo</label>
                   <Input value={formData.waistCircumference} onChange={e => handleChange('waistCircumference', e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng mông (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng mông</label>
                   <Input value={formData.hipCircumference} onChange={e => handleChange('hipCircumference', e.target.value)} />
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Dài quần (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Dài quần</label>
                   <Input value={formData.pantsLength} onChange={e => handleChange('pantsLength', e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng đùi (cm)</label>
+                  <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vòng đùi</label>
                   <Input value={formData.thighCircumference} onChange={e => handleChange('thighCircumference', e.target.value)} />
                 </div>
               </div>
@@ -3068,7 +3068,7 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
           </div>
           <div style={{ marginTop: 6 }}>
             <Checkbox checked={familyForm.isDependent} onChange={e => setFamilyForm({ ...familyForm, isDependent: e.target.checked })}>
-              Người phụ thuộc (giảm trừ gia cảnh)
+              Người phụ thuộc
             </Checkbox>
           </div>
         </div>
@@ -3092,22 +3092,22 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
               onChange={v => setBankForm({ ...bankForm, bankName: v })}
               showSearch
               options={[
-                'Ngân hàng TMCP Ngoại Thương VN (Vietcombank)',
-                'Ngân hàng TMCP Công Thương VN (VietinBank)',
-                'Ngân hàng TMCP Đầu tư & Phát triển VN (BIDV)',
-                'Ngân hàng Nông nghiệp & PTNT VN (Agribank)',
-                'Ngân hàng TMCP Kỹ Thương VN (Techcombank)',
-                'Ngân hàng TMCP Quân Đội (MB Bank)',
-                'Ngân hàng TMCP Việt Nam Thịnh Vượng (VPBank)',
-                'Ngân hàng TMCP Á Châu (ACB)',
-                'Ngân hàng TMCP Sài Gòn Thương Tín (Sacombank)',
-                'Ngân hàng TMCP Tiên Phong (TPBank)',
+                'Ngân hàng TMCP Ngoại Thương VN',
+                'Ngân hàng TMCP Công Thương VN',
+                'Ngân hàng TMCP Đầu tư & Phát triển VN',
+                'Ngân hàng Nông nghiệp & PTNT VN',
+                'Ngân hàng TMCP Kỹ Thương VN',
+                'Ngân hàng TMCP Quân Đội',
+                'Ngân hàng TMCP Việt Nam Thịnh Vượng',
+                'Ngân hàng TMCP Á Châu',
+                'Ngân hàng TMCP Sài Gòn Thương Tín',
+                'Ngân hàng TMCP Tiên Phong',
               ].map(b => ({ value: b, label: b }))}
             />
           </div>
           <div className="k-form-grid-2">
             <div>
-              <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Số tài khoản (STK) *</label>
+              <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Số tài khoản *</label>
               <Input value={bankForm.accountNumber} onChange={e => setBankForm({ ...bankForm, accountNumber: e.target.value })} placeholder="VD: 0071000998822" />
             </div>
             <div>

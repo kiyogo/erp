@@ -99,11 +99,11 @@ export const AssetAllocationModule: React.FC = () => {
       ticketCode: `CP-2026-0${data.length + 85}`,
       type: 'Cấp phát',
       allocatedDate: new Date().toISOString().substring(0, 10),
-      expectedReturnDate: 'Vô thời hạn (Theo HĐLĐ)',
+      expectedReturnDate: 'Vô thời hạn',
       purpose: 'Cấp phát chính thức cho nhân viên mới',
       condition: 'Mới 100%, hoạt động ổn định',
       accessories: 'Củ sạc chính hãng, Dây nguồn, Cặp/Balo bảo vệ',
-      handoverPerson: 'Lê Hoàng Yến (HR Manager)',
+      handoverPerson: 'Lê Hoàng Yến',
       department: 'Phòng Ban Kỹ Thuật',
       compensationAmount: 0,
     });
@@ -139,7 +139,7 @@ export const AssetAllocationModule: React.FC = () => {
 
   const handleConfirmSign = async () => {
     if (!pinInput || pinInput.length < 4) {
-      message.error('Vui lòng nhập mã PIN xác thực chữ ký số (tối thiểu 4 số)');
+      message.error('Vui lòng nhập mã PIN xác thực chữ ký số');
       return;
     }
 
@@ -249,7 +249,7 @@ export const AssetAllocationModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ theo dõi cấp phát tài sản (Excel)')}>
+          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ theo dõi cấp phát tài sản')}>
             Xuất Excel
           </Button>
           <Button
@@ -444,7 +444,7 @@ export const AssetAllocationModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="handoverPerson" label="Cán bộ bàn giao (HR/IT)" rules={[{ required: true }]}>
+            <Form.Item name="handoverPerson" label="Cán bộ bàn giao" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Lê Hoàng Yến (HR)" />
             </Form.Item>
             <Form.Item name="allocatedDate" label="Ngày bàn giao / thu hồi" rules={[{ required: true }]}>
@@ -464,7 +464,7 @@ export const AssetAllocationModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 12 }}>
-            <Form.Item name="compensationAmount" label="Số tiền bồi thường (nếu có lỗi hư hỏng)" initialValue={0}>
+            <Form.Item name="compensationAmount" label="Số tiền bồi thường" initialValue={0}>
               <Input type="number" min={0} step={100000} placeholder="0 đ nếu nguyên vẹn" />
             </Form.Item>
             <Form.Item name="notes" label="Ghi chú điều kiện sử dụng">
@@ -505,12 +505,12 @@ export const AssetAllocationModule: React.FC = () => {
             {/* Parties Info */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
               <div>
-                <strong style={{ color: '#009688' }}>BÊN GIAO (ĐẠI DIỆN CTY):</strong>
+                <strong style={{ color: '#009688' }}>BÊN GIAO:</strong>
                 <div style={{ marginTop: 4 }}>Ông/Bà: <strong>{detailItem.handoverPerson}</strong></div>
                 <div style={{ color: '#64748B' }}>Đơn vị: Phòng Nhân Sự &amp; IT</div>
               </div>
               <div>
-                <strong style={{ color: '#2563EB' }}>BÊN NHẬN (CÁN BỘ SỬ DỤNG):</strong>
+                <strong style={{ color: '#2563EB' }}>BÊN NHẬN:</strong>
                 <div style={{ marginTop: 4 }}>Ông/Bà: <strong>{detailItem.employeeName}</strong></div>
                 <div style={{ color: '#64748B' }}>Vị trí: {detailItem.position} - {detailItem.department}</div>
               </div>
@@ -629,7 +629,7 @@ export const AssetAllocationModule: React.FC = () => {
                 Nhập mã PIN cá nhân để ký số biên bản:
               </label>
               <Input.Password
-                placeholder="Nhập mã PIN (Ví dụ: 123456)"
+                placeholder="Nhập mã PIN"
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
                 maxLength={6}

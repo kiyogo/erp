@@ -235,9 +235,9 @@ export const LeaveSummaryModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả nhân sự' },
-            { key: 'Còn nhiều phép', label: 'Còn nhiều phép (>3)', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
-            { key: 'Sắp hết phép', label: 'Sắp hết phép (≤3)', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'Đã hết phép', label: 'Đã hết phép (0)', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
+            { key: 'Còn nhiều phép', label: 'Còn nhiều phép', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
+            { key: 'Sắp hết phép', label: 'Sắp hết phép', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'Đã hết phép', label: 'Đã hết phép', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -340,7 +340,7 @@ export const LeaveSummaryModule: React.FC = () => {
           <Form.Item name="year" label="Năm theo dõi" rules={[{ required: true }]}>
             <Input type="number" min={2000} max={2200} />
           </Form.Item>
-          <Form.Item name="usedLeaves" label="Phép đã sử dụng (số liệu điều chỉnh)">
+          <Form.Item name="usedLeaves" label="Phép đã sử dụng">
             <Input type="number" min={0} max={366} step={0.5} />
           </Form.Item>
 
