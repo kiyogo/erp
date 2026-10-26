@@ -1764,7 +1764,7 @@ textarea.ant-input {
    ============================================================ */
 .ant-modal {
   padding: 16px !important;
-  gap: 16px !important;
+  gap: 10px !important;
   display: flex !important;
   flex-direction: column !important;
   border: none !important;
@@ -1803,7 +1803,7 @@ textarea.ant-input {
   margin: 0 !important;
   display: flex !important;
   flex-direction: column !important;
-  gap: 16px !important;
+  gap: 10px !important;
 }
 
 .ant-modal form,
@@ -1816,13 +1816,13 @@ textarea.ant-input {
   padding-top: 0 !important;
   display: flex !important;
   flex-direction: column !important;
-  gap: 16px !important;
+  gap: 10px !important;
 }
 
 .ant-modal-footer {
   padding: 0 !important;
   margin: 0 !important;
-  gap: 12px !important;
+  gap: 10px !important;
   display: flex !important;
   justify-content: flex-end !important;
   align-items: center !important;
@@ -1837,7 +1837,7 @@ textarea.ant-input {
 .ant-modal .k-form-grid-4,
 .ant-modal [style*="gridTemplateColumns"],
 .ant-modal [style*="grid-template-columns"] {
-  gap: 16px !important;
+  gap: 10px !important;
 }
 
 .ant-modal .ant-form-item {
@@ -1847,7 +1847,7 @@ textarea.ant-input {
 .ant-modal .ant-modal-body > div[style*="flexDirection: column"],
 .ant-modal .ant-modal-body > div[style*="flex-direction: column"],
 .ant-modal .ant-modal-body > div[style*="flexDirection: 'column'"] {
-  gap: 16px !important;
+  gap: 10px !important;
   padding-top: 0 !important;
   margin-top: 0 !important;
 }

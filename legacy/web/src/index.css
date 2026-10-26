@@ -1980,7 +1980,7 @@ td.ant-table-column-sort {
 
   .ant-modal {
     padding: 16px !important;
-    gap: 16px !important;
+    gap: 10px !important;
   }
 
   .ant-modal-header {
@@ -2000,7 +2000,7 @@ td.ant-table-column-sort {
     padding: 0 !important;
     border: none !important;
     border-top: none !important;
-    gap: 12px !important;
+    gap: 10px !important;
   }
 
   .ant-modal-footer .ant-btn {

@@ -3136,7 +3136,7 @@ export const Modal: ModalComponent = ({
             zIndex: 10002,
             overflow: 'visible',
             padding: 16,
-            gap: 16,
+            gap: 10,
             border: 'none',
             ...style,
             top: undefined,
@@ -3210,7 +3210,7 @@ export const Modal: ModalComponent = ({
               margin: 0,
               display: 'flex',
               flexDirection: 'column',
-              gap: 16,
+              gap: 10,
               ...bodyStyle,
               ...(styles?.body || {}),
             }}
@@ -3221,7 +3221,7 @@ export const Modal: ModalComponent = ({
           </div>
 
           {footer !== null && (
-            <div className="ant-modal-footer" style={{ padding: 0, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 12, border: 'none', borderTop: 'none', margin: 0, ...(styles?.footer || {}) }}>
+            <div className="ant-modal-footer" style={{ padding: 0, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10, border: 'none', borderTop: 'none', margin: 0, ...(styles?.footer || {}) }}>
               {footer !== undefined ? (
                 footer
               ) : (
