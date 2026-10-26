@@ -1,4 +1,6 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import React, { useEffect, useState } from 'react';
 import {
   SearchOutlined,
@@ -41,8 +43,10 @@ const INITIAL_RAW_LOGS: EnterpriseRawLogItem[] = [];
 
 export const TimesheetRawDataModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseRawLogItem[]>(INITIAL_RAW_LOGS);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_raw_data').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_raw_data');
     setData(Array.isArray(list) ? list : []);
     const unsub = dataService.subscribe(() => {
@@ -61,10 +65,23 @@ export const TimesheetRawDataModule: React.FC = () => {
   const validCount = data.filter((d) => d.status === 'Dữ liệu hợp lệ').length;
   const duplicateCount = data.filter((d) => d.status === 'Bản ghi trùng lặp (Đã lọc)').length;
 
-  const handleSync = () => {
-    message.loading('Đang đồng bộ dữ liệu thô từ 4 máy quét IoT...', 1.2).then(() => {
-      message.success('Đã tải thành công 142 bản ghi điểm danh thời gian thực');
-    });
+  const handleSync = async () => {
+    try {
+      const rows = await dataService.refreshGenericData('attendance_raw_data');
+      message.info(`Đã tải lại ${rows.length} bản ghi đã lưu. Chưa cấu hình nhà cung cấp để đồng bộ máy chấm công.`);
+    } catch { message.error('Không thể tải dữ liệu chấm công thô.'); }
+  };
+
+  const handleValidate = async (record: EnterpriseRawLogItem) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      if (record.status === 'Bản ghi trùng lặp (Đã lọc)') throw new Error('Không thể ghi nhận công cho bản ghi trùng lặp.');
+      await collectionsApi.update('attendance_raw_data', record.key, { status: 'Dữ liệu hợp lệ' });
+      await dataService.refreshGenericData('attendance_raw_data');
+      message.success('Đã xác nhận bản ghi hợp lệ trên hệ thống.'); setDrawerOpen(false);
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể xác nhận bản ghi.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -182,7 +199,7 @@ export const TimesheetRawDataModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {validCount} Lượt điểm danh
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>100% khớp nhận diện FaceID &amp; Thẻ NFC</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Bản ghi đã được xác nhận hợp lệ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -194,11 +211,11 @@ export const TimesheetRawDataModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thiết bị IoT kết nối thời gian thực</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thiết bị có dữ liệu đã lưu</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            4 / 4 Gateway Online
+            {new Set(data.map((item) => item.terminalName).filter(Boolean)).size} Thiết bị
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Trạng thái đường truyền ping 6ms</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Chưa có kết nối thiết bị thời gian thực</div>
         </div>
       </div>
 
@@ -237,7 +254,7 @@ export const TimesheetRawDataModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất toàn bộ raw log quẹt thẻ ra JSON/Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Nhat_ky_cham_cong.xlsx', generateValidXlsxBlob([['Mã log', 'Mã NV', 'Nhân viên', 'Thiết bị', 'Thời gian', 'Phương thức', 'Điểm khớp', 'Trạng thái'], ...filteredData.map((item) => [item.logId, item.employeeCode, item.employeeName, item.terminalName, item.timestamp, item.verifyMode, item.matchScore, item.status])]))}>
             Xuất File Log
           </Button>
 
@@ -331,10 +348,8 @@ export const TimesheetRawDataModule: React.FC = () => {
             <Button
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-              onClick={() => {
-                message.success(`Đã xác thực và ghi nhận công cho bản ghi ${selectedLog.logId}`);
-                setDrawerOpen(false);
-              }}
+              onClick={() => handleValidate(selectedLog)}
+              loading={saving}
             >
               Ép Đồng Bộ Vào Bảng Chấm Công
             </Button>

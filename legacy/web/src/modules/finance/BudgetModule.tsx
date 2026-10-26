@@ -19,6 +19,7 @@ import { Modal, Form, Input, Select, Button, message, Card, Tag, Progress } from
 import { useEffect } from 'react';
 import { collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 interface BudgetRecord {
   key: string;
@@ -55,7 +56,7 @@ export const BudgetModule: React.FC = () => {
       setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
     } catch {
-      setData([]);
+      message.error('Không thể tải ngân sách. Vui lòng thử lại.');
     }
   };
 
@@ -68,8 +69,12 @@ export const BudgetModule: React.FC = () => {
   const totalRemaining = totalAllocated - totalSpent;
 
   const handleCreate = async (values: any) => {
-    const alloc = Number(values.allocatedBudget) || 0;
-    const spent = Number(values.actualSpent) || 0;
+    const alloc = Number(values.allocatedBudget);
+    const spent = Number(values.actualSpent ?? 0);
+    if (!Number.isFinite(alloc) || alloc <= 0 || !Number.isFinite(spent) || spent < 0) {
+      message.error('Ngân sách phải lớn hơn 0; số tiền đã giải ngân không được âm.');
+      return;
+    }
     const rem = alloc - spent;
     const rate = Math.round((spent / alloc) * 1000) / 10;
     const id = `budget-${Date.now()}`;
@@ -128,7 +133,7 @@ export const BudgetModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
             {/* Chart 1: Tiến độ sử dụng ngân sách theo phòng ban */}
-            <Card title="Tiến Độ Giải Ngân Ngân Sách Theo Phòng Ban (Q3/2026)" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <Card title="Tiến Độ Giải Ngân Ngân Sách Theo Phòng Ban" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {data.map((item, idx) => (
                   <div key={idx}>
@@ -151,12 +156,10 @@ export const BudgetModule: React.FC = () => {
             {/* Chart 2: Tỷ trọng phân bổ ngân sách */}
             <Card title="Tỷ Trọng Phân Bổ Ngân Sách Toàn Doanh Nghiệp" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {[
-                  { name: 'Khối Công Nghệ & R&D', share: 41.7, amount: '1.500.000.000 ₫', color: '#009688' },
-                  { name: 'Khối Kinh Doanh & Tiếp Thị', share: 33.3, amount: '1.200.000.000 ₫', color: '#2563EB' },
-                  { name: 'Phòng Nhân Sự & Hành Chính', share: 16.7, amount: '600.000.000 ₫', color: '#F59E0B' },
-                  { name: 'Phòng Tài Chính Kế Toán', share: 8.3, amount: '300.000.000 ₫', color: '#8B5CF6' },
-                ].map((dept, idx) => (
+                {Array.from(new Set(data.map(item => item.department))).map((name, idx) => {
+                  const amount = data.filter(item => item.department === name).reduce((sum, item) => sum + item.allocatedBudget, 0);
+                  const dept = { name, amount: `${amount.toLocaleString('vi-VN')} ₫`, share: totalAllocated > 0 ? Math.round(amount / totalAllocated * 1000) / 10 : 0, color: ['#009688', '#2563EB', '#F59E0B', '#8B5CF6'][idx % 4] };
+                  return (
                   <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6 }}>
                     <div>
                       <strong>{dept.name}</strong>
@@ -164,7 +167,7 @@ export const BudgetModule: React.FC = () => {
                     </div>
                     <strong style={{ color: dept.color, fontSize: 14 }}>{dept.share}%</strong>
                   </div>
-                ))}
+                ); })}
               </div>
             </Card>
           </div>
@@ -182,12 +185,7 @@ export const BudgetModule: React.FC = () => {
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                { id: '1', category: 'Hạ tầng Máy chủ & Băng thông Cloud IDC', dept: 'Khối Công Nghệ & R&D', budget: 900000000, spent: 720000000, remain: 180000000, approver: 'Ban Giám Đốc', status: 'Đã phê duyệt' },
-                { id: '2', category: 'Chiến dịch Quảng cáo & Triển lãm Tech Summit', dept: 'Khối Kinh Doanh & Tiếp Thị', budget: 800000000, spent: 750000000, remain: 50000000, approver: 'Ban Giám Đốc', status: 'Đã phê duyệt' },
-                { id: '3', category: 'Đào tạo & Nâng cao kỹ năng AI Engineers', dept: 'Phòng Nhân Sự & Đào Tạo', budget: 250000000, spent: 180000000, remain: 70000000, approver: 'Ban Giám Đốc', status: 'Đã phê duyệt' },
-                { id: '4', category: 'Mua sắm & Gia hạn License Phần mềm', dept: 'Khối Công Nghệ & R&D', budget: 600000000, spent: 400000000, remain: 200000000, approver: 'Ban Giám Đốc', status: 'Đã phê duyệt' },
-              ]}
+              dataSource={data.map(item => ({ ...item, category: item.code, dept: item.department, budget: item.allocatedBudget, spent: item.actualSpent, remain: item.remainingBudget }))}
               columns={[
                 { title: 'Hạng mục chi phí dự toán', dataIndex: 'category', key: 'category', render: (c: string) => <strong>{c}</strong> },
                 { title: 'Đơn vị thực hiện', dataIndex: 'dept', key: 'dept', render: (d: string) => <Tag color="blue">{d}</Tag> },
@@ -215,7 +213,10 @@ export const BudgetModule: React.FC = () => {
               allowClear
             />
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo ngân sách ra Excel')}>
+              <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Bao_cao_ngan_sach.xlsx', generateValidXlsxBlob([
+                ['Mã ngân sách', 'Phòng ban', 'Kỳ áp dụng', 'Ngân sách', 'Đã giải ngân', 'Còn lại', 'Tỷ lệ (%)', 'Trạng thái'],
+                ...filteredData.map(item => [item.code, item.department, item.fiscalYear, item.allocatedBudget, item.actualSpent, item.remainingBudget, item.utilizationRate, item.status]),
+              ]))}>
                 Xuất Báo Cáo
               </Button>
               <Button

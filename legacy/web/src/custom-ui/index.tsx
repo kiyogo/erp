@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useId, createContext, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { Link } from 'react-router-dom';
@@ -2255,6 +2255,8 @@ export const Card: React.FC<any> = ({ title, extra, children, style, className =
 // ==========================================
 const FormContext = createContext<{
   values: any;
+  isSubmitting?: boolean;
+  form?: FormStore;
   setFieldValue: (name: string, value: any) => void;
 }>({ values: {}, setFieldValue: () => { } });
 
@@ -2262,6 +2264,9 @@ class FormStore {
   private values: any = {};
   private initialValues: any = {};
   private listeners: (() => void)[] = [];
+  private fields = new Map<string, { rules: any[]; label: string }>();
+  private errors: Record<string, string[]> = {};
+  private submitHandler?: () => Promise<void>;
 
   constructor(initialValues = {}) {
     this.values = { ...initialValues };
@@ -2278,20 +2283,89 @@ class FormStore {
 
   setFieldsValue(newValues: any) {
     this.values = { ...this.values, ...newValues };
+    for (const name of Object.keys(newValues)) delete this.errors[name];
     this.notify();
   }
 
   setFieldValue(name: string, value: any) {
-    this.values = { ...this.values, [name]: value };
+    this.setFieldsValue({ [name]: value });
+  }
+
+  setInitialValues(values: any) {
+    this.initialValues = { ...this.initialValues, ...values };
+    this.values = { ...values, ...this.values };
     this.notify();
+  }
+
+  registerField(name: string, rules: any[] = [], label = name, initialValue?: any) {
+    const field = { rules, label };
+    this.fields.set(name, field);
+    if (initialValue !== undefined) {
+      if (!(name in this.initialValues)) this.initialValues[name] = initialValue;
+      if (this.values[name] === undefined) this.setFieldValue(name, initialValue);
+    }
+    return () => {
+      if (this.fields.get(name) === field) this.fields.delete(name);
+    };
+  }
+
+  getFieldError(name: string): string[] {
+    return this.errors[name] || [];
+  }
+
+  setSubmitHandler(handler: () => Promise<void>) {
+    this.submitHandler = handler;
+    return () => { if (this.submitHandler === handler) this.submitHandler = undefined; };
+  }
+
+  submit() {
+    return this.submitHandler ? this.submitHandler() : Promise.reject(new Error('Biểu mẫu chưa được mở.'));
   }
 
   resetFields() {
     this.values = { ...this.initialValues };
+    this.errors = {};
     this.notify();
   }
 
-  async validateFields() {
+  async validateFields(names?: string[]) {
+    const errorFields: { name: string[]; errors: string[] }[] = [];
+    for (const [name, field] of this.fields) {
+      if (names && !names.includes(name)) continue;
+      const value = this.values[name];
+      const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+      const errors: string[] = [];
+      for (const rule of field.rules) {
+        let invalid = Boolean(rule.required && empty);
+        let detail = 'không hợp lệ';
+        if (rule.required && empty) detail = 'là bắt buộc';
+        if (!empty) {
+          if ((rule.whitespace || rule.required) && typeof value === 'string' && !value.trim()) invalid = true;
+          if (rule.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))) invalid = true;
+          if (rule.type === 'url') {
+            try { const url = new URL(String(value)); if (!['http:', 'https:'].includes(url.protocol)) invalid = true; } catch { invalid = true; }
+          }
+          if (rule.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) invalid = true;
+          const size = typeof value === 'number' ? value : value.length;
+          if (rule.min !== undefined && size < rule.min) { invalid = true; detail = `phải tối thiểu ${rule.min}`; }
+          if (rule.max !== undefined && size > rule.max) { invalid = true; detail = `phải tối đa ${rule.max}`; }
+          if (rule.len !== undefined && size !== rule.len) invalid = true;
+          if (rule.enum && !rule.enum.includes(value)) invalid = true;
+          if (rule.pattern) {
+            const pattern = new RegExp(rule.pattern);
+            if (!pattern.test(String(value))) invalid = true;
+          }
+        }
+        if (invalid) { errors.push(rule.message || `${field.label} ${detail}.`); break; }
+        if (rule.validator) {
+          try { await rule.validator(rule, value); } catch (error: any) { errors.push(error?.message || rule.message || `${field.label} không hợp lệ.`); break; }
+        }
+      }
+      this.errors[name] = errors;
+      if (errors.length) errorFields.push({ name: [name], errors });
+    }
+    this.notify();
+    if (errorFields.length) throw Object.assign(new Error(errorFields[0].errors[0]), { errorFields, values: this.values });
     return this.values;
   }
 
@@ -2322,6 +2396,7 @@ export const useForm = (formInstance?: any) => {
 export const Form: React.FC<any> & { Item: React.FC<any>; useForm: typeof useForm } = ({
   layout,
   onFinish,
+  onFinishFailed,
   initialValues = {},
   form: formProp,
   children,
@@ -2339,31 +2414,37 @@ export const Form: React.FC<any> & { Item: React.FC<any>; useForm: typeof useFor
       forceUpdate({});
     });
   }, [form]);
+  useEffect(() => { form.setInitialValues(initialValues); }, [form]);
 
   const setFieldValue = (name: string, value: any) => {
     form.setFieldsValue({ [name]: value });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (isSubmitting || modalCtx?.isModalLoading) return;
     setIsSubmitting(true);
     if (modalCtx?.setModalLoading) modalCtx.setModalLoading(true);
     try {
       if (onFinish) {
-        const res = onFinish(form.getFieldsValue());
+        const values = await form.validateFields();
+        const res = onFinish(values);
         if (res instanceof Promise) {
           await res;
         }
       }
+    } catch (error: any) {
+      if (error?.errorFields) onFinishFailed?.(error);
+      else message.error(error?.message || 'Không thể gửi biểu mẫu.');
     } finally {
       setIsSubmitting(false);
       if (modalCtx?.setModalLoading) modalCtx.setModalLoading(false);
     }
   };
+  useEffect(() => form.setSubmitHandler(() => handleSubmit()), [form, handleSubmit]);
 
   return (
-    <FormContext.Provider value={{ values: form.getFieldsValue(), setFieldValue, isSubmitting: isSubmitting || Boolean(modalCtx?.isModalLoading) }}>
+    <FormContext.Provider value={{ values: form.getFieldsValue(), setFieldValue, form, isSubmitting: isSubmitting || Boolean(modalCtx?.isModalLoading) }}>
       <form
         onSubmit={handleSubmit}
         autoComplete={autoComplete}
@@ -2381,8 +2462,13 @@ export const Form: React.FC<any> & { Item: React.FC<any>; useForm: typeof useFor
 
 Form.useForm = useForm;
 
-Form.Item = ({ name, label, rules, valuePropName = 'value', children, style, autoCode = false }) => {
-  const { values, setFieldValue } = useContext(FormContext);
+Form.Item = ({ name, label, rules, initialValue, valuePropName = 'value', children, style, autoCode = false }) => {
+  const { values, setFieldValue, form } = useContext(FormContext);
+  const inputId = useId();
+  useEffect(() => {
+    if (name && form) return form.registerField(name, rules, typeof label === 'string' ? label.replace(/\s*\*$/, '') : name, initialValue);
+  }, [form, name, rules, label, initialValue]);
+  const errors = name ? form?.getFieldError(name) || [] : [];
   const formChild = React.isValidElement(children) ? children as React.ReactElement<any> : null;
   const isTextInput = formChild?.type === Input || formChild?.type === Input.TextArea;
   const isAutoGeneratedCode = typeof name === 'string' && isTextInput && isSystemGeneratedCodeField(name, autoCode);
@@ -2396,6 +2482,9 @@ Form.Item = ({ name, label, rules, valuePropName = 'value', children, style, aut
   if (name && formChild) {
     const childVal = values[name];
     const childProps: any = {
+      id: formChild.props.id || inputId,
+      'aria-invalid': errors.length > 0 || undefined,
+      'aria-describedby': errors.length ? `${inputId}-error` : formChild.props['aria-describedby'],
       [valuePropName]: childVal !== undefined ? childVal : '',
       readOnly: isAutoGeneratedCode || formChild.props.readOnly,
       title: isAutoGeneratedCode ? 'Mã do hệ thống tự tạo và không thể chỉnh sửa.' : formChild.props.title,
@@ -2441,7 +2530,7 @@ Form.Item = ({ name, label, rules, valuePropName = 'value', children, style, aut
       <div className="ant-form-item-row">
         {label && (
           <div className="ant-form-item-label">
-            <label>{labelNode}</label>
+            <label htmlFor={formChild?.props.id || inputId}>{labelNode}</label>
           </div>
         )}
         <div className="ant-form-item-control">
@@ -2450,6 +2539,7 @@ Form.Item = ({ name, label, rules, valuePropName = 'value', children, style, aut
               {child}
             </div>
           </div>
+          {errors.length > 0 && <div id={`${inputId}-error`} role="alert" style={{ color: '#EF4444', fontSize: 12, marginTop: 4 }}>{errors[0]}</div>}
         </div>
       </div>
     </div>

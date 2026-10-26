@@ -396,6 +396,7 @@ interface FamilyMember {
 }
 
 interface BankAccount {
+  employeeName?: string;
   id: string;
   employeeCode: string;
   bankName: string;
@@ -2037,6 +2038,11 @@ export const EmployeeFullEditModule: React.FC = () => {
       id: editingBankAccount ? editingBankAccount.id : `ba-${Date.now()}`,
       employeeCode: currentEmpCode,
       employeeName: currentEmpName,
+      bankName: bankAccountForm.bankName.trim(),
+      accountNumber: bankAccountForm.accountNumber.trim(),
+      accountHolder: bankAccountForm.accountHolder.trim(),
+      branch: bankAccountForm.branch || '',
+      accountType: bankAccountForm.accountType || 'Tài khoản phụ',
       status: newStatus,
       isPrimary: bankAccountForm.isPrimary ?? (bankAccountList.length === 0),
     };

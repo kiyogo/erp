@@ -5,6 +5,7 @@
 
 import {
   collectionsApi,
+  attendanceApi,
   employeesApi,
   contractsApi,
   tasksApi,
@@ -658,15 +659,30 @@ class DataService {
         this.genericCache.set(key, []);
       }
 
-      collectionsApi.get(key).then((res) => {
-        if (res.data?.data && Array.isArray(res.data.data)) {
-          if (res.data.data.length > 0 || !stored || stored.length === 0) {
-            this.genericCache.set(key, res.data.data);
-            saveToStorage(key, res.data.data);
-            this.notify();
-          }
-        }
-      }).catch(() => {});
+      void this.refreshGenericData(key).catch(() => {});
+    }
+    return this.genericCache.get(key) || [];
+  }
+
+  public async refreshGenericData(scope: string): Promise<any[]> {
+    const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    const initialRows = this.genericCache.get(key);
+    const rows: any[] = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const res = await collectionsApi.get(key, { page, limit: 500 });
+      if (!Array.isArray(res.data?.data)) throw new Error('Dữ liệu trả về không hợp lệ.');
+      rows.push(...res.data.data);
+      totalPages = Number(res.data.pagination?.totalPages) || 0;
+      page++;
+    } while (page <= totalPages);
+    // A late read must not overwrite a change made while loading.
+    if (this.genericCache.get(key) === initialRows) {
+      this.genericCache.set(key, rows);
+      saveToStorage(key, rows);
+      this.notify();
+      return rows;
     }
     return this.genericCache.get(key) || [];
   }
@@ -870,28 +886,17 @@ class DataService {
 
   // 9. Leave Requests (Collections: leave_requests)
   public getLeaveRequests(): LeaveRequest[] {
-    const mainList = this.getGenericData('leave_requests');
-    if (mainList && mainList.length > 0) return mainList;
-    const empList = this.getGenericData('employee_leaves');
-    if (empList && empList.length > 0) return empList;
-    return [];
+    return this.getGenericData('leave_requests');
   }
 
-  public addLeaveRequest(req: Omit<LeaveRequest, 'key'>) {
-    const newR = { ...req, key: String(Date.now()) };
-    const current = this.getLeaveRequests();
-    const updated = [newR, ...current];
-    this.saveGenericData('leave_requests', updated);
-    this.saveGenericData('employee_leaves', updated);
-    this.logAction('Thêm mới', 'Chấm công', `Tạo đơn nghỉ phép: ${req.code}`);
+  public async addLeaveRequest(req: Omit<LeaveRequest, 'key'>) {
+    await collectionsApi.create('leave_requests', { ...req, key: crypto.randomUUID(), status: 'Chờ duyệt' });
+    return this.refreshGenericData('leave_requests');
   }
 
-  public updateLeaveStatus(key: string, status: 'Đã duyệt' | 'Từ chối') {
-    const current = this.getLeaveRequests();
-    const updated = current.map((r) => (r.key === key ? { ...r, status } : r));
-    this.saveGenericData('leave_requests', updated);
-    this.saveGenericData('employee_leaves', updated);
-    this.logAction('Phê duyệt', 'Chấm công', `Duyệt đơn nghỉ phép key: ${key} -> ${status}`);
+  public async updateLeaveStatus(key: string, status: 'Đã duyệt' | 'Từ chối') {
+    await collectionsApi.update('leave_requests', key, { status });
+    return this.refreshGenericData('leave_requests');
   }
 
   // 10. Assets (Collections: assets)
@@ -1027,92 +1032,49 @@ class DataService {
     return this.getGenericData('employee_timesheets');
   }
 
-  public addEmployeeCheckin(type: 'in' | 'out'): any[] {
-    const list = this.getEmployeeTimesheets();
-    const now = new Date();
-    const dateStr = now.toISOString().substring(0, 10);
-    const timeStr = now.toTimeString().substring(0, 8);
-    const updated = list.map((item) => {
-      if (item.date === dateStr) {
-        return type === 'in' ? { ...item, checkIn: timeStr } : { ...item, checkOut: timeStr };
-      }
-      return item;
-    });
-    if (!updated.some((item) => item.date === dateStr)) {
-      updated.unshift({
-        key: String(Date.now()),
-        date: dateStr,
-        checkIn: type === 'in' ? timeStr : '--:--:--',
-        checkOut: type === 'out' ? timeStr : '--:--:--',
-        duration: 'Đang làm việc',
-        status: 'Đúng giờ',
-        note: 'Chấm công trực tuyến Geofence',
-      });
-    }
-    this.saveGenericData('employee_timesheets', updated);
-    this.logAction('Chấm công trực tuyến', 'Nhân viên', `Thực hiện ${type === 'in' ? 'Check-in' : 'Check-out'} lúc ${timeStr}`);
-    return updated;
+  public async addEmployeeCheckin(type: 'in' | 'out'): Promise<any[]> {
+    await attendanceApi.checkIn(type);
+    return this.refreshGenericData('employee_timesheets');
   }
 
   public getEmployeeLeaves(): any[] {
     return this.getLeaveRequests();
   }
 
-  public addEmployeeLeave(leave: any): any[] {
-    const list = this.getEmployeeLeaves();
-    const newLeave = {
+  public async addEmployeeLeave(leave: any): Promise<any[]> {
+    await collectionsApi.create('leave_requests', {
       ...leave,
-      key: String(Date.now()),
-      code: leave.code || `NP-${String(Date.now()).slice(-4)}`,
+      key: crypto.randomUUID(),
+      code: leave.code || `NP-${Date.now()}`,
       status: 'Chờ duyệt',
-      employeeName: leave.employeeName || 'Nhân sự',
       leaveType: leave.type || leave.leaveType || 'Nghỉ phép năm',
       startDate: leave.fromDate || leave.startDate || '',
       endDate: leave.toDate || leave.endDate || '',
-      daysCount: Number(leave.days) || Number(leave.daysCount) || 1,
-    };
-    const updated = [newLeave, ...list];
-    this.saveGenericData('leave_requests', updated);
-    this.saveGenericData('employee_leaves', updated);
-    this.logAction('Tạo đơn xin nghỉ phép', 'Nhân viên', `Gửi đơn xin nghỉ ${newLeave.leaveType} số ngày: ${newLeave.daysCount}`);
-    return updated;
+      daysCount: Number(leave.days ?? leave.daysCount),
+    });
+    return this.refreshGenericData('leave_requests');
   }
 
   public getEmployeeOvertime(): any[] {
-    const mainList = this.getGenericData('attendance_overtime');
-    if (mainList && mainList.length > 0) return mainList;
-    const empList = this.getGenericData('employee_overtime');
-    if (empList && empList.length > 0) return empList;
-    return [];
+    return this.getGenericData('attendance_overtime');
   }
 
-  public addEmployeeOvertime(ot: any): any[] {
-    const list = this.getEmployeeOvertime();
-    const newOt = {
+  public async addEmployeeOvertime(ot: any): Promise<any[]> {
+    await collectionsApi.create('attendance_overtime', {
       ...ot,
-      key: String(Date.now()),
-      code: ot.code || `OT-${String(Date.now()).slice(-4)}`,
+      key: crypto.randomUUID(),
+      code: ot.code || `OT-${Date.now()}`,
       status: 'Chờ phê duyệt',
-      otDate: ot.date || ot.otDate || new Date().toISOString().slice(0, 10),
-      totalHours: Number(ot.hours) || Number(ot.totalHours) || 2,
-      multiplier: ot.multiplier ? (typeof ot.multiplier === 'number' ? ot.multiplier : parseFloat(String(ot.multiplier)) / 100 || 1.5) : 1.5,
-      timeRange: ot.fromTime && ot.toTime ? `${ot.fromTime} - ${ot.toTime}` : ot.timeRange || '18:00 - 21:30',
-      baseHourlyRate: Number(ot.baseHourlyRate) || 180000,
-    };
-    const updated = [newOt, ...list];
-    this.saveGenericData('attendance_overtime', updated);
-    this.saveGenericData('employee_overtime', updated);
-    this.logAction('Đăng ký OT', 'Nhân viên', `Đăng ký làm thêm ${newOt.totalHours}h ngày ${newOt.otDate}`);
-    return updated;
+      otDate: ot.date || ot.otDate || '',
+      totalHours: Number(ot.hours ?? ot.totalHours),
+      timeRange: ot.fromTime && ot.toTime ? `${ot.fromTime} - ${ot.toTime}` : ot.timeRange || '',
+    });
+    return this.refreshGenericData('attendance_overtime');
   }
 
-  public updateOvertimeStatus(key: string, status: 'Đã duyệt OT' | 'Từ chối' | 'Chờ phê duyệt'): any[] {
-    const list = this.getEmployeeOvertime();
-    const updated = list.map((item) => (item.key === key ? { ...item, status } : item));
-    this.saveGenericData('attendance_overtime', updated);
-    this.saveGenericData('employee_overtime', updated);
-    this.logAction('Phê duyệt OT', 'Chấm công', `Cập nhật trạng thái OT key: ${key} -> ${status}`);
-    return updated;
+  public async updateOvertimeStatus(key: string, status: 'Đã duyệt OT' | 'Từ chối' | 'Chờ phê duyệt'): Promise<any[]> {
+    await collectionsApi.update('attendance_overtime', key, { status });
+    return this.refreshGenericData('attendance_overtime');
   }
 
   public getEmployeePayslips(): any[] {
@@ -1314,21 +1276,30 @@ class DataService {
     return updated;
   }
 
-  public signEmployeePayslip(monthKey: string, signerName: string) {
+  public async signEmployeePayslip(monthKey: string, signerName: string) {
     const list = this.getEmployeePayslips();
+    const current = list.find(item => item.key === monthKey || item.id === monthKey);
+    if (!current) throw new Error('Không tìm thấy phiếu lương.');
+    if (!signerName.trim()) throw new Error('Không xác định được người xác nhận.');
+    const patch = {
+      signedStatus: 'Đã xác nhận',
+      signedDate: new Date().toISOString(),
+      signerName,
+    };
+    await collectionsApi.update('employee_payslips', monthKey, patch);
     const updated = list.map((item) => {
-      if (item.key === monthKey) {
+      if (item === current) {
         return {
           ...item,
-          signedStatus: 'Đã ký số xác nhận',
-          signedDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
-          signerName,
+          ...patch,
         };
       }
       return item;
     });
-    this.saveGenericData('employee_payslips', updated);
-    this.logAction('Ký số phiếu lương', 'Nhân viên', `Ký xác nhận phiếu lương tháng: ${monthKey}`);
+    this.genericCache.set('employee_payslips', updated);
+    saveToStorage('employee_payslips', updated);
+    this.notify();
+    this.logAction('Xác nhận phiếu lương', 'Nhân viên', `Xác nhận phiếu lương: ${monthKey}`);
     return updated;
   }
 

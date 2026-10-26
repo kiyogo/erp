@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.mjs",
-    "dev": "node --watch index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:postgres": "node --env-file=.env tests/postgres-smoke.mjs",
+    "start": "node --env-file=.env index.mjs",
+    "dev": "node --env-file=.env --watch index.mjs",
     "seed:admin": "node index.mjs --seed-admin",
     "migrate:pg": "node scripts/migrate-sqlite-to-pg.mjs"
   },

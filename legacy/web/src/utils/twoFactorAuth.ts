@@ -62,11 +62,11 @@ export function generateBase32Secret(length = 20): string {
 export async function generateTOTP(secret: string, timeStepOffset = 0): Promise<string> {
   try {
     const keyBytes = base32ToBytes(secret);
-    if (!keyBytes || keyBytes.length === 0) return '000000';
+    if (!keyBytes || keyBytes.length === 0) return '';
 
     const cryptoKey = await window.crypto.subtle.importKey(
       'raw',
-      keyBytes,
+      new Uint8Array(keyBytes).buffer,
       { name: 'HMAC', hash: 'SHA-1' },
       false,
       ['sign']

@@ -4,6 +4,32 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-26] - Luồng nghiệp vụ thật, xác thực và kiểm thử hai database
+
+- Giữ React/custom UI, Node HTTP, service/collections, schema hiện tại và Canvas. Không sửa lại các thay đổi KTable/smart-table hoặc dự án Rust có sẵn trước task.
+- FormStore/custom-ui: áp dụng rules/validation, initial values, reset, submit từ footer Modal, hiển thị lỗi trường và trạng thái ARIA. Khắc phục các biểu mẫu trước đây gửi dữ liệu trống hoặc không submit được.
+- ContractsModule + API: cắt vòng lặp GET→ghi collection→GET; lỗi lưu không báo thành công; xóa qua API; duy trì mã hóa PII khi sửa và giải mã đúng khi tạo nội dung đồng bộ.
+- RecruitmentModule, OnboardingModule, EmployeeHistoryModule + API: ứng viên/CV/pipeline, checklist/đánh giá/điều kiện nghiệm thu, lịch sử nhân viên CRUD/export lưu thật; metadata danh tính/actor và validation máy chủ. Chưa có cổng tuyển công khai, AI tuyển dụng hoặc tự cấp tài khoản/thiết bị.
+- Toàn bộ 11 module attendance, EmployeeLeaves/Overtime/Timesheet và dataService: thao tác từng bản ghi chờ API; lịch/matrix theo dữ liệu thật; phê duyệt, ca/đổi ca, đối soát/khóa, giải trình và xuất file thật. Check-in/out do máy chủ ghi giờ/danh tính. Nâng dữ liệu mirror một lần sang scope chuẩn và giữ nguồn cũ. Sổ phép/công điều chỉnh còn thủ công; chưa gắn nhà cung cấp IoT/FaceID hay tự trả lương.
+- BankAccountsModule/InternalTransferModule + API: ghi hai vế/phí/audit trong transaction, chống chi quá số dư và lệnh trùng, hủy đảo toàn bộ vế; giữ lịch sử cũ. Đây là sổ quỹ nội bộ; không giả nhận đã chuyển tiền tại ngân hàng.
+- AdminSessionsModule, Login/AuthContext, AdminSystemModule + API: phiên sid thật có thu hồi/logout bền vững; kiểm tra credential Google RS256/claims; GIS thật; cấu hình Google máy chủ và kiểm tra kết nối thật; chặn bật chế độ Google bắt buộc trước khi Admin đăng nhập Google xác minh cùng cấu hình. Không dùng Client Secret trong trình duyệt.
+- API async normalization/transaction bảo vệ cập nhật đồng thời và lịch sử; sửa JSON text casting PostgreSQL và ON CONFLICT của Canvas operations/snapshots, chống retry tạo revision trùng.
+- Kiểm tra: 41 API + 20 web/domain đạt; build/typecheck đạt; tám luồng PostgreSQL thật đạt trong database tạm riêng rồi xóa; 246 route production không lỗi JavaScript/trang trắng, blank Form không gửi POST. Bằng chứng `outputs/legacy-progress-2026-10-26/`. Test bổ sung dùng Node runner, TypeScript, pdf-lib, Puppeteer và pg đã có, không thêm dependency.
+- Chưa hoàn thành 29 ứng dụng/mọi bullet trong video/txt. Các tác vụ con đã chạm hạn mức sử dụng khi chuyển sang đính kèm văn thư; phần đó chưa được triển khai. Báo cáo tiến độ nêu rõ phần còn lại, không tuyên bố parity100%.
+
+## [2026-10-25] - Sửa nền tảng web legacy và bổ sung kiểm thử hồi quy
+
+- Task: bắt đầu hoàn thiện tính năng theo yêu cầu video/txt, giữ kiến trúc, UI và module hiện có. Toàn bộ phạm vi chưa hoàn thành; xem `IMPLEMENTATION_PROGRESS.md`.
+- `api/db.mjs`, `api/index.mjs`: thay 12 transaction thủ công bằng helper hiện có; cô lập transaction SQLite khỏi yêu cầu đồng thời; chờ insert collection/checklist/chứng từ; kiểm tra và tính lại số tiền ngân sách ở API. Không đổi schema.
+- `web/src/utils/fileExporter.ts`: PDF nhiều trang, xuống dòng, bỏ khẳng định chữ ký không được xác minh; thêm XLSX OpenXML bằng ZIP helper hiện có.
+- `web/src/modules/finance/BudgetModule.tsx`: xuất XLSX dữ liệu thực, dùng collection cho biểu đồ/kế hoạch, kiểm tra số tiền và hiển thị lỗi tải.
+- `web/src/modules/employee/EmployeePayslipModule.tsx`, `web/src/services/dataService.ts`: xuất dữ liệu phiếu lương, xác nhận đúng key qua PATCH, chỉ cập nhật sau khi lưu, không tự đánh dấu phiếu có key 2/3 là đã ký.
+- `web/src/utils/twoFactorAuth.ts`: chặn khóa rỗng được chấp nhận với mã 000000; sửa BufferSource cho Web Crypto.
+- `web/src/custom-ui/index.tsx`, `web/src/api/endpoints.ts`, các module AdminSessions, LeaveRequests, Overtime, EmployeeFullEdit, EmployeeHistory, Recruitment, Rewards: sửa biến/kiểu chưa khớp; bỏ thông tin cá nhân tự dựng trong đơn nghỉ phép; phiên đăng nhập tải lại dữ liệu collection.
+- Bổ sung `api/tests/database.test.mjs`, `api/tests/api-smoke.test.mjs`, `api/tests/browser-routes.mjs`, `web/tests/export-and-auth.test.mjs`, `web/tests/payslip.test.mjs`.
+- Dependency: tái sử dụng TypeScript, pdf-lib, Puppeteer, Node test runner và các API hiện có; không thêm framework. Chưa kiểm thử PostgreSQL thực tế hoặc tích hợp CA/ngân hàng/thuế/bảo hiểm.
+
+
 ## [2026-08-31] - Loại Bỏ Văn Bản Gợi Ý (VD: ...) Rườm Rà Trong Các Khung Nhập Liệu
 
 ### 1. Mục Tiêu Task

@@ -1,4 +1,5 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi, filesApi, type StoredFileNode } from '../../api/endpoints';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -22,7 +23,8 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Radio, Card, Tooltip } from '../../custom-ui';
-import { downloadFile } from '../../utils/fileExporter';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { formatFileSize } from '../../utils/fileStorage';
 
 export interface EnterpriseArchiveRecord {
   key: string;
@@ -39,20 +41,32 @@ export interface EnterpriseArchiveRecord {
   docDate: string;
   urgency: 'Hỏa tốc' | 'Thượng khẩn' | 'Bình thường';
   securityLevel: 'Tuyệt mật' | 'Mật' | 'Nội bộ' | 'Thường';
-  pageCount: number;
+  pageCount?: number;
+  fileNodeId?: string;
+  fileSizeBytes?: number;
   fileScan: string;
   fileSize: string;
   digitalVerified: boolean;
   slaDeadline: string;
   status: 'Đã giải quyết xong' | 'Đang xử lý đúng hạn' | 'Cảnh báo quá hạn' | 'Đã chuyển phát bưu điện';
+  forwardNote?: string;
+  history?: Array<{ status: string; receiverOrAuthor?: string; at: string; actor: string }>;
 }
 
 const INITIAL_ARCHIVES: EnterpriseArchiveRecord[] = [];
 
 export const DocumentArchivesModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseArchiveRecord[]>(INITIAL_ARCHIVES);
+  const [saving, setSaving] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<EnterpriseArchiveRecord | null>(null);
+  const [scanFile, setScanFile] = useState<File | null>(null);
+  const [uploadedScan, setUploadedScan] = useState<StoredFileNode | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const [forwardForm] = Form.useForm();
 
   useEffect(() => {
+    void dataService.refreshGenericData('doc_archives').catch(() => message.error('Không thể tải sổ văn thư từ máy chủ.'));
     const list = dataService.getGenericData('doc_archives');
     setData(Array.isArray(list) ? list : []);
     const unsub = dataService.subscribe(() => {
@@ -77,34 +91,78 @@ export const DocumentArchivesModule: React.FC = () => {
   const totalRecords = data.length;
   const urgentCount = data.filter((d) => d.urgency === 'Hỏa tốc' || d.urgency === 'Thượng khẩn').length;
 
-  const handleCreate = (values: any) => {
-    const isIncoming = values.dispatchType === 'Văn bản đến';
-    const countType = data.filter((d) => d.dispatchType === values.dispatchType).length + 1;
-    const newRecord: EnterpriseArchiveRecord = {
-      ...values,
-      key: String(Date.now()),
-      bookNumber: isIncoming ? `SĐ-2026/0${countType}` : `SĐI-2026/0${countType}`,
-      dateReceivedOrIssued: values.dateReceivedOrIssued || new Date().toISOString().substring(0, 10),
-      docDate: values.docDate || new Date().toISOString().substring(0, 10),
-      pageCount: Number(values.pageCount) || 4,
-      fileScan: `${values.originalCode.replace(/[^a-zA-Z0-9]/g, '_')}_Scan.pdf`,
-      fileSize: '2.5 MB',
-      digitalVerified: true,
-      status: isIncoming ? 'Đang xử lý đúng hạn' : 'Đã chuyển phát bưu điện',
-    };
+  const refreshRecords = () => dataService.refreshGenericData('doc_archives').catch(() => message.warning('Hồ sơ đã lưu nhưng chưa tải lại được danh sách.'));
+  const displayStatus = (record: EnterpriseArchiveRecord) => ['Đang xử lý đúng hạn', 'Cảnh báo quá hạn'].includes(record.status) && record.slaDeadline && record.slaDeadline < new Date().toLocaleDateString('en-CA') ? 'Cảnh báo quá hạn' : record.status;
 
-    const nextItems = [newRecord, ...data]; setData(nextItems); dataService.saveGenericData('doc_archives', nextItems);
-    message.success(`Đã vào sổ văn thư thành công: ${newRecord.bookNumber} (${values.subject})`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const parseDate = (value: string) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '') || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) throw new Error('Vui lòng nhập ngày hợp lệ.');
+      };
+      parseDate(values.dateReceivedOrIssued); parseDate(values.docDate);
+      if (values.slaDeadline) { parseDate(values.slaDeadline); if (values.slaDeadline < values.dateReceivedOrIssued) throw new Error('Hạn xử lý không được trước ngày vào sổ.'); }
+      const pageCount = values.pageCount === '' || values.pageCount == null ? undefined : Number(values.pageCount);
+      if (pageCount != null && (!Number.isInteger(pageCount) || pageCount < 1)) throw new Error('Số trang phải là số nguyên dương.');
+      let file = uploadedScan;
+      if (scanFile && !file) {
+        if (scanFile.size < 1 || scanFile.size > 50 * 1024 * 1024) throw new Error('Tệp scan phải có dữ liệu và không quá 50 MB.');
+        if (!/\.(pdf|png|jpe?g|webp|tiff?)$/i.test(scanFile.name)) throw new Error('Chọn tệp PDF hoặc ảnh scan (PNG, JPG, WEBP, TIFF).');
+        const workspace = await filesApi.list(undefined, false, true);
+        if (!workspace.data.context?.parentId) throw new Error('Không tìm thấy thư mục được phép lưu tệp.');
+        const uploaded = await filesApi.upload(scanFile, scanFile.name, workspace.data.context.parentId, 'doc_archives');
+        file = uploaded.data.file;
+        setUploadedScan(file);
+      }
+      const record = {
+        ...values, key: editingRecord?.key || crypto.randomUUID(),
+        bookNumber: editingRecord?.bookNumber || values.bookNumber,
+        pageCount,
+        fileNodeId: file?.id || editingRecord?.fileNodeId || '',
+        fileScan: file?.name || editingRecord?.fileScan || '',
+        fileSizeBytes: file?.sizeBytes ?? editingRecord?.fileSizeBytes ?? 0,
+        fileSize: file ? formatFileSize(file.sizeBytes) : editingRecord?.fileNodeId ? editingRecord.fileSize : '',
+        digitalVerified: false,
+        status: editingRecord?.status || 'Đang xử lý đúng hạn',
+      };
+      const response = editingRecord ? await collectionsApi.update<EnterpriseArchiveRecord>('doc_archives', editingRecord.key, record) : await collectionsApi.create<EnterpriseArchiveRecord>('doc_archives', record);
+      setData((previous) => [response.data.record, ...previous.filter((item) => item.key !== response.data.record.key)]);
+      setModalOpen(false); setDrawerOpen(false); setScanFile(null); setUploadedScan(null); form.resetFields();
+      message.success(`Đã lưu sổ văn thư: ${response.data.record.bookNumber}`);
+      void refreshRecords();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu hồ sơ văn thư.'); }
+    finally { setSaving(false); }
   };
+
+  const handleDownloadOriginal = async (record: EnterpriseArchiveRecord) => {
+    if (!record.fileNodeId) { message.info('Hồ sơ chưa có tệp scan gốc được tải lên. Có thể xuất phiếu trích lục từ dữ liệu hồ sơ.'); return; }
+    try { const response = await filesApi.download(record.fileNodeId); downloadFile(record.fileScan || `${record.originalCode}_scan`, response.data); }
+    catch (error: any) { message.error(error?.response?.data?.message || 'Không thể tải tệp gốc. Tệp có thể đã bị xóa hoặc quyền truy cập đã thay đổi.'); }
+  };
+
+  const handlePrint = (record: EnterpriseArchiveRecord) => downloadFile(`Trich_luc_${record.bookNumber.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`, generateValidPdfBlob('PHIẾU TRÍCH LỤC SỔ VĂN THƯ', `${record.bookNumber} - ${record.originalCode}`, [`Loại sổ: ${record.dispatchType}`, `Thể loại: ${record.docType}`, `Trích yếu: ${record.subject}`, `Đối tác: ${record.partner}`, `Người ký: ${record.signer} - ${record.signerPosition}`, `Người xử lý: ${record.receiverOrAuthor}`, `Ngày văn bản: ${record.docDate}`, `Ngày vào sổ: ${record.dateReceivedOrIssued}`, `Hạn xử lý: ${record.slaDeadline || 'Chưa đặt'}`, `Số trang: ${record.pageCount ?? 'Chưa ghi nhận'}`, `Mức độ: ${record.urgency} / ${record.securityLevel}`, `Trạng thái: ${displayStatus(record)}`, `Tệp gốc: ${record.fileNodeId ? record.fileScan : 'Chưa đính kèm'}`, 'Phiếu này được tạo từ dữ liệu hồ sơ; không thay thế bản scan gốc hoặc xác thực chữ ký số.']));
+
+  const handleUpdate = async (record: EnterpriseArchiveRecord, patch: Partial<EnterpriseArchiveRecord>) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const response = await collectionsApi.update<EnterpriseArchiveRecord>('doc_archives', record.key, patch);
+      setData((previous) => previous.map((item) => item.key === record.key ? response.data.record : item));
+      setSelectedRecord(response.data.record); setForwardOpen(false);
+      message.success('Đã lưu kết quả xử lý văn thư.'); void refreshRecords();
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể cập nhật hồ sơ văn thư.'); }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = (record: EnterpriseArchiveRecord) => Modal.confirm({ title: 'Xóa hồ sơ văn thư?', content: `Hồ sơ ${record.bookNumber} sẽ được xóa khỏi sổ. Tệp đã tải lên vẫn có trong kho tệp.`, okText: 'Xóa hồ sơ', cancelText: 'Hủy', onOk: async () => { try { await collectionsApi.remove('doc_archives', record.key); setData((previous) => previous.filter((item) => item.key !== record.key)); setDrawerOpen(false); message.success('Đã xóa hồ sơ văn thư.'); void refreshRecords(); } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xóa hồ sơ văn thư.'); } } });
 
   const filteredData = data.filter((item) => {
     let matchTab = true;
     if (activeTab === 'Văn bản đến') matchTab = item.dispatchType === 'Văn bản đến';
     if (activeTab === 'Văn bản đi') matchTab = item.dispatchType === 'Văn bản đi';
     if (activeTab === 'urgent') matchTab = item.urgency === 'Hỏa tốc' || item.urgency === 'Thượng khẩn';
-    if (activeTab === 'pending') matchTab = item.status.includes('Đang xử lý');
+    if (activeTab === 'pending') matchTab = ['Đang xử lý đúng hạn', 'Cảnh báo quá hạn'].includes(item.status);
 
     const matchDocType = docTypeFilter === 'all' || item.docType === docTypeFilter;
 
@@ -163,7 +221,7 @@ export const DocumentArchivesModule: React.FC = () => {
             Đối tác / Cơ quan: <strong>{record.partner}</strong>
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
-            Người phụ trách: <strong>{record.receiverOrAuthor}</strong> · ({record.pageCount} trang)
+            Người phụ trách: <strong>{record.receiverOrAuthor}</strong> · ({record.pageCount == null ? 'Chưa ghi số trang' : `${record.pageCount} trang`})
           </div>
         </div>
       ),
@@ -193,11 +251,11 @@ export const DocumentArchivesModule: React.FC = () => {
       width: 160,
       render: (_: any, r: EnterpriseArchiveRecord) => {
         let color = 'success';
-        if (r.status.includes('Đang xử lý')) color = 'processing';
-        if (r.status.includes('Quá hạn')) color = 'error';
+        if (displayStatus(r).includes('Đang xử lý')) color = 'processing';
+        if (displayStatus(r).toLowerCase().includes('quá hạn')) color = 'error';
         return (
           <div>
-            <Tag color={color}>{r.status}</Tag>
+            <Tag color={color}>{displayStatus(r)}</Tag>
             <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
               Hạn SLA: <strong style={{ color: '#DC2626' }}>{r.slaDeadline}</strong>
             </div>
@@ -224,10 +282,8 @@ export const DocumentArchivesModule: React.FC = () => {
           <Button
             size="small"
             icon={<DownloadOutlined />}
-            onClick={() => {
-              downloadFile(record.fileScan);
-              message.success(`Đang tải file scan ${record.fileScan}...`);
-            }}
+            title={record.fileNodeId ? 'Tải tệp scan gốc' : 'Hồ sơ chưa có tệp scan gốc'}
+            onClick={() => handleDownloadOriginal(record)}
           />
         </div>
       ),
@@ -243,7 +299,7 @@ export const DocumentArchivesModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {incomingCount} văn bản đến
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>100% Số hóa hồ sơ đính kèm</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>{data.filter((item) => item.dispatchType === 'Văn bản đến' && item.fileNodeId).length} hồ sơ có tệp đính kèm</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -251,7 +307,7 @@ export const DocumentArchivesModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {outgoingCount} văn bản đi
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Đóng mộc điện tử &amp; Ký số CA</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo các hồ sơ đã lưu trong sổ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -263,11 +319,11 @@ export const DocumentArchivesModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tuân thủ Nghị định 30/2020/NĐ-CP</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng hồ sơ có tệp gốc</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            99.2% Chuẩn hóa
+            {data.filter((item) => item.fileNodeId).length} / {totalRecords} Hồ sơ
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Định dạng số ký hiệu quy chuẩn</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Thống kê theo tệp đã được tải lên kho</div>
         </div>
       </div>
 
@@ -325,7 +381,9 @@ export const DocumentArchivesModule: React.FC = () => {
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              setEditingRecord(null); setScanFile(null); setUploadedScan(null); setFileInputKey((value) => value + 1);
               form.resetFields();
+              form.setFieldsValue({ bookNumber: '', dateReceivedOrIssued: new Date().toLocaleDateString('en-CA'), docDate: new Date().toLocaleDateString('en-CA'), pageCount: undefined });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -333,7 +391,7 @@ export const DocumentArchivesModule: React.FC = () => {
             Vào sổ văn thư
           </Button>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ văn thư theo mẫu Nhà nước NĐ 30')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('So_van_thu.xlsx', generateValidXlsxBlob([['Số vào sổ', 'Loại sổ', 'Số ký hiệu gốc', 'Thể loại', 'Đối tác', 'Trích yếu', 'Người ký', 'Chức danh', 'Người xử lý', 'Ngày văn bản', 'Ngày vào sổ', 'Hạn xử lý', 'Độ khẩn', 'Mức bảo mật', 'Số trang', 'Tệp scan gốc', 'Dung lượng (byte)', 'Trạng thái'], ...filteredData.map((record) => [record.bookNumber, record.dispatchType, record.originalCode, record.docType, record.partner, record.subject, record.signer, record.signerPosition, record.receiverOrAuthor, record.docDate, record.dateReceivedOrIssued, record.slaDeadline || '', record.urgency, record.securityLevel, record.pageCount ?? null, record.fileNodeId ? record.fileScan : '', record.fileSizeBytes ?? 0, displayStatus(record)])]))}>
             Xuất Sổ
           </Button>
         </div>
@@ -346,9 +404,9 @@ export const DocumentArchivesModule: React.FC = () => {
 
       {/* MODAL: Đăng Ký Vào Sổ Văn Thư */}
       <Modal
-        title="Đăng Ký Vào Sổ Văn Thư (Đến / Đi) Theo Chuẩn NĐ 30/2020"
+        title={editingRecord ? 'Chỉnh sửa hồ sơ văn thư' : 'Đăng Ký Vào Sổ Văn Thư (Đến / Đi)'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => { if (!saving) setModalOpen(false); }}
         footer={null}
         width={720}
       >
@@ -364,13 +422,16 @@ export const DocumentArchivesModule: React.FC = () => {
             dateReceivedOrIssued: new Date().toISOString().substring(0, 10),
             docDate: new Date().toISOString().substring(0, 10),
             slaDeadline: new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10),
-            pageCount: 4,
           }}
           style={{ marginTop: 14 }}
         >
+          <Form.Item name="bookNumber" label="Số vào sổ (để trống để cấp tự động)">
+            <Input readOnly={!!editingRecord} />
+          </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="dispatchType" label="Loại sổ văn thư" rules={[{ required: true }]}>
               <Select
+                disabled={!!editingRecord}
                 options={[
                   { label: 'Sổ Văn Bản Đến', value: 'Văn bản đến' },
                   { label: 'Sổ Văn Bản Đi', value: 'Văn bản đi' },
@@ -448,22 +509,35 @@ export const DocumentArchivesModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="slaDeadline" label="Hạn cam kết xử lý xong (Theo Nghị định 30)">
+          <Form.Item name="slaDeadline" label="Hạn cam kết xử lý xong">
             <Input type="date" />
           </Form.Item>
 
+          <Form.Item label="Tệp scan gốc (PDF hoặc ảnh, tối đa 50 MB)">
+            <Input key={fileInputKey} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff" disabled={saving} onChange={(event) => { setScanFile(event.target.files?.[0] || null); setUploadedScan(null); }} />
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>{uploadedScan ? `Đã tải lên kho: ${uploadedScan.name} (${formatFileSize(uploadedScan.sizeBytes)})` : scanFile ? `${scanFile.name} (${formatFileSize(scanFile.size)})` : editingRecord?.fileNodeId ? `Tệp hiện tại: ${editingRecord.fileScan}` : 'Chưa chọn tệp scan. Hồ sơ vẫn có thể lưu để bổ sung sau.'}</div>
+          </Form.Item>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Vào sổ văn thư
+            <Button disabled={saving} onClick={() => setModalOpen(false)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingRecord ? 'Lưu thay đổi' : 'Vào sổ văn thư'}
             </Button>
           </div>
         </Form>
       </Modal>
 
+      <Modal title="Chuyển xử lý hồ sơ văn thư" open={forwardOpen} onCancel={() => setForwardOpen(false)} footer={null} width={540}>
+        <Form form={forwardForm} layout="vertical" onFinish={(values) => selectedRecord && handleUpdate(selectedRecord, { receiverOrAuthor: values.receiverOrAuthor, forwardNote: values.forwardNote, status: 'Đang xử lý đúng hạn' })}>
+          <Form.Item name="receiverOrAuthor" label="Cán bộ / Phòng ban tiếp nhận" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="forwardNote" label="Nội dung giao xử lý" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button type="primary" htmlType="submit" loading={saving}>Lưu chuyển xử lý</Button>
+        </Form>
+      </Modal>
+
       {/* DRAWER: Trích Lục Sổ Văn Thư */}
       <Drawer
-        title="Trích Lục Chi Tiết Sổ Văn Thư Điện Tử (NĐ 30/2020)"
+        title="Trích Lục Chi Tiết Sổ Văn Thư Điện Tử"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={650}
@@ -482,7 +556,7 @@ export const DocumentArchivesModule: React.FC = () => {
                   </div>
                 </div>
                 <Tag color={selectedRecord.status === 'Đã giải quyết xong' ? 'success' : 'processing'}>
-                  {selectedRecord.status}
+                  {displayStatus(selectedRecord)}
                 </Tag>
               </div>
 
@@ -494,11 +568,7 @@ export const DocumentArchivesModule: React.FC = () => {
                 <Tag color={selectedRecord.urgency === 'Hỏa tốc' ? 'error' : 'warning'}>
                   {selectedRecord.urgency}
                 </Tag>
-                {selectedRecord.digitalVerified && (
-                  <Tag color="purple" icon={<SafetyCertificateOutlined />}>
-                    Đã kiểm thực chữ ký số CA
-                  </Tag>
-                )}
+                <Tag color="default" icon={<SafetyCertificateOutlined />}>Chưa có kết quả kiểm thực chữ ký số</Tag>
               </div>
             </div>
 
@@ -550,18 +620,18 @@ export const DocumentArchivesModule: React.FC = () => {
             {/* Scanned PDF Attachment */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <PaperClipOutlined style={{ color: '#2563EB' }} /> Tệp Bản Scan Gốc Có Dấu Mộc Đỏ:
+                <PaperClipOutlined style={{ color: '#2563EB' }} /> Tệp Bản Scan Gốc Đã Đính Kèm:
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <FilePdfOutlined style={{ color: '#DC2626', fontSize: 22 }} />
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{selectedRecord.fileScan}</div>
-                    <div style={{ fontSize: 11, color: '#64748B' }}>Dung lượng: {selectedRecord.fileSize} · Ký số HSM hợp lệ</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{selectedRecord.fileNodeId ? selectedRecord.fileScan : 'Chưa có tệp scan gốc được lưu'}</div>
+                    <div style={{ fontSize: 11, color: '#64748B' }}>{selectedRecord.fileNodeId ? `Dung lượng: ${selectedRecord.fileSize}` : 'Có thể bổ sung tệp gốc qua Chỉnh sửa hồ sơ.'} · Chữ ký số chưa kiểm thực</div>
                   </div>
                 </div>
-                <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadFile(selectedRecord.fileScan)}>
-                  Tải tệp
+                <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownloadOriginal(selectedRecord)}>
+                  Tải tệp gốc
                 </Button>
               </div>
             </div>
@@ -570,7 +640,7 @@ export const DocumentArchivesModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in phiếu trích lục sổ văn thư ${selectedRecord.bookNumber} (PDF)`)}
+                onClick={() => handlePrint(selectedRecord)}
                 style={{ flex: 1 }}
               >
                 In Phiếu Trích Lục (PDF)
@@ -578,11 +648,20 @@ export const DocumentArchivesModule: React.FC = () => {
               <Button
                 type="primary"
                 icon={<ShareAltOutlined />}
-                onClick={() => message.success(`Đã chuyển phiếu giao nhận văn thư sang ${selectedRecord.receiverOrAuthor}`)}
+                onClick={() => { forwardForm.resetFields(); forwardForm.setFieldsValue({ receiverOrAuthor: selectedRecord.receiverOrAuthor, forwardNote: '' }); setForwardOpen(true); }}
+                disabled={['Đã giải quyết xong', 'Đã chuyển phát bưu điện'].includes(selectedRecord.status)}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
                 Chuyển Tiếp Xử Lý
               </Button>
+            </div>
+            {selectedRecord.forwardNote && <div style={{ fontSize: 12, color: '#475569' }}>Ghi nhận chuyển xử lý: {selectedRecord.forwardNote}</div>}
+            {!!selectedRecord.history?.length && <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}><div style={{ fontWeight: 700, marginBottom: 8 }}>Lịch sử xử lý đã ghi nhận</div>{selectedRecord.history.map((entry, index) => <div key={`${entry.at}-${index}`} style={{ fontSize: 12, color: '#475569', padding: '5px 0' }}>{new Date(entry.at).toLocaleString('vi-VN')} · {entry.actor} · {entry.status}{entry.receiverOrAuthor ? ` · ${entry.receiverOrAuthor}` : ''}</div>)}</div>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button onClick={() => { setEditingRecord(selectedRecord); setScanFile(null); setUploadedScan(null); setFileInputKey((value) => value + 1); form.resetFields(); form.setFieldsValue(selectedRecord); setModalOpen(true); }}>Chỉnh sửa hồ sơ</Button>
+              <Button icon={<PaperClipOutlined />} onClick={async () => { try { await navigator.clipboard.writeText(`${selectedRecord.bookNumber} | ${selectedRecord.originalCode}\n${selectedRecord.subject}\nNgười xử lý: ${selectedRecord.receiverOrAuthor}\nTrạng thái: ${displayStatus(selectedRecord)}`); message.success('Đã sao chép trích yếu hồ sơ.'); } catch { message.error('Trình duyệt chưa cho phép sao chép vào bộ nhớ tạm.'); } }}>Sao chép trích yếu</Button>
+              {!['Đã giải quyết xong', 'Đã chuyển phát bưu điện'].includes(selectedRecord.status) && <Button type="primary" loading={saving} onClick={() => Modal.confirm({ title: selectedRecord.dispatchType === 'Văn bản đến' ? 'Xác nhận đã giải quyết hồ sơ?' : 'Xác nhận đã chuyển phát văn bản?', content: 'Thao tác sẽ ghi nhận trạng thái xử lý trên sổ văn thư.', okText: 'Xác nhận', cancelText: 'Hủy', onOk: () => handleUpdate(selectedRecord, { status: selectedRecord.dispatchType === 'Văn bản đến' ? 'Đã giải quyết xong' : 'Đã chuyển phát bưu điện' }) })}>{selectedRecord.dispatchType === 'Văn bản đến' ? 'Hoàn tất xử lý' : 'Xác nhận chuyển phát'}</Button>}
+              <Button danger onClick={() => handleDelete(selectedRecord)}>Xóa hồ sơ</Button>
             </div>
           </div>
         )}

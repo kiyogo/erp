@@ -17,6 +17,9 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
 import { dataService, LeaveRequest } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceDate, employeeAttendanceFields, leaveDays } from './attendanceRules';
 
 export interface EnterpriseLeaveRequest extends LeaveRequest {
   empCode?: string;
@@ -30,6 +33,8 @@ export interface EnterpriseLeaveRequest extends LeaveRequest {
 
 export const LeaveRequestsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseLeaveRequest[]>([]);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [saving, setSaving] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -41,24 +46,20 @@ export const LeaveRequestsModule: React.FC = () => {
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   const loadData = () => {
+    setEmployees(dataService.getEmployees());
     const raw = dataService.getLeaveRequests() || [];
-    const enriched: EnterpriseLeaveRequest[] = raw.map((r, i) => ({
+    const enriched: EnterpriseLeaveRequest[] = raw.map((r) => ({
       ...r,
-      empCode: r.empCode || `KY-0${i + 12}`,
-      position: r.position || (r.department?.includes('Kỹ Thuật') ? 'Senior Engineer' : 'Chuyên Viên'),
-      handoverPerson: r.handoverPerson || 'Cán bộ bàn giao',
-      contactPhone: r.contactPhone || '0988.951.954',
-      remainingAnnualLeave: r.remainingAnnualLeave ?? 9.5,
-      approver: r.approver || 'Ban Lãnh Đạo',
-      leaveType: r.leaveType || (r as any).type || 'Nghỉ phép năm',
+      leaveType: r.leaveType || (r as any).type || 'Chưa phân loại',
       startDate: r.startDate || (r as any).fromDate || '',
       endDate: r.endDate || (r as any).toDate || '',
-      daysCount: Number(r.daysCount) || Number((r as any).days) || 1,
+      daysCount: Number(r.daysCount ?? (r as any).days) || 0,
     }));
     setData(enriched);
   };
 
   useEffect(() => {
+    void dataService.refreshGenericData('leave_requests').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     loadData();
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
@@ -72,25 +73,38 @@ export const LeaveRequestsModule: React.FC = () => {
   const approvedCount = data.filter((d) => d.status === 'Đã duyệt').length;
   const totalDays = data.reduce((sum, d) => sum + (d.daysCount || 0), 0);
 
-  const handleCreate = (values: any) => {
-    const formattedValues: LeaveRequest = {
-      ...values,
-      key: String(Date.now()),
-      daysCount: Number(values.daysCount) || 1,
-      status: 'Chờ duyệt' as const,
-    };
-    dataService.addLeaveRequest(formattedValues);
-    message.success(`Đã tạo đơn nghỉ phép ${values.code} thành công`);
-    setModalOpen(false);
-    form.resetFields();
-    loadData();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const formattedValues = {
+        ...values,
+        ...employeeAttendanceFields(employees, values.employeeName),
+        key: crypto.randomUUID(),
+        daysCount: leaveDays(values.daysCount, values.startDate, values.endDate),
+        status: 'Chờ duyệt' as const,
+      };
+      await collectionsApi.create('leave_requests', formattedValues);
+      await dataService.refreshGenericData('leave_requests');
+      message.success(`Đã tạo đơn nghỉ phép ${values.code} thành công`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error.message || 'Không thể lưu đơn nghỉ phép.');
+    } finally { setSaving(false); }
   };
 
-  const handleApproveOrReject = (req: EnterpriseLeaveRequest, status: 'Đã duyệt' | 'Từ chối') => {
-    dataService.updateLeaveStatus(req.key, status);
-    message.success(`Đã ${status.toLowerCase()} đơn ${req.code} của ${req.employeeName}`);
-    setDrawerOpen(false);
-    loadData();
+  const handleApproveOrReject = async (req: EnterpriseLeaveRequest, status: 'Đã duyệt' | 'Từ chối') => {
+    if (saving || req.status !== 'Chờ duyệt') return;
+    setSaving(true);
+    try {
+      await collectionsApi.update('leave_requests', req.key, { status });
+      await dataService.refreshGenericData('leave_requests');
+      message.success(`Đã ${status.toLowerCase()} đơn ${req.code} của ${req.employeeName}`);
+      setDrawerOpen(false);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái đơn nghỉ phép.');
+    } finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -222,15 +236,15 @@ export const LeaveRequestsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {approvedCount} Đơn hoàn tất
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tự động cập nhật vào bảng chấm công 31 ngày</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đơn đã được phê duyệt trên hệ thống</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quỹ phép năm trung bình còn lại</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số ngày nghỉ trung bình mỗi nhân sự</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            9.5 Ngày / Người
+            {data.length ? (totalDays / new Set(data.map((item) => item.empCode || item.employeeName)).size).toFixed(1) : 0} Ngày / Người
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tuân thủ Bộ luật Lao động 12 ngày phép/năm</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Số ngày nghỉ trung bình trên các đơn hiện có</div>
         </div>
       </div>
 
@@ -269,11 +283,11 @@ export const LeaveRequestsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<ReloadOutlined />} onClick={loadData}>
+          <Button icon={<ReloadOutlined />} onClick={() => dataService.refreshGenericData('leave_requests').catch(() => message.error('Không thể tải lại đơn nghỉ phép.'))}>
             Làm mới
           </Button>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách đơn xin nghỉ ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Don_nghi_phep.xlsx', generateValidXlsxBlob([['Mã đơn', 'Nhân viên', 'Mã NV', 'Phòng ban', 'Loại nghỉ', 'Từ ngày', 'Đến ngày', 'Số ngày', 'Lý do', 'Trạng thái'], ...filteredData.map((item) => [item.code, item.employeeName, item.empCode || '', item.department, item.leaveType, item.startDate, item.endDate, item.daysCount, item.reason, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -283,13 +297,11 @@ export const LeaveRequestsModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                code: `NP-2026-${String(Date.now()).slice(-3)}`,
+                code: `NP-${new Date().getFullYear()}-${Date.now()}`,
                 leaveType: 'Nghỉ phép năm',
-                department: 'Phòng Ban Kỹ Thuật',
-                startDate: new Date().toISOString().substring(0, 10),
-                endDate: new Date().toISOString().substring(0, 10),
+                startDate: attendanceDate(),
+                endDate: attendanceDate(),
                 daysCount: 1,
-                handoverPerson: 'Cán bộ bàn giao',
                 contactPhone: '',
               });
               setModalOpen(true);
@@ -334,12 +346,12 @@ export const LeaveRequestsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Người làm đơn" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Hoàng Quốc Dũng" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
                 placeholder="Chọn phòng ban trực thuộc..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
           </div>
@@ -371,7 +383,7 @@ export const LeaveRequestsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Nộp đơn trình duyệt
             </Button>
           </div>
@@ -428,7 +440,7 @@ export const LeaveRequestsModule: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Phép năm còn lại trước đơn:</span>
-                  <strong style={{ color: '#16A34A' }}>{selectedRequest.remainingAnnualLeave} Ngày phép</strong>
+                  <strong style={{ color: '#16A34A' }}>{selectedRequest.remainingAnnualLeave == null ? 'Chưa đối chiếu' : `${selectedRequest.remainingAnnualLeave} Ngày phép`}</strong>
                 </div>
                 <div style={{ marginTop: 6, padding: '8px 10px', background: '#F1F5F9', borderRadius: 6, fontSize: 12 }}>
                   <strong>Lý do xin nghỉ:</strong> "{selectedRequest.reason}"
@@ -443,7 +455,7 @@ export const LeaveRequestsModule: React.FC = () => {
               </div>
               <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
                 1. <strong>Cấp Quản lý Trực tiếp:</strong> {selectedRequest.approver} ({selectedRequest.status === 'Đã duyệt' ? '✅ Đã duyệt' : '⏳ Đang chờ'})<br />
-                2. <strong>Khối Nhân Sự C&amp;B:</strong> Tự động trừ phép năm sau khi quản lý phê duyệt.
+                2. <strong>Khối Nhân Sự C&amp;B:</strong> Đối chiếu đơn đã duyệt với sổ quỹ phép năm.
               </div>
             </div>
 

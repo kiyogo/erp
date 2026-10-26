@@ -1,4 +1,7 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceDate, attendanceNumber, dateRangeDays, employeeAttendanceFields, timeRangeDetails } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -34,20 +37,25 @@ export interface EnterpriseOvertimeRecord {
   reason: string;
   baseHourlyRate: number;
   approver: string;
-  status: 'Đã duyệt OT' | 'Chờ phê duyệt' | 'Từ chối';
+  requestedMultiplier?: number;
+  status: 'Đã duyệt OT' | 'Chờ phê duyệt' | 'Chờ duyệt' | 'Từ chối';
 }
 
 const INITIAL_OT_DATA: EnterpriseOvertimeRecord[] = [];
 
 export const OvertimeModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseOvertimeRecord[]>(INITIAL_OT_DATA);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [saving, setSaving] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_overtime').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_overtime');
     setData(Array.isArray(list) ? list : []);
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
+      setEmployees(dataService.getEmployees());
       const updated = dataService.getGenericData('attendance_overtime');
       setData(Array.isArray(updated) ? updated : []);
       dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
@@ -67,42 +75,51 @@ export const OvertimeModule: React.FC = () => {
   const approvedList = data.filter((d) => d.status === 'Đã duyệt OT');
   const totalOTHours = approvedList.reduce((sum, item) => sum + item.totalHours, 0);
   const totalEstPay = approvedList.reduce((sum, item) => sum + item.totalHours * item.baseHourlyRate * item.multiplier, 0);
-  const pendingCount = data.filter((d) => d.status === 'Chờ phê duyệt').length;
+  const pendingCount = data.filter((d) => ['Chờ phê duyệt', 'Chờ duyệt'].includes(d.status)).length;
 
-  const handleCreate = (values: any) => {
-    const hours = Number(values.totalHours) || 2;
-    const mult = Number(values.multiplier) || 1.5;
-    const newOT: EnterpriseOvertimeRecord = {
-      ...values,
-      key: String(Date.now()),
-      empCode: values.empCode || `KY-${String(Date.now()).slice(-3)}`,
-      totalHours: hours,
-      multiplier: mult,
-      baseHourlyRate: Number(values.baseHourlyRate) || 180000,
-      approver: 'Trần Tuấn Anh (CTO)',
-      status: 'Chờ phê duyệt',
-    };
-    const nextItems = [newOT, ...data]; setData(nextItems); dataService.saveGenericData('attendance_overtime', nextItems);
-    message.success(`Đã gửi đơn đăng ký làm thêm giờ (OT) của: ${values.employeeName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      dateRangeDays(values.otDate, values.otDate);
+      const hours = attendanceNumber(values.totalHours, 'Số giờ làm thêm', 0.5, 12);
+      if (Math.abs(timeRangeDetails(values.timeRange).hours - hours) > 0.001) throw new Error('Số giờ làm thêm phải khớp với khung giờ đăng ký.');
+      const multiplier = attendanceNumber(values.multiplier, 'Hệ số OT', 1, 3);
+      if (![1.5, 2, 3].includes(multiplier)) throw new Error('Vui lòng chọn hệ số OT có trong danh sách.');
+      const newOT = {
+        ...values,
+        ...employeeAttendanceFields(employees, values.employeeName),
+        key: crypto.randomUUID(), totalHours: hours, multiplier,
+        baseHourlyRate: attendanceNumber(values.baseHourlyRate, 'Lương cơ sở theo giờ', 0),
+        status: 'Chờ phê duyệt',
+      };
+      await collectionsApi.create('attendance_overtime', newOT);
+      await dataService.refreshGenericData('attendance_overtime');
+      message.success(`Đã gửi đơn đăng ký làm thêm giờ (OT) của: ${newOT.employeeName}`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu đơn OT.'); }
+    finally { setSaving(false); }
   };
 
-  const handleAction = (record: EnterpriseOvertimeRecord, newStatus: 'Đã duyệt OT' | 'Từ chối') => {
-    const updated = data.map((d) => (d.key === record.key ? { ...d, status: newStatus } : d));
-    setData(updated);
-    dataService.saveGenericData('attendance_overtime', updated);
-    if (newStatus === 'Đã duyệt OT') {
-      message.success(`Đã phê duyệt ${record.totalHours} giờ OT cho ${record.employeeName}`);
-    } else {
-      message.warning(`Đã từ chối đơn làm thêm giờ của ${record.employeeName}`);
-    }
+  const handleAction = async (record: EnterpriseOvertimeRecord, newStatus: 'Đã duyệt OT' | 'Từ chối') => {
+    if (saving || !['Chờ phê duyệt', 'Chờ duyệt'].includes(record.status)) return;
+    setSaving(true);
+    try {
+      if (newStatus === 'Đã duyệt OT' && (!(record.baseHourlyRate > 0) || ![1.5, 2, 3].includes(record.multiplier))) { setSelectedRecord(record); setDrawerOpen(true); throw new Error('Vui lòng nhập lương cơ sở theo giờ và chọn hệ số trước khi phê duyệt OT.'); }
+      await collectionsApi.update('attendance_overtime', record.key, { status: newStatus, baseHourlyRate: record.baseHourlyRate, multiplier: record.multiplier });
+      await dataService.refreshGenericData('attendance_overtime');
+      setSelectedRecord({ ...record, status: newStatus });
+      message.success(`Đã ${newStatus.toLowerCase()} đơn làm thêm giờ của ${record.employeeName}`);
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể cập nhật đơn OT.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
     const matchStatus =
       statusFilter === 'all' ||
       item.status === statusFilter ||
+      (statusFilter === 'Chờ phê duyệt' && item.status === 'Chờ duyệt') ||
       (statusFilter === 'weekend' && item.multiplier >= 2.0);
 
     const matchSearch =
@@ -280,11 +297,11 @@ export const OvertimeModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tuân thủ trần giờ OT quy định</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng nhân sự đăng ký OT</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            100% An toàn (&lt;40h/tháng)
+            {new Set(data.map((item) => item.empCode || item.employeeName)).size} Nhân sự
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đảm bảo sức khỏe người lao động</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Thống kê từ các đơn đăng ký hiện có</div>
         </div>
       </div>
 
@@ -323,7 +340,7 @@ export const OvertimeModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng tổng hợp giờ làm OT')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Lam_them_gio.xlsx', generateValidXlsxBlob([['Mã đơn', 'Nhân viên', 'Mã NV', 'Phòng ban', 'Ngày OT', 'Khung giờ', 'Số giờ', 'Hệ số', 'Lương giờ', 'Dự toán', 'Lý do', 'Trạng thái'], ...filteredData.map((item) => [item.code, item.employeeName, item.empCode, item.department, item.otDate, item.timeRange, item.totalHours, item.multiplier, item.baseHourlyRate, item.totalHours * item.multiplier * item.baseHourlyRate, item.reason, item.status])]))}>
             Xuất Báo Cáo
           </Button>
 
@@ -333,14 +350,12 @@ export const OvertimeModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                code: `OT-2026-${String(Date.now()).slice(-3)}`,
-                department: 'Phòng Ban Kỹ Thuật',
-                otDate: new Date().toISOString().substring(0, 10),
+                code: `OT-${new Date().getFullYear()}-${Date.now()}`,
+                otDate: attendanceDate(),
                 multiplier: 1.5,
                 timeRange: '18:00 - 21:00',
                 totalHours: 3,
-                baseHourlyRate: 180000,
-                project: 'Hệ Thống Core Engine Enterprise',
+                baseHourlyRate: 0,
               });
               setModalOpen(true);
             }}
@@ -369,19 +384,19 @@ export const OvertimeModule: React.FC = () => {
             <Form.Item name="code" label="Mã phiếu OT" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban" >
               <Select
                 placeholder="Chọn phòng ban..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân viên làm OT" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Hoàng Quốc Dũng" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department, position: employee.position }); }} />
             </Form.Item>
-            <Form.Item name="position" label="Chức danh" initialValue="Senior Engineer" rules={[{ required: true }]}>
+            <Form.Item name="position" label="Chức danh">
               <Input />
             </Form.Item>
           </div>
@@ -414,13 +429,17 @@ export const OvertimeModule: React.FC = () => {
             <Input />
           </Form.Item>
 
+          <Form.Item name="baseHourlyRate" label="Lương cơ sở theo giờ (VNĐ)" rules={[{ required: true }]}>
+            <Input type="number" min={0} step={1000} />
+          </Form.Item>
+
           <Form.Item name="reason" label="Lý do làm thêm giờ chi tiết" rules={[{ required: true }]}>
             <Input.TextArea rows={2} placeholder="Mô tả công việc cần xử lý ngoài giờ..." />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Gửi đơn đăng ký OT
             </Button>
           </div>
@@ -475,6 +494,7 @@ export const OvertimeModule: React.FC = () => {
                   <span style={{ color: '#64748B' }}>Hệ số phụ cấp:</span>
                   <strong style={{ color: '#D97706' }}>x{selectedRecord.multiplier} Lương chuẩn</strong>
                 </div>
+                {selectedRecord.requestedMultiplier && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Hệ số nhân viên đề nghị:</span><span>x{selectedRecord.requestedMultiplier}</span></div>}
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Cán bộ phê duyệt:</span>
                   <span>{selectedRecord.approver}</span>
@@ -498,7 +518,13 @@ export const OvertimeModule: React.FC = () => {
               </div>
             </div>
 
-            {selectedRecord.status === 'Chờ phê duyệt' && (
+            {['Chờ phê duyệt', 'Chờ duyệt'].includes(selectedRecord.status) && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <label>Lương cơ sở theo giờ (VNĐ)<Input type="number" min={0} value={selectedRecord.baseHourlyRate} onChange={(event) => setSelectedRecord({ ...selectedRecord, baseHourlyRate: Number(event.target.value) })} /></label>
+                <label>Hệ số phê duyệt<Select value={selectedRecord.multiplier} options={[{ label: 'Ngày thường x1.5', value: 1.5 }, { label: 'Ngày nghỉ x2', value: 2 }, { label: 'Ngày lễ x3', value: 3 }]} onChange={(value) => setSelectedRecord({ ...selectedRecord, multiplier: Number(value) })} /></label>
+              </div>
+            )}
+            {['Chờ phê duyệt', 'Chờ duyệt'].includes(selectedRecord.status) && (
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button
                   style={{ flex: 1, borderColor: '#DC2626', color: '#DC2626' }}

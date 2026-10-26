@@ -1,6 +1,6 @@
 # Desktop pixel-parity contract
 
-The native and WebAssembly launchers use the same `crates/kiyo-ui` source.
+The native and WebAssembly launchers use the same `ui` source.
 There is no separate Tauri or React frontend in the active source tree.
 
 For every applicable route, capture native screenshots at 1440x900 and

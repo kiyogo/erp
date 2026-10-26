@@ -1,0 +1,32 @@
+
+> kiyodn-web@0.1.0 test
+> node --experimental-strip-types --test tests/*.test.mjs src/modules/attendance/attendanceRules.test.mts
+
+✔ leave requests reject impossible dates, backwards dates and excess/invalid day counts (5.5366ms)
+✔ overnight shifts and OT use elapsed clock time without accepting impossible clock values (2.5364ms)
+✔ zero allowances remain zero and empty/NaN/negative amounts are never replaced with fabricated defaults (0.5213ms)
+✔ leave funds support zero entitlement and reject balances that hide excessive usage (0.7236ms)
+✔ timesheet calendar and employee cells never invent attendance or credit OT as regular work (1.8748ms)
+✔ employee history validates real identities and dates and filters all record details (22.9111ms)
+✔ history CRUD persists before UI success, includes former employees, exports current filter and preserves other views (103.4803ms)
+✔ PDF preserves all lines across pages and never invents a signature (19.0906ms)
+✔ PDF wraps long unbroken lines and supports an empty report (7.0853ms)
+✔ XLSX is an OpenXML ZIP with real numbers, Unicode, escaping and no formula injection (3.3845ms)
+✔ TOTP matches RFC 6238 and rejects an empty secret (65.7073ms)
+✔ required, email, URL and length rules block invalid values (6.4972ms)
+✔ defaults, zero values, reset and unmounted fields behave correctly (1.3205ms)
+✔ optional blank values, patterns and async validators are respected (1.2029ms)
+✔ modal footer submit calls the mounted form and unregisters on close (0.7357ms)
+✔ onboarding progress requires actual canonical confirmations and never infers from legacy percentage (11.4726ms)
+✔ onboarding persists each checkbox, handles failure, requires review before completion and opens real contract page (55.7282ms)
+✔ payslip confirmation persists by record key and does not claim success after API failure (701.8661ms)
+✔ recruitment validates stages and dates and derives metrics from actual candidates (26.7143ms)
+✔ recruitment saves real candidate records, preserves logical keys, exports and reports API failure (131.3873ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2590.4489

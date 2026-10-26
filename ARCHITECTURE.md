@@ -8,8 +8,8 @@ Tài liệu này mô tả kiến trúc đích và phần đã có của **Kiyo P
 
 | Thư mục | Vai trò / Nhiệm vụ | Công nghệ sử dụng |
 | :--- | :--- | :--- |
-| **`backend/`** | Server Backend (API + Xác thực + Quản lý File + phục vụ static assets) | **Rust** (`axum`, `tokio`, `rusqlite`, `argon2`, `jsonwebtoken`, `tower-http`) |
-| **`crates/kiyo-ui/`** | UI, models, state và API client dùng chung cho mọi nền tảng | **Rust + egui/eframe** |
+| **`server/`** | Server Backend (API + Xác thực + Quản lý File + phục vụ static assets) | **Rust** (`axum`, `tokio`, `rusqlite`, `argon2`, `jsonwebtoken`, `tower-http`) |
+| **`ui/`** | UI, models, state và API client dùng chung cho mọi nền tảng | **Rust + egui/eframe** |
 | **`desktop/`** | Launcher native Windows, Linux và macOS gọi `kiyo-ui` | **Rust + eframe** |
 | **`web/`** | Launcher trình duyệt biên dịch từ `kiyo-ui` | **WebAssembly + eframe WebRunner** |
 | **`legacy/`** | Kho mã cũ chỉ đọc để tham chiếu, không tham gia build | **Legacy snapshot** |
@@ -24,7 +24,7 @@ Tài liệu này mô tả kiến trúc đích và phần đã có của **Kiyo P
 2. **Khởi tạo Quản trị viên ban đầu (Bootstrap Admin)**:
    - Server tự động khởi tạo tài khoản quản trị tối cao ban đầu (`admin@kiyo.local`) qua biến môi trường `KIYO_BOOTSTRAP_ADMIN_EMAIL` và `KIYO_BOOTSTRAP_ADMIN_PASSWORD`.
 3. **UI đa nền tảng từ một nguồn**:
-   - `crates/kiyo-ui` chứa màn hình và state duy nhất.
+   - `ui` chứa màn hình và state duy nhất.
    - `desktop/` hướng tới native Windows, Linux và macOS; hiện mới build trên Windows.
    - `web/` biên dịch WebAssembly; binary wasm đã build, bundle Trunk và chạy trên browser chưa được kiểm thử.
    - Backend chỉ cung cấp API và dữ liệu; không chứa business UI.
@@ -32,7 +32,7 @@ Tài liệu này mô tả kiến trúc đích và phần đã có của **Kiyo P
 4. **Một nguồn mã duy nhất**:
    - Không còn frontend React trong source tree vận hành.
    - `legacy/` vẫn được giữ nguyên như kho tham chiếu chỉ đọc.
-   - Màn hình mới và thay đổi giao diện chỉ được viết trong `crates/kiyo-ui`.
+   - Màn hình mới và thay đổi giao diện chỉ được viết trong `ui`.
 
 ---
 
@@ -50,13 +50,13 @@ Script dự kiến tạo `/opt/kiyo`, tệp cấu hình và dịch vụ `systemd
 ### 2. Triển khai Windows Server (dự thảo)
 Chạy script PowerShell Administrator:
 ```powershell
-powershell -ExecutionPolicy Bypass -File backend\deploy\install.ps1
+powershell -ExecutionPolicy Bypass -File server\deploy\install.ps1
 ```
 Script copy artifact và tạo `.env`, nhưng chạy binary thủ công chưa tự nạp biến trong `.env`; chưa nghiệm thu như một dịch vụ Windows.
 
 ### 3. Cấu hình Tên miền riêng & Chứng chỉ SSL (Domain & HTTPS)
 - Khách hàng trỏ bản ghi DNS (`A Record`) về IP của Server.
-- Cấu hình file Nginx Reverse Proxy theo mẫu tại `backend/deploy/nginx.conf` và cấp chứng chỉ Let's Encrypt Certbot:
+- Cấu hình file Nginx Reverse Proxy theo mẫu tại `server/deploy/nginx.conf` và cấp chứng chỉ Let's Encrypt Certbot:
 ```bash
 sudo certbot --nginx -d your-domain.com
 ```

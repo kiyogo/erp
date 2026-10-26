@@ -1,7 +1,7 @@
 # Kiyo Desktop Parity Matrix
 
 This matrix is the implementation ledger for validating the native launcher
-against the shared `crates/kiyo-ui` implementation. A row is not accepted until
+against the shared `ui` implementation. A row is not accepted until
 UI, behavior, API, permissions and fixed-viewport screenshots pass the
 acceptance rule in `PARITY_MANIFEST.md`.
 

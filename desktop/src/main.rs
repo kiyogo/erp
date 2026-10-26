@@ -21,7 +21,9 @@ fn main() -> eframe::Result<()> {
             native_text::setup_fonts(&cc.egui_ctx);
             native_text::setup_style(&cc.egui_ctx);
 
-            Ok(Box::new(KiyoApp::default()))
+            let mut app = KiyoApp::default();
+            app.restore_appearance(cc.storage);
+            Ok(Box::new(app))
         }),
     )
 }

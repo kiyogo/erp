@@ -1,4 +1,7 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceDate, employeeAttendanceFields, leaveDays } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -39,13 +42,17 @@ const INITIAL_PLANS: EnterpriseLeavePlanItem[] = [];
 
 export const LeavePlansModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseLeavePlanItem[]>(INITIAL_PLANS);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [saving, setSaving] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_leave_plans').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_leave_plans');
     setData(Array.isArray(list) ? list : []);
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
+      setEmployees(dataService.getEmployees());
       const updated = dataService.getGenericData('attendance_leave_plans');
       setData(Array.isArray(updated) ? updated : []);
       dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
@@ -65,29 +72,28 @@ export const LeavePlansModule: React.FC = () => {
   const approvedCount = data.filter((d) => d.status === 'Đã duyệt kế hoạch').length;
   const pendingCount = data.filter((d) => d.status === 'Chờ phê duyệt').length;
 
-  const handleCreate = (values: any) => {
-    const newItem: EnterpriseLeavePlanItem = {
-      ...values,
-      key: String(Date.now()),
-      empCode: values.empCode || `KY-${String(Date.now()).slice(-3)}`,
-      totalDays: Number(values.totalDays) || 3,
-      bhxhBenefit: 'Hưởng chế độ theo quy định hiện hành',
-      status: 'Chờ phê duyệt',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('attendance_leave_plans', nextItems);
-    message.success(`Đã đăng ký kế hoạch nghỉ phép dài hạn cho: ${values.employeeName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const newItem = { ...values, ...employeeAttendanceFields(employees, values.employeeName), key: crypto.randomUUID(), totalDays: leaveDays(values.totalDays, values.fromDate, values.toDate), status: 'Chờ phê duyệt' };
+      await collectionsApi.create('attendance_leave_plans', newItem);
+      await dataService.refreshGenericData('attendance_leave_plans');
+      message.success(`Đã đăng ký kế hoạch nghỉ phép dài hạn cho: ${newItem.employeeName}`);
+      setModalOpen(false); form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu kế hoạch nghỉ.'); }
+    finally { setSaving(false); }
   };
 
-  const handleApprove = (record: EnterpriseLeavePlanItem) => {
-    setData(
-      data.map((d) =>
-        d.key === record.key ? { ...d, status: 'Đã duyệt kế hoạch' as const } : d
-      )
-    );
-    message.success(`Đã phê duyệt kế hoạch nghỉ phép: ${record.planCode}`);
-    setDrawerOpen(false);
+  const handleApprove = async (record: EnterpriseLeavePlanItem, status: 'Đã duyệt kế hoạch' | 'Từ chối' = 'Đã duyệt kế hoạch') => {
+    if (saving || record.status !== 'Chờ phê duyệt') return;
+    setSaving(true);
+    try {
+      await collectionsApi.update('attendance_leave_plans', record.key, { status });
+      await dataService.refreshGenericData('attendance_leave_plans');
+      message.success(`Đã ${status.toLowerCase()}: ${record.planCode}`); setDrawerOpen(false);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể cập nhật kế hoạch nghỉ.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -204,7 +210,7 @@ export const LeavePlansModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {approvedCount} Kế hoạch
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã có nhân sự dự phòng tiếp nhận 100%</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Kế hoạch đã được phê duyệt trên hệ thống</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -216,11 +222,11 @@ export const LeavePlansModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bảo toàn vận hành hệ thống</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Kế hoạch có nội dung bàn giao</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            100% Đảm bảo
+            {data.filter((item) => item.handoverPerson && item.handoverTasks).length} / {data.length}
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Không bị gián đoạn hoạt động kinh doanh</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Có người nhận và nội dung bàn giao đã ghi nhận</div>
         </div>
       </div>
 
@@ -259,7 +265,7 @@ export const LeavePlansModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách kế hoạch')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Ke_hoach_nghi.xlsx', generateValidXlsxBlob([['Mã kế hoạch', 'Nhân viên', 'Mã NV', 'Phòng ban', 'Loại nghỉ', 'Từ ngày', 'Đến ngày', 'Số ngày', 'Bàn giao cho', 'Nội dung', 'Trạng thái'], ...filteredData.map((item) => [item.planCode, item.employeeName, item.empCode, item.department, item.leaveType, item.fromDate, item.toDate, item.totalDays, item.handoverPerson, item.handoverTasks, item.status])]))}>
             Xuất Báo Cáo
           </Button>
 
@@ -269,14 +275,11 @@ export const LeavePlansModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                planCode: `KH-NP-0${data.length + 1}`,
+                planCode: `KH-NP-${Date.now()}`,
                 leaveType: 'Nghỉ phép năm dài ngày',
-                department: 'Phòng Ban Kỹ Thuật',
-                fromDate: new Date().toISOString().substring(0, 10),
-                toDate: new Date().toISOString().substring(0, 10),
-                totalDays: 5,
-                handoverPerson: 'Đặng Đình Long',
-                approver: 'Trần Tuấn Anh (CTO)',
+                fromDate: attendanceDate(),
+                toDate: attendanceDate(),
+                totalDays: 1,
               });
               setModalOpen(true);
             }}
@@ -319,12 +322,12 @@ export const LeavePlansModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân sự" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
                 placeholder="Chọn phòng ban trực thuộc..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
           </div>
@@ -345,8 +348,8 @@ export const LeavePlansModule: React.FC = () => {
             <Form.Item name="handoverPerson" label="Nhân sự tiếp nhận bàn giao" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Đặng Đình Long" />
             </Form.Item>
-            <Form.Item name="approver" label="Cán bộ phê duyệt" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Ban Giám Đốc" />
+            <Form.Item name="approver" label="Cán bộ phê duyệt dự kiến">
+              <Select allowClear placeholder="Chọn cán bộ" options={employees.map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.name }))} />
             </Form.Item>
           </div>
 
@@ -356,7 +359,7 @@ export const LeavePlansModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Trình kế hoạch phê duyệt
             </Button>
           </div>
@@ -427,6 +430,9 @@ export const LeavePlansModule: React.FC = () => {
               </div>
             </div>
 
+            {selectedPlan.status === 'Chờ phê duyệt' && (
+              <Button icon={<CloseOutlined />} loading={saving} onClick={() => handleApprove(selectedPlan, 'Từ chối')}>Từ chối kế hoạch nghỉ</Button>
+            )}
             {selectedPlan.status === 'Chờ phê duyệt' && (
               <Button
                 type="primary"

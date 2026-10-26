@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -17,13 +17,25 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
-import { useEffect } from 'react';
-import { collectionsApi } from '../../api/endpoints';
+import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Checkbox } from '../../custom-ui';
+import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { useNavigate } from 'react-router-dom';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+
+export const onboardingSteps = [
+  { key: 'equipment', title: 'Giai đoạn 1: Trang bị thiết bị & Tài khoản', description: 'Xác nhận bàn giao thiết bị và cấp tài khoản làm việc' },
+  { key: 'orientation', title: 'Giai đoạn 2: Đào tạo văn hóa & Quy định công ty', description: 'Xác nhận đã hướng dẫn nội quy, bảo mật và cơ cấu tổ chức' },
+  { key: 'training', title: 'Giai đoạn 3: Training chuyên môn 1:1 cùng Mentor', description: 'Xác nhận hoàn tất nội dung đào tạo chuyên môn đã giao' },
+  { key: 'trialTasks', title: 'Giai đoạn 4: Thực thi Task thực tế & Đánh giá giữa kỳ', description: 'Xác nhận nghiệm thu công việc và phản hồi giữa kỳ' },
+  { key: 'probationReview', title: 'Giai đoạn 5: Báo cáo thử việc & Hồ sơ hợp đồng', description: 'Xác nhận kết quả đánh giá và bàn giao hồ sơ; chữ ký được xử lý tại Hợp đồng lao động' },
+] as const;
+
+type OnboardingStep = { key: typeof onboardingSteps[number]['key']; completed: boolean; completedAt?: string; completedBy?: string };
 
 export interface EnterpriseOnboardingTask {
   key: string;
+  employeeId?: string;
   employeeName: string;
   empCode: string;
   position: string;
@@ -37,35 +49,61 @@ export interface EnterpriseOnboardingTask {
   laptopProvided: boolean;
   emailCreated: boolean;
   contractSigned: boolean;
+  checklist?: OnboardingStep[];
+  supportNote?: string;
+  reviewNotes?: string;
+  completedAt?: string;
   status: 'Đang hội nhập' | 'Đã hoàn thành' | 'Cần hỗ trợ';
 }
 
+export function onboardingChecklist(task: Pick<EnterpriseOnboardingTask, 'checklist'>): OnboardingStep[] {
+  return onboardingSteps.map(step => ({ key: step.key, completed: false, ...task.checklist?.find(item => item.key === step.key) }));
+}
+
+export function onboardingProgress(checklist: OnboardingStep[]): number {
+  return Math.round(onboardingSteps.filter(step => checklist.some(item => item.key === step.key && item.completed === true)).length / onboardingSteps.length * 100);
+}
+
 export const OnboardingModule: React.FC = () => {
+  const navigate = useNavigate();
   const [data, setData] = useState<EnterpriseOnboardingTask[]>([]);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [deptOptions, setDeptOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [posOptions, setPosOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<EnterpriseOnboardingTask | null>(null);
   const [form] = Form.useForm();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<EnterpriseOnboardingTask | null>(null);
+  const [selectedTaskRef, setSelectedTask] = useState<EnterpriseOnboardingTask | null>(null);
+  const [reviewNotes, setReviewNotes] = useState('');
+  const currentTask = data.find(task => task.key === selectedTaskRef?.key) || selectedTaskRef;
+  const selectedTask = currentTask;
 
   const loadData = async () => {
+    setLoading(true);
     try {
-      const [res, orgUnits, positions] = await Promise.all([
-        collectionsApi.get<EnterpriseOnboardingTask>('hr_onboarding_tasks', { limit: 500 }),
+      const [list, staff, orgUnits, positions] = await Promise.all([
+        dataService.refreshGenericData('hr_onboarding_tasks'),
+        employeesApi.getAll(),
         dataService.fetchOrgUnitsList(),
         dataService.fetchDropdownOptions('positions'),
       ]);
-      const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id, progress: onboardingProgress(onboardingChecklist(item)) })));
+      setEmployees(staff.data.data.filter(employee => employee.isActive !== false && employee.status !== 'Đã nghỉ việc'));
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
       setPosOptions(positions.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));
-    } catch {
-      setData([]);
+      setLoadError('');
+    } catch (error: any) {
+      setLoadError(error?.response?.data?.message || 'Không thể tải dữ liệu hội nhập. Vui lòng thử lại.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -74,34 +112,95 @@ export const OnboardingModule: React.FC = () => {
   }, []);
 
   const ongoingCount = data.filter((d) => d.status === 'Đang hội nhập').length;
-  const completedCount = data.filter((d) => d.status === 'Đã hoàn thành').length;
+  const completedCount = data.filter((d) => d.status === 'Đã hoàn thành' && onboardingProgress(onboardingChecklist(d)) === 100).length;
 
   const handleCreate = async (values: any) => {
-    const start = values.startDate || new Date().toISOString().substring(0, 10);
-    const evalDate = new Date(new Date(start).getTime() + 60 * 86400000).toISOString().substring(0, 10);
-    const id = `onboard-${Date.now()}`;
+    if (saving) return;
+    const employee = employees.find(item => item.id === values.employeeId || item.userId === values.employeeId);
+    if (!employee || !values.position?.trim() || !values.department?.trim() || !values.mentor?.trim()) { message.error('Vui lòng chọn nhân sự đã có trong hệ thống và nhập đủ vị trí, phòng ban, người hướng dẫn.'); return; }
+    const start = values.startDate || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || Number.isNaN(Date.parse(start)) || new Date(start).toISOString().slice(0, 10) !== start) { message.error('Ngày bắt đầu không hợp lệ.'); return; }
+    if (data.some(task => task.key !== editingTask?.key && task.employeeId === employee.id && task.status !== 'Đã hoàn thành')) { message.error('Nhân sự này đã có lộ trình hội nhập đang mở.'); return; }
+    const evalDate = values.evaluationDate || new Date(Date.parse(start) + 60 * 86400000).toISOString().substring(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(evalDate) || Number.isNaN(Date.parse(evalDate)) || new Date(evalDate).toISOString().slice(0, 10) !== evalDate || evalDate < start) { message.error('Ngày đánh giá phải hợp lệ và không trước ngày bắt đầu.'); return; }
+    const id = editingTask?.key || `onboard-${crypto.randomUUID()}`;
+    const checklist = editingTask ? onboardingChecklist(editingTask) : onboardingChecklist({});
     const newHire: EnterpriseOnboardingTask = {
+      ...editingTask,
       ...values,
       key: id,
-      empCode: values.empCode || `KY-${String(Date.now()).slice(-3)}`,
+      employeeId: employee.id, employeeName: employee.name, empCode: employee.employeeCode || employee.code,
       startDate: start,
       evaluationDate: evalDate,
-      progress: 15,
-      currentStep: 'Tiếp nhận bàn giao thiết bị & Đào tạo văn hóa hội nhập',
-      laptopProvided: true,
-      emailCreated: true,
-      contractSigned: false,
-      status: 'Đang hội nhập',
+      checklist,
+      progress: onboardingProgress(checklist),
+      currentStep: onboardingSteps.find(step => !checklist.find(item => item.key === step.key)?.completed)?.title || 'Chờ nghiệm thu hội nhập',
+      laptopProvided: editingTask?.laptopProvided || false,
+      emailCreated: editingTask?.emailCreated || false,
+      contractSigned: editingTask?.contractSigned || false,
+      status: editingTask?.status === 'Đã hoàn thành' && onboardingProgress(checklist) < 100 ? 'Đang hội nhập' : editingTask?.status || 'Đang hội nhập',
     };
     try {
-      await collectionsApi.create('hr_onboarding_tasks', newHire, id);
-      message.success(`Đã tạo lộ trình Onboarding 60 ngày cho: ${values.employeeName}`);
+      setSaving(true);
+      const response = editingTask ? await collectionsApi.update('hr_onboarding_tasks', id, newHire) : await collectionsApi.create('hr_onboarding_tasks', newHire, id);
+      setData(previous => editingTask ? previous.map(task => task.key === id ? response.data.record : task) : [response.data.record, ...previous]);
+      message.success(`Đã ${editingTask ? 'cập nhật' : 'tạo'} lộ trình hội nhập cho: ${employee.name}`);
       setModalOpen(false);
       form.resetFields();
-      await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tạo lộ trình Onboarding.');
-    }
+    } finally { setSaving(false); }
+  };
+
+  const updateTask = async (patch: Partial<EnterpriseOnboardingTask>) => {
+    if (!currentTask || saving) return;
+    setSaving(true);
+    try {
+      const result = await collectionsApi.update('hr_onboarding_tasks', currentTask.key, patch);
+      setData(previous => previous.map(task => task.key === currentTask.key ? result.data.record : task));
+      message.success(patch.status === 'Đã hoàn thành' ? 'Đã nghiệm thu lộ trình hội nhập. Chữ ký hợp đồng được quản lý tại phân hệ Hợp đồng lao động.' : 'Đã lưu tiến độ hội nhập.');
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể lưu tiến độ hội nhập.'); }
+    finally { setSaving(false); }
+  };
+
+  const updateChecklist = (key: OnboardingStep['key'], completed: boolean) => {
+    if (!currentTask) return;
+    const checklist = onboardingChecklist(currentTask).map(item => item.key === key ? { ...item, completed } : item);
+    const progress = onboardingProgress(checklist);
+    void updateTask({ checklist, progress,
+      laptopProvided: key === 'equipment' ? completed : currentTask.laptopProvided,
+      emailCreated: key === 'equipment' ? completed : currentTask.emailCreated,
+      currentStep: onboardingSteps.find(step => !checklist.find(item => item.key === step.key)?.completed)?.title || 'Chờ nghiệm thu hội nhập',
+      status: currentTask.status === 'Đã hoàn thành' && progress < 100 ? 'Đang hội nhập' : currentTask.status,
+    });
+  };
+
+  const finishOnboarding = () => {
+    if (!currentTask || onboardingProgress(onboardingChecklist(currentTask)) < 100) { message.error('Cần hoàn thành cả 5 giai đoạn trước khi nghiệm thu.'); return; }
+    if (!reviewNotes.trim()) { message.error('Vui lòng nhập kết quả đánh giá trước khi nghiệm thu.'); return; }
+    void updateTask({ status: 'Đã hoàn thành', reviewNotes: reviewNotes.trim() });
+  };
+
+  const exportReport = () => {
+    downloadFile(`Bao_cao_hoi_nhap_${new Date().toISOString().slice(0, 10)}.xlsx`, generateValidXlsxBlob([
+      ['Mã nhân viên', 'Họ tên', 'Vị trí', 'Phòng ban', 'Mentor', 'Ngày bắt đầu', 'Ngày đánh giá', 'Tiến độ (%)', 'Trạng thái', ...onboardingSteps.map(step => step.title), 'Kết quả đánh giá'],
+      ...filteredData.map(task => [task.empCode, task.employeeName, task.position, task.department, task.mentor, task.startDate, task.evaluationDate, task.progress, task.status, ...onboardingChecklist(task).map(item => item.completed ? 'Đã hoàn thành' : 'Chưa hoàn thành'), task.reviewNotes || '']),
+    ]));
+    message.success('Đã tải báo cáo hội nhập theo bộ lọc hiện tại.');
+  };
+
+  const editTask = () => {
+    if (!currentTask) return;
+    setEditingTask(currentTask); form.resetFields(); form.setFieldsValue(currentTask); setModalOpen(true);
+  };
+
+  const selectEmployee = (employeeId: string) => {
+    const employee = employees.find(item => item.id === employeeId);
+    if (employee) form.setFieldsValue({ employeeName: employee.name, empCode: employee.employeeCode || employee.code, position: employee.position, department: employee.department });
+  };
+
+  const showTask = (task: EnterpriseOnboardingTask) => {
+    setSelectedTask(task); setReviewNotes(task.reviewNotes || ''); setDrawerOpen(true);
   };
 
   const filteredData = data.filter((item) => {
@@ -188,10 +287,7 @@ export const OnboardingModule: React.FC = () => {
         <Button
           size="small"
           icon={<EyeOutlined />}
-          onClick={() => {
-            setSelectedTask(record);
-            setDrawerOpen(true);
-          }}
+          onClick={() => showTask(record)}
         >
           Checklist
         </Button>
@@ -201,6 +297,7 @@ export const OnboardingModule: React.FC = () => {
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+      {loadError && <div role="alert" style={{ color: '#DC2626', marginBottom: 12 }}>{loadError} <Button size="small" onClick={() => void loadData()}>Tải lại</Button></div>}
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -208,7 +305,7 @@ export const OnboardingModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} Nhân sự
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Quy trình hội nhập chuẩn hóa 60 ngày</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo dõi 5 giai đoạn hội nhập và ngày đánh giá đã đăng ký</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -216,23 +313,23 @@ export const OnboardingModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {ongoingCount} Nhân viên mới
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Có Buddy &amp; Mentor 1:1 kèm cặp sát sao</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>{data.filter(task => task.status === 'Cần hỗ trợ').length} lộ trình cần hỗ trợ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã hoàn tất &amp; Ký HĐ chính thức</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã nghiệm thu lộ trình hội nhập</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {completedCount} Cán bộ xuất sắc
+            {completedCount} Nhân sự
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Vượt qua bài sát hạch thử việc 100%</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Chữ ký hợp đồng được theo dõi tại Hợp đồng lao động</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ vượt qua thử việc chung</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ lộ trình đã nghiệm thu</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            96.8% Đạt chuẩn
+            {data.length ? `${Math.round(completedCount / data.length * 100)}%` : 'Chưa có dữ liệu'}
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Đánh giá chất lượng tuyển dụng xuất sắc</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Tính trên các lộ trình được lưu trong hệ thống</div>
         </div>
       </div>
 
@@ -271,7 +368,7 @@ export const OnboardingModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo Onboarding')}>
+          <Button icon={<DownloadOutlined />} onClick={exportReport} disabled={loading || !!loadError}>
             Xuất Báo Cáo
           </Button>
 
@@ -279,12 +376,10 @@ export const OnboardingModule: React.FC = () => {
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              setEditingTask(null);
               form.resetFields();
               form.setFieldsValue({
-                department: 'Phòng Ban Kỹ Thuật',
                 startDate: new Date().toISOString().substring(0, 10),
-                mentor: 'Trần Tuấn Anh (CTO)',
-                mentorPhone: '0988.776.655',
               });
               setModalOpen(true);
             }}
@@ -297,12 +392,12 @@ export const OnboardingModule: React.FC = () => {
 
       {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} loading={loading} />
       </div>
 
       {/* MODAL: Thêm Onboarding Mới */}
       <Modal
-        title="Tiếp Nhận Nhân Sự Mới &amp; Khởi Tạo Lộ Trình Onboarding"
+        title={editingTask ? 'Cập nhật lộ trình hội nhập' : 'Tiếp Nhận Nhân Sự Mới & Khởi Tạo Lộ Trình Onboarding'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -310,8 +405,8 @@ export const OnboardingModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeName" label="Họ tên nhân viên mới" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Đỗ Hải Nam" />
+            <Form.Item name="employeeId" label="Nhân sự tiếp nhận" rules={[{ required: true }]}>
+              <Select showSearch options={employees.map(employee => ({ value: employee.id, label: `${employee.employeeCode || employee.code} · ${employee.name}` }))} onChange={selectEmployee} placeholder="Chọn nhân sự trong hệ thống" />
             </Form.Item>
             <Form.Item name="position" label="Vị trí / Chức danh tuyển dụng" rules={[{ required: true }]}>
               {posOptions.length > 0 ? (
@@ -324,17 +419,14 @@ export const OnboardingModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true }]}>
-              <Select
-                options={deptOptions.length > 0 ? deptOptions : [
-                  { label: 'Ban Giám Đốc', value: 'Ban Giám Đốc' },
-                ]}
-                placeholder="Chọn phòng ban..."
-              />
+              {deptOptions.length ? <Select options={deptOptions} placeholder="Chọn phòng ban..." /> : <Input placeholder="Nhập phòng ban tiếp nhận" />}
             </Form.Item>
             <Form.Item name="startDate" label="Ngày bắt đầu đi làm" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
           </div>
+
+          <Form.Item name="evaluationDate" label="Ngày đánh giá (mặc định sau ngày bắt đầu 60 ngày)"><Input type="date" /></Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="mentor" label="Người hướng dẫn (Mentor / Buddy)" rules={[{ required: true }]}>
@@ -347,8 +439,8 @@ export const OnboardingModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Khởi tạo lộ trình Onboarding
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingTask ? 'Lưu lộ trình hội nhập' : 'Khởi tạo lộ trình Onboarding'}
             </Button>
           </div>
         </Form>
@@ -380,6 +472,8 @@ export const OnboardingModule: React.FC = () => {
               </div>
             </div>
 
+            <Button size="small" disabled={saving} onClick={editTask}>Chỉnh sửa thông tin lộ trình / Liên kết nhân sự</Button>
+
             {/* Mentor Info */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
@@ -406,64 +500,28 @@ export const OnboardingModule: React.FC = () => {
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
                 Checklist 5 Giai Đoạn Onboarding Bắt Buộc:
               </div>
+              {!selectedTask.checklist && <div role="status" style={{ color: '#B45309', fontSize: 12, marginBottom: 10 }}>Hồ sơ cũ chưa lưu xác nhận từng giai đoạn. Vui lòng kiểm tra thực tế trước khi đánh dấu.</div>}
+              {!selectedTask.employeeId && <div role="status" style={{ color: '#B45309', fontSize: 12, marginBottom: 10 }}>Liên kết nhân sự trong phần chỉnh sửa thông tin để lưu tiến độ.</div>}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CheckCircleOutlined style={{ color: '#16A34A', fontSize: 16 }} />
-                  <div>
-                    <strong>Giai đoạn 1: Trang bị thiết bị &amp; Tài khoản</strong>
-                    <div style={{ fontSize: 11.5, color: '#64748B' }}>Laptop cấu hình cao, Email @kiyovn.com, VPN, Thẻ nhân viên</div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CheckCircleOutlined style={{ color: '#16A34A', fontSize: 16 }} />
-                  <div>
-                    <strong>Giai đoạn 2: Đào tạo văn hóa &amp; Quy định công ty</strong>
-                    <div style={{ fontSize: 11.5, color: '#64748B' }}>Nội quy lao động, Bảo mật ISO 27001, Cấu trúc phòng ban</div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CheckCircleOutlined style={{ color: selectedTask.progress >= 40 ? '#16A34A' : '#94A3B8', fontSize: 16 }} />
-                  <div>
-                    <strong>Giai đoạn 3: Training chuyên môn 1:1 cùng Mentor</strong>
-                    <div style={{ fontSize: 11.5, color: '#64748B' }}>Tìm hiểu source code, bộ giải pháp Cloud &amp; quy trình làm việc</div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CheckCircleOutlined style={{ color: selectedTask.progress >= 80 ? '#16A34A' : '#94A3B8', fontSize: 16 }} />
-                  <div>
-                    <strong>Giai đoạn 4: Thực thi Task thực tế &amp; Đánh giá giữa kỳ</strong>
-                    <div style={{ fontSize: 11.5, color: '#64748B' }}>Bàn giao module đầu tiên, họp 1:1 phản hồi tiến độ tháng 1</div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CheckCircleOutlined style={{ color: selectedTask.progress === 100 ? '#16A34A' : '#94A3B8', fontSize: 16 }} />
-                  <div>
-                    <strong>Giai đoạn 5: Báo cáo thử việc &amp; Ký HĐLĐ chính thức</strong>
-                    <div style={{ fontSize: 11.5, color: '#64748B' }}>Hội đồng đánh giá thử việc nghiệm thu và chuyển tiếp nhân sự chính thức</div>
-                  </div>
-                </div>
+                {onboardingSteps.map(step => {
+                  const item = onboardingChecklist(selectedTask).find(value => value.key === step.key)!;
+                  return <div key={step.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <Checkbox checked={item.completed} disabled={saving || !selectedTask.employeeId} onChange={event => updateChecklist(step.key, event.target.checked)} aria-label={step.title} />
+                    <div><strong>{step.title}</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>{step.description}</div>{item.completedAt && <div style={{ fontSize: 11, color: '#16A34A' }}>Xác nhận: {new Date(item.completedAt).toLocaleString('vi-VN')}{item.completedBy ? ` · ${item.completedBy}` : ''}</div>}</div>
+                  </div>;
+                })}
               </div>
             </div>
 
             {/* Actions */}
-            {selectedTask.status === 'Đang hội nhập' && (
-              <Button
-                type="primary"
-                icon={<CheckOutlined />}
-                style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => {
-                  setData(data.map((d) => (d.key === selectedTask.key ? { ...d, progress: 100, status: 'Đã hoàn thành' } : d)));
-                  message.success(`Đã nghiệm thu và phê duyệt ký hợp đồng chính thức cho ${selectedTask.employeeName}`);
-                  setDrawerOpen(false);
-                }}
-              >
-                Nghiệm Thu Thử Việc Xuất Sắc &amp; Ký HĐLĐ
-              </Button>
-            )}
+            <div><label htmlFor="onboarding-review-notes" style={{ display: 'block', marginBottom: 6 }}>Kết quả đánh giá / nội dung cần hỗ trợ</label><Input.TextArea id="onboarding-review-notes" rows={3} maxLength={4000} value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} disabled={saving} /></div>
+            {selectedTask.supportNote && <div style={{ color: '#B45309', fontSize: 12 }}>Nội dung đã yêu cầu hỗ trợ: {selectedTask.supportNote}</div>}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <Button disabled={saving || !selectedTask.employeeId} onClick={() => void updateTask({ reviewNotes })}>Lưu đánh giá</Button>
+              {selectedTask.status === 'Cần hỗ trợ' ? <Button disabled={saving || !selectedTask.employeeId} onClick={() => void updateTask({ status: 'Đang hội nhập' })}>Tiếp tục lộ trình</Button> : selectedTask.status !== 'Đã hoàn thành' && <Button disabled={saving || !selectedTask.employeeId} onClick={() => { if (!reviewNotes.trim()) { message.error('Vui lòng nhập nội dung cần hỗ trợ.'); return; } void updateTask({ status: 'Cần hỗ trợ', supportNote: reviewNotes.trim() }); }}>Yêu cầu hỗ trợ</Button>}
+              {selectedTask.status !== 'Đã hoàn thành' && <Button type="primary" icon={<CheckOutlined />} loading={saving} disabled={onboardingProgress(onboardingChecklist(selectedTask)) < 100 || !selectedTask.employeeId} onClick={finishOnboarding} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Nghiệm thu hội nhập</Button>}
+              <Button onClick={() => navigate('/admin/hr/contracts')}>Mở hợp đồng lao động / Ký HĐLĐ</Button>
+            </div>
           </div>
         )}
       </Drawer>

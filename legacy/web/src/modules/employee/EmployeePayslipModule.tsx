@@ -14,7 +14,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Input, Button, message, Select } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
-import { downloadFile } from '../../utils/fileExporter';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { useAuth } from '../../context/AuthContext';
 
 interface BankFormState {
   bankName: string;
@@ -25,6 +26,7 @@ interface BankFormState {
 }
 
 export const EmployeePayslipModule: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<any[]>([]);
   const [searchText, setSearchText] = useState('');
   const [selectedPayslip, setSelectedPayslip] = useState<any | null>(null);
@@ -59,11 +61,15 @@ export const EmployeePayslipModule: React.FC = () => {
     return unsub;
   }, []);
 
-  const handleSignPayslip = (payslip: any) => {
+  const handleSignPayslip = async (payslip: any) => {
     const emp = dataService.getEmployeeProfile();
-    dataService.signEmployeePayslip(payslip.month, emp?.name || 'Nguyễn Huy Tùng');
-    setSignedMonths(prev => ({ ...prev, [payslip.key]: true }));
-    message.success(`Ký số điện tử thành công phiếu lương ${payslip.month}!`);
+    try {
+      await dataService.signEmployeePayslip(payslip.key || payslip.id, user?.name || emp?.name || '');
+      setSignedMonths(prev => ({ ...prev, [payslip.key]: true }));
+      message.success(`Đã lưu xác nhận phiếu lương ${payslip.month}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error.message || 'Không thể xác nhận phiếu lương.');
+    }
   };
 
   const filteredData = data.filter((item) =>
@@ -123,13 +129,13 @@ export const EmployeePayslipModule: React.FC = () => {
       ),
     },
     {
-      title: 'Ký số cá nhân',
+      title: 'Xác nhận cá nhân',
       key: 'signStatus',
       render: (_: any, record: any) => {
-        const isSigned = signedMonths[record.key] || record.key === '2' || record.key === '3';
+        const isSigned = signedMonths[record.key] || Boolean(record.signedDate);
         return isSigned ? (
           <span style={{ color: '#009688', fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <CheckCircleOutlined /> Đã ký số xác nhận
+            <CheckCircleOutlined /> Đã xác nhận
           </span>
         ) : (
           <Button
@@ -138,7 +144,7 @@ export const EmployeePayslipModule: React.FC = () => {
             style={{ backgroundColor: '#7C3AED', borderColor: '#7C3AED', fontSize: 12 }}
             onClick={() => handleSignPayslip(record)}
           >
-            Ký số ngay
+            Xác nhận phiếu lương
           </Button>
         );
       },
@@ -175,7 +181,10 @@ export const EmployeePayslipModule: React.FC = () => {
         />
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button icon={<DownloadOutlined />} onClick={() => {
-            downloadFile('Bang_Tong_Hop_Phieu_Luong_Ca_Nhan_2026.xlsx');
+            downloadFile('Bang_Tong_Hop_Phieu_Luong_Ca_Nhan.xlsx', generateValidXlsxBlob([
+              ['Kỳ lương', 'Lương cơ bản', 'Phụ cấp', 'Thưởng KPI', 'Bảo hiểm', 'Thuế TNCN', 'Thực lĩnh', 'Trạng thái'],
+              ...data.map(item => [item.month, item.basicSalary, item.allowance, item.bonusKPI, item.insuranceDeduction, item.personalTax, item.netSalary, item.status]),
+            ]));
             message.success('Đã xuất file bảng kê phiếu lương cá nhân thành công!');
           }}>
             Tải Toàn Bộ Phiếu Lương
@@ -209,10 +218,21 @@ export const EmployeePayslipModule: React.FC = () => {
           onCancel={() => setModalOpen(false)}
           footer={[
             <Button key="download" icon={<DownloadOutlined />} onClick={() => {
-              downloadFile(`Phieu_Luong_${selectedPayslip.month.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
+              downloadFile(`Phieu_Luong_${selectedPayslip.month.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`, generateValidPdfBlob(
+                `Phiếu lương ${selectedPayslip.month}`, dataService.getEmployeeProfile()?.name || '',
+                [
+                  `Lương cơ bản: ${selectedPayslip.basicSalary} VND`,
+                  `Phụ cấp: ${selectedPayslip.allowance} VND`,
+                  `Thưởng KPI: ${selectedPayslip.bonusKPI} VND`,
+                  `Bảo hiểm: ${selectedPayslip.insuranceDeduction} VND`,
+                  `Thuế TNCN: ${selectedPayslip.personalTax} VND`,
+                  `Thực lĩnh: ${selectedPayslip.netSalary} VND`,
+                  `Trạng thái: ${selectedPayslip.status}`,
+                ],
+              ));
               message.success(`Đã tải file PDF ${selectedPayslip.month} thành công!`);
             }}>
-              Tải PDF Ký Số
+              Tải PDF Phiếu Lương
             </Button>,
             <Button key="close" type="primary" onClick={() => setModalOpen(false)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Đóng

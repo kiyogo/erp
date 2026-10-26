@@ -1,4 +1,7 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceNumber, timeRangeDetails } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -41,8 +44,11 @@ const INITIAL_SHIFTS: EnterpriseWorkShift[] = [];
 
 export const ShiftsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseWorkShift[]>(INITIAL_SHIFTS);
+  const [saving, setSaving] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_shifts').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_shifts');
     setData(Array.isArray(list) ? list : []);
     const unsub = dataService.subscribe(() => {
@@ -64,21 +70,31 @@ export const ShiftsModule: React.FC = () => {
   const activeCount = data.filter((s) => s.status === 'Đang áp dụng').length;
   const nightShiftCount = data.filter((s) => s.shiftCategory === 'Ca đêm' || s.nightAllowancePct > 0).length;
 
-  const handleCreate = (values: any) => {
-    const hours = Number(values.workingHours) || 8;
-    const newShift: EnterpriseWorkShift = {
-      ...values,
-      key: String(Date.now()),
-      workingHours: hours,
-      workUnits: hours >= 8 ? (values.nightAllowancePct > 0 ? 1.3 : 1.0) : 0.5,
-      allowGraceMinutes: Number(values.allowGraceMinutes) || 15,
-      nightAllowancePct: Number(values.nightAllowancePct) || 0,
-      status: 'Đang áp dụng',
-    };
-    const nextItems = [newShift, ...data]; setData(nextItems); dataService.saveGenericData('attendance_shifts', nextItems);
-    message.success(`Đã thêm mới ca làm việc chuẩn hóa: ${values.shiftName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const time = timeRangeDetails(values.timeRange);
+      const hours = attendanceNumber(values.workingHours, 'Số giờ làm việc', 0.5, 24);
+      const breakHours = values.breakTime && values.breakTime !== '0' ? timeRangeDetails(values.breakTime).hours : 0;
+      if (hours + breakHours > time.hours + 0.001) throw new Error('Giờ làm việc và giờ nghỉ không được vượt quá khung giờ ca.');
+      const newShift = {
+        ...values, key: editingKey || crypto.randomUUID(),
+        startTime: time.startTime, endTime: time.endTime, workingHours: hours,
+        workUnits: Number((hours / 8).toFixed(4)),
+        allowGraceMinutes: attendanceNumber(values.allowGraceMinutes ?? 0, 'Số phút đi muộn', 0, 60),
+        nightAllowancePct: attendanceNumber(values.nightAllowancePct ?? 0, 'Phụ cấp ca đêm', 0, 100),
+        status: values.status || 'Đang áp dụng',
+      };
+      if (editingKey) await collectionsApi.update('attendance_shifts', editingKey, newShift);
+      else await collectionsApi.create('attendance_shifts', newShift);
+      await dataService.refreshGenericData('attendance_shifts');
+      message.success(`Đã lưu ca làm việc: ${values.shiftName}`);
+      setModalOpen(false);
+      setDrawerOpen(false);
+      form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu ca làm việc.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -188,7 +204,7 @@ export const ShiftsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {activeCount} / {data.length} Ca hiệu lực
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Phục vụ 100% khối văn phòng &amp; trực ca IDC</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Ca làm việc được lưu trên hệ thống</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -196,15 +212,15 @@ export const ShiftsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {nightShiftCount} Ca đặc thù
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Hưởng phụ cấp làm đêm 30% lương chuẩn</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Phụ cấp theo cấu hình của từng ca</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy mô nhân sự phân ca</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số nhóm đối tượng áp dụng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            142 Nhân sự
+            {new Set(data.map((item) => item.applicableTo).filter(Boolean)).size} Nhóm
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Được liên kết tự động với máy quét FaceID</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Kết nối thiết bị cần cấu hình nhà cung cấp</div>
         </div>
       </div>
 
@@ -244,7 +260,7 @@ export const ShiftsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục ca làm việc')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Ca_lam_viec.xlsx', generateValidXlsxBlob([['Mã ca', 'Tên ca', 'Khung giờ', 'Giờ làm', 'Ngày công', 'Giờ nghỉ', 'Cho phép muộn (phút)', 'Phụ cấp đêm (%)', 'Đối tượng', 'Trạng thái'], ...filteredData.map((item) => [item.shiftCode, item.shiftName, item.timeRange, item.workingHours, item.workUnits, item.breakTime, item.allowGraceMinutes, item.nightAllowancePct, item.applicableTo, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -252,9 +268,10 @@ export const ShiftsModule: React.FC = () => {
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              setEditingKey(null);
               form.resetFields();
               form.setFieldsValue({
-                shiftCode: `CA-${String(Date.now()).slice(-2)}`,
+                shiftCode: `CA-${Date.now()}`,
                 startTime: '08:00',
                 endTime: '17:30',
                 timeRange: '08:00 - 17:30',
@@ -263,7 +280,6 @@ export const ShiftsModule: React.FC = () => {
                 allowGraceMinutes: 15,
                 nightAllowancePct: 0,
                 shiftCategory: 'Hành chính',
-                applicableTo: 'Khối Kỹ Thuật & Vận Hành',
               });
               setModalOpen(true);
             }}
@@ -332,10 +348,13 @@ export const ShiftsModule: React.FC = () => {
           <Form.Item name="applicableTo" label="Đối tượng phòng ban áp dụng" rules={[{ required: true }]}>
             <Input placeholder="Ví dụ: Toàn bộ Kỹ sư Trung tâm Dữ liệu & Trực ca" />
           </Form.Item>
+          <Form.Item name="status" label="Trạng thái" initialValue="Đang áp dụng">
+            <Select options={[{ label: 'Đang áp dụng', value: 'Đang áp dụng' }, { label: 'Tạm ngưng', value: 'Tạm ngưng' }]} />
+          </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu ca làm việc
             </Button>
           </div>
@@ -403,12 +422,14 @@ export const ShiftsModule: React.FC = () => {
               </div>
             </div>
 
+            <Button icon={<EditOutlined />} onClick={() => { setEditingKey(selectedShift.key); form.resetFields(); form.setFieldsValue(selectedShift); setModalOpen(true); }}>
+              Chỉnh sửa ca làm việc
+            </Button>
             <Button
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => {
-                message.success(`Đã cập nhật chính sách ca ${selectedShift.shiftCode} xuống toàn bộ thiết bị FaceID`);
-                setDrawerOpen(false);
+                message.info('Chưa cấu hình kết nối thiết bị FaceID. Ca làm việc đã được lưu trong hệ thống.');
               }}
             >
               Đồng Bộ Chính Sách Xuống Máy Chấm Công

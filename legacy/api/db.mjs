@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, backup } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -14,6 +14,14 @@ const DB_PATH = path.resolve(process.env.KIYOVN_DB_PATH || path.join(DATA_DIR, '
 let isPg = false;
 let pool = null;
 let sqliteDb = null;
+let sqliteQueue = Promise.resolve();
+
+function withSqliteConnection(callback) {
+  if (asyncLocalStorage.getStore()?.sqliteTransaction) return callback();
+  const pending = sqliteQueue.then(callback);
+  sqliteQueue = pending.catch(() => {});
+  return pending;
+}
 
 function tryInitPostgres() {
   if (process.env.USE_SQLITE === 'true') return null;
@@ -97,7 +105,7 @@ export function convertSql(sql) {
   }
   return result
     .replace(/COLLATE\s+NOCASE/gi, '')
-    .replace(/json_extract\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*'\$\.([^']+)'\s*\)/gi, "($1->>'$2')");
+    .replace(/json_extract\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*'\$\.([^']+)'\s*\)/gi, "($1::jsonb->>'$2')");
 }
 
 export async function query(sql, params = []) {
@@ -106,9 +114,10 @@ export async function query(sql, params = []) {
     const converted = convertSql(sql);
     return await runner.query(converted, params);
   }
-  const stmt = sqliteDb.prepare(sql);
-  const info = stmt.run(...params);
-  return { rowCount: Number(info.changes || 0), rows: [] };
+  return withSqliteConnection(() => {
+    const info = sqliteDb.prepare(sql).run(...params);
+    return { rowCount: Number(info.changes || 0), rows: [] };
+  });
 }
 
 export async function queryOne(sql, params = []) {
@@ -118,8 +127,7 @@ export async function queryOne(sql, params = []) {
     const result = await runner.query(converted, params);
     return result.rows[0] || null;
   }
-  const stmt = sqliteDb.prepare(sql);
-  return stmt.get(...params) || null;
+  return withSqliteConnection(() => sqliteDb.prepare(sql).get(...params) || null);
 }
 
 export async function queryAll(sql, params = []) {
@@ -129,8 +137,7 @@ export async function queryAll(sql, params = []) {
     const result = await runner.query(converted, params);
     return result.rows;
   }
-  const stmt = sqliteDb.prepare(sql);
-  return stmt.all(...params);
+  return withSqliteConnection(() => sqliteDb.prepare(sql).all(...params));
 }
 
 export async function exec(sql) {
@@ -138,7 +145,7 @@ export async function exec(sql) {
     const runner = getClient();
     return await runner.query(sql);
   }
-  return sqliteDb.exec(sql);
+  return withSqliteConnection(() => sqliteDb.exec(sql));
 }
 
 export function prepare(sql) {
@@ -157,6 +164,11 @@ export function prepare(sql) {
       return { changes: res.rowCount, rowCount: res.rowCount };
     },
   };
+}
+
+export async function backupTo(destination) {
+  if (isPg) throw new Error('Native database backup is currently supported for SQLite only.');
+  return withSqliteConnection(() => backup(sqliteDb, destination));
 }
 
 export async function transaction(callback) {
@@ -185,21 +197,24 @@ export async function transaction(callback) {
       client.release();
     }
   } else {
-    sqliteDb.exec('BEGIN TRANSACTION;');
-    try {
-      const result = await callback();
-      sqliteDb.exec('COMMIT;');
-      return result;
-    } catch (err) {
-      sqliteDb.exec('ROLLBACK;');
-      throw err;
-    }
+    if (asyncLocalStorage.getStore()?.sqliteTransaction) return callback();
+    return withSqliteConnection(() => asyncLocalStorage.run({ sqliteTransaction: true }, async () => {
+      sqliteDb.exec('BEGIN TRANSACTION;');
+      try {
+        const result = await callback();
+        sqliteDb.exec('COMMIT;');
+        return result;
+      } catch (err) {
+        sqliteDb.exec('ROLLBACK;');
+        throw err;
+      }
+    }));
   }
 }
 
 export async function close() {
   if (pool) await pool.end().catch(() => {});
-  if (sqliteDb) sqliteDb.close();
+  if (sqliteDb) await withSqliteConnection(() => sqliteDb.close());
 }
 
 export async function initDatabaseSchema() {
@@ -632,6 +647,7 @@ const db = {
   exec,
   prepare,
   transaction,
+  backupTo,
   close,
   initDatabaseSchema,
 };

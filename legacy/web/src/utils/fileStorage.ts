@@ -37,11 +37,13 @@ export async function storeFileBlob(key: string, blob: Blob): Promise<void> {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       const req = store.put(blob, key);
-      req.onsuccess = () => resolve();
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error || new Error('Giao dịch lưu tệp bị hủy.'));
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
     console.error('Error storing file in IndexedDB:', err);
+    throw err;
   }
 }
 

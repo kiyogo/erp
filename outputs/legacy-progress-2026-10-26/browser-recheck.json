@@ -1,0 +1,208 @@
+[
+  {
+    "route": "/admin/finance/general/advance",
+    "finalUrl": "http://localhost:3011/admin/finance/general/advance",
+    "errors": [],
+    "apiRequests": [
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/employees"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/contracts"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/employee-proposals"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/finance/cash-transactions"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/finance/bank-accounts"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/finance/debts"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/notifications"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employees"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/contracts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employee-proposals"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/cash-transactions"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/bank-accounts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/debts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/notifications"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/collections/employee_my_profile"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/collections/employee_my_profile"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/auth/profile"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/auth/profile"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employees"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/contracts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employee-proposals"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/cash-transactions"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/bank-accounts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/debts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/notifications"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/collections/finance_general_ledger"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/collections/finance_general_ledger"
+      }
+    ],
+    "textLength": 997,
+    "blank": false
+  },
+  {
+    "route": "/admin/users",
+    "finalUrl": "http://localhost:3011/admin/users",
+    "errors": [],
+    "apiRequests": [
+      {
+        "method": "GET",
+        "path": "/api/v1/employees"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/contracts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employee-proposals"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/cash-transactions"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/bank-accounts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/debts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/notifications"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/collections/employee_my_profile"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/auth/profile"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employees"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/contracts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/employee-proposals"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/cash-transactions"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/bank-accounts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/finance/debts"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/notifications"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/users"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/collections/business_org_units"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/users"
+      },
+      {
+        "method": "OPTIONS",
+        "path": "/api/v1/collections/business_org_units"
+      }
+    ],
+    "textLength": 1684,
+    "blank": false
+  }
+]

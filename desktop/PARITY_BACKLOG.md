@@ -1,13 +1,13 @@
 # Desktop Parity Backlog
 
-`crates/kiyo-ui` is the visual and behavior source of truth. The native launcher
+`ui` is the visual and behavior source of truth. The native launcher
 and WebAssembly launcher consume the same implementation. No task is complete
 until native/browser behavior and fixed-viewport visual output are accepted.
 
 ## Baseline scope
 
-* Shared UI: `crates/kiyo-ui`.
-* Backend: `backend`.
+* Shared UI: `ui`.
+* Backend: `server`.
 * Current inventory: 197 files below `src/pages` and `src/modules`, 20 module groups, and at least 94 legacy API route branches.
 * Required reference sizes: 1440x900, 1280x800, and 390x844.
 * Required state coverage: unauthenticated, loading, empty, populated, validation error, request error, modal/popup open, hover/focus, dark/light appearance, ADMIN, and Employee where the route applies.

@@ -1,4 +1,7 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceDate, attendanceNumber, employeeAttendanceFields, monthDayCount } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -23,6 +26,7 @@ import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip
 
 export interface EnterpriseTimesheetSummaryItem {
   key: string;
+  month?: string;
   employeeCode: string;
   employeeName: string;
   position: string;
@@ -42,13 +46,17 @@ const INITIAL_SUMMARY: EnterpriseTimesheetSummaryItem[] = [];
 
 export const TimesheetSummaryModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseTimesheetSummaryItem[]>(INITIAL_SUMMARY);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [saving, setSaving] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_timesheet_summary').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_timesheet_summary');
     setData(Array.isArray(list) ? list : []);
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
+      setEmployees(dataService.getEmployees());
       const updated = dataService.getGenericData('attendance_timesheet_summary');
       setData(Array.isArray(updated) ? updated : []);
       dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
@@ -68,26 +76,37 @@ export const TimesheetSummaryModule: React.FC = () => {
   const totalActual = data.reduce((sum, item) => sum + item.actualDays, 0);
   const totalOT = data.reduce((sum, item) => sum + item.otHoursWeekday + item.otHoursWeekend, 0);
 
-  const handleCreate = (values: any) => {
-    const act = Number(values.actualDays) || 22;
-    const leave = Number(values.paidLeaveDays) || 0;
-    const newItem: EnterpriseTimesheetSummaryItem = {
-      ...values,
-      key: String(Date.now()),
-      standardDays: 22,
-      actualDays: act,
-      paidLeaveDays: leave,
-      unpaidLeaveDays: Number(values.unpaidLeaveDays) || 0,
-      otHoursWeekday: Number(values.otHoursWeekday) || 0,
-      otHoursWeekend: Number(values.otHoursWeekend) || 0,
-      totalPayDays: act + leave,
-      attendanceRate: Math.min(100, Math.round(((act + leave) / 22) * 100)),
-      status: 'Đã khóa công',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('attendance_timesheet_summary', nextItems);
-    message.success(`Đã thêm và tính toán dữ liệu công cho: ${values.employeeName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const monthDays = monthDayCount(values.month);
+      const employee = employeeAttendanceFields(employees, values.employeeName);
+      const standardDays = attendanceNumber(values.standardDays, 'Ngày công chuẩn', 0.5, 31);
+      const actualDays = attendanceNumber(values.actualDays, 'Công thực tế', 0, 31);
+      const paidLeaveDays = attendanceNumber(values.paidLeaveDays ?? 0, 'Phép hưởng lương', 0, 31);
+      const unpaidLeaveDays = attendanceNumber(values.unpaidLeaveDays ?? 0, 'Nghỉ không lương', 0, 31);
+      if (actualDays + paidLeaveDays + unpaidLeaveDays > monthDays) throw new Error(`Tổng ngày công và nghỉ không được vượt quá ${monthDays} ngày của tháng.`);
+      const existing = data.find((item) => item.employeeCode === employee.employeeCode && item.month === values.month);
+      if (existing?.status === 'Đã khóa công') throw new Error('Bảng công đã khóa. Không thể điều chỉnh.');
+      const record = { ...values, ...employee, key: existing?.key || crypto.randomUUID(), standardDays, actualDays, paidLeaveDays, unpaidLeaveDays, otHoursWeekday: attendanceNumber(values.otHoursWeekday ?? 0, 'Giờ OT thường', 0, 744), otHoursWeekend: attendanceNumber(values.otHoursWeekend ?? 0, 'Giờ OT cuối tuần', 0, 744), totalPayDays: actualDays + paidLeaveDays, attendanceRate: Math.round((actualDays + paidLeaveDays) / standardDays * 100), status: 'Chờ đối soát' };
+      if (existing) await collectionsApi.update('attendance_timesheet_summary', existing.key, record);
+      else await collectionsApi.create('attendance_timesheet_summary', record);
+      await dataService.refreshGenericData('attendance_timesheet_summary');
+      message.success(`Đã lưu dữ liệu công: ${employee.employeeName}`); setModalOpen(false); form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu bảng công.'); }
+    finally { setSaving(false); }
+  };
+
+  const handleLock = async (record: EnterpriseTimesheetSummaryItem) => {
+    if (saving || record.status === 'Đã khóa công') return;
+    setSaving(true);
+    try {
+      await collectionsApi.update('attendance_timesheet_summary', record.key, { status: 'Đã khóa công' });
+      await dataService.refreshGenericData('attendance_timesheet_summary');
+      message.success('Đã khóa số liệu công để đối chiếu khi tính lương.'); setDrawerOpen(false);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể khóa bảng công.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -221,7 +240,7 @@ export const TimesheetSummaryModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ chuyên cần bình quân</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            99.2% Đạt chuẩn
+            {data.length ? Math.round(data.reduce((sum, item) => sum + item.attendanceRate, 0) / data.length) : 0}%
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Không có hiện tượng vắng mặt không lý do</div>
         </div>
@@ -229,9 +248,9 @@ export const TimesheetSummaryModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chuyển tiếp sang Tính Lương</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            100% Sẵn sàng
+            {data.filter((item) => item.status === 'Đã khóa công').length} / {data.length} Đã khóa
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Đã sẵn sàng tạo kỳ chi trả lương T08/2026</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Các bảng công đã khóa để đối chiếu khi tính lương</div>
         </div>
       </div>
 
@@ -268,7 +287,7 @@ export const TimesheetSummaryModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng tổng hợp ngày công ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_hop_cong.xlsx', generateValidXlsxBlob([['Tháng', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Công chuẩn', 'Công thực tế', 'Phép hưởng lương', 'Không lương', 'OT thường', 'OT cuối tuần', 'Ngày tính lương', 'Trạng thái'], ...filteredData.map((item) => [item.month || '', item.employeeCode, item.employeeName, item.department, item.standardDays, item.actualDays, item.paidLeaveDays, item.unpaidLeaveDays, item.otHoursWeekday, item.otHoursWeekend, item.totalPayDays, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -278,9 +297,9 @@ export const TimesheetSummaryModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                employeeCode: `KY-0${data.length + 10}`,
-                department: 'Phòng Ban Kỹ Thuật',
-                actualDays: 22,
+                month: attendanceDate().slice(0, 7),
+                standardDays: 22,
+                actualDays: 0,
                 paidLeaveDays: 0,
                 unpaidLeaveDays: 0,
                 otHoursWeekday: 0,
@@ -313,23 +332,25 @@ export const TimesheetSummaryModule: React.FC = () => {
             <Form.Item name="employeeCode" label="Mã nhân viên" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
                 placeholder="Chọn phòng ban trực thuộc..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân viên" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Hoàng Văn Thắng" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ employeeCode: employee.code, department: employee.department, position: employee.position }); }} />
             </Form.Item>
-            <Form.Item name="position" label="Vị trí / Chức vụ" rules={[{ required: true }]}>
+            <Form.Item name="position" label="Vị trí / Chức vụ">
               <Input placeholder="Ví dụ: Senior Security Engineer" />
             </Form.Item>
           </div>
 
+          <Form.Item name="month" label="Tháng chấm công" rules={[{ required: true }]}><Input type="month" /></Form.Item>
+          <Form.Item name="standardDays" label="Ngày công chuẩn" rules={[{ required: true }]}><Input type="number" min={0.5} max={31} step={0.5} /></Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="actualDays" label="Công thực tế (ngày)" rules={[{ required: true }]}>
               <Input type="number" min={0} max={31} />
@@ -353,7 +374,7 @@ export const TimesheetSummaryModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu &amp; Cập nhật ngày công
             </Button>
           </div>
@@ -433,12 +454,11 @@ export const TimesheetSummaryModule: React.FC = () => {
             <Button
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-              onClick={() => {
-                message.success(`Đã khóa công và đồng bộ số liệu sang phân hệ Lương cho ${selectedSummary.employeeName}`);
-                setDrawerOpen(false);
-              }}
+              onClick={() => handleLock(selectedSummary)}
+              disabled={selectedSummary.status === 'Đã khóa công'}
+              loading={saving}
             >
-              Khóa Số Liệu &amp; Đẩy Sang Bảng Lương
+              Khóa Số Liệu &amp; Chuẩn Bị Bảng Lương
             </Button>
           </div>
         )}

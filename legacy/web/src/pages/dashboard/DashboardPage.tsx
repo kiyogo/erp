@@ -100,7 +100,7 @@ export const DashboardPage: React.FC = () => {
     {
       title: 'Tài khoản đang hoạt động',
       value: `${serverStats?.activeUsers ?? 0} tài khoản`,
-      change: 'Trực tuyến trên hệ thống',
+      change: 'Được phép đăng nhập hệ thống',
       icon: <CheckCircleOutlined style={{ fontSize: 20, color: '#6366F1' }} />,
       bg: '#EEF2FF',
       link: '/admin/hr/employees',

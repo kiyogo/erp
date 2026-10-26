@@ -10,7 +10,9 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| {
             native_text::setup_fonts(&cc.egui_ctx);
             native_text::setup_style(&cc.egui_ctx);
-            Ok(Box::new(KiyoApp::default()))
+            let mut app = KiyoApp::default();
+            app.restore_appearance(cc.storage);
+            Ok(Box::new(app))
         }),
     )
 }
@@ -23,6 +25,7 @@ fn main() {
     let window = web_sys::window().expect("browser window is unavailable");
     let path = window.location().pathname().unwrap_or_default();
     let activation_route = path.trim_end_matches('/') == "/activate-account";
+    let public_file_share_route = path.trim_end_matches('/') == "/files/share";
     let activation_token = if activation_route {
         let query = window.location().search().unwrap_or_default();
         web_sys::UrlSearchParams::new_with_str(&query)
@@ -31,7 +34,15 @@ fn main() {
     } else {
         None
     };
-    let app = if activation_route {
+    let public_file_share_token = if public_file_share_route {
+        let query = window.location().search().unwrap_or_default();
+        web_sys::UrlSearchParams::new_with_str(&query)
+            .ok()
+            .and_then(|parameters| parameters.get("token"))
+    } else {
+        None
+    };
+    let mut app = if activation_route {
         // Activation links contain a bearer secret. Remove both the query and
         // the one-shot activation path before mounting the canvas; a refresh
         // must not reopen an already-consumed activation flow.
@@ -39,6 +50,8 @@ fn main() {
             let _ = history.replace_state_with_url(&JsValue::NULL, "", Some("/"));
         }
         KiyoApp::with_activation_link(activation_token)
+    } else if public_file_share_route {
+        KiyoApp::with_public_file_share(public_file_share_token)
     } else {
         KiyoApp::default()
     };
@@ -59,6 +72,7 @@ fn main() {
                 Box::new(move |cc| {
                     native_text::setup_fonts(&cc.egui_ctx);
                     native_text::setup_style(&cc.egui_ctx);
+                    app.restore_appearance(cc.storage);
                     Ok(Box::new(app))
                 }),
             )

@@ -17,9 +17,15 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob } from '../../utils/fileExporter';
+import { leaveDays } from '../attendance/attendanceRules';
 
 export const EmployeeLeavesModule: React.FC = () => {
+  const { user } = useAuth();
+  const [saving, setSaving] = useState(false);
   const [data, setData] = useState<any[]>([]);
+  const [quota, setQuota] = useState<any | null>(null);
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'annual' | 'sick' | 'pending'>('all');
 
@@ -29,50 +35,36 @@ export const EmployeeLeavesModule: React.FC = () => {
   const [form] = Form.useForm();
 
   const loadData = () => {
-    setData(dataService.getEmployeeLeaves());
+    setData(dataService.getEmployeeLeaves().filter((item) => item.employeeId === user?.id || (!!user?.employeeCode && (item.empCode === user.employeeCode || item.employeeCode === user.employeeCode))));
+    const quota = dataService.getGenericData('attendance_leave_summary').find((item) => (item.employeeId === user?.id || (!!user?.employeeCode && item.employeeCode === user.employeeCode)) && (item.year || new Date().getFullYear()) === new Date().getFullYear());
+    setQuota(quota || null);
   };
 
   useEffect(() => {
+    void Promise.all([dataService.refreshGenericData('leave_requests'), dataService.refreshGenericData('attendance_leave_summary')]).catch(() => message.error('Không thể tải dữ liệu nghỉ phép từ máy chủ.'));
     loadData();
     const unsub = dataService.subscribe(() => {
       loadData();
     });
     return unsub;
-  }, []);
+  }, [user?.id]);
 
-  const handleCreate = (values: any) => {
-    let empName = 'Nhân sự';
-    let empCode = 'KY-001';
-    let empDept = 'Phòng Kỹ Thuật';
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
     try {
-      const rawUser = localStorage.getItem('minepanel_user');
-      if (rawUser) {
-        const parsed = JSON.parse(rawUser);
-        empName = parsed.fullName || parsed.name || empName;
-        empCode = parsed.code || parsed.employeeCode || empCode;
-        empDept = parsed.department || empDept;
-      }
-    } catch {}
-
-    dataService.addEmployeeLeave({
-      ...values,
-      employeeName: empName,
-      empCode,
-      department: empDept,
-      days: Number(values.days) || 1,
-      approver: 'Ban Lãnh Đạo',
-    });
-    message.success('Đã gửi đơn xin nghỉ phép thành công! Vui lòng chờ phê duyệt.');
-    setModalOpen(false);
-    form.resetFields();
-    loadData();
+      await dataService.addEmployeeLeave({ ...values, employeeId: user?.id, days: leaveDays(values.days, values.fromDate, values.toDate) });
+      message.success('Đã gửi đơn xin nghỉ phép thành công! Vui lòng chờ phê duyệt.');
+      setModalOpen(false); form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể gửi đơn xin nghỉ phép.'); }
+    finally { setSaving(false); }
   };
 
   const usedDays = data
     .filter((d) => d.status === 'Đã duyệt' || d.status === 'Đã phê duyệt')
     .reduce((acc, d) => acc + (Number(d.days) || Number(d.daysCount) || 0), 0);
-  const totalQuota = 12;
-  const remainingDays = Math.max(0, totalQuota - usedDays);
+  const totalQuota = quota ? Number(quota.totalEntitled) : null;
+  const remainingDays = quota ? Number(quota.remainingLeaves) : null;
   const pendingCount = data.filter((d) => d.status === 'Đang xử lý' || d.status === 'Chờ duyệt' || d.status === 'Chờ phê duyệt').length;
 
   const filteredData = data.filter((d) => {
@@ -184,9 +176,9 @@ export const EmployeeLeavesModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng quỹ phép năm 2026</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng quỹ phép năm {new Date().getFullYear()}</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {totalQuota} Ngày
+            {totalQuota == null ? 'Chưa cấu hình' : `${totalQuota} Ngày`}
           </div>
           <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phép hưởng nguyên lương tiêu chuẩn</div>
         </div>
@@ -202,9 +194,9 @@ export const EmployeeLeavesModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số ngày phép còn lại</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {remainingDays} Ngày
+            {remainingDays == null ? 'Chưa cấu hình' : `${remainingDays} Ngày`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Khả dụng xin nghỉ trước 31/12/2026</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Theo sổ quỹ phép đã được nhân sự cập nhật</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -251,13 +243,13 @@ export const EmployeeLeavesModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<ReloadOutlined />} onClick={loadData}>
+          <Button icon={<ReloadOutlined />} onClick={() => Promise.all([dataService.refreshGenericData('leave_requests'), dataService.refreshGenericData('attendance_leave_summary')]).catch(() => message.error('Không thể tải lại dữ liệu nghỉ phép.'))}>
             Làm mới
           </Button>
 
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => message.success('Đã in lịch sử nghỉ phép cá nhân (A4)')}
+            onClick={() => downloadFile('Lich_su_nghi_phep.pdf', generateValidPdfBlob('Lịch sử nghỉ phép', user?.name || '', filteredData.map((item) => `${item.code}: ${item.fromDate || item.startDate} - ${item.toDate || item.endDate}, ${item.days ?? item.daysCount} ngày, ${item.status}; ${item.reason}`)))}
           >
             In Lịch Sử (A4)
           </Button>
@@ -322,7 +314,7 @@ export const EmployeeLeavesModule: React.FC = () => {
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Gửi đơn phê duyệt
             </Button>
           </div>
@@ -375,7 +367,7 @@ export const EmployeeLeavesModule: React.FC = () => {
                 type="primary"
                 icon={<PrinterOutlined />}
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đang in đơn xin nghỉ phép ${selectedLeave.code} ra bản giấy A4...`)}
+                onClick={() => downloadFile(`Don_nghi_${selectedLeave.code}.pdf`, generateValidPdfBlob('Đơn xin nghỉ phép', `${user?.name || ''} - ${selectedLeave.code}`, [`Loại nghỉ: ${selectedLeave.type || selectedLeave.leaveType}`, `Từ ngày: ${selectedLeave.fromDate || selectedLeave.startDate}`, `Đến ngày: ${selectedLeave.toDate || selectedLeave.endDate}`, `Số ngày: ${selectedLeave.days ?? selectedLeave.daysCount}`, `Lý do: ${selectedLeave.reason}`, `Trạng thái: ${selectedLeave.status}`]))}
               >
                 In Đơn Nghỉ Phép (A4)
               </Button>

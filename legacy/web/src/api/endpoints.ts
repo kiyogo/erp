@@ -3,6 +3,8 @@ import api from './axios';
 export const authApi = {
   login:          (email: string, password: string) => api.post('/auth/login', { email, password }),
   loginGoogle:    (data?: any)                      => api.post('/auth/google', data || {}),
+  getGoogleConfig: () => api.get<{ configured: boolean; clientId: string; allowedDomain: string }>('/auth/google/config'),
+  logout: (token: string) => api.post<{ loggedOut: boolean }>('/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } }),
   getProfile:     ()                                 => api.get('/auth/profile'),
   changePassword: (data: { oldPassword?: string; currentPassword?: string; newPassword: string; confirmPassword?: string }) =>
     api.post<{ success: boolean; message: string }>('/auth/change-password', data),
@@ -48,7 +50,7 @@ export interface DashboardStatsData {
 }
 
 export const usersApi = {
-  getAll:  ()                      => api.get('/users'),
+  getAll:  (params?: { page?: number; limit?: number }) => api.get('/users', { params }),
   getOne:  (id: string)            => api.get(`/users/${id}`),
   create:  (data: any)             => api.post('/users', data),
   update:  (id: string, data: any) => api.patch(`/users/${id}`, data),
@@ -118,12 +120,24 @@ export type ActivationEmailTemplate = {
 };
 
 export const systemApi = {
+  getCompanyProfile: () => api.get<{ profile: CompanyProfile }>('/system/company-profile'),
+  saveCompanyProfile: (profile: CompanyProfile) => api.put<{ profile: CompanyProfile }>('/system/company-profile', profile),
+  getGoogleConfig: () => api.get<{ clientKey: string; clientSecret: string; redirectUri: string; allowedDomain: string; enforceGoogleLogin: string; configured: boolean }>('/auth/google/config'),
+  saveGoogleConfig: (data: { clientKey: string; redirectUri: string; allowedDomain: string; enforceGoogleLogin: string }) => api.put<{ config: { clientKey: string; clientSecret: string; redirectUri: string; allowedDomain: string; enforceGoogleLogin: string; configured: boolean } }>('/system/google-config', data),
   getEmailConfig: () => api.get<{ config: EmailGatewayConfig }>('/system/email-config'),
   saveEmailConfig: (data: Partial<EmailGatewayConfig> & { password?: string }) => api.put<{ config: EmailGatewayConfig }>('/system/email-config', data),
   testEmailConfig: (recipient?: string) => api.post<{ sent: true }>('/system/email-config/test', { recipient }),
   sendEmail: (data: { to: string | string[]; subject: string; content?: string; text?: string; html?: string; category?: string }) => api.post<{ sent: true; count: number; total: number }>('/system/send-email', data),
   getActivationTemplate: () => api.get<{ template: ActivationEmailTemplate; emailConfigured: boolean }>('/system/notification-templates/account-activation'),
   saveActivationTemplate: (template: ActivationEmailTemplate) => api.put<{ template: ActivationEmailTemplate }>('/system/notification-templates/account-activation', template),
+};
+
+export type CompanyProfile = {
+  companyName: string; fullName: string; shortName: string; companyCode: string; taxCode: string; businessType: string;
+  establishedDate: string; registrationDate: string; registrationNo: string; registrationIssuer: string;
+  representative: string; representativeTitle: string; address: string; phone: string; fax: string; email: string; website: string;
+  domain: string; timezone: 'Asia/Ho_Chi_Minh' | 'UTC'; currency: 'VND' | 'USD'; bankAccountId: string;
+  updatedAt?: string; updatedBy?: string; revision?: number;
 };
 
 export const activationApi = {
@@ -254,6 +268,7 @@ export type TaskReport = {
 };
 
 export type EnterpriseTask = {
+  id?: string;
   key: string;
   taskCode: string;
   taskTitle: string;
@@ -366,7 +381,7 @@ export type FinanceCashTransaction = {
   updatedAt: string;
 };
 
-export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'createdAt' | 'updatedAt'>;
+export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };
 
 export const financeCashApi = {
   getAll: (source?: FinanceCashTransaction['source']) => api.get<{ data: FinanceCashTransaction[] }>('/finance/cash-transactions', { params: source ? { source } : undefined }),
@@ -420,16 +435,68 @@ export type FinanceBankAccount = {
   accountHolder: string;
   branch: string;
   balance: number;
+  currentBalance?: number;
   status: string;
   createdAt: string;
   updatedAt: string;
 };
 
-export type CreateFinanceBankAccount = Omit<FinanceBankAccount, 'key' | 'createdAt' | 'updatedAt'>;
+export type CreateFinanceBankAccount = Omit<FinanceBankAccount, 'key' | 'createdAt' | 'updatedAt' | 'currentBalance'>;
 
 export const financeBankAccountsApi = {
   getAll: () => api.get<{ data: FinanceBankAccount[] }>('/finance/bank-accounts'),
   create: (data: CreateFinanceBankAccount) => api.post<{ account: FinanceBankAccount }>('/finance/bank-accounts', data),
+};
+
+export type FinanceTransferAccount = {
+  key: string;
+  name: string;
+  source: 'bank' | 'petty';
+  balance: number;
+  status: string;
+};
+
+export type FinanceInternalTransfer = {
+  key: string;
+  transferCode: string;
+  sourceAccount: string;
+  destinationAccount: string;
+  sourceAccountId?: string;
+  destinationAccountId?: string;
+  sourceType?: 'bank' | 'petty';
+  destinationType?: 'bank' | 'petty';
+  amount: number;
+  fee: number;
+  transferDate: string;
+  time: string;
+  executor: string;
+  approver: string;
+  purpose: string;
+  transferMethod: string;
+  status: 'Thành công' | 'Đang chuyển' | 'Đã hủy';
+  ledgerRecorded?: boolean;
+  executionStatus?: 'ledger_only';
+  transactionIds?: string[];
+  canceledBy?: string;
+  canceledAt?: string;
+  cancelReason?: string;
+};
+
+export type CreateFinanceInternalTransfer = {
+  requestId: string;
+  sourceAccountId: string;
+  destinationAccountId: string;
+  amount: number;
+  fee?: number;
+  transferDate: string;
+  purpose: string;
+  transferMethod?: string;
+};
+
+export const financeTransfersApi = {
+  getAll: () => api.get<{ data: FinanceInternalTransfer[]; accounts: FinanceTransferAccount[] }>('/finance/internal-transfers'),
+  create: (data: CreateFinanceInternalTransfer) => api.post<{ transfer: FinanceInternalTransfer; replayed: boolean }>('/finance/internal-transfers', data),
+  cancel: (key: string, reason: string) => api.post<{ transfer: FinanceInternalTransfer }>(`/finance/internal-transfers/${encodeURIComponent(key)}/cancel`, { reason }),
 };
 
 export type CrmContactType = 'customer' | 'supplier' | 'partner';
@@ -575,6 +642,41 @@ export const auditLogsApi = {
     api.get<{ data: AuditLogEntry[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>('/admin/audit-logs', { params: { page, limit } }),
   record: (data: { action: string; module?: string; detail?: string; details?: Record<string, unknown> }) =>
     api.post<{ recorded: boolean }>('/audit-events', data),
+};
+
+export type AdminSessionRecord = {
+  key: string;
+  userId: string;
+  user: string;
+  empCode: string;
+  role: string;
+  ip: string;
+  ipType: string;
+  device: string;
+  browser: string;
+  userAgent: string;
+  location: string;
+  loginTime: string;
+  lastActive: string;
+  expiresAt: string;
+  mfaVerified: boolean;
+  method: string;
+  tlsProtocol: string;
+  cipher: string;
+  status: 'Đang hoạt động' | 'Treo / Chờ thao tác' | 'Đã thu hồi' | 'Đã hết hạn';
+  revokedAt: string;
+  revokedBy: string;
+  revokeReason: string;
+  current: boolean;
+};
+
+export const adminSessionsApi = {
+  getAll: () => api.get<{ data: AdminSessionRecord[] }>('/admin/sessions'),
+  revoke: (key: string, reason?: string) => api.post<{ session: AdminSessionRecord }>(`/admin/sessions/${encodeURIComponent(key)}/revoke`, { reason }),
+};
+
+export const attendanceApi = {
+  checkIn: (type: 'in' | 'out') => api.post<{ record: Record<string, unknown> }>('/attendance/check-in', { type }),
 };
 
 export const collectionsApi = {

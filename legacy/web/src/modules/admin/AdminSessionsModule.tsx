@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   DesktopOutlined,
   StopOutlined,
@@ -17,37 +17,27 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Button, message, Modal, Input, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
-import { dataService } from '../../services/dataService';
+import { adminSessionsApi, type AdminSessionRecord } from '../../api/endpoints';
 
-export interface EnterpriseSessionRecord {
-  key: string;
-  user: string;
-  empCode: string;
-  role: string;
-  ip: string;
-  ipType: 'Nội bộ văn phòng Keangnam' | 'VPN Doanh nghiệp' | 'Mạng ngoài / 4G';
-  device: string;
-  browser: string;
-  location: string;
-  loginTime: string;
-  lastActive: string;
-  mfaVerified: boolean;
-  status: 'Đang hoạt động' | 'Treo / Chờ thao tác';
-}
-
-import { useEffect } from 'react';
+export type EnterpriseSessionRecord = AdminSessionRecord;
 
 export const AdminSessionsModule: React.FC = () => {
-  const [sessions, setSessions] = useState<EnterpriseSessionRecord[]>(INITIAL_SESSIONS);
+  const [sessions, setSessions] = useState<EnterpriseSessionRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadSessions = async () => {
+    setLoading(true);
+    try {
+      setSessions((await adminSessionsApi.getAll()).data.data);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách phiên truy cập.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const list = dataService.getGenericData('admin_sessions');
-    setSessions(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('admin_sessions');
-      setSessions(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
+    void loadSessions();
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -57,22 +47,25 @@ export const AdminSessionsModule: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<EnterpriseSessionRecord | null>(null);
 
   const activeCount = sessions.filter((s) => s.status === 'Đang hoạt động').length;
-  const vpnCount = sessions.filter((s) => s.ipType.includes('VPN') || s.ipType.includes('Mạng ngoài')).length;
+  const vpnCount = sessions.filter((s) => s.ipType.includes('Mạng ngoài') && !['Đã thu hồi', 'Đã hết hạn'].includes(s.status)).length;
+  const mfaCount = sessions.filter(s => s.mfaVerified).length;
 
   const handleRevoke = (key: string, user: string) => {
     Modal.confirm({
       title: 'Cưỡng chế ngắt phiên truy cập bảo mật?',
-      content: `Hệ thống sẽ ngay lập tức vô hiệu hóa Token xác thực và thu hồi quyền của ${user}. Người dùng sẽ bị đăng xuất khỏi toàn bộ hệ thống ngay tức thì.`,
+      content: `Thu hồi phiên đã chọn của ${user}. Các yêu cầu API tiếp theo của phiên này sẽ bị từ chối và yêu cầu đăng nhập lại.`,
       okText: 'Ngắt phiên ngay',
       cancelText: 'Hủy bỏ',
       okButtonProps: { danger: true },
-      onOk: () => {
-        const updated = sessions.filter((s) => s.key !== key);
-        setSessions(updated);
-        dataService.saveGenericData('admin_sessions', updated);
-        message.success(`Đã ngắt kết nối phiên làm việc của ${user} thành công!`);
-        if (selectedSession && selectedSession.key === key) {
-          setDrawerOpen(false);
+      onOk: async () => {
+        try {
+          const response = await adminSessionsApi.revoke(key, 'Quản trị viên ngắt phiên từ giao diện giám sát');
+          setSessions(items => items.map(item => item.key === key ? response.data.session : item));
+          if (selectedSession?.key === key) setSelectedSession(response.data.session);
+          message.success(`Đã thu hồi phiên làm việc của ${user}.`);
+          if (response.data.session.current) await loadSessions();
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể thu hồi phiên đăng nhập.');
         }
       },
     });
@@ -82,8 +75,10 @@ export const AdminSessionsModule: React.FC = () => {
     let matchTab = true;
     if (filterTab === 'active') matchTab = s.status === 'Đang hoạt động';
     else if (filterTab === 'idle') matchTab = s.status.includes('Treo');
-    else if (filterTab === 'admin') matchTab = s.role.includes('Admin') || s.role.includes('Giám Đốc');
-    else if (filterTab === 'vpn') matchTab = s.ipType.includes('VPN') || s.ipType.includes('Mạng ngoài');
+    else if (filterTab === 'admin') matchTab = s.role === 'ADMIN';
+    else if (filterTab === 'vpn') matchTab = s.ipType.includes('Mạng ngoài');
+    else if (filterTab === 'revoked') matchTab = s.status === 'Đã thu hồi';
+    else if (filterTab === 'expired') matchTab = s.status === 'Đã hết hạn';
 
     const matchSearch =
       (s.user || '').toLowerCase().includes(searchText.toLowerCase()) ||
@@ -95,6 +90,33 @@ export const AdminSessionsModule: React.FC = () => {
     return matchTab && matchSearch;
   });
 
+  const printSession = () => {
+    if (!selectedSession) return;
+    const popup = window.open('', '_blank');
+    if (!popup) { message.error('Trình duyệt đã chặn cửa sổ in. Vui lòng cho phép mở cửa sổ.'); return; }
+    popup.document.write('<!doctype html><html lang="vi"><head><meta charset="UTF-8"><title>Thông tin phiên truy cập</title><style>@page{size:A4;margin:20mm}body{font-family:Arial,sans-serif;line-height:1.6}h1{font-size:20px}</style></head><body></body></html>');
+    const heading = popup.document.createElement('h1');
+    heading.textContent = 'THÔNG TIN PHIÊN TRUY CẬP';
+    popup.document.body.appendChild(heading);
+    for (const text of [
+      `Mã phiên: ${selectedSession.key}`, `Tài khoản: ${selectedSession.user} (${selectedSession.empCode})`,
+      `Vai trò: ${selectedSession.role}`, `IP kết nối tới máy chủ: ${selectedSession.ip}`,
+      `Thiết bị / trình duyệt khai báo: ${selectedSession.device} / ${selectedSession.browser}`,
+      `User-Agent: ${selectedSession.userAgent}`, `Bắt đầu: ${selectedSession.loginTime}`,
+      `Hoạt động cuối: ${selectedSession.lastActive}`, `Hết hạn: ${selectedSession.expiresAt}`,
+      `Trạng thái: ${selectedSession.status}`, `Phương thức: ${selectedSession.method}`,
+      ...(selectedSession.revokedAt ? [`Thu hồi: ${selectedSession.revokedAt}; lý do: ${selectedSession.revokeReason}`] : []),
+      `Xuất lúc: ${new Date().toISOString()}`,
+    ]) {
+      const paragraph = popup.document.createElement('p');
+      paragraph.textContent = text;
+      popup.document.body.appendChild(paragraph);
+    }
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  };
+
   const columns = [
     {
       title: 'Tài khoản & Vai trò',
@@ -102,7 +124,7 @@ export const AdminSessionsModule: React.FC = () => {
       render: (_: any, record: EnterpriseSessionRecord) => (
         <div>
           <div style={{ fontWeight: 700, color: '#009688', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <UserOutlined /> {record.user}
+            <UserOutlined /> {record.user}{record.current ? ' (Phiên hiện tại)' : ''}
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{record.role}</div>
         </div>
@@ -114,7 +136,7 @@ export const AdminSessionsModule: React.FC = () => {
       render: (_: any, record: EnterpriseSessionRecord) => (
         <div>
           <div style={{ fontWeight: 600, color: '#1E40AF', fontSize: 13 }}>{record.ip}</div>
-          <Tag color={record.ipType.includes('Keangnam') ? 'green' : 'orange'} style={{ marginTop: 2 }}>
+          <Tag color={record.ipType.includes('nội bộ') ? 'green' : 'orange'} style={{ marginTop: 2 }}>
             {record.ipType}
           </Tag>
         </div>
@@ -182,6 +204,7 @@ export const AdminSessionsModule: React.FC = () => {
           <Button
             size="small"
             danger
+            disabled={record.status === 'Đã thu hồi' || record.status === 'Đã hết hạn'}
             icon={<StopOutlined />}
             onClick={() => handleRevoke(record.key, record.user)}
           >
@@ -201,31 +224,31 @@ export const AdminSessionsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {sessions.length} phiên kết nối
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Được cấp phát Access Token hợp lệ</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Lịch sử phiên đã được máy chủ xác thực ghi nhận</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phiên đang hoạt động thời gian thực</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phiên có hoạt động trong 5 phút gần đây</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {activeCount} phiên online
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đang gửi nhịp tim Heartbeat định kỳ</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Theo thời điểm yêu cầu API được xác thực gần nhất</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Truy cập qua VPN / Mạng ngoài</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Truy cập từ địa chỉ mạng ngoài</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>
             {vpnCount} kết nối từ xa
           </div>
-          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Xác thực đường truyền Zero Trust Shield</div>
+          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Theo địa chỉ kết nối trực tiếp đến máy chủ API</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bảo mật xác thực 2 bước (MFA)</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            100% Tuân thủ
+            {mfaCount}/{sessions.length} phiên được xác minh
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Mã khóa FIDO2 / OTP Authenticator</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Hiện chưa có bằng chứng xác thực MFA từ máy chủ</div>
         </div>
       </div>
 
@@ -237,7 +260,9 @@ export const AdminSessionsModule: React.FC = () => {
             { key: 'active', label: 'Đang hoạt động', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
             { key: 'idle', label: 'Phiên treo / Chờ', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'admin', label: 'Quản trị viên (Admin)', icon: <LockOutlined style={{ color: '#009688' }} /> },
-            { key: 'vpn', label: 'VPN / Mạng ngoài', icon: <GlobalOutlined style={{ color: '#06B6D4' }} /> },
+            { key: 'vpn', label: 'Mạng ngoài', icon: <GlobalOutlined style={{ color: '#06B6D4' }} /> },
+            { key: 'revoked', label: 'Đã thu hồi' },
+            { key: 'expired', label: 'Đã hết hạn' },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -267,10 +292,8 @@ export const AdminSessionsModule: React.FC = () => {
 
           <Button
             icon={<ReloadOutlined />}
-            onClick={() => {
-              setSessions(INITIAL_SESSIONS);
-              message.success('Đã làm mới danh sách phiên truy cập');
-            }}
+            loading={loading}
+            onClick={() => void loadSessions()}
           >
             Làm mới
           </Button>
@@ -283,6 +306,7 @@ export const AdminSessionsModule: React.FC = () => {
           dataSource={filteredSessions}
           columns={columns}
           rowKey="key"
+          loading={loading}
           pagination={{ pageSize: 8 }}
         />
       </div>
@@ -316,11 +340,11 @@ export const AdminSessionsModule: React.FC = () => {
                 <SafetyCertificateOutlined /> Thông Số Mạng &amp; Mã Hóa:
               </div>
               <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
-                <div>Địa chỉ IP Public: <strong style={{ color: '#1E40AF' }}>{selectedSession.ip}</strong></div>
+                <div>IP kết nối tới máy chủ: <strong style={{ color: '#1E40AF' }}>{selectedSession.ip}</strong></div>
                 <div>Phân loại kết nối: <Tag color="blue">{selectedSession.ipType}</Tag></div>
                 <div>Vị trí địa lý: <strong>{selectedSession.location}</strong></div>
-                <div>Giao thức an toàn: <strong>TLS 1.3 / ChaCha20-Poly1305</strong></div>
-                <div>Xác thực 2 yếu tố (2FA): <strong style={{ color: '#16A34A' }}>✓ FIDO2 WebAuthn Đã xác thực</strong></div>
+                <div>Giao thức kết nối API: <strong>{selectedSession.tlsProtocol ? `${selectedSession.tlsProtocol} / ${selectedSession.cipher}` : 'HTTP; chưa có thông tin TLS tại API'}</strong></div>
+                <div>Xác thực 2 yếu tố (2FA): <strong>{selectedSession.mfaVerified ? 'Đã xác minh' : 'Chưa được máy chủ xác minh MFA'}</strong></div>
               </div>
             </div>
 
@@ -334,12 +358,17 @@ export const AdminSessionsModule: React.FC = () => {
                 <div>Trình duyệt: <strong>{selectedSession.browser}</strong></div>
                 <div>Thời điểm bắt đầu phiên: <strong>{selectedSession.loginTime}</strong></div>
                 <div>Lần tương tác cuối: <strong style={{ color: '#16A34A' }}>{selectedSession.lastActive}</strong></div>
+                <div>Hết hạn: <strong>{selectedSession.expiresAt}</strong></div>
+                <div>Phương thức đăng nhập: <strong>{selectedSession.method}</strong></div>
+                <div>User-Agent khai báo: <strong>{selectedSession.userAgent || 'Chưa có'}</strong></div>
+                {selectedSession.revokedAt && <div>Thu hồi: <strong>{selectedSession.revokedAt}</strong> · {selectedSession.revokeReason}</div>}
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
               <Button
                 danger
+                disabled={selectedSession.status === 'Đã thu hồi' || selectedSession.status === 'Đã hết hạn'}
                 type="primary"
                 style={{ flex: 1 }}
                 icon={<StopOutlined />}
@@ -349,9 +378,9 @@ export const AdminSessionsModule: React.FC = () => {
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in chứng chỉ phiên truy cập ${selectedSession.user}`)}
+                onClick={printSession}
               >
-                In Chứng Chỉ Phiên (A4)
+                In Thông Tin Phiên (A4)
               </Button>
             </div>
           </div>

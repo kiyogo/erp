@@ -1,0 +1,67 @@
+
+> kiyodn-api@1.0.0 test
+> node --test tests/*.test.mjs
+
+(node:43144) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ anonymous access is rejected (10.205ms)
+✔ legacy attendance mirrors migrate without removing source records (10.9128ms)
+✔ collections support create, read, patch, replacement, delete and concurrent scopes (549.6402ms)
+✔ task checklist is persisted before response, then task can be deleted (66.8556ms)
+✔ canvas documents can be created simultaneously (145.9352ms)
+✔ budget API validates amounts and recomputes balances instead of trusting the browser (59.1089ms)
+✔ canvas operation retries are idempotent and snapshots can be updated (134.4762ms)
+✔ recruitment persists pipeline, rejects duplicate email and invalid transitions (170.5913ms)
+✔ employee leave is visible to admins and approval cannot be forged or overwritten (229.0829ms)
+✔ overtime hours and compensation derive from validated values (65.79ms)
+✔ shift approval swaps both assignments atomically (257.2491ms)
+✔ check-in uses server identity and timestamps and rejects duplicate events (57.1079ms)
+✔ employment history persists real employee identity and authoritative actors (84.4324ms)
+✔ contracts create, update and delete against the authoritative API (171.9264ms)
+✔ Google settings persist on the server without a client secret and prevent password lockout (113.3567ms)
+Isolated API test evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-api-test-1L8z2u
+(node:41420) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ logins issue unique persistent sessions with actual IP, agent, expiry and current-session marker (250.4735ms)
+✔ successful API activity updates the persisted last-active timestamp (145.2091ms)
+✔ session revoke immediately rejects the chosen token and keeps other sessions valid (148.5984ms)
+✔ logout revokes the current server session instead of only clearing browser data (138.0845ms)
+✔ legacy JWTs remain compatible, are registered once under concurrent access, and can be revoked (87.5666ms)
+✔ activation tokens and access tokens without a stored session cannot authorize API calls (7.4498ms)
+✔ only administrators can inspect or revoke sessions and generic writes cannot resurrect tokens (143.953ms)
+✔ unverified Google payloads, tampered signatures and invalid claims cannot log in (45.5329ms)
+✔ verified Google identity creates a real session and preserves signup without granting admin (488.7885ms)
+✔ Google-only login requires a verified admin session and can safely return to password mode (276.8541ms)
+✔ revocation survives API restart and configured Google Workspace domain is enforced (931.0888ms)
+Isolated auth/session evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-sessions-test-puZAqX
+[Database] Using SQLite storage: C:\Users\sonng\AppData\Local\Temp\kiyovn-db-test-sJyUS5\test.sqlite
+(node:38604) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ PostgreSQL conversion casts stored JSON text and keeps literal question marks (2.7559ms)
+✔ simultaneous transactions commit independently and support nested helpers (460.4461ms)
+✔ rollback excludes unrelated writes and uncommitted reads (40.2269ms)
+(node:40384) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ only authenticated administrators may read or record transfers (175.8245ms)
+✔ invalid amounts, accounts, dates and overdrafts leave the ledger unchanged (182.4127ms)
+✔ a transfer records balanced legs, actual fee, real actor and audit; retries do not duplicate it (113.0495ms)
+✔ failure on the credit leg rolls back the debit, metadata and audit (120.3376ms)
+✔ concurrent transfers cannot spend the same source balance twice (98.2339ms)
+✔ simultaneous retries of the same request create one transfer (110.5835ms)
+✔ canceling a transfer restores both balances and fee atomically and cannot cancel one leg (140.6119ms)
+✔ canceling after destination funds are spent is rejected without partial changes (153.9504ms)
+✔ bank to cash and cash to bank entries use the existing petty cash ledger (119.5239ms)
+✔ historical transfers stay readable; generic mutation cannot forge or erase linked entries (45.8466ms)
+Isolated finance evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-finance-test-APMM3i
+✔ onboarding persists real confirmations and completion and rejects forged progress, signature and actor (308.4057ms)
+Onboarding API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-onboarding-test-zTy7U7
+✔ recruitment persists jobs, actual CV bytes and candidate stages; rejects invalid writes (388.7245ms)
+Recruitment API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-recruitment-test-hNnIuD
+ℹ tests 41
+ℹ suites 0
+ℹ pass 41
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7209.8812

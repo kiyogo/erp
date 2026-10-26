@@ -1,4 +1,7 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceDate, attendanceNumber, dateRangeDays, employeeAttendanceFields } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -39,13 +42,17 @@ const INITIAL_ALERTS: EnterpriseAlertItem[] = [];
 
 export const AttendanceAlertsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseAlertItem[]>(INITIAL_ALERTS);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [saving, setSaving] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_alerts').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_alerts');
     setData(Array.isArray(list) ? list : []);
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
+      setEmployees(dataService.getEmployees());
       const updated = dataService.getGenericData('attendance_alerts');
       setData(Array.isArray(updated) ? updated : []);
       dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
@@ -66,39 +73,32 @@ export const AttendanceAlertsModule: React.FC = () => {
   const approvedCount = data.filter((d) => d.status === 'Đã giải trình hợp lệ').length;
   const penalizedCount = data.filter((d) => d.status === 'Đã trừ phạt chuyên cần').length;
 
-  const handleCreate = (values: any) => {
-    const newItem: EnterpriseAlertItem = {
-      ...values,
-      key: String(Date.now()),
-      empCode: values.empCode || `KY-${String(Date.now()).slice(-3)}`,
-      penaltyAmount: 0,
-      status: 'Chờ nhân viên giải trình',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('attendance_alerts', nextItems);
-    message.success(`Đã ghi nhận cảnh báo bất thường: ${values.employeeName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      dateRangeDays(values.alertDate, values.alertDate);
+      await collectionsApi.create('attendance_alerts', { ...values, ...employeeAttendanceFields(employees, values.employeeName), key: crypto.randomUUID(), penaltyAmount: 0, status: 'Chờ nhân viên giải trình' });
+      await dataService.refreshGenericData('attendance_alerts');
+      message.success('Đã ghi nhận cảnh báo bất thường.'); setModalOpen(false); form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu cảnh báo.'); }
+    finally { setSaving(false); }
   };
 
-  const handleApproveExplanation = (record: EnterpriseAlertItem) => {
-    setData(
-      data.map((d) =>
-        d.key === record.key ? { ...d, status: 'Đã giải trình hợp lệ' as const } : d
-      )
-    );
-    message.success(`Đã chấp thuận giải trình cho cảnh báo: ${record.alertCode}`);
-    setDrawerOpen(false);
+  const handleDecision = async (record: EnterpriseAlertItem, accepted: boolean) => {
+    if (saving || record.status !== 'Chờ nhân viên giải trình') return;
+    setSaving(true);
+    try {
+      if (!record.explanationText?.trim()) throw new Error('Vui lòng nhập nội dung giải trình hoặc kết luận xử lý.');
+      const penaltyAmount = accepted ? 0 : attendanceNumber(record.penaltyAmount, 'Số tiền ghi nhận xử lý', 0);
+      await collectionsApi.update('attendance_alerts', record.key, { status: accepted ? 'Đã giải trình hợp lệ' : 'Đã trừ phạt chuyên cần', explanationText: record.explanationText, penaltyAmount });
+      await dataService.refreshGenericData('attendance_alerts');
+      message.success('Đã lưu kết quả xử lý cảnh báo.'); setDrawerOpen(false);
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu kết quả xử lý.'); }
+    finally { setSaving(false); }
   };
-
-  const handlePenalize = (record: EnterpriseAlertItem) => {
-    setData(
-      data.map((d) =>
-        d.key === record.key ? { ...d, status: 'Đã trừ phạt chuyên cần' as const, penaltyAmount: 100000 } : d
-      )
-    );
-    message.warning(`Đã chuyển trạng thái trừ phạt chuyên cần 100.000 ₫ đối với ${record.employeeName}`);
-    setDrawerOpen(false);
-  };
+  const handleApproveExplanation = (record: EnterpriseAlertItem) => handleDecision(record, true);
+  const handlePenalize = (record: EnterpriseAlertItem) => handleDecision(record, false);
 
   const filteredData = data.filter((item) => {
     const matchStatus = statusFilter === 'all' || item.status === statusFilter;
@@ -164,7 +164,7 @@ export const AttendanceAlertsModule: React.FC = () => {
         if (status === 'Chờ nhân viên giải trình') color = 'warning';
         if (status === 'Đã giải trình hợp lệ') color = 'success';
         if (status === 'Đã trừ phạt chuyên cần') color = 'error';
-        return <Tag color={color}>{status}</Tag>;
+        return <Tag color={color}>{status === 'Đã trừ phạt chuyên cần' ? 'Đã ghi nhận xử lý' : status}</Tag>;
       },
     },
     {
@@ -195,7 +195,7 @@ export const AttendanceAlertsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} Sự vụ
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Ghi nhận tự động từ hệ thống IoT AI</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Cảnh báo đã được lưu trên hệ thống</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -211,15 +211,15 @@ export const AttendanceAlertsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {approvedCount} Trường hợp
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Được tính đủ công &amp; không trừ phạt</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã lưu kết quả giải trình hợp lệ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã trừ phạt chuyên cần</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã ghi nhận xử lý chuyên cần</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
             {penalizedCount} Sự vụ
           </div>
-          <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Trừ trực tiếp vào kỳ lương Tháng 08/2026</div>
+          <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Số tiền ghi nhận xử lý, chưa khấu trừ vào lương</div>
         </div>
       </div>
 
@@ -230,7 +230,7 @@ export const AttendanceAlertsModule: React.FC = () => {
             { key: 'all', label: 'Tất cả cảnh báo' },
             { key: 'Chờ nhân viên giải trình', label: 'Chờ giải trình', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Đã giải trình hợp lệ', label: 'Đã duyệt hợp lệ', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
-            { key: 'Đã trừ phạt chuyên cần', label: 'Đã trừ phạt', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
+            { key: 'Đã trừ phạt chuyên cần', label: 'Đã ghi nhận xử lý', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -258,7 +258,7 @@ export const AttendanceAlertsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo cảnh báo bất thường')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Canh_bao_cham_cong.xlsx', generateValidXlsxBlob([['Mã', 'Nhân viên', 'Mã NV', 'Ngày', 'Loại', 'Chi tiết', 'Giải trình', 'Số tiền ghi nhận', 'Trạng thái'], ...filteredData.map((item) => [item.alertCode, item.employeeName, item.empCode, item.alertDate, item.alertType, item.details, item.explanationText || '', item.penaltyAmount || 0, item.status])]))}>
             Xuất Báo Cáo
           </Button>
 
@@ -268,10 +268,9 @@ export const AttendanceAlertsModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                alertCode: `CB-2026-0${data.length + 1}`,
+                alertCode: `CB-${Date.now()}`,
                 alertType: 'Quên chấm công ra về',
-                alertDate: new Date().toISOString().substring(0, 10),
-                department: 'Phòng Ban Kỹ Thuật',
+                alertDate: attendanceDate(),
               });
               setModalOpen(true);
             }}
@@ -315,12 +314,12 @@ export const AttendanceAlertsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Nhân viên vi phạm" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Đỗ Hải Nam" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
                 placeholder="Chọn phòng ban trực thuộc..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
           </div>
@@ -335,7 +334,7 @@ export const AttendanceAlertsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tạo cảnh báo &amp; Gửi thông báo
             </Button>
           </div>
@@ -399,11 +398,15 @@ export const AttendanceAlertsModule: React.FC = () => {
                 </div>
               ) : (
                 <div style={{ fontSize: 12, color: '#94A3B8', fontStyle: 'italic' }}>
-                  Chưa có nội dung giải trình. Đã gửi nhắc nhở qua App Kiyo Portal.
+                  Chưa có nội dung giải trình được lưu.
                 </div>
               )}
             </div>
 
+            {selectedAlert.status === 'Chờ nhân viên giải trình' && <div>
+              <label>Giải trình / Kết luận xử lý<Input.TextArea value={selectedAlert.explanationText || ''} onChange={(event) => setSelectedAlert({ ...selectedAlert, explanationText: event.target.value })} rows={3} /></label>
+              <label>Số tiền ghi nhận xử lý (chưa khấu trừ lương)<Input type="number" min={0} value={selectedAlert.penaltyAmount ?? 0} onChange={(event) => setSelectedAlert({ ...selectedAlert, penaltyAmount: Number(event.target.value) })} /></label>
+            </div>}
             {/* Actions */}
             {selectedAlert.status === 'Chờ nhân viên giải trình' && (
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -412,7 +415,7 @@ export const AttendanceAlertsModule: React.FC = () => {
                   icon={<CloseOutlined />}
                   onClick={() => handlePenalize(selectedAlert)}
                 >
-                  Trừ Phạt Chuyên Cần (100k)
+                  Ghi nhận xử lý chuyên cần
                 </Button>
                 <Button
                   type="primary"

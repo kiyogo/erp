@@ -188,10 +188,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const logout = useCallback(() => {
+    if (token) void authApi.logout(token).catch(() => {
+      // An offline logout still clears this browser; the server session expires at its existing deadline.
+    });
     clearStoredSession();
     setToken(null);
     setUser(null);
-  }, []);
+  }, [token]);
 
   return (
     <AuthContext.Provider value={{ user, token, loading, login, loginWithGoogle, establishSession, logout, isLoggedIn: Boolean(token && user) }}>

@@ -7,8 +7,8 @@ dist
 node_modules
 **/node_modules
 legacy
-backend/data
-backend/deploy/data
+server/data
+server/deploy/data
 *.log
 *.sqlite
 *.sqlite-shm

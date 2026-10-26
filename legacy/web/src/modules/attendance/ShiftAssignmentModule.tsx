@@ -1,4 +1,8 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceDate, dateRangeDays, employeeAttendanceFields } from './attendanceRules';
+import type { EnterpriseWorkShift } from './ShiftsModule';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -38,13 +42,22 @@ const INITIAL_ASSIGNMENTS: EnterpriseShiftAssignment[] = [];
 
 export const ShiftAssignmentModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseShiftAssignment[]>(INITIAL_ASSIGNMENTS);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [shifts, setShifts] = useState<EnterpriseWorkShift[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapForm] = Form.useForm();
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_shift_assignments').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_shift_assignments');
+    setShifts(dataService.getGenericData('attendance_shifts'));
     setData(Array.isArray(list) ? list : []);
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
+      setEmployees(dataService.getEmployees());
+      setShifts(dataService.getGenericData('attendance_shifts'));
       const updated = dataService.getGenericData('attendance_shift_assignments');
       setData(Array.isArray(updated) ? updated : []);
       dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
@@ -64,37 +77,51 @@ export const ShiftAssignmentModule: React.FC = () => {
   const activeCount = data.filter((d) => d.status === 'Đang áp dụng').length;
   const pendingSwapCount = data.filter((d) => d.status === 'Chờ duyệt đổi ca').length;
 
-  const handleCreate = (values: any) => {
-    const newItem: EnterpriseShiftAssignment = {
-      ...values,
-      key: String(Date.now()),
-      empCode: values.empCode || `KY-${String(Date.now()).slice(-3)}`,
-      status: 'Đang áp dụng',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('attendance_shift_assignments', nextItems);
-    message.success(`Đã phân ca làm việc thành công cho: ${values.employeeName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      dateRangeDays(values.effectiveFrom, values.effectiveTo);
+      const shift = shifts.find((item) => item.key === values.shiftName && item.status === 'Đang áp dụng');
+      if (!shift) throw new Error('Vui lòng chọn ca làm việc đang áp dụng từ danh mục ca.');
+      const newItem = {
+        ...values, ...employeeAttendanceFields(employees, values.employeeName),
+        key: crypto.randomUUID(), shiftKey: shift.key, shiftName: shift.shiftName, shiftCode: shift.shiftCode, workHours: shift.timeRange,
+        status: 'Đang áp dụng',
+      };
+      await collectionsApi.create('attendance_shift_assignments', newItem);
+      await dataService.refreshGenericData('attendance_shift_assignments');
+      message.success(`Đã phân ca làm việc thành công cho: ${newItem.employeeName}`);
+      setModalOpen(false); form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu lịch phân ca.'); }
+    finally { setSaving(false); }
   };
 
-  const handleApproveSwap = (record: EnterpriseShiftAssignment) => {
-    const updated = data.map((d) =>
-      d.key === record.key ? { ...d, status: 'Đang áp dụng' as const } : d
-    );
-    setData(updated);
-    dataService.saveGenericData('attendance_shift_assignments', updated);
-    message.success(`Đã phê duyệt đổi ca trực cho nhân sự: ${record.employeeName}`);
-    setDrawerOpen(false);
+  const handleSwapDecision = async (record: EnterpriseShiftAssignment, accepted: boolean) => {
+    if (saving || record.status !== 'Chờ duyệt đổi ca') return;
+    setSaving(true);
+    try {
+      await collectionsApi.update('attendance_shift_assignments', record.key, { status: 'Đang áp dụng', swapDecision: accepted ? 'Đã duyệt' : 'Từ chối' });
+      await dataService.refreshGenericData('attendance_shift_assignments');
+      message.success(`Đã ${accepted ? 'phê duyệt' : 'từ chối'} yêu cầu đổi ca của: ${record.employeeName}`);
+      setDrawerOpen(false);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể cập nhật yêu cầu đổi ca.'); }
+    finally { setSaving(false); }
   };
+  const handleApproveSwap = (record: EnterpriseShiftAssignment) => handleSwapDecision(record, true);
+  const handleRejectSwap = (record: EnterpriseShiftAssignment) => handleSwapDecision(record, false);
 
-  const handleRejectSwap = (record: EnterpriseShiftAssignment) => {
-    const updated = data.map((d) =>
-      d.key === record.key ? { ...d, status: 'Đã kết thúc' as const } : d
-    );
-    setData(updated);
-    dataService.saveGenericData('attendance_shift_assignments', updated);
-    message.warning(`Đã từ chối yêu cầu đổi ca của: ${record.employeeName}`);
-    setDrawerOpen(false);
+  const handleRequestSwap = async (values: any) => {
+    if (saving || !selectedAssignment) return;
+    setSaving(true);
+    try {
+      const target = data.find((item) => item.key === values.swapTargetKey && item.status === 'Đang áp dụng' && item.empCode !== selectedAssignment.empCode && item.effectiveFrom === selectedAssignment.effectiveFrom && item.effectiveTo === selectedAssignment.effectiveTo);
+      if (!target) throw new Error('Chọn lịch phân ca của nhân viên khác có cùng khoảng hiệu lực.');
+      await collectionsApi.update('attendance_shift_assignments', selectedAssignment.key, { status: 'Chờ duyệt đổi ca', swapTargetKey: target.key, swapWithEmployee: target.employeeName, swapReason: values.swapReason, swapDecision: '' });
+      await dataService.refreshGenericData('attendance_shift_assignments');
+      setSwapOpen(false); setDrawerOpen(false); message.success('Đã gửi yêu cầu đổi ca để phê duyệt.');
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể gửi yêu cầu đổi ca.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -222,7 +249,7 @@ export const ShiftAssignmentModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} Nhân sự
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phân bổ đầy đủ 100% phòng ban</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Số lịch phân ca đã được lưu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -230,7 +257,7 @@ export const ShiftAssignmentModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {activeCount} Cán bộ
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tự động kích hoạt trên máy FaceID</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Lịch áp dụng trên hệ thống</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -242,11 +269,11 @@ export const ShiftAssignmentModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Độ phủ ca trực 24/7 IDC</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ nhân sự có phân ca</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            100% Liên tục
+            {employees.length ? Math.round(new Set(data.filter((item) => item.status === 'Đang áp dụng').map((item) => item.empCode)).size / employees.length * 100) : 0}%
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Đảm bảo SLA hạ tầng 99.99%</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tính theo danh sách nhân sự hiện có</div>
         </div>
       </div>
 
@@ -284,7 +311,7 @@ export const ShiftAssignmentModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách phân ca')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Phan_ca.xlsx', generateValidXlsxBlob([['Mã phân ca', 'Nhân viên', 'Mã NV', 'Phòng ban', 'Ca', 'Khung giờ', 'Từ ngày', 'Đến ngày', 'Trạng thái'], ...filteredData.map((item) => [item.code, item.employeeName, item.empCode, item.department, item.shiftName, item.workHours, item.effectiveFrom, item.effectiveTo, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -294,13 +321,9 @@ export const ShiftAssignmentModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                code: `PC-2026-0${data.length + 1}`,
-                shiftName: 'Ca Hành Chính Chuẩn',
-                shiftCode: 'CA-HC-01',
-                workHours: '08:00 - 17:30',
-                department: 'Phòng Ban Kỹ Thuật',
-                effectiveFrom: new Date().toISOString().substring(0, 10),
-                effectiveTo: '2026-12-31',
+                code: `PC-${new Date().getFullYear()}-${Date.now()}`,
+                effectiveFrom: attendanceDate(),
+                effectiveTo: `${new Date().getFullYear()}-12-31`,
               });
               setModalOpen(true);
             }}
@@ -331,31 +354,26 @@ export const ShiftAssignmentModule: React.FC = () => {
             </Form.Item>
             <Form.Item name="shiftName" label="Ca làm việc chỉ định" rules={[{ required: true }]}>
               <Select
-                options={[
-                  { label: 'Ca Hành Chính Chuẩn (08:00 - 17:30)', value: 'Ca Hành Chính Chuẩn' },
-                  { label: 'Ca Sáng (07:00 - 11:30)', value: 'Ca Sáng Sớm' },
-                  { label: 'Ca Chiều (13:00 - 17:30)', value: 'Ca Chiều Tối' },
-                  { label: 'Ca Đêm Trực NOC IDC 24/7 (22:00 - 06:00)', value: 'Ca Đêm Trực NOC IDC 24/7' },
-                  { label: 'Ca Linh Hoạt R&D (09:00 - 18:30)', value: 'Ca Linh Hoạt' },
-                ]}
+                options={shifts.filter((shift) => shift.status === 'Đang áp dụng').map((shift) => ({ label: `${shift.shiftName} (${shift.timeRange})`, value: shift.key }))}
+                onChange={(key) => { const shift = shifts.find((item) => item.key === key); if (shift) form.setFieldsValue({ workHours: shift.timeRange }); }}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân viên" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department, position: employee.position }); }} />
             </Form.Item>
-            <Form.Item name="position" label="Chức danh đảm nhiệm" rules={[{ required: true }]}>
+            <Form.Item name="position" label="Chức danh đảm nhiệm">
               <Input placeholder="Ví dụ: Senior DevOps Engineer" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
                 placeholder="Chọn phòng ban trực thuộc..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
             <Form.Item name="workHours" label="Khung giờ ca" rules={[{ required: true }]}>
@@ -374,13 +392,22 @@ export const ShiftAssignmentModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Xác nhận phân ca
             </Button>
           </div>
         </Form>
       </Modal>
 
+      <Modal title="Yêu cầu đổi ca" open={swapOpen} onCancel={() => setSwapOpen(false)} footer={null} width={540}>
+        <Form form={swapForm} layout="vertical" onFinish={handleRequestSwap}>
+          <Form.Item name="swapTargetKey" label="Lịch phân ca muốn đổi (cùng khoảng hiệu lực)" rules={[{ required: true }]}>
+            <Select options={data.filter((item) => item.key !== selectedAssignment?.key && item.empCode !== selectedAssignment?.empCode && item.status === 'Đang áp dụng' && item.effectiveFrom === selectedAssignment?.effectiveFrom && item.effectiveTo === selectedAssignment?.effectiveTo).map((item) => ({ label: `${item.employeeName} - ${item.shiftName} (${item.workHours})`, value: item.key }))} />
+          </Form.Item>
+          <Form.Item name="swapReason" label="Lý do đổi ca" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button type="primary" htmlType="submit" loading={saving}>Gửi yêu cầu đổi ca</Button>
+        </Form>
+      </Modal>
       {/* DRAWER: Chi Tiết Phân Ca & Duyệt Đổi Ca */}
       <Drawer
         title="Lịch Phân Ca &amp; Xét Duyệt Yêu Cầu Đổi Ca"
@@ -429,6 +456,9 @@ export const ShiftAssignmentModule: React.FC = () => {
             </div>
 
             {/* Swap Request details if any */}
+            {selectedAssignment.status === 'Đang áp dụng' && (
+              <Button icon={<SwapOutlined />} onClick={() => { swapForm.resetFields(); setSwapOpen(true); }}>Yêu cầu đổi ca</Button>
+            )}
             {selectedAssignment.status === 'Chờ duyệt đổi ca' && (
               <div style={{ border: '1px solid #FED7AA', borderRadius: 8, padding: 14, background: '#FFFBEB' }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#D97706', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -445,10 +475,7 @@ export const ShiftAssignmentModule: React.FC = () => {
                   <Button
                     style={{ flex: 1, borderColor: '#DC2626', color: '#DC2626' }}
                     icon={<CloseOutlined />}
-                    onClick={() => {
-                      message.info(`Đã từ chối đơn đổi ca của ${selectedAssignment.employeeName}`);
-                      setDrawerOpen(false);
-                    }}
+                    onClick={() => handleRejectSwap(selectedAssignment)}
                   >
                     Từ Chối Đổi Ca
                   </Button>

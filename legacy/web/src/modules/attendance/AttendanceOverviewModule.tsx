@@ -1,3 +1,4 @@
+import { attendanceDate } from './attendanceRules';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarOutlined,
@@ -8,12 +9,16 @@ import {
 } from '@ant-design/icons';
 import { Button, Drawer, Tag, message } from '../../custom-ui';
 import { KTable } from '../../components/KTable';
-import { collectionsApi, employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 type LeaveRequest = {
   key: string;
   code: string;
   employeeName: string;
+  employeeId?: string;
+  empCode?: string;
   department: string;
   leaveType: string;
   startDate: string;
@@ -23,7 +28,7 @@ type LeaveRequest = {
   status: 'Chờ duyệt' | 'Đã duyệt' | 'Từ chối' | string;
 };
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = attendanceDate();
 
 const isWithinRange = (startDate?: string, endDate?: string, referenceDate = TODAY) => {
   if (!startDate || !endDate) return false;
@@ -42,10 +47,10 @@ export const AttendanceOverviewModule: React.FC = () => {
     try {
       const [employeeRes, leaveRes] = await Promise.all([
         employeesApi.getAll(),
-        collectionsApi.get<LeaveRequest>('leave_requests'),
+        dataService.refreshGenericData('leave_requests'),
       ]);
       setEmployees(employeeRes.data.data || []);
-      setLeaveRequests(leaveRes.data.data || []);
+      setLeaveRequests(leaveRes);
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tải tổng quan chấm công.');
     } finally {
@@ -58,7 +63,8 @@ export const AttendanceOverviewModule: React.FC = () => {
   }, []);
 
   const activeEmployees = employees.filter((employee) => employee.status !== 'Đã nghỉ việc');
-  const approvedToday = leaveRequests.filter((item) => item.status === 'Đã duyệt' && isWithinRange(item.startDate, item.endDate)).length;
+  const leaveToday = leaveRequests.filter((item) => item.status === 'Đã duyệt' && isWithinRange(item.startDate, item.endDate));
+  const approvedToday = activeEmployees.filter((employee) => leaveToday.some((item) => item.employeeId === employee.key || item.empCode === employee.code)).length;
   const pendingLeaves = leaveRequests.filter((item) => item.status === 'Chờ duyệt').length;
   const approvedUpcoming = leaveRequests.filter((item) => item.status === 'Đã duyệt' && item.startDate > TODAY).length;
   const availableToday = Math.max(0, activeEmployees.length - approvedToday);
@@ -192,7 +198,7 @@ export const AttendanceOverviewModule: React.FC = () => {
           <Button icon={<ReloadOutlined spin={syncing} />} onClick={() => void loadData()}>
             Làm mới
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã chuẩn bị báo cáo nghỉ phép từ dữ liệu hiện có.')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_quan_nghi_phep.xlsx', generateValidXlsxBlob([['Mã đơn', 'Nhân viên', 'Phòng ban', 'Loại nghỉ', 'Từ ngày', 'Đến ngày', 'Số ngày', 'Trạng thái'], ...leaveRequests.map((item) => [item.code, item.employeeName, item.department, item.leaveType, item.startDate, item.endDate, item.daysCount, item.status])]))}>
             Xuất báo cáo
           </Button>
           <Button
@@ -207,7 +213,7 @@ export const AttendanceOverviewModule: React.FC = () => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: 16, marginBottom: 16 }}>
         <div className="transparent-table-card" style={{ marginBottom: 0 }}>
-          <KTable dataSource={leaveRequests.sort((a, b) => b.startDate.localeCompare(a.startDate))} columns={columns} pagination={{ pageSize: 6 }} />
+          <KTable dataSource={[...leaveRequests].sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''))} columns={columns} pagination={{ pageSize: 6 }} />
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 18 }}>

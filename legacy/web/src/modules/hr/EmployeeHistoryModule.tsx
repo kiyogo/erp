@@ -28,13 +28,15 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Checkbox, Tag } from '../../custom-ui';
 import { dataService, Employee } from '../../services/dataService';
-import { employeesApi } from '../../api/endpoints';
+import { employeesApi, collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
-interface HistoryRecord {
+export interface HistoryRecord {
   key: string;
   code: string;
   employeeName: string;
   employeeCode: string;
+  employeeId?: string;
   type: 'Chức vụ' | 'Thuyên chuyển' | 'Nghỉ việc' | 'Khen thưởng' | 'Kỷ luật sự cố' | 'Ngân hàng' | 'Xác thực danh tính';
   eventDate: string;
   oldValue: string;
@@ -42,9 +44,28 @@ interface HistoryRecord {
   decisionNumber: string;
   signer: string;
   note: string;
+  createdAt?: string;
+  createdBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 const INITIAL_HISTORY_DATA: HistoryRecord[] = [];
+const generalHistoryTypes: HistoryRecord['type'][] = ['Chức vụ', 'Thuyên chuyển', 'Nghỉ việc', 'Khen thưởng', 'Kỷ luật sự cố'];
+
+export function validateEmployeeHistory(record: Partial<HistoryRecord>): string {
+  if (!record.employeeId) return 'Vui lòng chọn nhân viên có trong hệ thống.';
+  if (!generalHistoryTypes.includes(record.type!)) return 'Loại biến động không hợp lệ.';
+  const date = record.eventDate || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) return 'Ngày hiệu lực không hợp lệ.';
+  if (!record.newValue?.trim()) return 'Vui lòng nhập giá trị mới của biến động.';
+  return '';
+}
+
+export function filterEmployeeHistory(records: HistoryRecord[], type: HistoryRecord['type'] | 'all', query: string): HistoryRecord[] {
+  const search = query.trim().toLowerCase();
+  return records.filter(record => (type === 'all' || record.type === type) && (!search || [record.code, record.employeeName, record.employeeCode, record.decisionNumber, record.oldValue, record.newValue, record.signer, record.note].some(value => String(value || '').toLowerCase().includes(search))));
+}
 
 // Helper function to detect correct Vietnamese Gender
 const detectGender = (nameStr: string): 'Nam' | 'Nữ' => {
@@ -390,13 +411,19 @@ const EKYCVideoPlayback: React.FC<{ employee: any; verifiedAt: string }> = ({ em
   );
 };
 
-export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type'] }> = ({
+export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type'] | 'all' }> = ({
   defaultType = 'Chức vụ',
 }) => {
   const [data, setData] = useState<HistoryRecord[]>(INITIAL_HISTORY_DATA);
-  const [typeFilter, setTypeFilter] = useState<HistoryRecord['type']>(defaultType);
+  const [typeFilter, setTypeFilter] = useState<HistoryRecord['type'] | 'all'>(defaultType);
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingHistory, setEditingHistory] = useState<HistoryRecord | null>(null);
+  const [viewingHistory, setViewingHistory] = useState<HistoryRecord | null>(null);
+  const [historyEmployees, setHistoryEmployees] = useState<Array<{ key: string; name: string; code: string }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historySaving, setHistorySaving] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const [form] = Form.useForm();
   const [bankStatusFilter, setBankStatusFilter] = useState<string>('all');
 
@@ -446,6 +473,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
     try {
       const response = await employeesApi.getAll();
       const rawList = response.data?.data || [];
+      setHistoryEmployees(rawList.map(employee => ({ key: employee.id || employee.userId || employee.key, name: employee.name || employee.fullName, code: employee.employeeCode || employee.code })));
       const activeEmps = rawList.filter((item: any) => item?.role !== 'ADMIN' && item?.status !== 'Đã nghỉ việc');
       setEmployees(
         activeEmps.map((item: any) => ({
@@ -533,6 +561,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
 
   useEffect(() => {
     void loadEmployees();
+    void loadHistory();
     loadBankAccounts();
     const banks = dataService.getDropdownOptions('banks');
     if (banks && banks.length > 0) {
@@ -560,26 +589,71 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
     setTypeFilter(defaultType);
   }, [defaultType]);
 
-  // Handle Create General History
-  const handleCreateHistory = (values: any) => {
-    const newRec: HistoryRecord = {
-      key: `hist-${Date.now()}`,
-      code: `LS-${Date.now().toString().slice(-4)}`,
-      employeeName: values.employeeName || '',
-      employeeCode: values.employeeCode || 'EMP-001',
-      type: values.type || 'Chức vụ',
-      eventDate: values.eventDate || new Date().toLocaleDateString('vi-VN'),
-      oldValue: values.oldValue || 'Chưa cập nhật',
-      newValue: values.newValue || 'Mới cập nhật',
-      decisionNumber: values.decisionNumber || `QĐ-${Date.now().toString().slice(-4)}`,
-      signer: values.signer || 'Ban Giám Đốc',
-      note: values.note || '',
-    };
-    const updated = [newRec, ...data];
-    setData(updated);
-    message.success('Đã ghi nhận lịch sử biến động mới thành công!');
-    setModalOpen(false);
+  const loadHistory = async (): Promise<boolean> => {
+    setHistoryLoading(true);
+    try {
+      const records = await dataService.refreshGenericData('hr_employee_history');
+      setData(records.map((record: HistoryRecord & { id?: string }) => ({ ...record, key: record.key || record.id || '' })).sort((a, b) => (b.eventDate || '').localeCompare(a.eventDate || '')));
+      setHistoryError('');
+      return true;
+    } catch (error: any) {
+      setHistoryError(error?.response?.data?.message || 'Không thể tải lịch sử biến động nhân sự. Vui lòng thử lại.');
+      return false;
+    } finally { setHistoryLoading(false); }
+  };
+
+  const openHistory = (record?: HistoryRecord) => {
+    setEditingHistory(record || null);
     form.resetFields();
+    form.setFieldsValue(record || { type: generalHistoryTypes.includes(typeFilter as HistoryRecord['type']) ? typeFilter : 'Chức vụ', eventDate: new Date().toISOString().slice(0, 10) });
+    setModalOpen(true);
+  };
+
+  // Handle Create General History
+  const handleCreateHistory = async (values: any) => {
+    if (historySaving) return;
+    const employee = historyEmployees.find(item => item.key === values.employeeId);
+    const newRec: HistoryRecord = {
+      ...editingHistory,
+      key: editingHistory?.key || `hist-${crypto.randomUUID()}`,
+      code: editingHistory?.code || `LS-${Date.now()}`,
+      employeeId: employee?.key,
+      employeeName: employee?.name || '',
+      employeeCode: employee?.code || '',
+      type: values.type,
+      eventDate: values.eventDate || '',
+      oldValue: String(values.oldValue || '').trim(),
+      newValue: String(values.newValue || '').trim(),
+      decisionNumber: String(values.decisionNumber || '').trim(),
+      signer: String(values.signer || '').trim(),
+      note: String(values.note || '').trim(),
+    };
+    const validation = validateEmployeeHistory(newRec);
+    if (validation) { message.error(validation); return; }
+    setHistorySaving(true);
+    try {
+      const result = editingHistory ? await collectionsApi.update('hr_employee_history', editingHistory.key, newRec) : await collectionsApi.create('hr_employee_history', newRec, newRec.key);
+      setData(previous => (editingHistory ? previous.map(record => record.key === editingHistory.key ? result.data.record : record) : [result.data.record, ...previous]).sort((a, b) => b.eventDate.localeCompare(a.eventDate)));
+      message.success(editingHistory ? 'Đã cập nhật biến động nhân sự.' : 'Đã lưu biến động nhân sự.');
+      setModalOpen(false); setEditingHistory(null); form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu biến động nhân sự.');
+    } finally { setHistorySaving(false); }
+  };
+
+  const deleteHistory = (record: HistoryRecord) => {
+    Modal.confirm({
+      title: 'Xóa bản ghi biến động nhân sự?', content: `${record.code} · ${record.employeeName} · ${record.type}`, okText: 'Xóa', cancelText: 'Hủy',
+      onOk: async () => {
+        setHistorySaving(true);
+        try {
+          await collectionsApi.remove('hr_employee_history', record.key);
+          setData(previous => previous.filter(item => item.key !== record.key));
+          message.success('Đã xóa bản ghi biến động nhân sự.');
+        } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xóa bản ghi biến động nhân sự.'); }
+        finally { setHistorySaving(false); }
+      },
+    });
   };
 
   // Handle Bank Accounts Actions
@@ -720,18 +794,17 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
   });
 
   // Filtered History Data
-  const filteredHistoryData = (data || []).filter((item) => {
-    if (!item) return false;
-    const q = (searchText || '').toLowerCase();
-    const matchSearch =
-      !q ||
-      (item.employeeName && (item.employeeName || '').toLowerCase().includes(q)) ||
-      (item.employeeCode && (item.employeeCode || '').toLowerCase().includes(q)) ||
-      (item.decisionNumber && (item.decisionNumber || '').toLowerCase().includes(q)) ||
-      (item.newValue && (item.newValue || '').toLowerCase().includes(q));
-    const matchType = typeFilter === 'all' || item.type === typeFilter;
-    return matchSearch && matchType;
-  });
+  const filteredHistoryData = filterEmployeeHistory(data, typeFilter, searchText);
+
+  const exportHistory = () => {
+    const rows = typeFilter === 'Ngân hàng'
+      ? [['Mã nhân viên', 'Họ tên', 'Ngân hàng', 'Số tài khoản', 'Chủ tài khoản', 'Chi nhánh', 'Trạng thái'], ...filteredBankAccounts.map(record => [record.employeeCode, record.employeeName, record.bankName, record.accountNumber, record.accountHolder, record.branch, record.status])]
+      : typeFilter === 'Xác thực danh tính'
+      ? [['Mã nhân viên', 'Họ tên', 'Loại giấy tờ', 'Số giấy tờ', 'Thời gian xác thực', 'Trạng thái'], ...filteredIdentityData.map(record => [record.employeeCode, record.employeeName, record.idType, record.idNumber, record.verifiedAt, record.status])]
+      : [['Mã hồ sơ', 'Mã nhân viên', 'Họ tên', 'Loại biến động', 'Ngày hiệu lực', 'Giá trị cũ', 'Giá trị mới', 'Số quyết định', 'Người ký quyết định', 'Ghi chú'], ...filteredHistoryData.map(record => [record.code, record.employeeCode, record.employeeName, record.type, record.eventDate, record.oldValue, record.newValue, record.decisionNumber, record.signer, record.note])];
+    downloadFile(`Lich_su_nhan_su_${new Date().toISOString().slice(0, 10)}.xlsx`, generateValidXlsxBlob(rows));
+    message.success('Đã tải báo cáo theo dữ liệu và bộ lọc hiện tại.');
+  };
 
   const generalColumns = [
     {
@@ -803,6 +876,14 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       title: 'Người ký',
       dataIndex: 'signer',
       key: 'signer',
+    },
+    {
+      title: 'Thao tác', key: 'actions', width: 155,
+      render: (_: unknown, record: HistoryRecord) => <div style={{ display: 'flex', gap: 6 }}>
+        <Button size="small" icon={<EyeOutlined />} onClick={() => setViewingHistory(record)}>Xem</Button>
+        <Button size="small" icon={<EditOutlined />} disabled={historySaving} onClick={() => openHistory(record)}>Sửa</Button>
+        <Button size="small" danger icon={<DeleteOutlined />} disabled={historySaving} onClick={() => deleteHistory(record)}>Xóa</Button>
+      </div>,
     },
   ];
 
@@ -1097,6 +1178,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+      {historyError && typeFilter !== 'Ngân hàng' && typeFilter !== 'Xác thực danh tính' && <div role="alert" style={{ color: '#DC2626', marginBottom: 12 }}>{historyError} <Button size="small" onClick={() => void loadHistory()}>Tải lại</Button></div>}
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -1184,11 +1266,13 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button
             icon={<ReloadOutlined />}
-            onClick={() => {
+            onClick={async () => {
               if (typeFilter === 'Ngân hàng') {
                 loadBankAccounts();
               } else if (typeFilter === 'Xác thực danh tính') {
-                void loadEmployees();
+                await loadEmployees();
+              } else {
+                if (!await loadHistory()) return;
               }
               message.success('Đã làm mới dữ liệu');
             }}
@@ -1197,7 +1281,8 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
           </Button>
           <Button
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất dữ liệu ra tệp Excel')}
+            onClick={exportHistory}
+            disabled={typeFilter !== 'Ngân hàng' && typeFilter !== 'Xác thực danh tính' && (historyLoading || !!historyError)}
             style={{ borderRadius: 6 }}
           >
             Xuất Excel
@@ -1225,10 +1310,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => {
-                form.resetFields();
-                setModalOpen(true);
-              }}
+              onClick={() => openHistory()}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
               Ghi nhận biến động mới
@@ -1240,6 +1322,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       {/* Main Table with Minepanel transparent-table-card (giống 100% /admin/business/org-units) */}
       <div className="transparent-table-card" style={{ width: '100%' }}>
         <KTable
+          loading={typeFilter !== 'Ngân hàng' && typeFilter !== 'Xác thực danh tính' && historyLoading}
           dataSource={
             typeFilter === 'Ngân hàng'
               ? filteredBankAccounts
@@ -1498,7 +1581,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {identityTab === 'cccd' ? <IdcardOutlined style={{ color: '#009688', fontSize: 18 }} /> : identityTab === 'video' ? <VideoCameraOutlined style={{ color: '#009688', fontSize: 18 }} /> : <FileTextOutlined style={{ color: '#009688', fontSize: 18 }} />}
-            <span>{identityModalTitle}</span>
+            <span>{identityTab === 'cccd' ? 'Giấy tờ định danh' : identityTab === 'video' ? 'Video xác thực' : 'Thông tin xác thực'}</span>
           </div>
         }
         open={isIdentityViewModalOpen}
@@ -1579,7 +1662,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
 
       {/* MODAL: THÊM BIẾN ĐỘNG CHUNG */}
       <Modal
-        title="Ghi nhận biến động nhân sự mới"
+        title={editingHistory ? 'Chỉnh sửa biến động nhân sự' : 'Ghi nhận biến động nhân sự mới'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -1587,11 +1670,11 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       >
         <Form form={form} layout="vertical" onFinish={handleCreateHistory} style={{ marginTop: 12 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeCode" label="Mã nhân viên" rules={[{ required: true }]}>
-              <Input placeholder="EMP-001" />
+            <Form.Item name="employeeId" label="Nhân viên (Mã · Họ tên)" rules={[{ required: true }]}>
+              <Select showSearch placeholder="Chọn nhân viên" options={historyEmployees.map(employee => ({ value: employee.key, label: `${employee.code} · ${employee.name}` }))} onChange={employeeId => { const employee = historyEmployees.find(item => item.key === employeeId); form.setFieldsValue({ employeeName: employee?.name || '' }); }} />
             </Form.Item>
             <Form.Item name="employeeName" label="Họ và tên" rules={[{ required: true }]}>
-              <Input placeholder="Nguyễn Văn A" />
+              <Input readOnly placeholder="Theo nhân viên đã chọn" />
             </Form.Item>
           </div>
 
@@ -1608,39 +1691,46 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
               />
             </Form.Item>
             <Form.Item name="eventDate" label="Ngày hiệu lực" rules={[{ required: true }]}>
-              <Input placeholder="DD/MM/YYYY" defaultValue={new Date().toLocaleDateString('vi-VN')} />
+              <Input type="date" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="oldValue" label="Giá trị cũ (nếu có)">
-              <Input placeholder="VD: Chức vụ cũ, Phòng cũ..." />
+              <Input placeholder="VD: Chức vụ cũ, Phòng cũ..." maxLength={1000} />
             </Form.Item>
             <Form.Item name="newValue" label="Giá trị mới" rules={[{ required: true }]}>
-              <Input placeholder="VD: Chức vụ mới, Phòng mới..." />
+              <Input placeholder="VD: Chức vụ mới, Phòng mới..." maxLength={1000} />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="decisionNumber" label="Số Quyết định">
-              <Input placeholder="QĐ-2026/01..." />
+              <Input placeholder="Số quyết định thực tế (nếu có)" maxLength={160} />
             </Form.Item>
             <Form.Item name="signer" label="Người ký">
-              <Input placeholder="Ban Giám Đốc" />
+              <Input placeholder="Người ký quyết định thực tế (nếu có)" maxLength={200} />
             </Form.Item>
           </div>
 
           <Form.Item name="note" label="Ghi chú">
-            <Input.TextArea rows={2} placeholder="Nội dung chi tiết quyết định..." />
+            <Input.TextArea rows={2} placeholder="Nội dung chi tiết quyết định..." maxLength={4000} />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xác nhận ghi nhận
+            <Button type="primary" htmlType="submit" loading={historySaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingHistory ? 'Lưu thay đổi' : 'Xác nhận ghi nhận'}
             </Button>
           </div>
         </Form>
+      </Modal>
+
+      <Modal title="Chi tiết biến động nhân sự" open={!!viewingHistory} onCancel={() => setViewingHistory(null)} footer={<Button onClick={() => setViewingHistory(null)}>Đóng</Button>} width={560}>
+        {viewingHistory && <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 12 }}>{[
+          ['Mã hồ sơ', viewingHistory.code], ['Nhân viên', `${viewingHistory.employeeCode} · ${viewingHistory.employeeName}`], ['Loại biến động', viewingHistory.type], ['Ngày hiệu lực', viewingHistory.eventDate],
+          ['Giá trị cũ', viewingHistory.oldValue], ['Giá trị mới', viewingHistory.newValue], ['Số quyết định', viewingHistory.decisionNumber], ['Người ký quyết định', viewingHistory.signer], ['Ghi chú', viewingHistory.note],
+        ].map(([label, value]) => <div key={label}><span style={{ color: '#64748B', fontSize: 12 }}>{label}</span><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value || '—'}</div></div>)}</div>}
       </Modal>
     </div>
   );

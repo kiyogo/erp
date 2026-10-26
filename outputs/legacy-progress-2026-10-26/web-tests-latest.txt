@@ -1,0 +1,48 @@
+
+> kiyodn-web@0.1.0 test
+> node --experimental-strip-types --test tests/*.test.mjs src/modules/attendance/attendanceRules.test.mts
+
+✔ leave requests reject impossible dates, backwards dates and excess/invalid day counts (7.9038ms)
+✔ overnight shifts and OT use elapsed clock time without accepting impossible clock values (2.8018ms)
+✔ zero allowances remain zero and empty/NaN/negative amounts are never replaced with fabricated defaults (0.527ms)
+✔ leave funds support zero entitlement and reject balances that hide excessive usage (0.7049ms)
+✔ timesheet calendar and employee cells never invent attendance or credit OT as regular work (1.6791ms)
+✔ backup UI starts empty, uses physical backup API and never fabricates successful creation, restore or download (116.5104ms)
+✔ user roles, activation and MFA reflect server facts, with independent pending/locked filters (11.6433ms)
+✔ users load all pages, persist CRUD before success, reset actual passwords and export current filter (61.1601ms)
+✔ contract download uses authoritative Word bytes, resolves stale file ids and reports errors without fake fallback (7.2081ms)
+✔ archive form preserves uploaded scans after record errors, downloads original bytes, exports real data and persists processing (132.7437ms)
+✔ editor save awaits remote persistence before success and prevents concurrent repeated writes (16.1524ms)
+✔ editor reports rejected persistence without success, preserves draft and unlocks a successful retry (3.8615ms)
+✔ editor stops remote save after a rejected local draft write and always releases the lock (0.905ms)
+✔ actual draft storage waits for IndexedDB commit and propagates transaction abort (11.9911ms)
+✔ actual draft storage rejects IndexedDB open failure instead of allowing false save success (4.5289ms)
+✔ employee history validates real identities and dates and filters all record details (22.7736ms)
+✔ history CRUD persists before UI success, includes former employees, exports current filter and preserves other views (111.9676ms)
+✔ document metadata saves only after server confirmation, preserves original upload on retry and exports filtered actual records (66.7527ms)
+✔ document Word editor loads persisted bytes before opening and saves true blobs with cleanup after record failure (30.1881ms)
+✔ PDF preserves all lines across pages and never invents a signature (28.4196ms)
+✔ PDF wraps long unbroken lines and supports an empty report (10.8408ms)
+✔ XLSX is an OpenXML ZIP with real numbers, Unicode, escaping and no formula injection (6.2173ms)
+✔ TOTP matches RFC 6238 and rejects an empty secret (138.5665ms)
+✔ required, email, URL and length rules block invalid values (7.089ms)
+✔ defaults, zero values, reset and unmounted fields behave correctly (1.9823ms)
+✔ optional blank values, patterns and async validators are respected (1.5066ms)
+✔ modal footer submit calls the mounted form and unregisters on close (1.1289ms)
+✔ onboarding progress requires actual canonical confirmations and never infers from legacy percentage (12.3596ms)
+✔ onboarding persists each checkbox, handles failure, requires review before completion and opens real contract page (53.5553ms)
+✔ payslip confirmation persists by record key and does not claim success after API failure (980.8935ms)
+✔ recruitment validates stages and dates and derives metrics from actual candidates (112.8174ms)
+✔ recruitment saves real candidate records, preserves logical keys, exports and reports API failure (116.3373ms)
+✔ rewards require an approved state before award and validate actual nonnegative amounts (20.5362ms)
+✔ rewards await approval and award, preserve failure state, show authoritative actors and export real records (129.9888ms)
+✔ company settings load real fields, await persistence, preserve failure state and export actual profile without passwords (40.075ms)
+✔ SMTP tab saves through the real email endpoint and failed company reads cannot overwrite existing settings (60.4093ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4467.6021

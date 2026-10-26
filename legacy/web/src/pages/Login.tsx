@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { Typography, Alert } from '../custom-ui';
+import React, { useEffect, useState } from 'react';
+import { Typography, Alert, Modal } from '../custom-ui';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { authApi } from '../api/endpoints';
 
 const { Title, Text } = Typography;
 
@@ -13,6 +14,66 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { login, loginWithGoogle } = useAuth();
+  const [googleModalOpen, setGoogleModalOpen] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleButton, setGoogleButton] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!googleModalOpen || !googleClientId || !googleButton) return;
+    let active = true;
+    const renderGoogleButton = async () => {
+      if (!(window as any).google?.accounts?.id) {
+        await new Promise<void>((resolve, reject) => {
+          let script = document.querySelector<HTMLScriptElement>('script[data-google-identity]');
+          const created = !script;
+          if (!script) {
+            script = document.createElement('script');
+            script.src = 'https://accounts.google.com/gsi/client';
+            script.async = true;
+            script.dataset.googleIdentity = 'true';
+          }
+          const element = script;
+          const cleanup = () => {
+            clearTimeout(timeout);
+            element.removeEventListener('load', loaded);
+            element.removeEventListener('error', failed);
+          };
+          const loaded = () => { cleanup(); resolve(); };
+          const failed = () => { cleanup(); element.remove(); reject(new Error('Không tải được dịch vụ đăng nhập Google. Vui lòng kiểm tra kết nối.')); };
+          const timeout = setTimeout(failed, 15_000);
+          element.addEventListener('load', loaded, { once: true });
+          element.addEventListener('error', failed, { once: true });
+          if (created) document.head.appendChild(element);
+        });
+      }
+      if (!active) return;
+      const google = (window as any).google.accounts.id;
+      google.initialize({
+        client_id: googleClientId,
+        ux_mode: 'popup',
+        callback: async (response: { credential?: string }) => {
+          if (!active || !response.credential) return;
+          setLoading(true);
+          setError('');
+          try {
+            const user = await loginWithGoogle({ credential: response.credential });
+            setGoogleModalOpen(false);
+            navigate(user.role.toUpperCase() === 'ADMIN' ? '/admin/dashboard' : '/employee/home');
+          } catch (err: any) {
+            setGoogleModalOpen(false);
+            setError(err?.response?.data?.message || err?.message || 'Không thể đăng nhập bằng Google.');
+          } finally {
+            setLoading(false);
+          }
+        },
+      });
+      google.renderButton(googleButton, { theme: 'outline', size: 'large', text: 'signin_with', locale: 'vi', width: 280 });
+    };
+    void renderGoogleButton().catch(err => {
+      if (active) { setGoogleModalOpen(false); setError(err?.message || 'Không tải được đăng nhập Google.'); }
+    });
+    return () => { active = false; };
+  }, [googleModalOpen, googleClientId, googleButton, loginWithGoogle, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,24 +118,10 @@ const Login: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      let ssoConfig: any = null;
-      try {
-        const raw = localStorage.getItem('google_sso_config');
-        if (raw) ssoConfig = JSON.parse(raw);
-      } catch {}
-
-      const user = await loginWithGoogle({
-        clientKey: ssoConfig?.clientKey || undefined,
-        allowedDomain: ssoConfig?.allowedDomain || undefined,
-      });
-
-      const role = (user?.role || '').toUpperCase();
-      const isAdmin = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'SYSTEM_ADMIN' || role === 'HR_MANAGER' || role === 'MANAGER';
-      if (isAdmin) {
-        navigate('/admin/dashboard');
-      } else {
-        navigate('/employee/home');
-      }
+      const response = await authApi.getGoogleConfig();
+      if (!response.data.configured) throw new Error('Chưa cấu hình đăng nhập Google trên máy chủ. Vui lòng dùng tài khoản và mật khẩu.');
+      setGoogleClientId(response.data.clientId);
+      setGoogleModalOpen(true);
     } catch (err: any) {
       console.error('Google login error:', err);
       const serverMessage = err?.response?.data?.message || err?.message;
@@ -97,6 +144,10 @@ const Login: React.FC = () => {
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
       }}
     >
+      <Modal title="Đăng nhập bằng Google" open={googleModalOpen} onCancel={() => setGoogleModalOpen(false)} footer={null} width={360}>
+        <p>Chọn tài khoản trong cửa sổ xác thực của Google.</p>
+        <div ref={setGoogleButton} style={{ minHeight: 44 }} />
+      </Modal>
       <div
         style={{
           width: 360,

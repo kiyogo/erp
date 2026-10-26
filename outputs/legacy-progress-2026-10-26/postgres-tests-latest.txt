@@ -1,0 +1,5 @@
+
+> kiyodn-api@1.0.0 test:postgres
+> node --env-file=.env tests/postgres-smoke.mjs
+
+{"databaseEngine":"PostgreSQL","checksPassed":14,"evidence":"C:\\Users\\sonng\\AppData\\Local\\Temp\\kiyovn-pg-test-ajQZbr"}

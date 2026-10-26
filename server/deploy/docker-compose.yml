@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  kiyo-server:
+    build:
+      context: ../..
+      dockerfile: server/deploy/Dockerfile
+    container_name: kiyo-server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - KIYO_API_HOST=0.0.0.0
+      - KIYO_API_PORT=3001
+      - KIYO_API_DB_PATH=/app/data/kiyo.sqlite
+      - KIYO_API_STORAGE_PATH=/app/data/files
+      - KIYO_STATIC_DIR=/app/dist
+      - KIYO_JWT_SECRET=${KIYO_JWT_SECRET:?set-a-unique-secret-at-least-32-characters}
+      - KIYO_BOOTSTRAP_ADMIN_EMAIL=${KIYO_BOOTSTRAP_ADMIN_EMAIL:?set-an-admin-email}
+      - KIYO_BOOTSTRAP_ADMIN_PASSWORD=${KIYO_BOOTSTRAP_ADMIN_PASSWORD:?set-a-strong-password}
+    volumes:
+      - kiyo_data:/app/data
+
+volumes:
+  kiyo_data:

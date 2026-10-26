@@ -19,8 +19,47 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
-import { employeesApi, usersApi } from '../../api/endpoints';
+import { adminSessionsApi, employeesApi, usersApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+
+export function normalizeAdminUser(user: any, lastLogin = '') {
+  const isActive = user.isActive === true || user.isActive === 1 || user.is_active === 1;
+  return {
+    ...user,
+    key: String(user.id || user.key),
+    username: user.employeeCode || user.employee_code || '',
+    fullName: user.fullName || user.name || '',
+    role: user.role,
+    department: user.department || '',
+    position: user.position || '',
+    status: isActive ? 'Hoạt động' : user.activationStatus === 'Chờ kích hoạt' ? 'Chờ kích hoạt' : 'Đã khóa',
+    isActive,
+    twoFactor: user.mfaVerified === true ? true : null,
+    lastLogin: lastLogin || 'Chưa có dữ liệu phiên',
+  };
+}
+
+export function filterAdminUsers(users: any[], tab: string, search: string) {
+  const query = search.trim().toLocaleLowerCase('vi-VN');
+  return users.filter(user => {
+    const matches = tab === 'all' || (tab === 'active' && user.status === 'Hoạt động')
+      || (tab === 'locked' && user.status === 'Đã khóa') || (tab === 'pending' && user.status === 'Chờ kích hoạt')
+      || (tab === 'admin' && user.role === 'ADMIN') || (tab === 'mfa' && user.twoFactor === true);
+    return matches && [user.username, user.fullName, user.email, user.department, user.position, user.role]
+      .some(value => String(value || '').toLocaleLowerCase('vi-VN').includes(query));
+  });
+}
+
+export function validateAdminUser(values: any, editing = false) {
+  if (!String(values.fullName || '').trim()) return 'Vui lòng nhập họ tên.';
+  if (!editing && !String(values.username || '').trim()) return 'Vui lòng nhập mã nhân viên.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(values.email || '').trim())) return 'Email không hợp lệ.';
+  if (!['ADMIN', 'USER'].includes(values.role)) return 'Vai trò phải là ADMIN hoặc USER theo quyền hệ thống hiện tại.';
+  if (!editing && (String(values.password || '').length < 12 || String(values.password || '').length > 256)) return 'Mật khẩu khởi tạo phải dài từ 12 đến 256 ký tự.';
+  if (values.twoFactor === true || values.twoFactor === 'true') return 'Máy chủ chưa có bộ thực thi MFA; không thể bật bắt buộc 2FA từ biểu mẫu này.';
+  return '';
+}
 
 export const AdminUsersModule: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
@@ -32,27 +71,43 @@ export const AdminUsersModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [form] = Form.useForm();
+  const [passwordForm] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editingUser, setEditingUser] = useState<any>(null);
+  const [passwordTarget, setPasswordTarget] = useState<any>(null);
 
   const loadData = async () => {
+    setLoading(true);
     try {
-      const [response, orgUnits] = await Promise.all([
-        usersApi.getAll(),
+      const response = await usersApi.getAll({ page: 1, limit: 100 });
+      const users = [...(response.data.data || [])];
+      const total = Number(response.data.pagination?.total || users.length);
+      const limit = Number(response.data.pagination?.limit || 100);
+      for (let page = 2; page <= Math.ceil(total / limit); page++) {
+        const next = await usersApi.getAll({ page, limit: 100 });
+        users.push(...(next.data.data || []));
+      }
+      const [orgResult, sessionResult] = await Promise.allSettled([
         dataService.fetchOrgUnitsList(),
+        adminSessionsApi.getAll(),
       ]);
-      setData((response.data.data || []).map((user: any) => ({
-        ...user,
-        key: user.id,
-        username: user.employeeCode,
-        fullName: user.fullName || user.name,
-        role: user.role === 'ADMIN' ? 'Super Admin' : user.position || 'Nhân viên',
-        department: user.department || 'Chưa phân phòng ban',
-        status: user.isActive ? 'Hoạt động' : (user.activationStatus === 'Chờ kích hoạt' ? 'Chờ kích hoạt' : 'Đã khóa'),
-        twoFactor: false,
-        lastLogin: user.updatedAt ? 'Chưa có dữ liệu' : 'Chưa đăng nhập',
-      })));
-      setDepartmentOptions(orgUnits.map((name) => ({ label: name, value: name })));
+      const lastLogins = new Map<string, string>();
+      if (sessionResult.status === 'fulfilled') {
+        for (const session of sessionResult.value.data.data) {
+          if (session.loginTime > (lastLogins.get(session.userId) || '')) lastLogins.set(session.userId, session.loginTime);
+        }
+      }
+      const records = users.map((user: any) => normalizeAdminUser(user, lastLogins.get(user.id)));
+      setData(records);
+      setSelectedUser((selected: any) => selected ? records.find(user => user.key === selected.key) || null : null);
+      if (orgResult.status === 'fulfilled') setDepartmentOptions(orgResult.value.map(name => ({ label: name, value: name })));
+      else message.warning('Chưa tải được danh mục phòng ban. Danh sách tài khoản vẫn được hiển thị.');
+      if (sessionResult.status === 'rejected') message.warning('Chưa tải được lịch sử phiên để xác định lần đăng nhập cuối.');
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tải danh sách tài khoản.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -61,31 +116,36 @@ export const AdminUsersModule: React.FC = () => {
   }, []);
 
   const handleCreate = async (values: any) => {
+    if (saving) return;
+    const validation = validateAdminUser(values, Boolean(editingUser));
+    if (validation) { message.error(validation); return; }
+    setSaving(true);
     try {
-      await usersApi.create({
-        name: values.fullName,
-        email: values.email,
-        employeeCode: values.username,
-        password: values.password,
-        role: values.role === 'Super Admin' ? 'ADMIN' : 'USER',
-        department: values.department,
-      });
-      message.success(`Đã tạo tài khoản và hồ sơ nhân sự cho ${values.fullName}.`);
+      const payload = {
+        name: String(values.fullName).trim(), email: String(values.email).trim(), role: values.role,
+        department: values.department || '', position: values.position || '',
+      };
+      if (editingUser) await usersApi.update(editingUser.key, payload);
+      else await usersApi.create({ ...payload, employeeCode: String(values.username).trim(), password: values.password });
+      message.success(`Đã ${editingUser ? 'cập nhật' : 'tạo'} tài khoản và hồ sơ nhân sự cho ${values.fullName}.`);
       setModalOpen(false);
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể tạo tài khoản.');
+      message.error(error?.response?.data?.message || 'Không thể lưu tài khoản.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleToggleStatus = async (key: string, name: string) => {
     const current = data.find((item) => item.key === key);
+    if (!current) return;
+    if (current.status === 'Chờ kích hoạt') { await handleResetPassword(current); return; }
     try {
       await usersApi.update(key, { isActive: current?.status !== 'Hoạt động' });
       message.success(`Đã cập nhật trạng thái tài khoản: ${name}`);
       await loadData();
-      if (selectedUser && selectedUser.key === key) setSelectedUser((prev: any) => ({ ...prev, status: prev.status === 'Hoạt động' ? 'Đã khóa' : 'Hoạt động' }));
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái tài khoản.');
     }
@@ -93,7 +153,8 @@ export const AdminUsersModule: React.FC = () => {
 
   const handleResetPassword = async (record: any) => {
     if (record.activationStatus !== 'Chờ kích hoạt') {
-      message.info('Chức năng đặt lại mật khẩu sẽ dùng một luồng email riêng. Tài khoản này đã được kích hoạt.');
+      passwordForm.resetFields();
+      setPasswordTarget(record);
       return;
     }
     try {
@@ -114,24 +175,49 @@ export const AdminUsersModule: React.FC = () => {
 
   const activeCount = data.filter((u) => u.status === 'Hoạt động').length;
   const mfaCount = data.filter((u) => u.twoFactor).length;
-  const adminCount = data.filter((u) => (u.role || '').includes('Admin') || (u.role || '').includes('Giám Đốc')).length;
+  const adminCount = data.filter((u) => u.role === 'ADMIN').length;
 
-  const filteredData = data.filter((u) => {
-    let matchTab = true;
-    if (filterTab === 'active') matchTab = u.status === 'Hoạt động';
-    else if (filterTab === 'locked') matchTab = u.status !== 'Hoạt động';
-    else if (filterTab === 'admin') matchTab = (u.role || '').includes('Admin') || (u.role || '').includes('Giám Đốc');
-    else if (filterTab === 'mfa') matchTab = !!u.twoFactor;
+  const filteredData = filterAdminUsers(data, filterTab, searchText);
 
-    const matchSearch =
-      (u.username || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (u.fullName || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (u.email || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (u.department || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (u.role || '').toLowerCase().includes(searchText.toLowerCase());
+  const handlePasswordChange = async (values: any) => {
+    if (!passwordTarget || saving) return;
+    if (String(values.newPassword || '').length < 12 || String(values.newPassword || '').length > 256) { message.error('Mật khẩu mới phải dài từ 12 đến 256 ký tự.'); return; }
+    if (values.newPassword !== values.confirmPassword) { message.error('Mật khẩu xác nhận không trùng khớp.'); return; }
+    setSaving(true);
+    try {
+      await employeesApi.changePassword(passwordTarget.key, { newPassword: values.newPassword, confirmPassword: values.confirmPassword });
+      message.success(`Đã đặt mật khẩu mới cho ${passwordTarget.fullName}.`);
+      setPasswordTarget(null);
+      passwordForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể đặt lại mật khẩu.');
+    } finally { setSaving(false); }
+  };
 
-    return matchTab && matchSearch;
+  const handleDelete = (record: any) => Modal.confirm({
+    title: 'Xóa tài khoản người dùng?',
+    content: `Xóa tài khoản ${record.fullName}. Tài khoản có hồ sơ nghiệp vụ liên kết có thể không xóa được; có thể khóa tài khoản để giữ lịch sử.`,
+    okText: 'Xóa tài khoản', cancelText: 'Hủy', okButtonProps: { danger: true },
+    onOk: async () => {
+      try {
+        await usersApi.remove(record.key);
+        setDrawerOpen(false);
+        await loadData();
+        message.success('Đã xóa tài khoản.');
+      } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xóa tài khoản.'); }
+    },
   });
+
+  const printUser = () => {
+    if (!selectedUser) return;
+    const popup = window.open('', '_blank');
+    if (!popup) { message.error('Trình duyệt đã chặn cửa sổ in. Vui lòng cho phép mở cửa sổ.'); return; }
+    popup.document.write('<!doctype html><html lang="vi"><head><meta charset="UTF-8"><title>Thông tin tài khoản</title><style>@page{size:A4;margin:20mm}body{font-family:Arial,sans-serif;line-height:1.6}</style></head><body></body></html>');
+    for (const text of ['THÔNG TIN TÀI KHOẢN NGƯỜI DÙNG', `Mã nhân viên: ${selectedUser.username}`, `Họ tên: ${selectedUser.fullName}`, `Email: ${selectedUser.email}`, `Phòng ban: ${selectedUser.department || 'Chưa phân phòng ban'}`, `Chức danh: ${selectedUser.position || 'Chưa có'}`, `Vai trò hệ thống: ${selectedUser.role}`, `Trạng thái: ${selectedUser.status}`, `Đăng nhập cuối đã ghi nhận: ${selectedUser.lastLogin}`, `Xuất lúc: ${new Date().toISOString()}`]) {
+      const paragraph = popup.document.createElement('p'); paragraph.textContent = text; popup.document.body.appendChild(paragraph);
+    }
+    popup.document.close(); popup.focus(); popup.print();
+  };
 
   const columns = [
     {
@@ -161,10 +247,7 @@ export const AdminUsersModule: React.FC = () => {
       dataIndex: 'role',
       key: 'role',
       render: (r: string) => {
-        let color = 'cyan';
-        if (r.includes('Super Admin')) color = 'purple';
-        else if (r.includes('Giám Đốc')) color = 'green';
-        return <Tag color={color}>{r}</Tag>;
+        return <Tag color={r === 'ADMIN' ? 'purple' : 'cyan'}>{r === 'ADMIN' ? 'Quản trị viên (ADMIN)' : r === 'USER' ? 'Nhân viên (USER)' : r}</Tag>;
       },
     },
     {
@@ -172,9 +255,9 @@ export const AdminUsersModule: React.FC = () => {
       dataIndex: 'twoFactor',
       key: 'twoFactor',
       width: 140,
-      render: (tf: boolean) => (
-        <Tag color={tf ? 'success' : 'error'}>
-          {tf ? '● Đã bật 2FA' : '○ Chưa bật'}
+      render: (tf: boolean | null) => (
+        <Tag color={tf ? 'success' : 'default'}>
+          {tf ? '● Máy chủ đã xác minh MFA' : 'Chưa có dữ liệu MFA'}
         </Tag>
       ),
     },
@@ -225,7 +308,7 @@ export const AdminUsersModule: React.FC = () => {
             danger={record.status === 'Hoạt động'}
             onClick={() => handleToggleStatus(record.key, record.fullName)}
           >
-            {record.status === 'Hoạt động' ? 'Khóa' : 'Mở'}
+            {record.status === 'Hoạt động' ? 'Khóa' : record.status === 'Chờ kích hoạt' ? 'Gửi kích hoạt' : 'Mở'}
           </Button>
         </div>
       ),
@@ -241,7 +324,7 @@ export const AdminUsersModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} người dùng
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phân quyền theo mô hình RBAC</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo danh sách tài khoản được lưu trên máy chủ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -253,19 +336,19 @@ export const AdminUsersModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhóm Quản trị viên &amp; Lãnh đạo</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quản trị viên hệ thống (ADMIN)</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
             {adminCount} tài khoản
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Đặc quyền phê duyệt &amp; ký số HSM</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Quyền quản trị được máy chủ kiểm tra theo vai trò</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ kích hoạt xác thực 2FA</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            {Math.round((mfaCount / (data.length || 1)) * 100)}% Tuân thủ
+            {mfaCount}/{data.length} có xác nhận
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>{mfaCount}/{data.length} đã kích hoạt OTP/FIDO2</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Chưa có bộ thực thi chính sách MFA cho tài khoản</div>
         </div>
       </div>
 
@@ -276,6 +359,7 @@ export const AdminUsersModule: React.FC = () => {
             { key: 'all', label: 'Tất cả tài khoản' },
             { key: 'active', label: 'Đang hoạt động', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
             { key: 'locked', label: 'Đã khóa', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
+            { key: 'pending', label: 'Chờ kích hoạt' },
             { key: 'admin', label: 'Quản trị & Lãnh đạo', icon: <CrownOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'mfa', label: 'Đã bật 2FA', icon: <SafetyCertificateOutlined style={{ color: '#10B981' }} /> },
           ].map((tab) => (
@@ -305,7 +389,11 @@ export const AdminUsersModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách tài khoản quản trị')}>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadData()}>Làm mới</Button>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Danh_sach_tai_khoan.xlsx', generateValidXlsxBlob([
+            ['Mã nhân viên', 'Họ tên', 'Email', 'Vai trò hệ thống', 'Phòng ban', 'Chức danh', 'Trạng thái', 'Đăng nhập cuối đã ghi nhận', 'MFA'],
+            ...filteredData.map(user => [user.username, user.fullName, user.email, user.role, user.department, user.position, user.status, user.lastLogin, user.twoFactor ? 'Máy chủ đã xác minh' : 'Chưa có dữ liệu']),
+          ]))}>
             Xuất Excel
           </Button>
 
@@ -314,6 +402,8 @@ export const AdminUsersModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              setEditingUser(null);
+              form.setFieldsValue({ role: 'USER', twoFactor: 'unsupported' });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -329,21 +419,22 @@ export const AdminUsersModule: React.FC = () => {
           dataSource={filteredData}
           columns={columns}
           rowKey="key"
+          loading={loading}
           pagination={{ pageSize: 8 }}
         />
       </div>
 
       {/* Add User Modal */}
       <Modal
-        title="Tạo Mới Tài Khoản Người Dùng &amp; Phân Quyền"
+        title={editingUser ? 'Cập nhật tài khoản người dùng' : 'Tạo Mới Tài Khoản Người Dùng & Phân Quyền'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
         width={560}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <Form.Item name="username" label="Tên đăng nhập (Username)" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: hoang.yen" />
+          <Form.Item name="username" label="Mã nhân viên / Tên đăng nhập" rules={[{ required: true }]}>
+            <Input disabled={Boolean(editingUser)} placeholder="Ví dụ: NV-001" />
           </Form.Item>
           <Form.Item name="fullName" label="Họ và tên người dùng" rules={[{ required: true }]}>
             <Input placeholder="Ví dụ: Lê Hoàng Yến" />
@@ -351,41 +442,39 @@ export const AdminUsersModule: React.FC = () => {
           <Form.Item name="email" label="Email doanh nghiệp" rules={[{ required: true, type: 'email' }]}>
             <Input placeholder="Ví dụ: yen.lh@kiyovn.enterprise" />
           </Form.Item>
-          <Form.Item name="password" label="Mật khẩu khởi tạo" rules={[{ required: true, min: 12, message: 'Tối thiểu 12 ký tự.' }]}>
+          {!editingUser && <Form.Item name="password" label="Mật khẩu khởi tạo" rules={[{ required: true, min: 12, message: 'Tối thiểu 12 ký tự.' }]}>
             <Input.Password autoComplete="new-password" />
-          </Form.Item>
-          <Form.Item name="role" label="Vai trò & Nhóm quyền RBAC" rules={[{ required: true }]}>
+          </Form.Item>}
+          <Form.Item name="role" label="Vai trò hệ thống" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Super Admin (Toàn quyền hệ thống)', value: 'Super Admin' },
-                { label: 'Ban Giám Đốc (Executive Director)', value: 'Ban Giám Đốc' },
-                { label: 'Kế Toán Trưởng (Chief Accountant)', value: 'Kế Toán Trưởng' },
-                { label: 'Trưởng Phòng Nhân Sự (HR Manager)', value: 'Trưởng Phòng Nhân Sự' },
-                { label: 'Trưởng Phòng Ban Chuyên Môn', value: 'Trưởng Phòng Ban' },
-                { label: 'Nhân Viên Tiêu Chuẩn (Employee)', value: 'Nhân Viên Tiêu Chuẩn' },
+                { label: 'Quản trị viên (ADMIN)', value: 'ADMIN' },
+                { label: 'Nhân viên (USER)', value: 'USER' },
               ]}
             />
           </Form.Item>
-          <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true }]}>
+          <Form.Item name="department" label="Phòng ban trực thuộc">
             <Select
-              options={departmentOptions.length > 0 ? departmentOptions : [
-                { label: 'Ban Giám Đốc', value: 'Ban Giám Đốc' },
-              ]}
-              placeholder="Chọn phòng ban..."
+              options={departmentOptions}
+              allowClear
+              placeholder={departmentOptions.length ? 'Chọn phòng ban...' : 'Chưa có danh mục phòng ban'}
             />
           </Form.Item>
-          <Form.Item name="twoFactor" label="Bắt buộc xác thực 2 bước (2FA)" initialValue="true">
+          <Form.Item name="position" label="Chức danh công việc (không thay đổi quyền hệ thống)">
+            <Input placeholder="Ví dụ: Ban Giám Đốc, Kế Toán Trưởng, Trưởng Phòng Nhân Sự..." />
+          </Form.Item>
+          <Form.Item name="twoFactor" label="Chính sách xác thực 2 bước (2FA)" initialValue="unsupported">
             <Select
+              disabled
               options={[
-                { label: 'Bật bắt buộc (Khuyến nghị an ninh cao)', value: 'true' },
-                { label: 'Không bắt buộc', value: 'false' },
+                { label: 'Chưa có bộ thực thi MFA trên máy chủ', value: 'unsupported' },
               ]}
             />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Khởi tạo tài khoản
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingUser ? 'Lưu tài khoản' : 'Khởi tạo tài khoản'}
             </Button>
           </div>
         </Form>
@@ -424,9 +513,10 @@ export const AdminUsersModule: React.FC = () => {
               </div>
               <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
                 <div>Email công vụ: <strong style={{ color: '#1E40AF' }}>{selectedUser.email}</strong></div>
-                <div>Xác thực 2 bước (2FA): <Tag color={selectedUser.twoFactor ? 'success' : 'error'}>{selectedUser.twoFactor ? 'Đã kích hoạt' : 'Chưa bật'}</Tag></div>
+                <div>Chức danh: <strong>{selectedUser.position || 'Chưa có'}</strong></div>
+                <div>Xác thực 2 bước (2FA): <Tag color={selectedUser.twoFactor ? 'success' : 'default'}>{selectedUser.twoFactor ? 'Máy chủ đã xác minh' : 'Chưa có dữ liệu MFA'}</Tag></div>
                 <div>Lần đăng nhập cuối: <strong>{selectedUser.lastLogin}</strong></div>
-                <div>Chính sách mật khẩu: <strong>Đạt tiêu chuẩn 12 ký tự phức tạp</strong></div>
+                <div>Chính sách nhập mật khẩu mới: <strong>Tối thiểu 12 ký tự; mật khẩu hiện tại không được đọc hoặc suy đoán độ mạnh.</strong></div>
               </div>
             </div>
 
@@ -436,11 +526,8 @@ export const AdminUsersModule: React.FC = () => {
                 <SafetyCertificateOutlined /> Đặc Quyền Truy Cập RBAC:
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                <Tag color="blue">Xem Báo Cáo Tài Chính</Tag>
-                <Tag color="cyan">Ký Số Phê Duyệt HSM</Tag>
-                <Tag color="purple">Quản Lý Nhân Sự</Tag>
-                <Tag color="geekblue">Xuất Dữ Liệu Excel / PDF</Tag>
-                <Tag color="green">Truy Cập VPN Nội Bộ</Tag>
+                <Tag color="blue">{selectedUser.role === 'ADMIN' ? 'Vai trò ADMIN: thao tác API quản trị theo kiểm tra máy chủ' : 'Vai trò USER: truy cập hồ sơ và dữ liệu được cho phép'}</Tag>
+                <span>Quyền từng chức năng chưa được xác định từ ma trận RBAC riêng.</span>
               </div>
             </div>
 
@@ -450,24 +537,35 @@ export const AdminUsersModule: React.FC = () => {
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
                 onClick={() => void handleResetPassword(selectedUser)}
               >
-                Gửi Mail Đổi Mật Khẩu
+                {selectedUser.status === 'Chờ kích hoạt' ? 'Gửi lại email kích hoạt' : 'Đặt mật khẩu mới'}
               </Button>
               <Button
                 danger={selectedUser.status === 'Hoạt động'}
                 onClick={() => handleToggleStatus(selectedUser.key, selectedUser.fullName)}
               >
-                {selectedUser.status === 'Hoạt động' ? 'Khóa Tài Khoản' : 'Mở Khóa'}
+                {selectedUser.status === 'Hoạt động' ? 'Khóa Tài Khoản' : selectedUser.status === 'Chờ kích hoạt' ? 'Gửi kích hoạt' : 'Mở Khóa'}
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in thẻ chứng nhận cán bộ cho ${selectedUser.fullName}`)}
+                onClick={printUser}
               >
-                In Thẻ Cán Bộ (A4)
+                In Thông Tin (A4)
               </Button>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Button onClick={() => { setEditingUser(selectedUser); form.resetFields(); form.setFieldsValue({ ...selectedUser, twoFactor: 'unsupported' }); setModalOpen(true); }}>Sửa tài khoản</Button>
+              <Button danger onClick={() => handleDelete(selectedUser)}>Xóa tài khoản</Button>
             </div>
           </div>
         )}
       </Drawer>
+      <Modal title={`Đặt mật khẩu mới: ${passwordTarget?.fullName || ''}`} open={Boolean(passwordTarget)} onCancel={() => setPasswordTarget(null)} footer={null} width={480}>
+        <Form form={passwordForm} layout="vertical" onFinish={handlePasswordChange}>
+          <Form.Item name="newPassword" label="Mật khẩu mới" rules={[{ required: true, min: 12 }]}><Input.Password autoComplete="new-password" /></Form.Item>
+          <Form.Item name="confirmPassword" label="Xác nhận mật khẩu" rules={[{ required: true }]}><Input.Password autoComplete="new-password" /></Form.Item>
+          <Button type="primary" htmlType="submit" loading={saving}>Lưu mật khẩu mới</Button>
+        </Form>
+      </Modal>
     </div>
   );
 };

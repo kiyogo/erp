@@ -1,0 +1,109 @@
+
+> kiyodn-api@1.0.0 test
+> node --test tests/*.test.mjs
+
+(node:49960) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ concurrent name and password updates preserve both committed changes without restoring the old credential (682.7068ms)
+✔ concurrent profile update cannot reactivate an account locked by another committed request (411.8021ms)
+✔ simultaneous administrators cannot demote each other and leave zero active administrators (848.6632ms)
+✔ simultaneous administrators cannot delete each other and leave zero active administrators (619.5055ms)
+✔ simultaneous administrators cannot retire each other and leave zero active administrators (575.4999ms)
+✔ deleting a former administrator cannot cascade-delete their shared enterprise records (215.3648ms)
+Isolated user lifecycle evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-user-lifecycle-test-ErDGfW
+(node:66132) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ anonymous access is rejected (11.4234ms)
+✔ legacy attendance mirrors migrate without removing source records (14.435ms)
+✔ collections support create, read, patch, replacement, delete and concurrent scopes (491.3322ms)
+✔ task checklist is persisted before response, then task can be deleted (65.2955ms)
+✔ canvas documents can be created simultaneously (140.2338ms)
+✔ budget API validates amounts and recomputes balances instead of trusting the browser (75.6589ms)
+✔ canvas operation retries are idempotent and snapshots can be updated (158.6151ms)
+✔ recruitment persists pipeline, rejects duplicate email and invalid transitions (269.7144ms)
+✔ employee leave is visible to admins and approval cannot be forged or overwritten (367.3465ms)
+✔ overtime hours and compensation derive from validated values (88.1178ms)
+✔ shift approval swaps both assignments atomically (381.9305ms)
+✔ check-in uses server identity and timestamps and rejects duplicate events (140.3292ms)
+✔ employment history persists real employee identity and authoritative actors (121.1237ms)
+✔ contracts create, update and delete against the authoritative API (173.1243ms)
+✔ Google settings persist on the server without a client secret and prevent password lockout (177.4766ms)
+Isolated API test evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-api-test-WyuAJo
+(node:26956) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ logins issue unique persistent sessions with actual IP, agent, expiry and current-session marker (287.9425ms)
+✔ successful API activity updates the persisted last-active timestamp (191.6025ms)
+✔ session revoke immediately rejects the chosen token and keeps other sessions valid (186.8277ms)
+✔ logout revokes the current server session instead of only clearing browser data (213.9357ms)
+✔ legacy JWTs remain compatible, are registered once under concurrent access, and can be revoked (80.4307ms)
+✔ activation tokens and access tokens without a stored session cannot authorize API calls (9.4612ms)
+✔ only administrators can inspect or revoke sessions and generic writes cannot resurrect tokens (163.8641ms)
+✔ unverified Google payloads, tampered signatures and invalid claims cannot log in (37.9441ms)
+✔ verified Google identity creates a real session and preserves signup without granting admin (543.3358ms)
+✔ Google-only login requires a verified admin session and can safely return to password mode (250.2995ms)
+✔ revocation survives API restart and configured Google Workspace domain is enforced (790.2517ms)
+Isolated auth/session evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-sessions-test-vb0bdP
+(node:64920) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[Database] Using SQLite storage: C:\Users\sonng\AppData\Local\Temp\kiyovn-backups-test-OADqcN\live.sqlite
+✔ an empty backup catalog has no fictional snapshots and exposes actual engine capabilities (11.8128ms)
+✔ full backup contains a real consistent SQLite image, uploaded bytes and a verifiable manifest (2379.2009ms)
+✔ database-only and storage-only scopes contain exactly their intended physical data (253.5735ms)
+✔ archive tampering is detected and download refuses mismatched bytes (141.8493ms)
+✔ missing archives remain visible as missing and path traversal cannot access arbitrary server files (116.2683ms)
+✔ invalid or failed snapshots never leave a successful catalog entry or partial archive (8.8177ms)
+Isolated backup evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-backups-test-OADqcN
+✔ PostgreSQL without a configured dump mechanism reports database backup unavailable but retains file backup (47.9459ms)
+[Database] Using SQLite storage: C:\Users\sonng\AppData\Local\Temp\kiyovn-db-test-klSMws\test.sqlite
+(node:66272) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ PostgreSQL conversion casts stored JSON text and keeps literal question marks (3.1639ms)
+✔ simultaneous transactions commit independently and support nested helpers (497.1915ms)
+✔ rollback excludes unrelated writes and uncommitted reads (23.4706ms)
+✔ archive accepts records without scans, allocates unique book numbers and rejects invalid input (278.1065ms)
+✔ archive persists the exact original scan bytes and derives file metadata without asserting signature verification (260.7058ms)
+✔ archive writes require an authenticated administrator (298.8078ms)
+Archive API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-archives-test-dEKfFe
+✔ generated DOCX is a deterministic valid ZIP with the required OpenXML package relationships (10.2196ms)
+✔ DOCX preserves Unicode, leading spaces, paragraphs, tabs and explicit page breaks while escaping text (1.2727ms)
+✔ DOCX accepts empty text, replaces forbidden XML characters and refuses non-text inputs (4.8499ms)
+✔ ZIP stores full long document lengths and complete final paragraphs beyond 16-bit sizes (373.4965ms)
+✔ all generated package XML parses in the existing browser XML parser with exact document content (5141.9695ms)
+✔ enterprise register persists metadata and exact original / Word files without fabricated signature claims (315.1886ms)
+✔ user administration preserves profile fields, paginates and retains an active administrator (538.7809ms)
+(node:49092) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ admin backup endpoints produce a physical ZIP and refuse forged generic snapshots or unsupported restore (424.8374ms)
+✔ contracts download real Unicode DOCX, keep previous bytes during updates and never attach an unknown recipient to an arbitrary user (160.7679ms)
+✔ company profile stores all legal fields, validates dates and settings, rejects stale writes and feeds generated Word contracts (312.454ms)
+Operations API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-enterprise-operations-test-8jHJSy
+(node:60588) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ only authenticated administrators may read or record transfers (209.4312ms)
+✔ invalid amounts, accounts, dates and overdrafts leave the ledger unchanged (203.1626ms)
+✔ a transfer records balanced legs, actual fee, real actor and audit; retries do not duplicate it (136.2657ms)
+✔ failure on the credit leg rolls back the debit, metadata and audit (155.5894ms)
+✔ concurrent transfers cannot spend the same source balance twice (145.3008ms)
+✔ simultaneous retries of the same request create one transfer (101.3794ms)
+✔ canceling a transfer restores both balances and fee atomically and cannot cancel one leg (170.9516ms)
+✔ canceling after destination funds are spent is rejected without partial changes (197.8144ms)
+✔ bank to cash and cash to bank entries use the existing petty cash ledger (127.5981ms)
+✔ historical transfers stay readable; generic mutation cannot forge or erase linked entries (64.715ms)
+Isolated finance evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-finance-test-CzKgco
+✔ onboarding persists real confirmations and completion and rejects forged progress, signature and actor (368.0012ms)
+Onboarding API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-onboarding-test-dXg0uh
+✔ recruitment persists jobs, actual CV bytes and candidate stages; rejects invalid writes (406.5363ms)
+Recruitment API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-recruitment-test-ZIcqvJ
+✔ rewards require a real recipient and valid nonnegative amounts while preserving zero-value recognition (83.4283ms)
+✔ rewards start pending, require approval before award and derive approval/presenter identity from the authenticated actor (161.8121ms)
+✔ pending reward content is editable, approved financial content remains unchanged, and USER access is forbidden (300.7259ms)
+✔ approved reward identity stays frozen after employee rename and approved/awarded records cannot be erased (283.5958ms)
+Rewards API evidence: C:\Users\sonng\AppData\Local\Temp\kiyovn-rewards-test-5NgBbe
+ℹ tests 71
+ℹ suites 0
+ℹ pass 71
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10398.4284

@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, verify as verifySignature } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import net from 'node:net';
 import path from 'node:path';
 import tls from 'node:tls';
@@ -9,6 +11,8 @@ import { promisify } from 'node:util';
 import db, { initDatabaseSchema } from './db.mjs';
 import cryptoService, { encryptField, decryptField, isEncrypted, computeBlindIndex } from './crypto.mjs';
 import logger from './logger.mjs';
+import { createBackupManager } from './backups.mjs';
+import { createDocxFromText } from './document-files.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -32,6 +36,7 @@ const HOST = process.env.HOST || '127.0.0.1';
 const DATA_DIR = path.resolve(process.env.KIYOVN_DATA_DIR || path.join(__dirname, 'data'));
 const DB_PATH = path.resolve(process.env.KIYOVN_DB_PATH || path.join(DATA_DIR, 'kiyovn.sqlite'));
 const FILES_DIR = path.resolve(process.env.KIYOVN_FILES_DIR || path.join(DATA_DIR, 'files'));
+const backupManager = createBackupManager({ db, filesDir: FILES_DIR, dataDir: DATA_DIR });
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LIMIT = 8;
@@ -97,7 +102,10 @@ function base64url(value) {
 
 function publicUser(row, profile = null) {
   if (!row) return null;
-  return serializeUserProfile(row, profile);
+  return {
+    ...serializeUserProfile(row, profile),
+    ...(row.activation_pending !== undefined ? { activationStatus: row.activation_pending ? 'Chờ kích hoạt' : profile?.employment_status === 'Đã nghỉ việc' ? 'Đã nghỉ việc' : row.is_active ? 'Đang hoạt động' : 'Đã khóa' } : {}),
+  };
 }
 
 function formatRelativeTime(isoString) {
@@ -287,8 +295,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
   }
   const timestamp = now();
 
-  await db.exec('BEGIN');
-  try {
+  await db.transaction(async () => {
     if (allowIdentityChanges && (changes.password || changes.newPassword)) {
       const rawPass = String(changes.password || changes.newPassword).trim();
       if (rawPass) {
@@ -308,11 +315,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
     } else {
       await ensureEmployeeWorkspace(await getUserById(realUserId));
     }
-    await db.exec('COMMIT');
-  } catch (error) {
-    await db.exec('ROLLBACK');
-    throw error;
-  }
+  });
   const updatedRow = await employeeProfileRowByUserId(realUserId);
   return serializeEmployeeDetail(updatedRow, updatedRow, { role: 'ADMIN' });
 }
@@ -516,15 +519,61 @@ async function requireActivationSession(token) {
   return { user, record };
 }
 
+let googleSigningKeys = { keys: [], fetchedAt: 0, expiresAt: 0 };
+
+async function getGoogleConfig() {
+  const saved = parseJsonObject(await getSystemSetting('google_sso_config'));
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || saved.clientKey || '';
+  const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN?.trim().toLowerCase() || saved.allowedDomain || '';
+  const enforce = process.env.GOOGLE_ENFORCE_LOGIN !== undefined ? ['true', '1'].includes(process.env.GOOGLE_ENFORCE_LOGIN) : saved.enforceGoogleLogin === '100';
+  return { clientId, clientKey: clientId, allowedDomain, configured: Boolean(clientId), enforceGoogleLogin: enforce ? '100' : 'optional', redirectUri: saved.redirectUri || '', clientSecret: '', environmentOverride: Boolean(process.env.GOOGLE_CLIENT_ID?.trim()) };
+}
+
+async function getCompanyProfile() {
+  const row = await db.prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'company_profile'").get();
+  return { companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', ...parseJsonObject(row?.setting_value) };
+}
+
 async function verifyGoogleIdentityCredential(credential) {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  if (!clientId) throw new HttpError(422, 'Chưa cấu hình GOOGLE_CLIENT_ID để liên kết tài khoản Google.');
-  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(String(credential || ''))}`);
-  if (!response.ok) throw new HttpError(422, 'Không thể xác thực tài khoản Google.');
-  const payload = await response.json();
-  if (payload.aud !== clientId || !payload.email || payload.email_verified !== 'true') {
+  const config = await getGoogleConfig();
+  const clientId = config.clientId;
+  if (!clientId) throw new HttpError(422, 'Chưa cấu hình GOOGLE_CLIENT_ID để đăng nhập hoặc liên kết tài khoản Google.');
+  const parts = String(credential || '').split('.');
+  if (parts.length !== 3 || parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) throw new HttpError(422, 'Chứng thực Google không hợp lệ.');
+  let header;
+  let payload;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch { throw new HttpError(422, 'Chứng thực Google không hợp lệ.'); }
+  const current = Math.floor(Date.now() / 1000);
+  if (header.alg !== 'RS256' || typeof header.kid !== 'string' || payload.aud !== clientId
+    || !['accounts.google.com', 'https://accounts.google.com'].includes(payload.iss)
+    || !Number.isInteger(payload.exp) || payload.exp <= current
+    || !Number.isInteger(payload.iat) || payload.iat > current + 60
+    || typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 255
+    || !payload.email || ![true, 'true'].includes(payload.email_verified)) {
     throw new HttpError(422, 'Tài khoản Google không hợp lệ hoặc chưa xác minh email.');
   }
+  const domain = config.allowedDomain;
+  if (domain && String(payload.hd || '').toLowerCase() !== domain) throw new HttpError(403, 'Tài khoản Google không thuộc tên miền doanh nghiệp được cấp quyền.');
+  if (googleSigningKeys.expiresAt <= Date.now()
+    || (!googleSigningKeys.keys.some(key => key.kid === header.kid) && googleSigningKeys.fetchedAt < Date.now() - 60_000)) {
+    try {
+      const response = await fetch('https://www.googleapis.com/oauth2/v3/certs', { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) throw new Error('Google signing keys unavailable');
+      const result = await response.json();
+      if (!Array.isArray(result.keys)) throw new Error('Invalid signing keys');
+      const maxAge = Number(/max-age=(\d+)/i.exec(response.headers.get('cache-control') || '')?.[1] || 300);
+      googleSigningKeys = { keys: result.keys, fetchedAt: Date.now(), expiresAt: Date.now() + Math.min(maxAge, 86400) * 1000 };
+    } catch { throw new HttpError(503, 'Không thể kết nối dịch vụ xác thực Google. Vui lòng thử lại.'); }
+  }
+  const key = googleSigningKeys.keys.find(item => item.kid === header.kid && item.kty === 'RSA');
+  let verified = false;
+  try {
+    verified = Boolean(key) && verifySignature('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), createPublicKey({ key, format: 'jwk' }), Buffer.from(parts[2], 'base64url'));
+  } catch {}
+  if (!verified) throw new HttpError(422, 'Chữ ký chứng thực Google không hợp lệ.');
   return normalizeEmail(payload.email);
 }
 
@@ -1025,6 +1074,32 @@ function publicBankAccount(row, actor = null) {
   };
 }
 
+async function internalTransferAccounts() {
+  const banks = (await db.prepare('SELECT * FROM finance_bank_accounts ORDER BY bank_name, id').all()).map(row => publicBankAccount(row));
+  const transactions = await db.prepare("SELECT source, account_name, transaction_type, amount FROM finance_cash_transactions WHERE status = 'Đã hoàn thành'").all();
+  const bankNameCounts = new Map();
+  for (const bank of banks) bankNameCounts.set(bank.bankName, (bankNameCounts.get(bank.bankName) || 0) + 1);
+  const accounts = banks.map(bank => {
+    const name = `${bank.bankName} (${bank.accountNumber})`;
+    const aliases = new Set([bank.key, bank.accountNumber, name, `${bank.bankName} - ${bank.accountNumber} (VND)`]);
+    // Old cash entries used bank names; only assign them when the name identifies one account.
+    if (bankNameCounts.get(bank.bankName) === 1) aliases.add(bank.bankName);
+    const movement = transactions.filter(item => item.source === 'bank' && aliases.has(item.account_name))
+      .reduce((sum, item) => sum + (item.transaction_type === 'Thu' ? Number(item.amount) : -Number(item.amount)), 0);
+    return { key: bank.key, name, source: 'bank', balance: Number(bank.balance) + movement, status: bank.status };
+  });
+  for (const name of new Set(['Quỹ tiền mặt', ...transactions.filter(item => item.source === 'petty').map(item => item.account_name)])) {
+    const balance = transactions.filter(item => item.source === 'petty' && item.account_name === name)
+      .reduce((sum, item) => sum + (item.transaction_type === 'Thu' ? Number(item.amount) : -Number(item.amount)), 0);
+    accounts.push({ key: `petty:${name}`, name, source: 'petty', balance, status: 'Đang hoạt động' });
+  }
+  return accounts;
+}
+
+async function lockTransferLedger() {
+  if (db.pool) await db.exec('LOCK TABLE finance_cash_transactions IN SHARE ROW EXCLUSIVE MODE');
+}
+
 function publicCrmContact(row, actor = null) {
   if (!row) return null;
   const isFull = !actor || actor.role === 'ADMIN';
@@ -1170,12 +1245,68 @@ function publicProposal(row) {
   };
 }
 
-function createToken(user) {
+async function createToken(user, request, method = 'password') {
   const issuedAt = Math.floor(Date.now() / 1000);
+  const sessionId = randomUUID();
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = base64url(JSON.stringify({ sub: user.id, role: user.role, iat: issuedAt, exp: issuedAt + TOKEN_TTL_SECONDS }));
+  const payload = base64url(JSON.stringify({ sub: user.id, role: user.role, scope: 'access', sid: sessionId, iat: issuedAt, exp: issuedAt + TOKEN_TTL_SECONDS }));
   const signature = createHmac('sha256', jwtSecret).update(`${header}.${payload}`).digest('base64url');
+  await saveAuthSession(user, sessionId, request, issuedAt, issuedAt + TOKEN_TTL_SECONDS, method);
   return `${header}.${payload}.${signature}`;
+}
+
+async function saveAuthSession(user, key, request, issuedAt, expiresAt, method) {
+  const timestamp = now();
+  const session = {
+    kind: 'auth_session', key, userId: user.id, method,
+    ip: String(request.socket.remoteAddress || '').replace(/^::ffff:/, ''),
+    userAgent: String(request.headers['user-agent'] || '').slice(0, 1024),
+    loginTime: new Date(issuedAt * 1000).toISOString(), lastActive: timestamp,
+    expiresAt: new Date(expiresAt * 1000).toISOString(), revokedAt: '', revokedBy: '',
+    tlsProtocol: request.socket.encrypted ? request.socket.getProtocol?.() || 'TLS' : '',
+    cipher: request.socket.encrypted ? request.socket.getCipher?.()?.name || '' : '',
+  };
+  await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+    VALUES (?, 'admin_sessions', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO NOTHING`)
+    .run(randomUUID(), key, user.id, JSON.stringify(session), timestamp, timestamp);
+}
+
+function publicAuthSession(record, user, currentKey) {
+  const expired = Date.parse(record.expiresAt) <= Date.now();
+  const idle = Date.parse(record.lastActive) < Date.now() - 5 * 60 * 1000;
+  const ip = record.ip || '';
+  const local = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || ip === '::1' || /^(fc|fd|fe80:)/i.test(ip);
+  const agent = record.userAgent || '';
+  const browser = /Edg\//.test(agent) ? 'Microsoft Edge' : /Firefox\//.test(agent) ? 'Firefox' : /Chrome\//.test(agent) ? 'Chrome' : /Safari\//.test(agent) ? 'Safari' : 'Không xác định';
+  const device = /Android/.test(agent) ? 'Android' : /iPhone|iPad/.test(agent) ? 'iOS' : /Windows/.test(agent) ? 'Windows' : /Macintosh/.test(agent) ? 'macOS' : /Linux/.test(agent) ? 'Linux' : 'Không xác định';
+  return {
+    key: record.key, userId: user.id, user: user.name, empCode: user.employee_code, role: user.role,
+    ip, ipType: local ? 'Mạng nội bộ / Loopback' : ip ? 'Mạng ngoài' : 'Chưa xác định',
+    device, browser, userAgent: agent, location: 'Chưa xác định',
+    loginTime: record.loginTime, lastActive: record.lastActive, expiresAt: record.expiresAt,
+    mfaVerified: false, method: record.method, tlsProtocol: record.tlsProtocol || '', cipher: record.cipher || '',
+    status: record.revokedAt ? 'Đã thu hồi' : expired ? 'Đã hết hạn' : idle ? 'Treo / Chờ thao tác' : 'Đang hoạt động',
+    revokedAt: record.revokedAt || '', revokedBy: record.revokedBy || '', revokeReason: record.revokeReason || '',
+    current: record.key === currentKey,
+  };
+}
+
+async function revokeAuthSession(row, actorId, reason) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const session = publicCollectionRecord(row);
+    if (session.revokedAt) return session;
+    const timestamp = now();
+    const revoked = { ...session, revokedAt: timestamp, revokedBy: actorId, revokeReason: reason };
+    const result = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+      .run(JSON.stringify(revoked), timestamp, row.id, row.payload_json);
+    if (result.changes) {
+      await recordAuditEvent(actorId, 'revoke_session', 'admin_sessions', session.key, { userId: session.userId, reason });
+      return revoked;
+    }
+    row = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(row.id);
+    if (!row) throw new HttpError(404, 'Không tìm thấy phiên đăng nhập.');
+  }
+  throw new HttpError(409, 'Phiên đang được cập nhật, vui lòng thử thu hồi lại.');
 }
 
 function verifyToken(token) {
@@ -1253,7 +1384,8 @@ function optionalAmount(value, field) {
 
 function requiredIsoDate(value, field) {
   const date = requiredText(value, field, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00.000Z`))) {
+  const timestamp = Date.parse(`${date}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
     throw new HttpError(422, `${field} không đúng định dạng YYYY-MM-DD.`);
   }
   return date;
@@ -1271,6 +1403,10 @@ const USER_COLLECTION_SCOPES = new Set([
   'attendance.overtime-requests',
   'meeting-room.bookings',
   'tickets.requests',
+  'leave_requests',
+  'attendance_overtime',
+  'attendance_leave_summary',
+  'attendance_explanations',
 ]);
 
 function normalizeCollectionScope(value) {
@@ -1290,14 +1426,89 @@ async function requireCollectionActor(request, scope) {
   if (actor.role !== 'ADMIN' && !canUseCollectionAsUser(scope)) {
     throw new HttpError(403, 'Bạn không có quyền truy cập dữ liệu quản trị này.');
   }
+  if (actor.role !== 'ADMIN' && ['hr_job_openings', 'hr_recruitment_candidates', 'hr_onboarding_tasks', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews'].includes(scope)) {
+    throw new HttpError(403, 'Chỉ quản trị viên được quản lý tuyển dụng.');
+  }
+  if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary' && request.method !== 'GET') throw new HttpError(403, 'Chỉ quản trị viên được điều chỉnh số dư phép.');
+  if (scope === 'employee_timesheets' && request.method !== 'GET') throw new HttpError(405, 'Vui lòng chấm công qua chức năng ghi nhận giờ vào/ra.');
+  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives'].includes(scope)) {
+    throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
+  }
   return actor;
 }
 
-function normalizeCollectionRecord(value) {
+async function normalizeCollectionRecord(value, scope, actor, current = null) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new HttpError(422, 'Bản ghi phải là một đối tượng JSON.');
   }
   const record = { ...value };
+  if (scope === 'hr_employee_history') {
+    record.employeeId = requiredText(record.employeeId, 'Nhân viên', 160);
+    const employee = await getUserById(record.employeeId);
+    if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại.');
+    record.employeeName = employee.name; record.employeeCode = employee.employee_code;
+    record.type = oneOf(record.type, 'Loại biến động', ['Chức vụ', 'Thuyên chuyển', 'Nghỉ việc', 'Khen thưởng', 'Kỷ luật sự cố']);
+    record.eventDate = requiredIsoDate(record.eventDate, 'Ngày hiệu lực');
+    record.newValue = requiredText(record.newValue, 'Nội dung mới', 4000);
+    for (const field of ['oldValue', 'decisionNumber', 'signer', 'note']) record[field] = optionalText(record[field], 'Thông tin biến động', 4000);
+    record.code = current?.code || requiredText(record.code, 'Mã lịch sử', 160);
+    record.createdAt = current?.createdAt || now(); record.createdBy = current?.createdBy || actor.name;
+    record.updatedAt = now(); record.updatedBy = actor.name;
+  }
+  if (scope === 'hr_onboarding_tasks') {
+    record.employeeId = requiredText(record.employeeId, 'Nhân viên hội nhập', 160);
+    const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department, p.position FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1').get(record.employeeId);
+    if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+    record.employeeName = employee.name; record.empCode = employee.employee_code;
+    record.department = requiredText(record.department || employee.department, 'Phòng ban tiếp nhận', 160);
+    record.position = requiredText(record.position || employee.position, 'Vị trí tiếp nhận', 160);
+    record.startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu hội nhập');
+    record.evaluationDate = requiredIsoDate(record.evaluationDate, 'Ngày đánh giá');
+    if (record.evaluationDate < record.startDate) throw new HttpError(422, 'Ngày đánh giá phải sau ngày bắt đầu.');
+    record.mentor = requiredText(record.mentor, 'Người hướng dẫn', 160);
+    record.mentorPhone = optionalText(record.mentorPhone, 'Điện thoại người hướng dẫn', 40);
+    record.supportNote = optionalText(record.supportNote, 'Ghi nhận hỗ trợ', 4000);
+    record.reviewNotes = optionalText(record.reviewNotes, 'Ghi nhận nghiệm thu', 4000);
+    const keys = ['equipment', 'orientation', 'training', 'trialTasks', 'probationReview'];
+    const input = Array.isArray(record.checklist) ? record.checklist : [];
+    if (input.length !== keys.length || new Set(input.map(item => item.key)).size !== keys.length || input.some(item => !keys.includes(item.key) || typeof item.completed !== 'boolean')) throw new HttpError(422, 'Cần đủ năm mục kiểm tra hội nhập.');
+    record.checklist = keys.map(key => {
+      const item = input.find(entry => entry.key === key);
+      const previous = current?.checklist?.find(entry => entry.key === key);
+      return { key, completed: item.completed, ...(item.completed ? { completedAt: previous?.completed ? previous.completedAt || now() : now(), completedBy: previous?.completed ? previous.completedBy || actor.name : actor.name } : {}) };
+    });
+    record.progress = record.checklist.filter(item => item.completed).length * 20;
+    record.laptopProvided = record.checklist[0].completed;
+    record.emailCreated = record.checklist[0].completed;
+    record.currentStep = ['Cấp phát thiết bị & Tài khoản', 'Giới thiệu công ty & Văn hóa', 'Đào tạo nghiệp vụ', 'Thực hiện công việc thử việc', 'Đánh giá thử việc'][record.checklist.findIndex(item => !item.completed)] || 'Chờ nghiệm thu hội nhập';
+    record.status = oneOf(record.status || 'Đang hội nhập', 'Trạng thái hội nhập', ['Đang hội nhập', 'Đã hoàn thành', 'Cần hỗ trợ']);
+    if (record.status === 'Đã hoàn thành') {
+      if (record.progress !== 100) throw new HttpError(422, 'Cần hoàn thành tất cả mục kiểm tra trước khi nghiệm thu.');
+      record.reviewNotes = requiredText(record.reviewNotes, 'Ghi nhận nghiệm thu', 4000);
+      record.completedAt = current?.completedAt || now(); record.completedBy = current?.completedBy || actor.name;
+    } else { delete record.completedAt; delete record.completedBy; }
+    record.contractSigned = Boolean(current?.contractSigned);
+  }
+  if (scope === 'attendance_explanations') {
+    record.date = requiredIsoDate(record.date, 'Ngày giải trình');
+    record.reason = requiredText(record.reason, 'Lý do giải trình', 4000);
+    record.employeeId = current?.employeeId || actor.id;
+    record.employeeName = current?.employeeName || actor.name;
+    record.status = oneOf(record.status || 'Chờ duyệt', 'Trạng thái giải trình', ['Chờ duyệt', 'Đã duyệt', 'Từ chối']);
+    if (!current && record.status !== 'Chờ duyệt') throw new HttpError(422, 'Giải trình mới phải chờ duyệt.');
+    if (actor.role !== 'ADMIN' && record.status !== 'Chờ duyệt') throw new HttpError(403, 'Chỉ quản trị viên được duyệt giải trình.');
+    record.createdAt = current?.createdAt || now();
+  }
+  if (scope === 'finance_budgets') {
+    record.code = requiredText(record.code, 'Mã ngân sách', 160);
+    record.department = requiredText(record.department, 'Phòng ban', 160);
+    record.fiscalYear = requiredText(record.fiscalYear, 'Kỳ áp dụng', 160);
+    record.allocatedBudget = requiredAmount(record.allocatedBudget, 'Ngân sách');
+    record.actualSpent = optionalAmount(record.actualSpent, 'Số tiền đã giải ngân');
+    record.remainingBudget = record.allocatedBudget - record.actualSpent;
+    record.utilizationRate = Math.round(record.actualSpent / record.allocatedBudget * 1000) / 10;
+    record.status = record.utilizationRate > 100 ? 'Vượt ngân sách' : record.utilizationRate > 80 ? 'Cảnh báo hạn mức' : 'Trong hạn mức';
+  }
   const candidate = record.key ?? record.id ?? record.code;
   const recordKey = candidate === undefined || candidate === null || String(candidate).trim() === ''
     ? randomUUID()
@@ -1306,13 +1517,361 @@ function normalizeCollectionRecord(value) {
     throw new HttpError(422, 'Khóa bản ghi không hợp lệ.');
   }
   if (record.key === undefined) record.key = recordKey;
+  if (scope === 'hr_performance_reviews') {
+    const pending = 'Chờ phê duyệt điểm', completed = 'Đã hoàn tất đánh giá';
+    record.status = oneOf(record.status || pending, 'Trạng thái đánh giá', [pending, completed]);
+    if (!current && record.status !== pending) throw new HttpError(422, 'Phiếu mới phải chờ phê duyệt điểm.');
+    if (current?.status === completed) throw new HttpError(422, 'Phiếu đã hoàn tất không thể sửa hoặc phê duyệt lại.');
+    record.employeeId = requiredText(record.employeeId, 'Nhân viên được đánh giá', 160);
+    record.evaluatorId = requiredText(record.evaluatorId, 'Người đánh giá', 160);
+    const employee = await employeeProfileRowByUserId(record.employeeId);
+    const evaluator = await getUserById(record.evaluatorId);
+    if (!employee || !evaluator) throw new HttpError(422, 'Nhân viên hoặc người đánh giá không tồn tại.');
+    record.employeeName = employee.name; record.empCode = employee.employee_code; record.evaluator = evaluator.name;
+    record.department = requiredText(record.department || employee.department, 'Phòng ban tại kỳ đánh giá', 160);
+    record.position = optionalText(record.position || employee.position, 'Chức danh tại kỳ đánh giá', 160);
+    record.code = requiredText(record.code, 'Mã phiếu đánh giá', 160);
+    record.period = requiredText(record.period, 'Kỳ đánh giá', 160);
+    record.managerComment = optionalText(record.managerComment, 'Nhận xét quản lý', 4000);
+    const score = (value, maximum, label, optional = false) => {
+      if (value === '' || value === null || value === undefined) { if (optional) return null; throw new HttpError(422, `${label} là bắt buộc.`); }
+      const number = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+      if (!Number.isFinite(number) || number < 0 || number > maximum || Math.abs(number * 100 - Math.round(number * 100)) > 0.00001) throw new HttpError(422, `${label} phải từ 0 đến ${maximum}, tối đa hai chữ số thập phân.`);
+      return number;
+    };
+    record.selfScore = score(record.selfScore, 100, 'Điểm tự chấm', true);
+    const pillars = ['productivityScore', 'disciplineScore', 'innovationScore'];
+    pillars.forEach((key, index) => { record[key] = score(record[key], index === 0 ? 60 : 20, 'Điểm trụ cột', true); });
+    const measured = pillars.filter(key => record[key] !== null).length;
+    if (measured !== 0 && measured !== 3) throw new HttpError(422, 'Nhập đủ ba trụ cột hoặc để trống cả ba để nhập điểm tổng hợp.');
+    record.managerScore = measured === 3 ? Math.round(pillars.reduce((sum, key) => sum + record[key], 0) * 100) / 100 : score(record.managerScore, 100, 'Điểm quản lý');
+    record.grade = record.managerScore >= 95 ? 'A+ (Xuất sắc)' : record.managerScore >= 85 ? 'A (Tốt)' : record.managerScore >= 70 ? 'B (Đạt)' : 'C (Cần cải thiện)';
+    record.kpiBonus = optionalAmount(record.kpiBonus, 'Thưởng KPI đề xuất');
+    const reviews = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_performance_reviews'").all();
+    for (const row of reviews) {
+      if (row.record_key === recordKey) continue;
+      const item = parseJsonObject(row.payload_json);
+      if (String(item.code || '').toLowerCase() === record.code.toLowerCase()) throw new HttpError(409, 'Mã phiếu đánh giá đã tồn tại.');
+      if ((item.employeeId === record.employeeId || item.empCode === record.empCode) && String(item.period || '').trim().toLowerCase() === record.period.toLowerCase()) throw new HttpError(409, 'Nhân viên đã có phiếu trong kỳ đánh giá này.');
+    }
+    record.createdAt = current?.createdAt || now(); record.createdBy = current?.createdBy || actor.name;
+    record.updatedAt = now(); record.updatedBy = actor.name;
+    for (const key of ['approvedBy', 'approvedById', 'approvedAt']) delete record[key];
+    if (current && record.status === completed) { record.approvedBy = actor.name; record.approvedById = actor.id; record.approvedAt = now(); }
+    record.payrollTransferred = false;
+    record.history = Array.isArray(current?.history) ? [...current.history] : [];
+    record.history.push({ status: record.status, at: now(), actorId: actor.id, actor: actor.name });
+  }
+  if (['enterprise_documents', 'doc_archives'].includes(scope)) {
+    const archived = scope === 'doc_archives';
+    if (archived) {
+      record.dispatchType = oneOf(record.dispatchType, 'Chiều văn bản', ['Văn bản đến', 'Văn bản đi']);
+      record.docType = oneOf(record.docType, 'Loại văn bản', ['Công văn', 'Quyết định', 'Thông báo', 'Tờ trình', 'Hợp đồng', 'Giấy mời']);
+      record.subject = requiredText(record.subject, 'Trích yếu', 4000);
+      record.partner = requiredText(record.partner, 'Cơ quan gửi / nhận', 200);
+      record.docDate = requiredIsoDate(record.docDate, 'Ngày văn bản');
+      record.dateReceivedOrIssued = requiredIsoDate(record.dateReceivedOrIssued, 'Ngày vào sổ');
+      record.slaDeadline = record.slaDeadline ? requiredIsoDate(record.slaDeadline, 'Hạn xử lý') : '';
+      if (record.slaDeadline && record.slaDeadline < record.dateReceivedOrIssued) throw new HttpError(422, 'Hạn xử lý phải từ ngày vào sổ.');
+      record.securityLevel = oneOf(record.securityLevel || 'Thường', 'Độ mật', ['Tuyệt mật', 'Mật', 'Nội bộ', 'Thường']);
+      record.urgency = oneOf(record.urgency || 'Bình thường', 'Độ khẩn', ['Hỏa tốc', 'Thượng khẩn', 'Bình thường']);
+      for (const field of ['originalCode', 'signer', 'signerPosition', 'receiverOrAuthor', 'forwardNote']) record[field] = optionalText(record[field], 'Thông tin văn bản', 4000);
+      if (record.pageCount !== undefined && record.pageCount !== '' && record.pageCount !== null) record.pageCount = requiredAmount(record.pageCount, 'Số trang');
+      else delete record.pageCount;
+      const terminal = record.dispatchType === 'Văn bản đến' ? 'Đã giải quyết xong' : 'Đã chuyển phát bưu điện';
+      record.status = oneOf(record.status || 'Đang xử lý đúng hạn', 'Trạng thái văn bản', ['Đang xử lý đúng hạn', 'Cảnh báo quá hạn', terminal]);
+      if (!current && record.status !== 'Đang xử lý đúng hạn') throw new HttpError(422, 'Văn bản mới phải bắt đầu ở trạng thái đang xử lý.');
+      if (current && current.dispatchType !== record.dispatchType) throw new HttpError(422, 'Không thể chuyển văn bản sang sổ khác.');
+      if (current?.status === terminal && record.status !== terminal) throw new HttpError(422, 'Văn bản đã hoàn tất không thể mở lại.');
+      const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'doc_archives'").all();
+      const sameBook = rows.filter(row => { const item = parseJsonObject(row.payload_json); return item.dispatchType === record.dispatchType && String(item.dateReceivedOrIssued || '').slice(0, 4) === record.dateReceivedOrIssued.slice(0, 4); });
+      if (!String(record.bookNumber || '').trim()) {
+        const next = 1 + sameBook.reduce((max, row) => Math.max(max, Number.parseInt(parseJsonObject(row.payload_json).bookNumber, 10) || 0), 0);
+        record.bookNumber = `${String(next).padStart(4, '0')}/${record.dateReceivedOrIssued.slice(0, 4)}`;
+      }
+      record.bookNumber = requiredText(record.bookNumber, 'Số vào sổ', 160);
+      if (sameBook.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).bookNumber || '').toLowerCase() === record.bookNumber.toLowerCase())) throw new HttpError(409, 'Số vào sổ đã tồn tại trong năm và chiều văn bản này.');
+      record.digitalVerified = false;
+    } else {
+      record.docCode = requiredText(record.docCode, 'Số / ký hiệu văn bản', 160);
+      record.title = requiredText(record.title, 'Trích yếu', 4000);
+      record.docCategory = oneOf(record.docCategory, 'Phân loại', ['Quy chế & Quyết định', 'Công văn điều hành', 'Thông báo nội bộ', 'Hợp đồng & Pháp lý', 'Biên bản & Kỹ thuật']);
+      record.direction = oneOf(record.direction, 'Chiều văn bản', ['Nội bộ ban hành', 'Văn bản đến', 'Văn bản đi']);
+      record.securityLevel = oneOf(record.securityLevel, 'Độ mật', ['Tuyệt mật (BOD Only)', 'Mật (Confidential)', 'Nội bộ công ty', 'Công khai']);
+      record.status = oneOf(record.status || 'Dự thảo thẩm định', 'Trạng thái văn bản', ['Đang hiệu lực', 'Mới ban hành', 'Dự thảo thẩm định', 'Hết hiệu lực / Lưu kho']);
+      record.issuingAuthority = requiredText(record.issuingAuthority, 'Đơn vị ban hành', 200);
+      for (const field of ['signerName', 'signerPosition', 'storageLocation', 'summary']) record[field] = optionalText(record[field], 'Thông tin văn bản', 4000);
+      record.issuedDate = requiredIsoDate(record.issuedDate, 'Ngày ban hành');
+      record.effectiveDate = requiredIsoDate(record.effectiveDate, 'Ngày có hiệu lực');
+      if (record.effectiveDate < record.issuedDate) throw new HttpError(422, 'Ngày hiệu lực phải từ ngày ban hành.');
+      record.expirationDate = record.expirationDate && record.expirationDate !== 'Vĩnh viễn' ? requiredIsoDate(record.expirationDate, 'Ngày hết hiệu lực') : 'Vĩnh viễn';
+      if (record.expirationDate !== 'Vĩnh viễn' && record.expirationDate < record.effectiveDate) throw new HttpError(422, 'Ngày hết hiệu lực phải từ ngày hiệu lực.');
+      record.tags = Array.isArray(record.tags) ? [...new Set(record.tags.map(tag => requiredText(tag, 'Từ khóa', 100)))].slice(0, 40) : [];
+      const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'enterprise_documents'").all();
+      if (rows.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).docCode || '').toLowerCase() === record.docCode.toLowerCase())) throw new HttpError(409, 'Số / ký hiệu văn bản đã tồn tại.');
+      record.caSigned = false;
+      delete record.caVerifiedAt;
+    }
+    for (const field of ['fileNodeId', ...(!archived ? ['wordFileNodeId'] : [])]) {
+      record[field] = optionalText(record[field], 'Tệp đính kèm', 160);
+      const prefix = field === 'wordFileNodeId' ? 'word' : '';
+      if (record[field]) {
+        const node = requireFileAccess(actor, await fileNodeById(record[field]));
+        if (node.node_type !== 'file' || !node.storage_key) throw new HttpError(422, 'Nội dung tệp đính kèm chưa được lưu.');
+        if (prefix && !/\.docx$/i.test(node.name)) throw new HttpError(422, 'Bản soạn thảo phải là tệp DOCX.');
+        let bytes;
+        try { bytes = await readFile(fileStoragePath(node.storage_key)); } catch { throw new HttpError(422, 'Không đọc được nội dung tệp đính kèm.'); }
+        const size = bytes.length;
+        const displaySize = size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : size >= 1024 ? `${(size / 1024).toFixed(1)} KB` : `${size} B`;
+        if (prefix) { record.wordFileName = node.name; record.wordFileSizeBytes = size; record.wordSha256Hash = createHash('sha256').update(bytes).digest('hex'); }
+        else {
+          record[archived ? 'fileScan' : 'fileName'] = node.name; record.fileSizeBytes = size; record.fileSize = displaySize;
+          record.sha256Hash = createHash('sha256').update(bytes).digest('hex');
+          if (!archived) record.fileFormat = path.extname(node.name).slice(1).toUpperCase();
+        }
+      } else if (prefix) { record.wordFileName = ''; record.wordFileSizeBytes = 0; record.wordSha256Hash = ''; }
+      else { record[archived ? 'fileScan' : 'fileName'] = ''; record.fileSizeBytes = 0; record.fileSize = ''; record.sha256Hash = ''; if (!archived) record.fileFormat = ''; }
+    }
+    record.createdAt = current?.createdAt || now(); record.createdBy = current?.createdBy || actor.name;
+    record.updatedAt = now(); record.updatedBy = actor.name;
+    record.history = Array.isArray(current?.history) ? [...current.history] : [];
+    if (!current || current.status !== record.status || current.receiverOrAuthor !== record.receiverOrAuthor || current.fileNodeId !== record.fileNodeId || current.wordFileNodeId !== record.wordFileNodeId) record.history.push({ status: record.status, receiverOrAuthor: record.receiverOrAuthor || '', at: now(), actorId: actor.id, actor: actor.name });
+  }
+  if (scope === 'hr_rewards') {
+    const pending = 'Chờ duyệt', approved = 'Đã ký quyết định', waiting = 'Chờ trao thưởng trong lễ vinh danh';
+    const awarded = ['Đã trao giải', 'Đã trao thưởng'];
+    record.status = oneOf(record.status || pending, 'Trạng thái khen thưởng', [pending, approved, waiting, ...awarded]);
+    if (!current && record.status !== pending) throw new HttpError(422, 'Khen thưởng mới phải chờ duyệt.');
+    if (current && current.status !== pending) {
+      if (record.status === current.status || ![approved, waiting].includes(current.status) || record.status !== 'Đã trao giải') throw new HttpError(422, 'Quyết định đã duyệt chỉ có thể ghi nhận trao thưởng một lần.');
+      const allowed = new Set(['status', 'key', 'id', 'awardedBy', 'awardedById', 'awardedAt']);
+      if (Object.keys(record).some(key => !allowed.has(key) && JSON.stringify(record[key]) !== JSON.stringify(current[key]))) throw new HttpError(422, 'Không thể sửa nội dung quyết định đã duyệt.');
+    }
+    if (current?.status === pending && ![pending, approved].includes(record.status)) throw new HttpError(422, 'Cần duyệt quyết định trước khi trao thưởng.');
+    record.employeeId = requiredText(record.employeeId, 'Người nhận / đại diện', 160);
+    const employee = await getUserById(record.employeeId);
+    if (!employee) throw new HttpError(422, 'Người nhận không tồn tại.');
+    record.employeeName = current && current.status !== pending ? current.employeeName : employee.name;
+    record.empCode = current && current.status !== pending ? current.empCode : employee.employee_code;
+    for (const field of ['rewardCode', 'title', 'department', 'decisionNo']) record[field] = requiredText(record[field], 'Thông tin khen thưởng', 200);
+    record.rewardType = oneOf(record.rewardType, 'Hình thức khen thưởng', ['Tiền mặt & Cúp pha lê', 'Chuyến du lịch nghỉ dưỡng 5 sao', 'Cổ phần thưởng ESOP', 'Bằng khen Ban Giám Đốc']);
+    record.achievementSummary = optionalText(record.achievementSummary, 'Thành tích', 4000);
+    record.rewardValue = optionalAmount(record.rewardValue, 'Giá trị khen thưởng');
+    record.date = requiredIsoDate(record.date, 'Ngày quyết định');
+    const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_rewards'").all();
+    if (rows.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).rewardCode || '').toLowerCase() === record.rewardCode.toLowerCase())) throw new HttpError(409, 'Mã khen thưởng đã tồn tại.');
+    for (const field of ['approvedBy', 'approvedById', 'approvedAt', 'awardedBy', 'awardedById', 'awardedAt']) { if (current?.[field]) record[field] = current[field]; else delete record[field]; }
+    if (current?.status === pending && record.status === approved) { record.approvedBy = actor.name; record.approvedById = actor.id; record.approvedAt = now(); record.signer = actor.name; }
+    else record.signer = current?.signer || '';
+    if (current && [approved, waiting].includes(current.status) && record.status === 'Đã trao giải') { record.awardedBy = actor.name; record.awardedById = actor.id; record.awardedAt = now(); }
+    record.createdAt = current?.createdAt || now(); record.updatedAt = now();
+  }
+  if (scope === 'hr_job_openings') {
+    record.jobCode = requiredText(record.jobCode, 'Mã tuyển dụng', 160);
+    record.title = requiredText(record.title, 'Vị trí tuyển dụng', 200);
+    record.department = requiredText(record.department, 'Phòng ban', 160);
+    record.headcountNeeded = requiredAmount(record.headcountNeeded, 'Số lượng tuyển');
+    record.deadline = requiredIsoDate(record.deadline, 'Hạn tuyển dụng');
+    record.status = oneOf(record.status || 'Đang tuyển dụng', 'Trạng thái tuyển dụng', ['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng (Đủ định biên)', 'Đã đủ chỉ tiêu']);
+    record.createdAt = current?.createdAt || record.createdAt || now();
+    const jobs = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_job_openings'").all();
+    if (jobs.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).jobCode || '').toLowerCase() === record.jobCode.toLowerCase())) throw new HttpError(409, 'Mã tuyển dụng đã tồn tại.');
+  }
+  if (scope === 'hr_recruitment_candidates') {
+    record.jobKey = requiredText(record.jobKey, 'Vị trí tuyển dụng', 160);
+    const jobRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_job_openings' AND record_key = ?").get(record.jobKey);
+    if (!jobRow) throw new HttpError(422, 'Vị trí tuyển dụng không tồn tại.');
+    if (!current && parseJsonObject(jobRow.payload_json).status !== 'Đang tuyển dụng') throw new HttpError(422, 'Vị trí hiện không tiếp nhận ứng viên.');
+    if (current && current.jobKey !== record.jobKey) throw new HttpError(422, 'Không thể chuyển hồ sơ sang vị trí khác.');
+    record.name = requiredText(record.name, 'Tên ứng viên', 160);
+    record.email = normalizeEmail(record.email);
+    record.phone = optionalText(record.phone, 'Điện thoại', 40);
+    record.appliedAt = requiredIsoDate(record.appliedAt, 'Ngày ứng tuyển');
+    record.status = oneOf(record.status || 'applied', 'Giai đoạn ứng viên', ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected']);
+    const transitions = { applied: ['screening', 'rejected'], screening: ['interview', 'rejected'], interview: ['offer', 'rejected'], offer: ['hired', 'rejected'], hired: [], rejected: [] };
+    if (!current && record.status !== 'applied') throw new HttpError(422, 'Ứng viên mới phải bắt đầu ở giai đoạn tiếp nhận.');
+    if (current && current.status !== record.status && !transitions[current.status]?.includes(record.status)) throw new HttpError(422, 'Không thể chuyển sang giai đoạn ứng viên này.');
+    const candidates = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_recruitment_candidates'").all();
+    if (candidates.some(row => { const item = parseJsonObject(row.payload_json); return row.record_key !== recordKey && item.jobKey === record.jobKey && String(item.email || '').toLowerCase() === record.email; })) throw new HttpError(409, 'Email ứng viên đã tồn tại trong vị trí tuyển dụng này.');
+    if (record.interviewAt) {
+      const date = String(record.interviewAt);
+      requiredIsoDate(date.slice(0, 10), 'Ngày phỏng vấn');
+      if (!/^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$/.test(date)) throw new HttpError(422, 'Thời gian phỏng vấn không hợp lệ.');
+      if (date.slice(0, 10) < record.appliedAt) throw new HttpError(422, 'Ngày phỏng vấn không được trước ngày ứng tuyển.');
+    }
+    for (const field of ['offerDate', 'hiredDate']) {
+      if (record[field]) { record[field] = requiredIsoDate(record[field], 'Ngày tuyển dụng'); if (record[field] < record.appliedAt) throw new HttpError(422, 'Ngày tuyển dụng không được trước ngày ứng tuyển.'); }
+    }
+    if (record.status === 'interview' && !record.interviewAt) throw new HttpError(422, 'Vui lòng nhập lịch phỏng vấn.');
+    if (record.status === 'interview' && !String(record.interviewer || '').trim()) throw new HttpError(422, 'Vui lòng nhập người phỏng vấn.');
+    if (record.status === 'offer' && !record.offerDate) throw new HttpError(422, 'Vui lòng nhập ngày gửi đề nghị.');
+    if (record.status === 'hired' && !record.hiredDate) throw new HttpError(422, 'Vui lòng nhập ngày nhận việc.');
+    if (record.status === 'hired' && !record.offerDate) throw new HttpError(422, 'Vui lòng nhập ngày đề nghị.');
+    if (record.offerDate && record.interviewAt && record.offerDate < record.interviewAt.slice(0, 10)) throw new HttpError(422, 'Ngày đề nghị không được trước ngày phỏng vấn.');
+    if (record.hiredDate && record.offerDate && record.hiredDate < record.offerDate) throw new HttpError(422, 'Ngày nhận việc không được trước ngày đề nghị.');
+    record.history = Array.isArray(current?.history) ? [...current.history] : [];
+    if (!current || current.status !== record.status) record.history.push({ status: record.status, at: now(), actorId: actor.id, actor: actor.name });
+    if (record.cvFileId) {
+      const file = await db.prepare("SELECT id FROM file_nodes WHERE id = ? AND node_type = 'file' AND deleted_at IS NULL").get(record.cvFileId);
+      if (!file) throw new HttpError(422, 'Tệp CV không tồn tại.');
+    }
+  }
+  if (['leave_requests', 'attendance_overtime', 'attendance_shift_assignments', 'attendance_leave_summary', 'attendance_leave_plans', 'attendance_timesheet_summary', 'attendance_alerts'].includes(scope)) {
+    let employeeId = actor.role === 'ADMIN' ? optionalText(record.employeeId, 'Nhân viên', 160) : actor.id;
+    if (!employeeId && (record.empCode || record.employeeCode)) employeeId = (await db.prepare('SELECT id FROM users WHERE employee_code = ?').get(record.empCode || record.employeeCode))?.id;
+    if (!employeeId && record.employeeName) {
+      const employees = await db.prepare('SELECT id FROM users WHERE name = ?').all(record.employeeName);
+      if (employees.length === 1) employeeId = employees[0].id;
+    }
+    if (!employeeId) throw new HttpError(422, 'Vui lòng liên kết nhân viên có trong hệ thống.');
+    const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1').get(employeeId);
+    if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+    record.employeeId = employee.id;
+    record.employeeName = employee.name;
+    record.empCode = employee.employee_code;
+    record.department = employee.department || '';
+    if (['leave_requests', 'attendance_overtime', 'attendance_shift_assignments'].includes(scope)) record.code = requiredText(record.code, 'Mã đơn', 160);
+  }
+  if (scope === 'attendance_leave_plans') {
+    record.fromDate = requiredIsoDate(record.fromDate, 'Ngày bắt đầu'); record.toDate = requiredIsoDate(record.toDate, 'Ngày kết thúc');
+    const span = (Date.parse(record.toDate) - Date.parse(record.fromDate)) / 86400000 + 1;
+    record.totalDays = Number(record.totalDays);
+    if (span <= 0 || !Number.isFinite(record.totalDays) || record.totalDays <= 0 || record.totalDays > span || !Number.isInteger(record.totalDays * 2)) throw new HttpError(422, 'Số ngày nghỉ theo kế hoạch không hợp lệ.');
+    record.status = oneOf(record.status || 'Chờ phê duyệt', 'Trạng thái kế hoạch nghỉ', ['Chờ phê duyệt', 'Đã duyệt kế hoạch', 'Từ chối']);
+    if ((!current && record.status !== 'Chờ phê duyệt') || (current && current.status !== 'Chờ phê duyệt')) throw new HttpError(422, 'Kế hoạch đã xử lý hoặc chưa được tạo để phê duyệt.');
+    if (current && record.status !== current.status) { record.approver = actor.name; record.approvedAt = now(); }
+  }
+  if (scope === 'attendance_timesheet_summary') {
+    record.month = requiredText(record.month, 'Kỳ công', 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(record.month)) throw new HttpError(422, 'Kỳ công phải theo YYYY-MM.');
+    const [year, month] = record.month.split('-').map(Number);
+    const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    for (const field of ['standardDays', 'actualDays', 'paidLeaveDays', 'unpaidLeaveDays', 'otHoursWeekday', 'otHoursWeekend']) {
+      record[field] = Number(record[field] ?? 0);
+      if (!Number.isFinite(record[field]) || record[field] < 0 || record[field] > (field.startsWith('otHours') ? days * 24 : days)) throw new HttpError(422, 'Số ngày hoặc giờ công không hợp lệ.');
+    }
+    if (!record.standardDays || record.actualDays + record.paidLeaveDays + record.unpaidLeaveDays > days) throw new HttpError(422, 'Tổng ngày công/nghỉ không hợp lệ trong tháng.');
+    if (current?.status === 'Đã khóa công') throw new HttpError(422, 'Bảng công đã khóa không thể thay đổi.');
+    record.employeeCode = record.empCode;
+    record.totalPayDays = record.actualDays + record.paidLeaveDays;
+    record.attendanceRate = Math.round(record.totalPayDays / record.standardDays * 100);
+    record.status = oneOf(record.status || 'Chờ đối soát', 'Trạng thái bảng công', ['Chờ đối soát', 'Đã khóa công']);
+    if (!current && record.status !== 'Chờ đối soát') throw new HttpError(422, 'Cần lập bảng công trước khi khóa.');
+    if (record.status === 'Đã khóa công') { record.lockedBy = actor.name; record.lockedAt = now(); }
+  }
+  if (scope === 'attendance_alerts') {
+    record.alertCode = requiredText(record.alertCode, 'Mã cảnh báo', 160);
+    record.alertDate = requiredIsoDate(record.alertDate, 'Ngày cảnh báo');
+    record.alertType = requiredText(record.alertType, 'Loại cảnh báo', 160);
+    record.details = requiredText(record.details, 'Chi tiết cảnh báo', 4000);
+    record.penaltyAmount = optionalAmount(record.penaltyAmount, 'Số tiền đề xuất');
+    record.status = oneOf(record.status || 'Chờ nhân viên giải trình', 'Trạng thái cảnh báo', ['Chờ nhân viên giải trình', 'Đã giải trình hợp lệ', 'Đã trừ phạt chuyên cần']);
+    if (record.status !== 'Chờ nhân viên giải trình') {
+      record.explanationText = requiredText(record.explanationText, 'Nội dung giải trình', 4000);
+      record.reviewedBy = actor.name; record.reviewedAt = now();
+    }
+  }
+  if (scope === 'attendance_raw_data') record.status = oneOf(record.status || 'Cần kiểm tra', 'Trạng thái dữ liệu chấm công', ['Dữ liệu hợp lệ', 'Bản ghi trùng lặp (Đã lọc)', 'Cần kiểm tra']);
+  if (scope === 'attendance_shifts') {
+    record.shiftCode = requiredText(record.shiftCode, 'Mã ca', 160);
+    record.shiftName = requiredText(record.shiftName, 'Tên ca', 160);
+    record.startTime = requiredText(record.startTime, 'Giờ bắt đầu', 5);
+    record.endTime = requiredText(record.endTime, 'Giờ kết thúc', 5);
+    const clock = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!clock.test(record.startTime) || !clock.test(record.endTime) || record.startTime === record.endTime) throw new HttpError(422, 'Giờ ca làm việc không hợp lệ.');
+    const minutes = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+    const hours = ((minutes(record.endTime) - minutes(record.startTime) + 1440) % 1440) / 60;
+    for (const field of ['workingHours', 'workUnits', 'allowGraceMinutes', 'nightAllowancePct']) {
+      record[field] = Number(record[field] ?? 0);
+      if (!Number.isFinite(record[field]) || record[field] < 0) throw new HttpError(422, `${field} không hợp lệ.`);
+    }
+    if (!record.workingHours || record.workingHours > hours || record.workUnits > 2 || record.allowGraceMinutes > 1440 || record.nightAllowancePct > 100) throw new HttpError(422, 'Thông số giờ làm, ngày công hoặc phụ cấp không hợp lệ.');
+    record.status = oneOf(record.status || 'Đang áp dụng', 'Trạng thái ca', ['Đang áp dụng', 'Tạm ngưng']);
+    record.timeRange = `${record.startTime} - ${record.endTime}`;
+    if (record.breakTime && record.breakTime !== '0') {
+      const pause = /^([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)/.exec(String(record.breakTime));
+      if (!pause) throw new HttpError(422, 'Thời gian nghỉ giữa ca không hợp lệ.');
+      const pauseStart = Number(pause[1]) * 60 + Number(pause[2]);
+      const pauseEnd = Number(pause[3]) * 60 + Number(pause[4]);
+      const pauseLength = (pauseEnd - pauseStart + 1440) % 1440;
+      if (!pauseLength || (pauseStart - minutes(record.startTime) + 1440) % 1440 + pauseLength > hours * 60 || record.workingHours > hours - pauseLength / 60 + 0.001) throw new HttpError(422, 'Giờ làm và giờ nghỉ phải nằm trong ca.');
+    }
+  }
+  if (scope === 'attendance_shift_assignments') {
+    record.effectiveFrom = requiredIsoDate(record.effectiveFrom, 'Ngày áp dụng');
+    record.effectiveTo = requiredIsoDate(record.effectiveTo, 'Ngày kết thúc');
+    if (record.effectiveFrom > record.effectiveTo) throw new HttpError(422, 'Ngày kết thúc phải sau ngày bắt đầu.');
+    record.shiftKey = requiredText(record.shiftKey, 'Ca làm việc', 160);
+    const shiftRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_shifts' AND record_key = ?").get(record.shiftKey);
+    const shift = parseJsonObject(shiftRow?.payload_json);
+    if (!shiftRow || shift.status !== 'Đang áp dụng') throw new HttpError(422, 'Ca làm việc không tồn tại hoặc đã ngừng áp dụng.');
+    record.shiftName = shift.shiftName; record.shiftCode = shift.shiftCode; record.workHours = shift.timeRange;
+    record.status = oneOf(record.status || 'Đang áp dụng', 'Trạng thái phân ca', ['Đang áp dụng', 'Chờ duyệt đổi ca', 'Đã kết thúc']);
+    if (record.status === 'Chờ duyệt đổi ca') {
+      record.swapTargetKey = requiredText(record.swapTargetKey, 'Phân ca đối ứng', 160);
+      record.swapReason = requiredText(record.swapReason, 'Lý do đổi ca', 2000);
+      if (record.swapTargetKey === recordKey) throw new HttpError(422, 'Không thể đổi cùng một phân ca.');
+    }
+  }
+  if (scope === 'attendance_leave_summary') {
+    record.year = Number(record.year || new Date().getFullYear());
+    if (!Number.isInteger(record.year) || record.year < 2000 || record.year > 2200) throw new HttpError(422, 'Năm phép không hợp lệ.');
+    for (const field of ['standardQuota', 'seniorityQuota', 'carriedOver', 'usedLeaves']) {
+      record[field] = Number(record[field] ?? 0);
+      if (!Number.isFinite(record[field]) || record[field] < 0) throw new HttpError(422, 'Số ngày phép không hợp lệ.');
+    }
+    record.totalEntitled = record.standardQuota + record.seniorityQuota + record.carriedOver;
+    record.remainingLeaves = record.totalEntitled - record.usedLeaves;
+    record.leaveUsagePct = record.totalEntitled ? Math.round(record.usedLeaves / record.totalEntitled * 1000) / 10 : 0;
+    record.status = record.remainingLeaves <= 0 ? 'Đã hết phép' : record.remainingLeaves <= 3 ? 'Sắp hết phép' : 'Còn nhiều phép';
+    const summaries = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'attendance_leave_summary'").all();
+    if (summaries.some(row => { const item = parseJsonObject(row.payload_json); return row.record_key !== recordKey && item.employeeId === record.employeeId && Number(item.year) === record.year; })) throw new HttpError(409, 'Nhân viên đã có số dư phép cho năm này.');
+  }
+  if (scope === 'leave_requests') {
+    record.startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu');
+    record.endDate = requiredIsoDate(record.endDate, 'Ngày kết thúc');
+    const span = (Date.parse(record.endDate) - Date.parse(record.startDate)) / 86400000 + 1;
+    record.daysCount = Number(record.daysCount);
+    if (span <= 0 || !Number.isFinite(record.daysCount) || record.daysCount <= 0 || record.daysCount > span || !Number.isInteger(record.daysCount * 2)) throw new HttpError(422, 'Số ngày nghỉ phải theo nửa ngày và nằm trong khoảng ngày đăng ký.');
+    record.reason = requiredText(record.reason, 'Lý do nghỉ', 4000);
+    record.leaveType = requiredText(record.leaveType, 'Loại nghỉ', 160);
+    record.status = oneOf(record.status || 'Chờ duyệt', 'Trạng thái đơn nghỉ', ['Chờ duyệt', 'Đã duyệt', 'Từ chối']);
+  }
+  if (scope === 'attendance_overtime') {
+    record.otDate = requiredIsoDate(record.otDate, 'Ngày làm thêm');
+    const match = /^([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)$/.exec(String(record.timeRange || ''));
+    if (!match) throw new HttpError(422, 'Khung giờ làm thêm không hợp lệ.');
+    const start = Number(match[1]) * 60 + Number(match[2]);
+    const end = Number(match[3]) * 60 + Number(match[4]);
+    const hours = ((end - start + 1440) % 1440) / 60;
+    if (!hours || Math.abs(Number(record.totalHours) - hours) > 0.01) throw new HttpError(422, 'Số giờ làm thêm phải khớp khung giờ đăng ký.');
+    record.totalHours = hours;
+    record.reason = requiredText(record.reason, 'Lý do làm thêm', 4000);
+    if (actor.role !== 'ADMIN') { record.multiplier = current?.multiplier ?? 1; record.baseHourlyRate = current?.baseHourlyRate ?? 0; }
+    record.multiplier = Number(record.multiplier ?? 1);
+    record.baseHourlyRate = Number(record.baseHourlyRate ?? 0);
+    if (!Number.isFinite(record.multiplier) || record.multiplier <= 0 || record.multiplier > 10 || !Number.isFinite(record.baseHourlyRate) || record.baseHourlyRate < 0) throw new HttpError(422, 'Hệ số hoặc đơn giá làm thêm không hợp lệ.');
+    record.totalAmount = Math.round(record.totalHours * record.multiplier * record.baseHourlyRate);
+    record.status = oneOf(record.status || 'Chờ phê duyệt', 'Trạng thái làm thêm', ['Chờ phê duyệt', 'Chờ duyệt', 'Đã duyệt OT', 'Từ chối']);
+  }
+  if (['leave_requests', 'attendance_overtime'].includes(scope)) {
+    const pending = scope === 'leave_requests' ? 'Chờ duyệt' : 'Chờ phê duyệt';
+    if (!current && !['Chờ duyệt', 'Chờ phê duyệt'].includes(record.status)) throw new HttpError(422, 'Đơn mới phải chờ phê duyệt.');
+    if (current && !['Chờ duyệt', 'Chờ phê duyệt'].includes(current.status) && JSON.stringify(record) !== JSON.stringify(current)) throw new HttpError(422, 'Đơn đã xử lý không thể thay đổi.');
+    if (actor.role !== 'ADMIN' && record.status !== pending && record.status !== 'Chờ duyệt') throw new HttpError(403, 'Chỉ quản trị viên được phê duyệt.');
+    if (current && record.status !== current.status && !['Chờ duyệt', 'Chờ phê duyệt'].includes(record.status)) {
+      record.approver = actor.name; record.approverId = actor.id; record.approvedAt = now();
+    } else if (!current) { delete record.approver; delete record.approverId; delete record.approvedAt; }
+  }
   const serialized = JSON.stringify(record);
   if (serialized.length > 128 * 1024) throw new HttpError(422, 'Bản ghi vượt quá dung lượng cho phép.');
   return { recordKey, record, serialized };
 }
 
 function publicCollectionRecord(row) {
-  return serializeCollectionRecord(row);
+  const record = serializeCollectionRecord(row);
+  if (record && row.scope === 'employee_timesheets') return { ...record, employeeId: row.owner_id };
+  return record;
 }
 
 async function recordAuditEvent(actorId, action, scope, resourceId = '', details = {}) {
@@ -1593,18 +2152,27 @@ function validateContract(input) {
   };
 }
 
-function generateContractDocContent(contract, user) {
+function generateContractDocContent(contract, user, company = {}) {
+  contract = { ...contract };
+  for (const field of ['party_b_id_number', 'party_b_phone', 'party_b_email', 'party_b_bank', 'party_b_address', 'employee_id_number', 'employee_phone', 'employee_email', 'employee_bank']) contract[field] = decryptField(contract[field], 'contract');
   const bName = contract.employee_name || contract.party_b_name || user?.name || 'Nhân sự';
   const bCode = contract.employee_code || user?.employee_code || '';
   const bPos = contract.position || contract.party_b_position || '';
   const bDept = contract.department || '';
   const sal = (contract.salary || contract.contract_value || 0).toLocaleString('vi-VN');
 
-  return `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n------------------------\n\n${(contract.name || 'HỢP ĐỒNG DOANH NGHIỆP').toUpperCase()}\nSố: ${contract.code}\n\nI. ĐẠI DIỆN BÊN A (NGƯỜI SỬ DỤNG LAO ĐỘNG / ĐƠN VỊ CUNG CẤP):\n- Doanh nghiệp: CÔNG TY CỔ PHẦN CÔNG NGHỆ KIYOVN\n- Đại diện: Trần Tuấn Anh\n- Chức vụ: Tổng Giám Đốc\n- Địa chỉ: Tòa nhà Keangnam Landmark 72, Nam Từ Liêm, Hà Nội\n\nII. ĐẠI DIỆN BÊN B (NGƯỜI LAO ĐỘNG / ĐỐI TÁC):\n- Họ và tên: ${bName}\n- Mã nhân viên / Mã định danh: ${bCode}\n- Vị trí công tác: ${bPos}\n- Phòng ban: ${bDept}\n- Số CCCD/CMND: ${contract.employee_id_number || contract.party_b_id_number || ''}\n- Điện thoại: ${contract.employee_phone || contract.party_b_phone || ''}\n- Email: ${contract.employee_email || contract.party_b_email || user?.email || ''}\n\nIII. ĐIỀU KHOẢN HỢP ĐỒNG & CHẾ ĐỘ:\n- Mức lương / Giá trị hợp đồng: ${sal} VNĐ / tháng\n- Phụ cấp: ${(contract.allowance || 0).toLocaleString('vi-VN')} VNĐ\n- Thời hạn hợp đồng: Từ ${contract.start_date || ''} đến ${contract.end_date || ''}\n- Chế độ bảo hiểm: ${contract.insurance_type || ''}\n- Cam kết bảo mật NDA: ${contract.nda_clause ? 'Bắt buộc tuân thủ' : 'Theo thỏa thuận'}\n\nIV. TRẠNG THÁI KÝ KẾT ĐIỆN TỬ:\n- Bên A: ${contract.company_sign_status || 'Chưa ký'} ${contract.company_cert_name ? `(${contract.company_cert_name})` : ''}\n- Bên B: ${contract.employee_sign_status || 'Chưa ký'} ${contract.employee_cert_name ? `(${contract.employee_cert_name})` : ''}\n- Thời gian ký kết: ${contract.employee_sign_date || contract.created_at}`;
+  return `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n------------------------\n\n${(contract.name || 'HỢP ĐỒNG DOANH NGHIỆP').toUpperCase()}\nSố: ${contract.code}\n\nI. ĐẠI DIỆN BÊN A (NGƯỜI SỬ DỤNG LAO ĐỘNG / ĐƠN VỊ CUNG CẤP):\n- Pháp nhân doanh nghiệp: ${company.fullName || company.companyName || 'Chưa cấu hình'}\n- Mã số thuế: ${company.taxCode || 'Chưa khai báo'}\n- Đại diện: ${contract.signer_name || company.representative || 'Chưa khai báo'}\n- Chức vụ: ${contract.signer_position || company.representativeTitle || 'Chưa khai báo'}\n- Địa chỉ doanh nghiệp: ${company.address || 'Chưa cấu hình'}\n\nII. ĐẠI DIỆN BÊN B (NGƯỜI LAO ĐỘNG / ĐỐI TÁC):\n- Họ và tên: ${bName}\n- Mã nhân viên / Mã định danh: ${bCode}\n- Vị trí công tác: ${bPos}\n- Phòng ban: ${bDept}\n- Số CCCD/CMND: ${contract.employee_id_number || contract.party_b_id_number || ''}\n- Điện thoại: ${contract.employee_phone || contract.party_b_phone || ''}\n- Email: ${contract.employee_email || contract.party_b_email || user?.email || ''}\n\nIII. ĐIỀU KHOẢN HỢP ĐỒNG & CHẾ ĐỘ:\n- Mức lương / Giá trị hợp đồng: ${sal} VNĐ / tháng\n- Phụ cấp: ${(contract.allowance || 0).toLocaleString('vi-VN')} VNĐ\n- Thời hạn hợp đồng: Từ ${contract.start_date || ''} đến ${contract.end_date || ''}\n- Chế độ bảo hiểm: ${contract.insurance_type || ''}\n- Cam kết bảo mật NDA: ${contract.nda_clause ? 'Bắt buộc tuân thủ' : 'Theo thỏa thuận'}\n\nIV. TRẠNG THÁI KÝ KẾT ĐIỆN TỬ:\n- Bên A: ${contract.company_sign_status || 'Chưa ký'} ${contract.company_cert_name ? `(${contract.company_cert_name})` : ''}\n- Bên B: ${contract.employee_sign_status || 'Chưa ký'} ${contract.employee_cert_name ? `(${contract.employee_cert_name})` : ''}\n- Thời gian ghi nhận ký: ${contract.employee_sign_date || contract.company_sign_date || 'Chưa ghi nhận'}\n- Trạng thái/chứng thư là thông tin ghi nhận trong hệ thống, chưa được dịch vụ CA xác minh.`;
 }
 
-async function syncContractToFileNodes(contract) {
+async function syncContractToFileNodes(contract, { overwrite = true } = {}) {
   if (!contract) return null;
+  if (!overwrite && contract.file_node_id) {
+    const existing = await fileNodeById(contract.file_node_id);
+    if (existing?.storage_key) {
+      const bytes = await readFile(fileStoragePath(existing.storage_key)).catch(() => null);
+      if (bytes?.length >= 4 && bytes.readUInt32LE(0) === 0x04034b50) return existing;
+    }
+  }
   let user = null;
   if (contract.employee_user_id) {
     user = await db.prepare('SELECT * FROM users WHERE id = ?').get(contract.employee_user_id);
@@ -1613,14 +2181,13 @@ async function syncContractToFileNodes(contract) {
     user = await db.prepare('SELECT * FROM users WHERE employee_code = ?').get(contract.employee_code);
   }
   if (!user && contract.employee_email) {
-    user = await db.prepare('SELECT * FROM users WHERE email = ?').get(contract.employee_email);
+    user = await db.prepare('SELECT * FROM users WHERE email = ?').get(decryptField(contract.employee_email, 'contract'));
   }
   if (!user && contract.employee_name) {
     user = await db.prepare('SELECT * FROM users WHERE name = ? COLLATE NOCASE').get(contract.employee_name);
   }
-  if (!user) {
-    user = await db.prepare('SELECT * FROM users ORDER BY created_at ASC LIMIT 1').get();
-  }
+  const employeeUserId = user?.id || null;
+  if (!user && contract.created_by) user = await getUserById(contract.created_by);
   if (!user) return null;
 
   const workspace = await ensureEmployeeWorkspace(user);
@@ -1630,7 +2197,7 @@ async function syncContractToFileNodes(contract) {
   const cleanCode = (contract.code || 'HD').replace(/[\\/:*?"<>|]/g, '-');
   const cleanName = (contract.name || 'Hop_dong').replace(/[\\/:*?"<>|]/g, '_');
   const safeFileName = `${cleanCode}_${cleanName}.docx`;
-  const contentBuf = Buffer.from(generateContractDocContent(contract, user), 'utf-8');
+  const contentBuf = createDocxFromText(generateContractDocContent(contract, user, await getCompanyProfile()));
 
   let fileNode = await db.prepare('SELECT * FROM file_nodes WHERE parent_id = ? AND name = ? AND deleted_at IS NULL')
     .get(systemFolder.id, safeFileName);
@@ -1639,7 +2206,7 @@ async function syncContractToFileNodes(contract) {
   if (!fileNode) {
     const fileId = randomUUID();
     const storageKey = `${fileId}.bin`;
-    await writeFile(fileStoragePath(storageKey), contentBuf, { flag: 'w' }).catch(() => {});
+    await writeFile(fileStoragePath(storageKey), contentBuf, { flag: 'w' });
     await db.prepare(`INSERT INTO file_nodes (
       id, parent_id, employee_id, owner_id, name, node_type, mime_type, size, storage_key,
       origin_module, is_hidden, is_system, is_protected, created_at, updated_at
@@ -1647,15 +2214,15 @@ async function syncContractToFileNodes(contract) {
       .run(fileId, systemFolder.id, user.id, user.id, safeFileName, contentBuf.length, storageKey, timestamp, timestamp);
     fileNode = await db.prepare('SELECT * FROM file_nodes WHERE id = ?').get(fileId);
   } else {
-    const storageKey = fileNode.storage_key || `${fileNode.id}.bin`;
-    await writeFile(fileStoragePath(storageKey), contentBuf, { flag: 'w' }).catch(() => {});
-    await db.prepare('UPDATE file_nodes SET size = ?, updated_at = ? WHERE id = ?')
-      .run(contentBuf.length, timestamp, fileNode.id);
+    const storageKey = `${randomUUID()}.bin`;
+    await writeFile(fileStoragePath(storageKey), contentBuf, { flag: 'w' });
+    await db.prepare('UPDATE file_nodes SET storage_key = ?, size = ?, updated_at = ? WHERE id = ?')
+      .run(storageKey, contentBuf.length, timestamp, fileNode.id);
   }
 
   if (fileNode && contract.id) {
     await db.prepare('UPDATE contracts SET file_node_id = ?, employee_user_id = ? WHERE id = ?')
-      .run(fileNode.id, user.id, contract.id);
+      .run(fileNode.id, employeeUserId, contract.id);
   }
   return fileNode;
 }
@@ -2097,6 +2664,7 @@ async function createUser(input) {
   const suppliedEmployeeCode = optionalText(input.employeeCode ?? input.code, 'Mã nhân sự', 64).toUpperCase();
   const employeeCode = suppliedEmployeeCode || await generateEmployeeCode();
   const role = input.role === 'ADMIN' ? 'ADMIN' : input.role === 'USER' ? 'USER' : 'USER';
+  if (input.role !== undefined && !['ADMIN', 'USER'].includes(input.role)) throw new HttpError(422, 'Vai trò không hợp lệ.');
   const password = validatePassword(input.password);
   if (await getUserByEmail(email)) throw new HttpError(409, 'Email đã tồn tại.');
   if (await db.prepare('SELECT 1 FROM users WHERE employee_code = ? LIMIT 1').get(employeeCode)) {
@@ -2111,18 +2679,13 @@ async function createUser(input) {
     passwordHash: await hashPassword(password),
     timestamp: now(),
   };
-  await db.exec('BEGIN');
-  try {
+  await db.transaction(async () => {
     await db.prepare(`INSERT INTO users (id, email, name, employee_code, role, password_hash, is_active, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
       .run(user.id, user.email, user.name, user.employeeCode, user.role, user.passwordHash, user.timestamp, user.timestamp);
     await ensureEmployeeProfile(user, input);
     await ensureEmployeeWorkspace(await getUserById(user.id));
-    await db.exec('COMMIT');
-  } catch (error) {
-    await db.exec('ROLLBACK');
-    throw error;
-  }
+  });
   return publicUser(await getUserById(user.id));
 }
 
@@ -2163,19 +2726,14 @@ async function createPendingEmployee(input) {
     timestamp,
   };
   let activation;
-  await db.exec('BEGIN');
-  try {
+  await db.transaction(async () => {
     await db.prepare(`INSERT INTO users (id, email, name, employee_code, role, password_hash, is_active, created_at, updated_at)
       VALUES (?, ?, ?, ?, 'USER', ?, 0, ?, ?)`)
       .run(user.id, user.email, user.name, user.employeeCode, user.passwordHash, timestamp, timestamp);
     await ensureEmployeeProfile(user, employee);
     await ensureEmployeeWorkspace(await getUserById(user.id));
     activation = await createActivationToken(user.id);
-    await db.exec('COMMIT');
-  } catch (error) {
-    await db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 
   const config = await getEmailConfig();
   const delivery = config.configured
@@ -2197,9 +2755,29 @@ function getBearerToken(request) {
 }
 
 async function requireUser(request) {
-  const claims = verifyToken(getBearerToken(request));
+  const token = getBearerToken(request);
+  const claims = verifyToken(token);
+  if (claims.scope && claims.scope !== 'access') throw new HttpError(401, 'Token này không có quyền truy cập hệ thống.');
   const user = await getUserById(claims.sub);
   if (!user || !user.is_active) throw new HttpError(401, 'Tài khoản không còn hoạt động.');
+  const key = claims.sid || `legacy-${createHash('sha256').update(token).digest('hex')}`;
+  let row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND record_key = ? AND owner_id = ?").get(key, user.id);
+  if (!row && !claims.sid) {
+    if (!Number.isInteger(claims.iat) || claims.iat > Math.floor(Date.now() / 1000)) throw new HttpError(401, 'Phiên đăng nhập không hợp lệ.');
+    await saveAuthSession(user, key, request, claims.iat, claims.exp, 'legacy');
+    row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND record_key = ? AND owner_id = ?").get(key, user.id);
+  }
+  const session = row && publicCollectionRecord(row);
+  if (!session || session.kind !== 'auth_session' || session.revokedAt || Date.parse(session.expiresAt) <= Date.now()) {
+    throw new HttpError(401, 'Phiên đăng nhập đã hết hạn hoặc bị thu hồi. Vui lòng đăng nhập lại.');
+  }
+  if (Date.parse(session.lastActive) < Date.now() - 30_000) {
+    const timestamp = now();
+    // Compare the stored revision so a concurrent activity update cannot overwrite revocation.
+    await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+      .run(JSON.stringify({ ...session, lastActive: timestamp }), timestamp, row.id, row.payload_json);
+  }
+  request.authSession = { row, key, session };
   return user;
 }
 
@@ -2207,6 +2785,18 @@ async function requireAdmin(request) {
   const user = await requireUser(request);
   if (user.role !== 'ADMIN') throw new HttpError(403, 'Bạn không có quyền quản trị.');
   return user;
+}
+
+async function lockUserAdministration(actor) {
+  if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('user-admin-lifecycle'))").get();
+  const freshActor = await getUserById(actor.id);
+  if (!freshActor || !freshActor.is_active || freshActor.role !== 'ADMIN') throw new HttpError(403, 'Quyền quản trị của phiên này đã thay đổi.');
+}
+
+async function retainActiveAdministrator(target) {
+  if (target.role !== 'ADMIN' || !target.is_active) return;
+  const others = await db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'ADMIN' AND is_active = 1 AND id <> ?").get(target.id);
+  if (Number(others.count) === 0) throw new HttpError(422, 'Phải giữ ít nhất một quản trị viên đang hoạt động.');
 }
 
 function loginKey(request, email) {
@@ -2285,6 +2875,7 @@ async function handleRequest(request, response) {
   }
 
   if (request.method === 'POST' && resource === '/auth/login') {
+    if ((await getGoogleConfig()).enforceGoogleLogin === '100') throw new HttpError(403, 'Hệ thống yêu cầu đăng nhập bằng Google.');
     const payload = await readJson(request);
     const rawAccount = String(payload.email || payload.username || '').trim().toLowerCase();
     const rawPassword = String(payload.password || '');
@@ -2318,8 +2909,7 @@ async function handleRequest(request, response) {
       const timestamp = now();
       const passwordHash = await hashPassword(rawPassword.trim() || rawPassword);
 
-      await db.exec('BEGIN');
-      try {
+      await db.transaction(async () => {
         if (user) {
           // Nâng cấp tài khoản hiện có thành ADMIN tối cao và kích hoạt ngay
           await db.prepare('UPDATE users SET role = ?, is_active = 1, password_hash = ?, updated_at = ? WHERE id = ?')
@@ -2364,11 +2954,7 @@ async function handleRequest(request, response) {
           });
           await ensureEmployeeWorkspace(user);
         }
-        await db.exec('COMMIT');
-      } catch (err) {
-        await db.exec('ROLLBACK');
-        throw err;
-      }
+      });
     } else {
       // Khi hệ thống ĐÃ CÓ TÀI KHOẢN: Tìm kiếm đa năng tài khoản (Email, Mã nhân viên, Tên đăng nhập, Số điện thoại)
       const accountLower = rawAccount.toLowerCase();
@@ -2428,7 +3014,7 @@ async function handleRequest(request, response) {
     }
 
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
-    const token = createToken(user);
+    const token = await createToken(user, request);
     sendJson(response, 200, {
       token,
       access_token: token,
@@ -2439,93 +3025,86 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/auth/google/config') {
+    sendJson(response, 200, await getGoogleConfig());
+    return;
+  }
+
+  if (request.method === 'PUT' && resource === '/system/google-config') {
+    const actor = await requireAdmin(request);
+    const payload = await readJson(request);
+    const current = await getGoogleConfig();
+    const clientKey = requiredText(payload.clientKey, 'Google Client ID', 255);
+    if (!/^[A-Za-z0-9_.-]+\.apps\.googleusercontent\.com$/.test(clientKey)) throw new HttpError(422, 'Google Client ID không đúng định dạng.');
+    if (current.environmentOverride && clientKey !== current.clientId) throw new HttpError(422, 'Google Client ID đang được cấu hình bằng biến môi trường.');
+    const allowedDomain = optionalText(payload.allowedDomain, 'Tên miền Google Workspace', 255).replace(/^@/, '').toLowerCase();
+    if (allowedDomain && !/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(allowedDomain)) throw new HttpError(422, 'Tên miền Google Workspace không hợp lệ.');
+    if (process.env.GOOGLE_ALLOWED_DOMAIN !== undefined && allowedDomain !== process.env.GOOGLE_ALLOWED_DOMAIN.trim().toLowerCase()) throw new HttpError(422, 'Tên miền Google đang được cấu hình bằng biến môi trường.');
+    const enforceGoogleLogin = oneOf(payload.enforceGoogleLogin || 'optional', 'Chế độ đăng nhập', ['100', 'optional']);
+    if (enforceGoogleLogin === '100' && (request.authSession.session.method !== 'google' || clientKey !== current.clientId || allowedDomain !== current.allowedDomain)) throw new HttpError(422, 'Hãy lưu chế độ linh hoạt và đăng nhập Google thành công bằng Client ID và tên miền này trước khi bật bắt buộc.');
+    const redirectUri = optionalText(payload.redirectUri, 'Authorized JavaScript origin', 2048);
+    if (redirectUri) {
+      let url;
+      try { url = new URL(redirectUri); } catch { throw new HttpError(422, 'Origin không hợp lệ.'); }
+      if (!['http:', 'https:'].includes(url.protocol) || url.origin !== redirectUri.replace(/\/$/, '')) throw new HttpError(422, 'Origin chỉ gồm giao thức, tên miền và cổng.');
+    }
+    await setSystemSetting('google_sso_config', JSON.stringify({ clientKey, allowedDomain, enforceGoogleLogin, redirectUri }));
+    await recordAuditEvent(actor.id, 'configure_google', 'system', '', { clientId: clientKey });
+    sendJson(response, 200, { config: await getGoogleConfig() });
+    return;
+  }
+
   if (request.method === 'POST' && resource === '/auth/google') {
     const payload = await readJson(request);
-    let googleEmail = '';
-    let googleName = '';
-    let googleAvatar = '';
-
-    // 1. Extract from Google JWT credential if present
-    if (payload.credential) {
-      try {
-        const jwtParts = String(payload.credential).split('.');
-        if (jwtParts.length >= 2) {
-          const tokenData = JSON.parse(Buffer.from(jwtParts[1], 'base64').toString('utf8'));
-          googleEmail = normalizeEmail(tokenData.email || '');
-          googleName = tokenData.name || '';
-          googleAvatar = tokenData.picture || '';
-        }
-      } catch {}
-    }
-
-    // 2. Direct email/name if passed
-    if (!googleEmail && payload.email) {
-      googleEmail = normalizeEmail(payload.email);
-      googleName = payload.name || '';
-      googleAvatar = payload.avatar || '';
-    }
-
-    // 3. Fallback: match primary admin or active system user
-    if (!googleEmail) {
-      const adminUser = await db.prepare("SELECT * FROM users WHERE role = 'ADMIN' ORDER BY created_at ASC LIMIT 1").get();
-      if (adminUser) {
-        googleEmail = adminUser.email;
-        googleName = adminUser.name;
-      } else {
-        const firstUser = await db.prepare('SELECT * FROM users ORDER BY created_at ASC LIMIT 1').get();
-        if (firstUser) {
-          googleEmail = firstUser.email;
-          googleName = firstUser.name;
-        } else {
-          googleEmail = 'admin@kiyovn.com';
-          googleName = 'Quản Trị Viên';
-        }
-      }
-    }
-
-    // 4. Look up user by email or prefix
+    const credential = requiredText(payload.credential, 'Chứng thực đăng nhập Google', 16_000);
+    const googleEmail = await verifyGoogleIdentityCredential(credential);
+    const identity = JSON.parse(Buffer.from(credential.split('.')[1], 'base64url').toString('utf8'));
+    const googleName = optionalText(identity.name, 'Tên tài khoản Google', 160);
+    const googleAvatar = /^https:\/\//i.test(String(identity.picture || '')) ? String(identity.picture).slice(0, 2000) : '';
     let user = await db.prepare('SELECT * FROM users WHERE LOWER(email) = ? LIMIT 1').get(googleEmail.toLowerCase());
     if (!user) {
-      user = await db.prepare('SELECT * FROM users WHERE LOWER(email) LIKE ? LIMIT 1').get(`${googleEmail.toLowerCase().split('@')[0]}@%`);
+      const linked = await db.prepare("SELECT user_id, details_json FROM employee_profiles WHERE LOWER(json_extract(details_json, '$.googleEmail')) = ?").all(googleEmail);
+      if (linked.length === 1) user = await getUserById(linked[0].user_id);
     }
 
     const timestamp = now();
 
-    // 5. If user exists: auto activate account (No activation needed when logging in with Google)
     if (user) {
-      if (!user.is_active) {
-        await db.prepare('UPDATE users SET is_active = 1, updated_at = ? WHERE id = ?').run(timestamp, user.id);
-        user = await getUserById(user.id);
+      if (!user.is_active) throw new HttpError(403, 'Tài khoản chưa kích hoạt hoặc đã bị khóa. Vui lòng dùng liên kết kích hoạt hoặc liên hệ quản trị viên.');
+      const profile = await db.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(user.id);
+      const details = parseJsonObject(profile?.details_json);
+      if (details.googleSubject && details.googleSubject !== identity.sub) throw new HttpError(403, 'Danh tính Google không khớp tài khoản đã liên kết.');
+      if (!details.googleSubject && !googleEmail.endsWith('@gmail.com') && !identity.hd && details.googleEmail !== googleEmail) {
+        throw new HttpError(403, 'Vui lòng liên kết tài khoản Google qua quy trình kích hoạt trước khi đăng nhập.');
       }
     } else {
-      // 6. If user does not exist: automatically create and activate user
-      const adminCountRow = await db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'ADMIN'").get();
-      const adminCount = Number(adminCountRow?.count || 0);
-      const isFirst = adminCount === 0;
       const id = randomUUID();
-      const newRole = isFirst ? 'ADMIN' : 'EMPLOYEE';
       const finalName = googleName || (googleEmail.includes('@') ? googleEmail.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Google User');
-      const code = isFirst ? 'ADMIN-001' : await generateEmployeeCode();
+      const code = await generateEmployeeCode();
       const dummyHash = await hashPassword(randomUUID());
 
       await db.prepare(`INSERT INTO users (id, email, name, employee_code, role, password_hash, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`).run(id, googleEmail, finalName, code, newRole, dummyHash, timestamp, timestamp);
+        VALUES (?, ?, ?, ?, 'USER', ?, 1, ?, ?)`).run(id, googleEmail, finalName, code, dummyHash, timestamp, timestamp);
 
       user = await getUserById(id);
       await ensureEmployeeProfile(user, {
         name: finalName,
         email: googleEmail,
         employeeCode: code,
-        department: isFirst ? 'Ban Giám Đốc' : 'Phòng Kinh Doanh',
-        position: isFirst ? 'Tổng Quản Trị Hệ Thống' : 'Chuyên Viên',
+        department: '',
+        position: '',
         status: 'Chính thức',
         avatar: googleAvatar || '',
       });
       await ensureEmployeeWorkspace(user);
     }
 
+    const linkedProfile = await db.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(user.id);
+    const linkedDetails = { ...parseJsonObject(linkedProfile?.details_json), googleEmail, googleSubject: identity.sub, googleLinkedAt: timestamp };
+    await db.prepare('UPDATE employee_profiles SET details_json = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(linkedDetails), timestamp, user.id);
+
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
-    const token = createToken(user);
+    const token = await createToken(user, request, 'google');
     sendJson(response, 200, {
       token,
       access_token: token,
@@ -2540,6 +3119,44 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(actor.id);
     sendJson(response, 200, { user: publicUser(actor, profile) });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/logout') {
+    const actor = await requireUser(request);
+    await db.transaction(() => revokeAuthSession(request.authSession.row, actor.id, 'Đăng xuất'));
+    sendJson(response, 200, { loggedOut: true });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/admin/sessions') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' ORDER BY created_at DESC, record_key").all();
+    const data = [];
+    for (const row of rows) {
+      const session = publicCollectionRecord(row);
+      if (session?.kind !== 'auth_session') continue;
+      const user = await getUserById(row.owner_id);
+      if (user) data.push(publicAuthSession(session, user, request.authSession.key));
+    }
+    sendJson(response, 200, { data });
+    return;
+  }
+
+  const sessionRevokeMatch = /^\/admin\/sessions\/([^/]+)\/revoke$/.exec(resource);
+  if (request.method === 'POST' && sessionRevokeMatch) {
+    const actor = await requireAdmin(request);
+    const key = requiredText(decodeURIComponent(sessionRevokeMatch[1]), 'Mã phiên', 160);
+    const input = await readJson(request, 16 * 1024);
+    const reason = optionalText(input.reason, 'Lý do thu hồi', 1000) || 'Quản trị viên thu hồi phiên';
+    let revoked;
+    await db.transaction(async () => {
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND record_key = ? ORDER BY created_at LIMIT 1").get(key);
+      if (!row || publicCollectionRecord(row)?.kind !== 'auth_session') throw new HttpError(404, 'Không tìm thấy phiên đăng nhập được xác thực.');
+      const session = await revokeAuthSession(row, actor.id, reason);
+      revoked = publicAuthSession(session, await getUserById(row.owner_id), request.authSession.key);
+    });
+    sendJson(response, 200, { session: revoked });
     return;
   }
 
@@ -2564,8 +3181,7 @@ async function handleRequest(request, response) {
     const password = validatePassword(String(payload.password || '').trim());
     const googleEmail = payload.googleCredential ? await verifyGoogleIdentityCredential(payload.googleCredential) : '';
     const timestamp = now();
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
       await db.prepare('UPDATE users SET password_hash = ?, is_active = 1, updated_at = ? WHERE id = ?')
         .run(await hashPassword(password), timestamp, user.id);
       await db.prepare('UPDATE activation_tokens SET used_at = ? WHERE id = ?').run(timestamp, record.id);
@@ -2579,15 +3195,11 @@ async function handleRequest(request, response) {
           .run(JSON.stringify(details), timestamp, user.id);
       }
       await ensureEmployeeWorkspace(await getUserById(user.id));
-      await db.exec('COMMIT');
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     const activatedUser = await getUserById(user.id);
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
     sendJson(response, 200, {
-      access_token: createToken(activatedUser),
+      access_token: await createToken(activatedUser, request, 'activation'),
       token_type: 'Bearer',
       expires_in: TOKEN_TTL_SECONDS,
       user: publicUser(activatedUser, profile),
@@ -2659,14 +3271,9 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && resource === '/ekyc/session') {
     const payload = await readJson(request).catch(() => ({}));
     const token = String(payload.token || randomUUID()).trim();
-    const tokenHeader = getBearerToken(request);
-    let userId = payload.userId || null;
-    if (!userId && tokenHeader) {
-      try {
-        const claims = verifyToken(tokenHeader);
-        userId = claims.sub;
-      } catch {}
-    }
+    const actor = await requireUser(request);
+    const userId = payload.userId || actor.id;
+    if (userId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Bạn không được tạo phiên xác minh cho người khác.');
     ekycSessions.set(token, {
       token,
       userId,
@@ -2763,6 +3370,7 @@ async function handleRequest(request, response) {
   }
 
   if (request.method === 'GET' && resource.startsWith('/ekyc/session/') && resource.endsWith('/status')) {
+    if (request.headers.authorization) await requireUser(request);
     const token = decodeURIComponent(resource.slice('/ekyc/session/'.length, -'/status'.length));
     const session = ekycSessions.get(token);
     if (session && session.status === 'VERIFIED' && session.data) {
@@ -2788,13 +3396,7 @@ async function handleRequest(request, response) {
     // Kiểm tra trong database theo userId nếu có
     let targetUserId = session?.userId || url.searchParams.get('userId');
     if (!targetUserId) {
-      const tokenHeader = getBearerToken(request);
-      if (tokenHeader) {
-        try {
-          const claims = verifyToken(tokenHeader);
-          targetUserId = claims.sub;
-        } catch {}
-      }
+      targetUserId = (await requireUser(request)).id;
     }
 
     if (targetUserId) {
@@ -2832,8 +3434,81 @@ async function handleRequest(request, response) {
   // empty UI state.  ADMIN users operate on shared collections; normal users
   // can only access the explicitly personal/request scopes above and only
   // their own rows.
+  if (request.method === 'POST' && resource === '/attendance/check-in') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request);
+    const type = oneOf(payload.type, 'Loại chấm công', ['in', 'out']);
+    const timestamp = now();
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(timestamp)).map(part => [part.type, part.value]));
+    const date = `${parts.year}-${parts.month}-${parts.day}`;
+    const time = `${parts.hour}:${parts.minute}:${parts.second}`;
+    const key = `${actor.id}-${date}`;
+    let record;
+    await db.transaction(async () => {
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [key]);
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'employee_timesheets' AND record_key = ? AND owner_id = ?").get(key, actor.id);
+      record = row ? publicCollectionRecord(row) : { key, employeeId: actor.id, employeeName: actor.name, empCode: actor.employee_code, date, checkIn: '', checkOut: '', status: 'Chờ đối soát', note: 'Chấm công trực tuyến', source: 'web', locationVerified: false };
+      if (type === 'in' && record.checkIn) throw new HttpError(409, 'Bạn đã chấm công vào trong ngày.');
+      if (type === 'out' && !record.checkIn) throw new HttpError(422, 'Cần chấm công vào trước khi chấm công ra.');
+      if (type === 'out' && record.checkOut) throw new HttpError(409, 'Bạn đã chấm công ra trong ngày.');
+      if (type === 'in') { record.checkIn = time; record.checkInAt = timestamp; record.duration = 'Đang làm việc'; }
+      else {
+        record.checkOut = time; record.checkOutAt = timestamp;
+        record.durationMinutes = Math.max(0, Math.round((Date.parse(timestamp) - Date.parse(record.checkInAt)) / 60000));
+        record.duration = `${Math.floor(record.durationMinutes / 60)}h ${record.durationMinutes % 60}m`;
+      }
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'employee_timesheets', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`)
+        .run(row?.id || randomUUID(), key, actor.id, JSON.stringify(record), row?.created_at || timestamp, timestamp);
+      await recordAuditEvent(actor.id, type === 'in' ? 'check_in' : 'check_out', 'employee_timesheets', key);
+    });
+    sendJson(response, 200, { record });
+    return;
+  }
+
+  if (resource === '/admin/backups' && ['GET', 'POST'].includes(request.method)) {
+    const actor = await requireAdmin(request);
+    if (request.method === 'GET') sendJson(response, 200, await backupManager.list());
+    else {
+      const backup = await backupManager.create(await readJson(request), actor);
+      await recordAuditEvent(actor.id, 'create', 'admin_backups', backup.key, { type: backup.type, checksumSha256: backup.checksumSha256 });
+      sendJson(response, 201, { backup });
+    }
+    return;
+  }
+  const backupMatch = /^\/admin\/backups\/([^/]+)\/(verify|download|restore)$/.exec(resource);
+  if (backupMatch) {
+    const actor = await requireAdmin(request);
+    const key = decodeURIComponent(backupMatch[1]);
+    if (backupMatch[2] === 'verify' && request.method === 'POST') {
+      const backup = await backupManager.verify(key);
+      await recordAuditEvent(actor.id, 'verify', 'admin_backups', key, { status: backup.status });
+      sendJson(response, 200, { backup });
+      return;
+    }
+    if (backupMatch[2] === 'download' && request.method === 'GET') {
+      const file = await backupManager.download(key);
+      response.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': file.sizeBytes,
+        'Content-Disposition': `attachment; filename="${file.fileName}"`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+      await pipeline(createReadStream(file.filePath), response);
+      return;
+    }
+    if (backupMatch[2] === 'restore' && request.method === 'POST') throw new HttpError(409, 'Khôi phục tự động chưa được hỗ trợ. Hãy kiểm tra bản sao lưu và lập kế hoạch khôi phục ngoại tuyến.');
+  }
+
   const collectionMatch = /^\/collections\/([^/]+)$/.exec(resource);
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
+
+  if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
+    && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'finance_internal_transfers') {
+    await requireAdmin(request);
+    throw new HttpError(409, 'Lệnh điều chuyển phải được ghi hoặc hủy qua API điều chuyển để bảo toàn sổ quỹ.');
+  }
+  if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
+    && ['admin_sessions', 'admin_backups'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    await requireAdmin(request);
+    throw new HttpError(409, 'Dữ liệu quản trị này do hệ thống quản lý. Vui lòng dùng API quản trị tương ứng.');
+  }
 
   if (collectionMatch && request.method === 'GET') {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
@@ -2859,7 +3534,10 @@ async function handleRequest(request, response) {
       'system_broadcasts',
       'enterprise_settings',
     ]);
-    if (actor.role !== 'ADMIN' && !SHARED_READ_SCOPES.has(scope) && !scope.startsWith('business_') && !scope.startsWith('dropdown_')) {
+    if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary') {
+      where.push("(owner_id = ? OR json_extract(payload_json, '$.employeeId') = ?)");
+      parameters.push(actor.id, actor.id);
+    } else if (actor.role !== 'ADMIN' && !SHARED_READ_SCOPES.has(scope) && !scope.startsWith('business_') && !scope.startsWith('dropdown_')) {
       where.push('owner_id = ?');
       parameters.push(actor.id);
     }
@@ -2887,7 +3565,7 @@ async function handleRequest(request, response) {
     if (!Array.isArray(payload.records) || payload.records.length > 1_000) {
       throw new HttpError(422, 'Danh sách bản ghi không hợp lệ hoặc vượt quá giới hạn 1.000 bản ghi.');
     }
-    const records = payload.records.map(normalizeCollectionRecord);
+    const records = await Promise.all(payload.records.map(record => normalizeCollectionRecord(record, scope, actor)));
     if (new Set(records.map((item) => item.recordKey)).size !== records.length) {
       throw new HttpError(422, 'Danh sách có khóa bản ghi trùng lặp.');
     }
@@ -2896,8 +3574,7 @@ async function handleRequest(request, response) {
       : await db.prepare('SELECT record_key, created_at FROM collection_records WHERE scope = ? AND owner_id = ?').all(scope, actor.id);
     const createdAtByKey = new Map(existingRows.map((row) => [row.record_key, row.created_at]));
     const timestamp = now();
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
       if (actor.role === 'ADMIN') {
         await db.prepare('DELETE FROM collection_records WHERE scope = ?').run(scope);
       } else {
@@ -2907,14 +3584,10 @@ async function handleRequest(request, response) {
         (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`);
       for (const item of records) {
-        insert.run(randomUUID(), scope, item.recordKey, actor.id, item.serialized, createdAtByKey.get(item.recordKey) || timestamp, timestamp);
+        await insert.run(randomUUID(), scope, item.recordKey, actor.id, item.serialized, createdAtByKey.get(item.recordKey) || timestamp, timestamp);
       }
       await recordAuditEvent(actor.id, 'replace_collection', scope, '', { recordCount: records.length });
-      await db.exec('COMMIT');
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     const savedRows = await db.prepare('SELECT * FROM collection_records WHERE scope = ? AND owner_id = ? ORDER BY updated_at DESC, record_key ASC')
       .all(scope, actor.id);
     sendJson(response, 200, { data: savedRows.map(publicCollectionRecord).filter(Boolean) });
@@ -2925,20 +3598,26 @@ async function handleRequest(request, response) {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
     const actor = await requireCollectionActor(request, scope);
     const payload = await readJson(request, 256 * 1024);
-    const item = normalizeCollectionRecord(payload.record);
+    let item;
+    let ownerId = actor.id;
     const timestamp = now();
     try {
-      await db.prepare(`INSERT INTO collection_records
-        (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(randomUUID(), scope, item.recordKey, actor.id, item.serialized, timestamp, timestamp);
+      await db.transaction(async () => {
+        if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        item = await normalizeCollectionRecord(payload.record, scope, actor);
+        if (['leave_requests', 'attendance_overtime', 'attendance_leave_summary'].includes(scope)) ownerId = item.record.employeeId;
+        await db.prepare(`INSERT INTO collection_records
+          (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), scope, item.recordKey, ownerId, item.serialized, timestamp, timestamp);
+        await recordAuditEvent(actor.id, 'create', scope, item.recordKey);
+      });
     } catch (error) {
       if (String(error?.message || '').includes('UNIQUE')) throw new HttpError(409, 'Khóa bản ghi đã tồn tại.');
       throw error;
     }
-    await recordAuditEvent(actor.id, 'create', scope, item.recordKey);
     const row = await db.prepare('SELECT * FROM collection_records WHERE scope = ? AND record_key = ? AND owner_id = ?')
-      .get(scope, item.recordKey, actor.id);
+      .get(scope, item.recordKey, ownerId);
     sendJson(response, 201, { record: publicCollectionRecord(row) });
     return;
   }
@@ -2967,21 +3646,51 @@ async function handleRequest(request, response) {
 
     if (request.method === 'PATCH') {
       const payload = await readJson(request, 256 * 1024);
-      const current = publicCollectionRecord(existing) || {};
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
-      const item = normalizeCollectionRecord({ ...current, ...patch, key: current.key ?? recordKey });
-      await db.prepare('UPDATE collection_records SET record_key = ?, payload_json = ?, updated_at = ? WHERE id = ?')
-        .run(item.recordKey, item.serialized, now(), existing.id);
-      await recordAuditEvent(actor.id, 'update', scope, item.recordKey);
+      await db.transaction(async () => {
+        if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
+        if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        const current = publicCollectionRecord(fresh) || {};
+        const item = await normalizeCollectionRecord({ ...current, ...patch, key: current.key ?? recordKey }, scope, actor, current);
+        if (scope === 'attendance_shift_assignments' && current.status === 'Chờ duyệt đổi ca' && patch.swapDecision) {
+          if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được duyệt đổi ca.');
+          if (!['Đã duyệt', 'Từ chối'].includes(patch.swapDecision)) throw new HttpError(422, 'Quyết định đổi ca không hợp lệ.');
+          if (patch.swapDecision === 'Đã duyệt') {
+            const targetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'attendance_shift_assignments' AND record_key = ?").get(current.swapTargetKey);
+            const target = publicCollectionRecord(targetRow);
+            if (!target || target.status !== 'Đang áp dụng' || target.employeeId === current.employeeId || target.effectiveFrom !== current.effectiveFrom || target.effectiveTo !== current.effectiveTo) throw new HttpError(422, 'Phân ca đối ứng phải đang áp dụng, khác nhân viên và trùng khoảng ngày.');
+            const shiftedTarget = { ...target };
+            for (const field of ['shiftKey', 'shiftName', 'shiftCode', 'workHours']) { item.record[field] = target[field]; shiftedTarget[field] = current[field]; }
+            shiftedTarget.swapDecision = 'Đã duyệt'; shiftedTarget.swapApprover = actor.name; shiftedTarget.swapApprovedAt = now();
+            await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(shiftedTarget), now(), targetRow.id);
+          }
+          item.record.status = 'Đang áp dụng'; item.record.swapApprover = actor.name; item.record.swapApprovedAt = now();
+          item.serialized = JSON.stringify(item.record);
+        }
+        const ownerId = ['leave_requests', 'attendance_overtime', 'attendance_leave_summary'].includes(scope) ? item.record.employeeId : fresh.owner_id;
+        await db.prepare('UPDATE collection_records SET record_key = ?, owner_id = ?, payload_json = ?, updated_at = ? WHERE id = ?')
+          .run(item.recordKey, ownerId, item.serialized, now(), existing.id);
+        await recordAuditEvent(actor.id, 'update', scope, item.recordKey);
+      });
       const updated = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
       sendJson(response, 200, { record: publicCollectionRecord(updated) });
       return;
     }
 
     if (request.method === 'DELETE') {
-      await db.prepare('DELETE FROM collection_records WHERE id = ?').run(existing.id);
-      await recordAuditEvent(actor.id, 'delete', scope, recordKey);
+      await db.transaction(async () => {
+        if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
+        if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        if (['leave_requests', 'attendance_overtime', 'hr_rewards', 'hr_performance_reviews'].includes(scope)) {
+          const current = publicCollectionRecord(fresh);
+          if (!['Chờ duyệt', 'Chờ phê duyệt', 'Chờ phê duyệt điểm'].includes(current.status)) throw new HttpError(422, 'Không thể xóa bản ghi đã phê duyệt hoặc từ chối.');
+        }
+        await db.prepare('DELETE FROM collection_records WHERE id = ?').run(existing.id);
+        await recordAuditEvent(actor.id, 'delete', scope, recordKey);
+      });
       sendJson(response, 200, { deleted: true });
       return;
     }
@@ -3247,8 +3956,8 @@ async function handleRequest(request, response) {
   if (request.method === 'GET' && resource === '/dashboard/stats') {
     await requireUser(request);
     const totalEmployees = Number((await db.prepare("SELECT COUNT(*) AS count FROM users WHERE role != 'ADMIN'").get())?.count || 0);
-    const totalUsers = totalEmployees;
-    const activeUsers = Number((await db.prepare("SELECT COUNT(*) AS count FROM users WHERE is_active = 1 AND role != 'ADMIN'").get())?.count || 0);
+    const totalUsers = Number((await db.prepare('SELECT COUNT(*) AS count FROM users').get())?.count || 0);
+    const activeUsers = Number((await db.prepare('SELECT COUNT(*) AS count FROM users WHERE is_active = 1').get())?.count || 0);
 
     const currentMonthPrefix = new Date().toISOString().slice(0, 7);
     const newEmployeesThisMonth = Number((await db.prepare("SELECT COUNT(*) AS count FROM users WHERE role != 'ADMIN' AND created_at LIKE ?").get(`${currentMonthPrefix}%`))?.count || 0);
@@ -3446,10 +4155,111 @@ async function handleRequest(request, response) {
     const id = decodeURIComponent(cashTransactionMatch[1]);
     const current = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id);
     if (!current) throw new HttpError(404, 'Không tìm thấy chứng từ thu chi.');
+    if (/^TRF-[0-9a-f-]+-(OUT|IN|FEE)$/i.test(current.code)) {
+      throw new HttpError(409, 'Chứng từ thuộc lệnh điều chuyển. Hãy hủy cả lệnh để bảo toàn hai bên sổ quỹ.');
+    }
     const payload = await readJson(request);
     if (payload.status !== 'Đã hủy') throw new HttpError(422, 'Chỉ hỗ trợ hủy chứng từ qua API này.');
     await db.prepare('UPDATE finance_cash_transactions SET status = ?, updated_at = ? WHERE id = ?').run('Đã hủy', now(), id);
     sendJson(response, 200, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/finance/internal-transfers') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_internal_transfers' ORDER BY created_at DESC, record_key").all();
+    sendJson(response, 200, { data: rows.map(publicCollectionRecord).filter(Boolean), accounts: await internalTransferAccounts() });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/internal-transfers') {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request, 16 * 1024);
+    const requestId = requiredText(input.requestId, 'Mã yêu cầu', 100);
+    if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) throw new HttpError(422, 'Mã yêu cầu không hợp lệ.');
+    const sourceId = requiredText(input.sourceAccountId, 'Tài khoản nguồn', 200);
+    const destinationId = requiredText(input.destinationAccountId, 'Tài khoản đích', 200);
+    if (sourceId === destinationId) throw new HttpError(422, 'Tài khoản nguồn và đích phải khác nhau.');
+    const amount = requiredAmount(input.amount, 'Số tiền điều chuyển');
+    const fee = optionalAmount(input.fee, 'Phí thực tế');
+    const purpose = requiredText(input.purpose, 'Nội dung điều chuyển', 1000);
+    const transferDate = requiredIsoDate(input.transferDate, 'Ngày điều chuyển');
+    if (new Date(`${transferDate}T00:00:00.000Z`).toISOString().slice(0, 10) !== transferDate) throw new HttpError(422, 'Ngày điều chuyển không tồn tại.');
+    if (transferDate > now().slice(0, 10)) throw new HttpError(422, 'Chỉ ghi sổ giao dịch đã thực hiện, không ghi ngày tương lai.');
+    const transferMethod = oneOf(input.transferMethod || 'Ghi sổ nội bộ', 'Phương thức', ['Ghi sổ nội bộ', 'Napas 247', 'CITAD Liên Ngân Hàng', 'Rút séc / Nộp tiền mặt két']);
+    const fingerprint = JSON.stringify({ sourceId, destinationId, amount, fee, purpose, transferDate, transferMethod });
+    const key = `request-${actor.id}-${requestId}`;
+    let transfer;
+    let replayed = false;
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      const previous = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_internal_transfers' AND record_key = ? AND owner_id = ?").get(key, actor.id);
+      if (previous) {
+        transfer = publicCollectionRecord(previous);
+        if (transfer.requestFingerprint !== fingerprint) throw new HttpError(409, 'Mã yêu cầu đã được dùng cho một lệnh khác.');
+        replayed = true;
+        return;
+      }
+      const accounts = await internalTransferAccounts();
+      const source = accounts.find(item => item.key === sourceId);
+      const destination = accounts.find(item => item.key === destinationId);
+      if (!source || !destination) throw new HttpError(422, 'Không tìm thấy tài khoản hoặc quỹ đã chọn.');
+      if ([source, destination].some(item => item.status !== 'Đang hoạt động')) throw new HttpError(422, 'Tài khoản điều chuyển phải đang hoạt động.');
+      if (!Number.isSafeInteger(source.balance) || source.balance < amount + fee) throw new HttpError(422, 'Số dư tài khoản nguồn không đủ cho số tiền và phí điều chuyển.');
+      const id = randomUUID();
+      const timestamp = now();
+      const code = `TRF-${id}`;
+      const transactionIds = [randomUUID(), randomUUID(), ...(fee > 0 ? [randomUUID()] : [])];
+      const insert = db.prepare(`INSERT INTO finance_cash_transactions (
+        id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+        account_name, status, note, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, ?)`);
+      await insert.run(transactionIds[0], `${code}-OUT`, 'Chi', source.source, 'Chuyển tiền nội bộ', amount, transferDate, destination.name, source.name, purpose, actor.id, timestamp, timestamp);
+      await insert.run(transactionIds[1], `${code}-IN`, 'Thu', destination.source, 'Chuyển tiền nội bộ', amount, transferDate, source.name, destination.name, purpose, actor.id, timestamp, timestamp);
+      if (fee > 0) await insert.run(transactionIds[2], `${code}-FEE`, 'Chi', source.source, 'Phí điều chuyển nội bộ', fee, transferDate, 'Phí thực tế do người lập ghi nhận', source.name, purpose, actor.id, timestamp, timestamp);
+      transfer = {
+        key, transferCode: code, sourceAccountId: sourceId, destinationAccountId: destinationId,
+        sourceAccount: source.name, destinationAccount: destination.name, sourceType: source.source, destinationType: destination.source,
+        amount, fee, purpose, transferDate, transferMethod, time: timestamp.slice(11, 19) + ' UTC',
+        executor: actor.name, executorId: actor.id, approver: '', status: 'Thành công',
+        ledgerRecorded: true, executionStatus: 'ledger_only', transactionIds, requestFingerprint: fingerprint,
+        createdAt: timestamp, updatedAt: timestamp,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_internal_transfers', ?, ?, ?, ?, ?)`)
+        .run(id, key, actor.id, JSON.stringify(transfer), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'record_internal_transfer', 'finance_internal_transfers', key, { amount, fee, sourceId, destinationId, transactionIds });
+    });
+    sendJson(response, replayed ? 200 : 201, { transfer, replayed });
+    return;
+  }
+
+  const transferCancelMatch = /^\/finance\/internal-transfers\/([^/]+)\/cancel$/.exec(resource);
+  if (transferCancelMatch && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    const key = requiredText(decodeURIComponent(transferCancelMatch[1]), 'Mã lệnh', 160);
+    const reason = requiredText((await readJson(request, 16 * 1024)).reason, 'Lý do hủy', 1000);
+    let transfer;
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_internal_transfers' AND record_key = ? ORDER BY created_at LIMIT 1").get(key);
+      if (!row) throw new HttpError(404, 'Không tìm thấy lệnh điều chuyển.');
+      transfer = publicCollectionRecord(row);
+      if (!transfer.ledgerRecorded || !Array.isArray(transfer.transactionIds)) throw new HttpError(409, 'Lệnh cũ chưa có chứng từ liên kết, cần đối chiếu trước khi hủy.');
+      if (transfer.status === 'Đã hủy') return;
+      const destination = (await internalTransferAccounts()).find(item => item.key === transfer.destinationAccountId);
+      if (!destination || destination.balance < transfer.amount) throw new HttpError(422, 'Tài khoản đích không đủ số dư để hoàn lại lệnh điều chuyển.');
+      const timestamp = now();
+      for (const transactionId of transfer.transactionIds) {
+        const current = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(transactionId);
+        if (!current || current.status !== 'Đã hoàn thành') throw new HttpError(409, 'Chứng từ liên kết không đầy đủ, cần đối chiếu sổ quỹ.');
+        await db.prepare("UPDATE finance_cash_transactions SET status = 'Đã hủy', updated_at = ? WHERE id = ?").run(timestamp, transactionId);
+      }
+      transfer = { ...transfer, status: 'Đã hủy', canceledBy: actor.name, canceledById: actor.id, canceledAt: timestamp, cancelReason: reason, updatedAt: timestamp };
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(transfer), timestamp, row.id);
+      await recordAuditEvent(actor.id, 'cancel_internal_transfer', 'finance_internal_transfers', key, { reason });
+    });
+    sendJson(response, 200, { transfer });
     return;
   }
 
@@ -3486,9 +4296,8 @@ async function handleRequest(request, response) {
       id, document_type, code, subtype, partner_name, description, amount, paid_amount,
       document_date, due_date, status, tax_code, vat_rate, vat_amount, created_by, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    await db.exec('BEGIN');
-    try {
-      insertDocument.run(
+    await db.transaction(async () => {
+      await insertDocument.run(
         id,
         document.documentType,
         document.code,
@@ -3508,11 +4317,7 @@ async function handleRequest(request, response) {
         timestamp,
       );
       await insertAutomaticCashTransaction(document, actor.id, timestamp);
-      await db.exec('COMMIT');
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     sendJson(response, 201, { document: publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id)) });
     return;
   }
@@ -3552,7 +4357,8 @@ async function handleRequest(request, response) {
   if (request.method === 'GET' && resource === '/finance/bank-accounts') {
     await requireAdmin(request);
     const rows = await db.prepare('SELECT * FROM finance_bank_accounts ORDER BY created_at DESC').all();
-    sendJson(response, 200, { data: rows.map(publicBankAccount) });
+    const balances = new Map((await internalTransferAccounts()).map(account => [account.key, account.balance]));
+    sendJson(response, 200, { data: rows.map(row => ({ ...publicBankAccount(row), currentBalance: balances.get(row.id) })) });
     return;
   }
 
@@ -3671,8 +4477,7 @@ async function handleRequest(request, response) {
 
     const id = randomUUID();
     const timestamp = now();
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
       await db.prepare(`INSERT INTO tasks (
         id, code, title, description, project_name, assignee_id, created_by, priority,
         due_date, progress, status, created_at, updated_at
@@ -3681,13 +4486,11 @@ async function handleRequest(request, response) {
       const insertChecklist = await db.prepare(`
         INSERT INTO task_checklist_items (id, task_id, title, is_completed, sort_order) VALUES (?, ?, ?, 0, ?)
       `);
-      task.checklist.forEach((title, index) => insertChecklist.run(randomUUID(), id, title, index));
+      for (const [index, title] of task.checklist.entries()) {
+        await insertChecklist.run(randomUUID(), id, title, index);
+      }
       await recordTaskActivity(id, actor.id, `Đã tạo nhiệm vụ "${task.taskTitle}" cho ${assignee.name}.`, timestamp);
-      await db.exec('COMMIT');
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     sendJson(response, 201, { task: await populateTaskDetails(publicTask(await taskRowById(id)), id) });
     return;
   }
@@ -3710,18 +4513,13 @@ async function handleRequest(request, response) {
     if (actor.role !== 'ADMIN' && current.created_by !== actor.id && current.created_by !== actor.employee_code) {
       throw new HttpError(403, 'Chỉ Quản trị viên hoặc người tạo mới có quyền xóa nhiệm vụ.');
     }
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
       await db.prepare('DELETE FROM task_checklist_items WHERE task_id = ?').run(id);
       await db.prepare('DELETE FROM task_comments WHERE task_id = ?').run(id);
       await db.prepare('DELETE FROM task_reports WHERE task_id = ?').run(id);
       await db.prepare('DELETE FROM task_activities WHERE task_id = ?').run(id);
       await db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
-      await db.exec('COMMIT');
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     sendJson(response, 200, { deleted: true });
     return;
   }
@@ -3794,8 +4592,7 @@ async function handleRequest(request, response) {
     const rawBody = await readJson(request);
     const report = validateTaskReport(rawBody, actor.role === 'ADMIN');
     const timestamp = now();
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
       await db.prepare(`INSERT INTO task_reports (
         id, task_id, author_id, content, attachments_json, progress, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -3803,11 +4600,7 @@ async function handleRequest(request, response) {
       await db.prepare('UPDATE tasks SET progress = ?, status = ?, updated_at = ? WHERE id = ? OR code = ?')
         .run(report.progress, report.status, timestamp, task.id, task.id);
       await recordTaskActivity(task.id, actor.id, 'Đã gửi báo cáo công việc.', timestamp);
-      await db.exec('COMMIT');
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     sendJson(response, 201, { task: await populateTaskDetails(publicTask(await taskRowById(task.id)), task.id) });
     return;
   }
@@ -3948,7 +4741,11 @@ async function handleRequest(request, response) {
     const validated = validateContract(payload);
     const id = randomUUID();
     const timestamp = now();
+    let syncedRow;
+    await db.transaction(async () => {
+    if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('contracts-lifecycle'))").get();
     const code = validated.code || await nextUniqueCode('HD', 'contracts');
+    if (await db.prepare('SELECT id FROM contracts WHERE code = ?').get(code)) throw new HttpError(409, 'Mã hợp đồng đã tồn tại.');
 
     await db.prepare(`INSERT INTO contracts (
       id, code, name, contract_category, contract_template, party_b_type, party_b_name,
@@ -4029,7 +4826,8 @@ async function handleRequest(request, response) {
 
     const savedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(id);
     await syncContractToFileNodes(savedRow);
-    const syncedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(id);
+    syncedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(id);
+    });
 
     sendJson(response, 201, { contract: publicContract(syncedRow) });
     return;
@@ -4061,7 +4859,9 @@ async function handleRequest(request, response) {
       const payload = await readJson(request);
       const validated = validateContract(payload);
       const timestamp = now();
-
+      let updatedRow;
+      await db.transaction(async () => {
+      if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('contracts-lifecycle'))").get();
       await db.prepare(`UPDATE contracts SET
         name = ?, contract_category = ?, contract_template = ?, party_b_type = ?, party_b_name = ?,
         party_b_tax_code = ?, party_b_representative = ?, party_b_position = ?, party_b_id_number = ?,
@@ -4085,17 +4885,17 @@ async function handleRequest(request, response) {
         validated.partyBTaxCode,
         validated.partyBRepresentative,
         validated.partyBPosition,
-        validated.partyBIdNumber,
-        validated.partyBPhone,
-        validated.partyBEmail,
-        validated.partyBBank,
-        validated.partyBAddress,
+        encryptField(validated.partyBIdNumber, 'contract'),
+        encryptField(validated.partyBPhone, 'contract'),
+        encryptField(validated.partyBEmail, 'contract'),
+        encryptField(validated.partyBBank, 'contract'),
+        encryptField(validated.partyBAddress, 'contract'),
         validated.employeeCode,
         validated.employeeName,
-        validated.employeeIdNumber,
-        validated.employeePhone,
-        validated.employeeEmail,
-        validated.employeeBank,
+        encryptField(validated.employeeIdNumber, 'contract'),
+        encryptField(validated.employeePhone, 'contract'),
+        encryptField(validated.employeeEmail, 'contract'),
+        encryptField(validated.employeeBank, 'contract'),
         validated.contractType,
         validated.position,
         validated.department,
@@ -4134,8 +4934,10 @@ async function handleRequest(request, response) {
         contractId,
       );
 
-      const updatedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(contractId);
+      updatedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(contractId);
       await syncContractToFileNodes(updatedRow);
+      updatedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(contractId);
+      });
       sendJson(response, 200, { contract: publicContract(updatedRow) });
       return;
     }
@@ -4223,6 +5025,42 @@ async function handleRequest(request, response) {
     await syncContractToFileNodes(updatedRow);
     sendJson(response, 200, { contract: publicContract(updatedRow) });
     return;
+  }
+
+  if (resource === '/system/company-profile' && ['GET', 'PUT'].includes(request.method)) {
+    const actor = await requireAdmin(request);
+    if (request.method === 'GET') { sendJson(response, 200, { profile: await getCompanyProfile() }); return; }
+    const payload = await readJson(request);
+    let profile;
+    await db.transaction(async () => {
+      if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('company-profile'))").get();
+      const current = await getCompanyProfile();
+      if ((current.updatedAt && payload.updatedAt !== current.updatedAt) || (current.revision && payload.revision !== current.revision)) throw new HttpError(409, 'Thông tin công ty đã được thay đổi. Vui lòng tải lại trước khi lưu.');
+      profile = {};
+      for (const field of ['companyName', 'fullName', 'shortName', 'companyCode', 'taxCode', 'businessType', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'address', 'phone', 'fax', 'email', 'website', 'domain', 'bankAccountId']) profile[field] = optionalText(payload[field], 'Thông tin công ty', field === 'address' ? 1000 : 300);
+      profile.companyName = requiredText(profile.companyName, 'Tên công ty', 300);
+      if (profile.email) profile.email = normalizeEmail(profile.email);
+      for (const field of ['establishedDate', 'registrationDate']) profile[field] = payload[field] ? requiredIsoDate(payload[field], 'Ngày đăng ký / thành lập') : '';
+      if (profile.website) {
+        let website;
+        try { website = new URL(profile.website); } catch { throw new HttpError(422, 'Website phải là địa chỉ HTTP hoặc HTTPS hợp lệ.'); }
+        if (!['http:', 'https:'].includes(website.protocol) || website.username || website.password) throw new HttpError(422, 'Website phải là địa chỉ HTTP hoặc HTTPS hợp lệ.');
+        profile.website = website.href;
+      }
+      if (profile.domain) {
+        let domain;
+        try { domain = new URL(`https://${profile.domain}`); } catch { throw new HttpError(422, 'Tên miền không hợp lệ.'); }
+        if (!domain.hostname || domain.username || domain.password || domain.pathname !== '/' || domain.search || domain.hash) throw new HttpError(422, 'Chỉ nhập tên miền, không nhập đường dẫn hoặc giao thức.');
+        profile.domain = domain.host;
+      }
+      profile.timezone = oneOf(payload.timezone || 'Asia/Ho_Chi_Minh', 'Múi giờ hiển thị', ['Asia/Ho_Chi_Minh', 'UTC']);
+      profile.currency = oneOf(payload.currency || 'VND', 'Tiền tệ hiển thị', ['VND', 'USD']);
+      if (profile.bankAccountId && !await db.prepare("SELECT id FROM finance_bank_accounts WHERE id = ? AND status = 'Đang hoạt động'").get(profile.bankAccountId)) throw new HttpError(422, 'Tài khoản ngân hàng không tồn tại hoặc đã ngừng hoạt động.');
+      profile.updatedAt = now(); profile.updatedBy = actor.name; profile.revision = Number(current.revision || 0) + 1;
+      await db.prepare("INSERT INTO system_settings (setting_key, setting_value, updated_at) VALUES ('company_profile', ?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").run(JSON.stringify(profile), profile.updatedAt);
+      await recordAuditEvent(actor.id, 'update', 'company_profile', 'company_profile');
+    });
+    sendJson(response, 200, { profile }); return;
   }
 
   if (request.method === 'GET' && resource === '/system/email-config') {
@@ -4387,11 +5225,17 @@ async function handleRequest(request, response) {
     if (request.method === 'DELETE') {
       const actor = await requireAdmin(request);
       if (actor.id === employeeId) throw new HttpError(422, 'Không thể ngừng tài khoản đang dùng.');
-      const current = await employeeProfileRowByUserId(employeeId);
-      if (!current) throw new HttpError(404, 'Không tìm thấy nhân sự.');
-      const employee = await updateEmployeeProfileRecord(employeeId, { status: 'Đã nghỉ việc' }, { allowIdentityChanges: true });
-      await db.prepare('UPDATE users SET is_active = 0, updated_at = ? WHERE id = ?').run(now(), employeeId);
-      await cleanupEmptyEmployeeWorkspace(employeeId);
+      let employee;
+      await db.transaction(async () => {
+        await lockUserAdministration(actor);
+        const current = await employeeProfileRowByUserId(employeeId);
+        if (!current) throw new HttpError(404, 'Không tìm thấy nhân sự.');
+        if (current.id === actor.id) throw new HttpError(422, 'Không thể ngừng tài khoản đang dùng.');
+        await retainActiveAdministrator(current);
+        employee = await updateEmployeeProfileRecord(current.id, { status: 'Đã nghỉ việc' }, { allowIdentityChanges: true });
+        await db.prepare('UPDATE users SET is_active = 0, updated_at = ? WHERE id = ?').run(now(), current.id);
+        await cleanupEmptyEmployeeWorkspace(current.id);
+      });
       sendJson(response, 200, { employee: { ...employee, isActive: false, activationStatus: 'Đã nghỉ việc' } });
       return;
     }
@@ -4464,10 +5308,11 @@ async function handleRequest(request, response) {
     const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const limit = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '20', 10) || 20));
     const total = (await db.prepare('SELECT COUNT(*) AS count FROM users').get())?.count;
-    const rows = await db.prepare(`SELECT u.*, p.phone, p.department, p.position
+    const rows = await db.prepare(`SELECT u.*, p.phone, p.department, p.position, p.employment_status,
+      CASE WHEN u.is_active = 0 AND EXISTS(SELECT 1 FROM activation_tokens a WHERE a.user_id = u.id AND a.used_at IS NULL) THEN 1 ELSE 0 END AS activation_pending
       FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
       ORDER BY u.created_at DESC LIMIT ? OFFSET ?`).all(limit, (page - 1) * limit);
-    sendJson(response, 200, { data: rows.map(publicUser), pagination: { page, limit, total } });
+    sendJson(response, 200, { data: rows.map(row => publicUser(row, row)), pagination: { page, limit, total } });
     return;
   }
 
@@ -4494,33 +5339,50 @@ async function handleRequest(request, response) {
       const target = await getUserById(id);
       if (!target) throw new HttpError(404, 'Không tìm thấy tài khoản.');
       const payload = await readJson(request);
-      const name = payload.name === undefined && payload.fullName === undefined ? target.name : requiredText(payload.name || payload.fullName, 'Họ tên', 160);
-      const email = payload.email === undefined ? target.email : normalizeEmail(payload.email);
-      const existingEmail = await getUserByEmail(email);
-      if (existingEmail && existingEmail.id !== id) throw new HttpError(409, 'Email đã tồn tại.');
-      const role = payload.role === undefined ? target.role : payload.role === 'ADMIN' ? 'ADMIN' : payload.role === 'USER' ? 'USER' : null;
-      if (!role) throw new HttpError(422, 'Vai trò không hợp lệ.');
-      const isActive = payload.isActive === undefined ? target.is_active : payload.isActive ? 1 : 0;
-      if (actor.id === id && !isActive) throw new HttpError(422, 'Không thể tự vô hiệu hóa tài khoản đang dùng.');
-      const passwordHash = payload.password === undefined ? target.password_hash : await hashPassword(validatePassword(payload.password));
-      await db.prepare('UPDATE users SET name = ?, email = ?, role = ?, is_active = ?, password_hash = ?, updated_at = ? WHERE id = ?')
-        .run(name, email, role, isActive, passwordHash, now(), id);
-      const updatedUser = await getUserById(id);
-      await ensureEmployeeProfile(updatedUser);
-      if (isActive) {
-        await ensureEmployeeWorkspace(updatedUser);
-      } else {
-        await cleanupEmptyEmployeeWorkspace(id);
-      }
-      sendJson(response, 200, { user: publicUser(updatedUser) });
+      const suppliedName = payload.name === undefined && payload.fullName === undefined ? undefined : requiredText(payload.name || payload.fullName, 'Họ tên', 160);
+      const suppliedEmail = payload.email === undefined ? undefined : normalizeEmail(payload.email);
+      if (payload.role !== undefined && !['ADMIN', 'USER'].includes(payload.role)) throw new HttpError(422, 'Vai trò không hợp lệ.');
+      if (payload.isActive !== undefined && typeof payload.isActive !== 'boolean') throw new HttpError(422, 'Trạng thái hoạt động phải là true hoặc false.');
+      const suppliedHash = payload.password === undefined ? undefined : await hashPassword(validatePassword(payload.password));
+      let updatedUser;
+      await db.transaction(async () => {
+        await lockUserAdministration(actor);
+        const fresh = await getUserById(id);
+        if (!fresh) throw new HttpError(404, 'Không tìm thấy tài khoản.');
+        const name = suppliedName ?? fresh.name, email = suppliedEmail ?? fresh.email, role = payload.role ?? fresh.role;
+        const isActive = payload.isActive === undefined ? fresh.is_active : payload.isActive ? 1 : 0;
+        if (actor.id === id && !isActive) throw new HttpError(422, 'Không thể tự vô hiệu hóa tài khoản đang dùng.');
+        const existingEmail = await getUserByEmail(email);
+        if (existingEmail && existingEmail.id !== id) throw new HttpError(409, 'Email đã tồn tại.');
+        if (role !== 'ADMIN' || !isActive) await retainActiveAdministrator(fresh);
+        await db.prepare('UPDATE users SET name = ?, email = ?, role = ?, is_active = ?, password_hash = ?, updated_at = ? WHERE id = ?')
+          .run(name, email, role, isActive, suppliedHash ?? fresh.password_hash, now(), id);
+        const updated = await getUserById(id);
+        await ensureEmployeeProfile(updated);
+        if (payload.department !== undefined || payload.position !== undefined) await updateEmployeeProfileRecord(id, {
+          ...(payload.department !== undefined ? { department: payload.department } : {}),
+          ...(payload.position !== undefined ? { position: payload.position } : {}),
+        }, { allowIdentityChanges: true });
+        updatedUser = await getUserById(id);
+        if (updatedUser.is_active) await ensureEmployeeWorkspace(updatedUser);
+        else await cleanupEmptyEmployeeWorkspace(id);
+      });
+      sendJson(response, 200, { user: publicUser(updatedUser, await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(id)) });
       return;
     }
     if (request.method === 'DELETE') {
       const actor = await requireAdmin(request);
       if (actor.id === id) throw new HttpError(422, 'Không thể tự xóa tài khoản đang dùng.');
-      await cleanupEmptyEmployeeWorkspace(id);
-      const result = await db.prepare('DELETE FROM users WHERE id = ?').run(id);
-      if (!result.changes) throw new HttpError(404, 'Không tìm thấy tài khoản.');
+      await db.transaction(async () => {
+        await lockUserAdministration(actor);
+        const target = await getUserById(id);
+        if (!target) throw new HttpError(404, 'Không tìm thấy tài khoản.');
+        await retainActiveAdministrator(target);
+        const businessRecord = await db.prepare("SELECT scope FROM collection_records WHERE owner_id = ? AND scope <> 'admin_sessions' LIMIT 1").get(id);
+        if (businessRecord) throw new HttpError(409, 'Tài khoản đang sở hữu hồ sơ nghiệp vụ. Vui lòng khóa tài khoản hoặc ghi nhận nghỉ việc để giữ nguyên dữ liệu.');
+        await cleanupEmptyEmployeeWorkspace(id);
+        await db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      });
       sendJson(response, 200, { deleted: true });
       return;
     }
@@ -4665,19 +5527,14 @@ async function handleRequest(request, response) {
     });
 
     const timestamp = now();
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
       await db.prepare(`INSERT INTO documents (id, owner_id, title, current_revision, settings_json, created_at, updated_at)
         VALUES (?, ?, ?, 1, ?, ?, ?)`).run(id, actor.id, title, JSON.stringify(settings), timestamp, timestamp);
 
       await db.prepare(`INSERT INTO document_snapshots (id, document_id, revision, data, created_at)
         VALUES (?, ?, 1, ?, ?)`).run(randomUUID(), id, initialData, timestamp);
 
-      await db.exec('COMMIT');
-    } catch (e) {
-      await db.exec('ROLLBACK');
-      throw e;
-    }
+    });
 
     const doc = await documentRowById(id);
     sendJson(response, 201, {
@@ -4826,41 +5683,45 @@ async function handleRequest(request, response) {
     const payload = await readJson(request);
 
     const ops = Array.isArray(payload.operations) ? payload.operations : [];
+    const appliedOps = [];
+    let snapshotSaved = false;
     const timestamp = now();
     let currentRev = Number(doc.current_revision || 1);
 
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async () => {
+      const latest = await documentRowById(docId);
+      const baseRevision = Number(latest.current_revision || 1);
+      currentRev = baseRevision;
       for (const op of ops) {
-        currentRev += 1;
         const opId = randomUUID();
         const txId = String(op.transactionId || randomUUID());
+        if (await db.prepare('SELECT id FROM document_operations WHERE document_id = ? AND transaction_id = ?').get(docId, txId)) continue;
+        currentRev += 1;
         const clientId = String(op.clientId || actor.id);
         const opData = typeof op.data === 'string' ? op.data : JSON.stringify(op);
 
-        await db.prepare(`INSERT OR IGNORE INTO document_operations (id, document_id, revision, client_id, transaction_id, data, created_at)
+        await db.prepare(`INSERT INTO document_operations (id, document_id, revision, client_id, transaction_id, data, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)`).run(opId, docId, currentRev, clientId, txId, opData, timestamp);
+        appliedOps.push(op);
       }
 
       // If client also submitted an updated snapshot
-      if (payload.snapshot && payload.snapshot.data) {
+      if (payload.snapshot && payload.snapshot.data && (!ops.length || appliedOps.length)) {
         const snapData = typeof payload.snapshot.data === 'string' ? payload.snapshot.data : JSON.stringify(payload.snapshot.data);
-        await db.prepare(`INSERT OR REPLACE INTO document_snapshots (id, document_id, revision, data, created_at)
-          VALUES (?, ?, ?, ?, ?)`).run(randomUUID(), docId, currentRev, snapData, timestamp);
+        await db.prepare(`INSERT INTO document_snapshots (id, document_id, revision, data, created_at)
+          VALUES (?, ?, ?, ?, ?) ON CONFLICT(document_id, revision) DO UPDATE SET data = excluded.data`).run(randomUUID(), docId, currentRev, snapData, timestamp);
+        snapshotSaved = true;
       }
 
-      await db.prepare('UPDATE documents SET current_revision = ?, updated_at = ? WHERE id = ?').run(currentRev, timestamp, docId);
-      await db.exec('COMMIT');
-    } catch (e) {
-      await db.exec('ROLLBACK');
-      throw e;
-    }
+      const updated = await db.prepare('UPDATE documents SET current_revision = ?, updated_at = ? WHERE id = ? AND current_revision = ?').run(currentRev, timestamp, docId, baseRevision);
+      if (!updated.changes) throw new HttpError(409, 'Tài liệu vừa được cập nhật. Vui lòng tải lại và thử lại.');
+    });
 
     const broadcastPayload = {
       revision: currentRev,
       actorId: actor.id,
-      operations: ops,
-      snapshotRevision: payload.snapshot ? currentRev : undefined,
+      operations: appliedOps,
+      snapshotRevision: snapshotSaved ? currentRev : undefined,
     };
     broadcastDocEvent(docId, 'operations', broadcastPayload);
 
@@ -4879,8 +5740,8 @@ async function handleRequest(request, response) {
     const data = typeof payload.data === 'string' ? payload.data : JSON.stringify(payload.data);
     const timestamp = now();
 
-    await db.prepare(`INSERT OR REPLACE INTO document_snapshots (id, document_id, revision, data, created_at)
-      VALUES (?, ?, ?, ?, ?)`).run(randomUUID(), docId, revision, data, timestamp);
+    await db.prepare(`INSERT INTO document_snapshots (id, document_id, revision, data, created_at)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(document_id, revision) DO UPDATE SET data = excluded.data`).run(randomUUID(), docId, revision, data, timestamp);
 
     sendJson(response, 200, { success: true, revision });
     return;
@@ -5059,13 +5920,67 @@ async function seedAdmin() {
   console.log(`Created admin account ${user.email} (${user.employeeCode}).`);
 }
 
+async function migrateAttendanceCollections() {
+  if (await getSystemSetting('attendance_canonical_scopes_v1')) return;
+  let migrated = 0;
+  await db.transaction(async () => {
+    const sourceRows = await db.prepare("SELECT * FROM collection_records WHERE scope IN ('employee_leaves', 'employee_overtime') ORDER BY updated_at DESC").all();
+    for (const row of sourceRows) {
+      const scope = row.scope === 'employee_leaves' ? 'leave_requests' : 'attendance_overtime';
+      if (await db.prepare('SELECT id FROM collection_records WHERE scope = ? AND record_key = ?').get(scope, row.record_key)) continue;
+      const record = parseJsonObject(row.payload_json);
+      const owner = await getUserById(row.owner_id);
+      let employee = record.employeeId ? await getUserById(record.employeeId) : null;
+      if (!employee && (record.empCode || record.employeeCode)) employee = await db.prepare('SELECT * FROM users WHERE employee_code = ?').get(record.empCode || record.employeeCode);
+      if (!employee && record.employeeName) {
+        const matches = await db.prepare('SELECT * FROM users WHERE name = ?').all(record.employeeName);
+        if (matches.length === 1) employee = matches[0];
+      }
+      if (!employee && owner?.role === 'USER') employee = owner;
+      if (employee) { record.employeeId = employee.id; record.employeeName = employee.name; record.empCode = employee.employee_code; }
+      record.key = row.record_key;
+      if (scope === 'leave_requests') {
+        record.startDate = record.startDate || record.fromDate || '';
+        record.endDate = record.endDate || record.toDate || '';
+        record.leaveType = record.leaveType || record.type || '';
+        if (record.daysCount === undefined && record.days !== undefined) record.daysCount = Number(record.days);
+        if (record.status === 'Đã phê duyệt') record.status = 'Đã duyệt';
+      } else {
+        record.otDate = record.otDate || record.date || '';
+        if (record.totalHours === undefined && record.hours !== undefined) record.totalHours = Number(record.hours);
+        if (!record.timeRange && record.fromTime && record.toTime) record.timeRange = `${record.fromTime} - ${record.toTime}`;
+        if (record.status === 'Đã duyệt') record.status = 'Đã duyệt OT';
+      }
+      await db.prepare('INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(randomUUID(), scope, row.record_key, employee?.id || row.owner_id, JSON.stringify(record), row.created_at, row.updated_at);
+      migrated++;
+    }
+    const canonicalRows = await db.prepare("SELECT * FROM collection_records WHERE scope IN ('leave_requests', 'attendance_overtime')").all();
+    for (const row of canonicalRows) {
+      const record = parseJsonObject(row.payload_json);
+      let employee = record.employeeId ? await getUserById(record.employeeId) : null;
+      if (!employee && (record.empCode || record.employeeCode)) employee = await db.prepare('SELECT * FROM users WHERE employee_code = ?').get(record.empCode || record.employeeCode);
+      if (!employee && record.employeeName) {
+        const matches = await db.prepare('SELECT * FROM users WHERE name = ?').all(record.employeeName);
+        if (matches.length === 1) employee = matches[0];
+      }
+      if (!employee) continue;
+      record.employeeId = employee.id;
+      const collision = await db.prepare('SELECT id FROM collection_records WHERE scope = ? AND record_key = ? AND owner_id = ? AND id <> ?').get(row.scope, row.record_key, employee.id, row.id);
+      if (!collision) await db.prepare('UPDATE collection_records SET owner_id = ?, payload_json = ? WHERE id = ?').run(employee.id, JSON.stringify(record), row.id);
+    }
+    await setSystemSetting('attendance_canonical_scopes_v1', JSON.stringify({ at: now(), migrated }));
+  });
+}
+
+await migrateAttendanceCollections();
 await ensureAllEmployeeWorkspaces();
-await seedDefaultContracts();
+if (process.env.SEED_DEMO_DATA === 'true') await seedDefaultContracts();
 
 async function ensureAllContractsSynced() {
-  const allContracts = await db.prepare('SELECT * FROM contracts WHERE deleted_at IS NULL').get ? await db.prepare('SELECT * FROM contracts').all() : [];
+  const allContracts = await db.prepare('SELECT * FROM contracts').all();
   for (const c of allContracts) {
-    await syncContractToFileNodes(c);
+    await syncContractToFileNodes(c, { overwrite: false });
   }
 }
 await ensureAllContractsSynced();
@@ -5084,10 +5999,12 @@ if (process.argv.includes('--seed-admin')) {
 
 const server = createServer((request, response) => {
   void handleRequest(request, response).catch((error) => {
-    const status = error instanceof HttpError ? error.status : 500;
-    const message = error instanceof HttpError ? error.message : (error?.message || 'Máy chủ gặp lỗi. Vui lòng thử lại sau.');
+    if (response.headersSent || response.destroyed) { if (!response.destroyed) response.destroy(); return; }
+    const suppliedStatus = error?.statusCode ?? error?.status;
+    const status = error instanceof HttpError ? error.status : Number.isInteger(suppliedStatus) && suppliedStatus >= 400 && suppliedStatus < 500 ? suppliedStatus : 500;
+    const message = status === 500 ? 'Máy chủ gặp lỗi. Vui lòng thử lại sau.' : error.message;
     if (status === 500) console.error('[500 Error]', error);
-    sendJson(response, status, { message, details: error?.stack });
+    sendJson(response, status, { message });
   });
 });
 

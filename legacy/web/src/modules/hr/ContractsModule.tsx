@@ -22,12 +22,13 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Radio, Upload, Checkbox } from '../../custom-ui';
 import { ContractTemplate, dataService } from '../../services/dataService';
-import { contractsApi } from '../../api/endpoints';
+import { contractsApi, filesApi } from '../../api/endpoints';
 import { downloadFile } from '../../utils/fileExporter';
 
 export interface EnterpriseContractItem {
   key: string;
   id?: string;
+  fileNodeId?: string | null;
   code: string;
   name: string;
   contractCategory?: 'partner' | 'service' | 'nda' | 'consultant' | 'equity' | 'labor' | 'custom' | string;
@@ -223,16 +224,13 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
       ]);
       setOrgUnitOptions(units.map((u) => ({ label: u, value: u })));
       setPositionOptions(posOpts.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));
-      if (response.data?.data && Array.isArray(response.data.data) && response.data.data.length > 0) {
+      if (response.data?.data && Array.isArray(response.data.data)) {
         setContracts(response.data.data as any[]);
-        dataService.saveEnterpriseContracts(response.data.data as any[]);
       } else {
-        const list = dataService.getEnterpriseContracts();
-        setContracts(list);
+        throw new Error('Danh sách hợp đồng trả về không hợp lệ.');
       }
-    } catch {
-      const list = dataService.getEnterpriseContracts();
-      setContracts(list);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách hợp đồng.');
     } finally {
       setLoading(false);
     }
@@ -622,8 +620,8 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
         companySignedFileName: updatedCompanySignedFileName,
         attachedFileNames: contractSourceType === 'upload' ? uploadedTemplateFiles : editingContract?.attachedFileNames,
 
-        signerName: values.signerName || 'Trần Tuấn Anh',
-        signerPosition: values.signerPosition || 'Tổng Giám Đốc',
+        signerName: values.signerName || '',
+        signerPosition: values.signerPosition || '',
         note: values.note,
         customFieldValues,
       };
@@ -635,19 +633,20 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
             const res = await contractsApi.update(targetId, contractItem as any);
             if (res.data?.contract) {
               const saved = res.data.contract as any;
-              contractItem.key = saved.id || contractItem.key;
+              Object.assign(contractItem, saved, { key: saved.id || contractItem.key });
             }
             message.success(`Đã cập nhật hợp đồng: ${contractItem.code}`);
           } else {
             const res = await contractsApi.create(contractItem as any);
             if (res.data?.contract) {
               const saved = res.data.contract as any;
-              contractItem.key = saved.id || contractItem.key;
+              Object.assign(contractItem, saved, { key: saved.id || contractItem.key });
             }
             message.success(`Đã tạo thành công hợp đồng mới: ${contractItem.code}`);
           }
-        } catch {
-          message.success(`Đã lưu hợp đồng: ${contractItem.code}`);
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể lưu hợp đồng. Vui lòng thử lại.');
+          return;
         }
 
         let updatedList: EnterpriseContractItem[] = [];
@@ -658,10 +657,11 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
         }
 
         setContracts(updatedList);
-        dataService.saveEnterpriseContracts(updatedList);
         setModalOpen(false);
         void loadData();
       })();
+    }).catch((error: any) => {
+      if (!error?.errorFields) message.error(error?.message || 'Không thể kiểm tra biểu mẫu hợp đồng.');
     });
   };
 
@@ -672,20 +672,33 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
       okText: 'Xóa hợp đồng',
       cancelText: 'Hủy',
       okButtonProps: { danger: true },
-      onOk: () => {
-        const updated = contracts.filter((c) => c.key !== contract.key);
-        setContracts(updated);
-        dataService.saveEnterpriseContracts(updated);
-        message.success('Đã xóa hợp đồng thành công!');
+      onOk: async () => {
+        try {
+          await contractsApi.remove(contract.id || contract.key);
+          setContracts(current => current.filter(c => (c.id || c.key) !== (contract.id || contract.key)));
+          message.success('Đã xóa hợp đồng thành công!');
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể xóa hợp đồng.');
+          throw error;
+        }
       },
     });
   };
 
-  const handleDownloadContract = (contract: EnterpriseContractItem) => {
+  const handleDownloadContract = async (contract: EnterpriseContractItem) => {
+    try {
+      const fileId = contract.fileNodeId || (await contractsApi.getOne(contract.id || contract.key)).data.contract?.fileNodeId;
+      if (!fileId) { message.warning('Hợp đồng chưa có bản Word trên máy chủ. Có thể xuất nội dung TXT trong hồ sơ.'); return; }
+      const response = await filesApi.download(fileId);
+      downloadFile(`${contract.code.replace(/[^a-z0-9_-]/gi, '_')}.docx`, response.data);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không tải được tệp Word hợp đồng.'); }
+  };
+
+  const handleExportContractText = (contract: EnterpriseContractItem) => {
     const tpl = contractTemplates.find((item) => item.name === contract.contractTemplate);
     const content = tpl
       ? renderTemplateContent(tpl.content, { ...contract, ...(contract.customFieldValues || {}) })
-      : `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\n${contract.name.toUpperCase()}\nSố: ${contract.code}\n\nBÊN A: CÔNG TY CỔ PHẦN KIYOVN\nĐại diện: ${contract.signerName || 'Trần Tuấn Anh'} - Chức vụ: ${contract.signerPosition || 'Tổng Giám Đốc'}\n\nBÊN B: ${contract.partyBName || contract.employeeName}\nĐại diện: ${contract.partyBRepresentative || contract.employeeName}\nSố điện thoại: ${contract.partyBPhone || contract.employeePhone}\nEmail: ${contract.partyBEmail || contract.employeeEmail}\n\nĐIỀU 1: NỘI DUNG VÀ THỜI HẠN\n- Danh mục: ${contract.type}\n- Thời hạn: Từ ${contract.startDate} đến ${contract.endDate}\n\nĐIỀU 2: GIÁ TRỊ HỢP ĐỒNG & THANH TOÁN\n- Giá trị hợp đồng: ${(contract.contractValue || contract.salary || 0).toLocaleString('vi-VN')} VNĐ\n- Hình thức chi trả: ${contract.paymentMethod || 'Chuyển khoản ngân hàng'}\n\nĐIỀU 3: CHỮ KÝ SỐ\n- Phía Bên B: ${contract.employeeSignStatus === 'Đã ký' ? `ĐÃ KÝ SỐ (${contract.employeeCertName})` : 'CHƯA KÝ'}\n- Phía Bên A: ${contract.companySignStatus === 'Đã ký' ? `ĐÃ KÝ SỐ DOANH NGHIỆP (${contract.companyCertName})` : 'CHƯA KÝ'}`;
+      : `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\n${contract.name.toUpperCase()}\nSố: ${contract.code}\n\nBÊN A: CÔNG TY CỔ PHẦN KIYOVN\nĐại diện: ${contract.signerName || 'Chưa khai báo'} - Chức vụ: ${contract.signerPosition || 'Chưa khai báo'}\n\nBÊN B: ${contract.partyBName || contract.employeeName}\nĐại diện: ${contract.partyBRepresentative || contract.employeeName}\nSố điện thoại: ${contract.partyBPhone || contract.employeePhone}\nEmail: ${contract.partyBEmail || contract.employeeEmail}\n\nĐIỀU 1: NỘI DUNG VÀ THỜI HẠN\n- Danh mục: ${contract.type}\n- Thời hạn: Từ ${contract.startDate} đến ${contract.endDate}\n\nĐIỀU 2: GIÁ TRỊ HỢP ĐỒNG & THANH TOÁN\n- Giá trị hợp đồng: ${(contract.contractValue || contract.salary || 0).toLocaleString('vi-VN')} VNĐ\n- Hình thức chi trả: ${contract.paymentMethod || 'Chuyển khoản ngân hàng'}\n\nĐIỀU 3: THÔNG TIN GHI NHẬN KÝ\n- Phía Bên B: ${contract.employeeSignStatus === 'Đã ký' ? `ĐÃ GHI NHẬN KÝ (${contract.employeeCertName})` : 'CHƯA KÝ'}\n- Phía Bên A: ${contract.companySignStatus === 'Đã ký' ? `ĐÃ GHI NHẬN KÝ DOANH NGHIỆP (${contract.companyCertName})` : 'CHƯA KÝ'}`;
 
     downloadFile(`${contract.code}_${(contract.partyBName || contract.employeeName).replace(/\s+/g, '_')}.txt`, content);
     message.success(`Đã tải xuống hợp đồng ${contract.code}`);
@@ -1792,13 +1805,14 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
               onClick={() => handleDownloadContract(selectedContract)}
               style={{ backgroundColor: '#009688', borderColor: '#009688', borderRadius: 4 }}
             >
-              Tải hợp đồng
+              Tải Word
             </Button>
           )
         }
       >
         {selectedContract && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Button icon={<DownloadOutlined />} onClick={() => handleExportContractText(selectedContract)}>Xuất nội dung TXT theo mẫu</Button>
             <div style={{ background: '#F8FAFC', padding: 14, borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>{selectedContract.name}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>

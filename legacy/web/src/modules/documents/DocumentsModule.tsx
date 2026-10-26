@@ -1,4 +1,5 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi, filesApi, StoredFileNode } from '../../api/endpoints';
 import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
@@ -18,7 +19,8 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Radio } from '../../custom-ui';
-import { downloadFile } from '../../utils/fileExporter';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { saveFileBlob } from '../../utils/fileStorage';
 import { DocxEditorModal } from '../../components/editor/DocxEditorModal';
 
 export interface EnterpriseDocItem {
@@ -35,7 +37,14 @@ export interface EnterpriseDocItem {
   expirationDate: string;
   securityLevel: 'Tuyệt mật (BOD Only)' | 'Mật (Confidential)' | 'Nội bộ công ty' | 'Công khai';
   storageLocation: string;
-  fileFormat: 'PDF' | 'DOCX' | 'XLSX';
+  fileFormat: string;
+  fileNodeId?: string;
+  fileName?: string;
+  fileSizeBytes?: number;
+  wordFileNodeId?: string;
+  wordFileName?: string;
+  wordSha256Hash?: string;
+  caVerifiedAt?: string;
   fileSize: string;
   caSigned: boolean;
   sha256Hash: string;
@@ -69,10 +78,20 @@ const buildDocxInitialContent = (doc: EnterpriseDocItem) => {
 
 export const DocumentsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseDocItem[]>(INITIAL_ENTERPRISE_DOCS);
+  const [saving, setSaving] = useState(false);
+  const [editingDoc, setEditingDoc] = useState<EnterpriseDocItem | null>(null);
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<StoredFileNode | null>(null);
+
+  const refresh = async () => {
+    try { setData(await dataService.refreshGenericData('enterprise_documents')); }
+    catch (error: any) { message.error(error?.response?.data?.message || 'Không tải được danh mục văn bản.'); }
+  };
 
   useEffect(() => {
     const list = dataService.getGenericData('enterprise_documents');
     setData(Array.isArray(list) ? list : []);
+    void refresh();
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('enterprise_documents');
       setData(Array.isArray(updated) ? updated : []);
@@ -89,32 +108,33 @@ export const DocumentsModule: React.FC = () => {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<EnterpriseDocItem | null>(null);
+  const currentDoc = data.find(item => item.key === selectedDoc?.key) || selectedDoc;
 
   // Docx Editor
   const [docxEditorOpen, setDocxEditorOpen] = useState(false);
   const [editorDocItem, setEditorDocItem] = useState<EnterpriseDocItem | null>(null);
 
   const handleOpenCreateDocx = () => {
-    const codeNum = Number(String(Date.now()).slice(-3));
+    const codeNum = `${Date.now()}-${crypto.randomUUID().slice(0, 6)}`;
     const newDoc: EnterpriseDocItem = {
-      key: String(Date.now()),
-      docCode: `VB-2026/${codeNum}-KIYO`,
+      key: crypto.randomUUID(),
+      docCode: `VB-${new Date().getFullYear()}/${codeNum}`,
       title: 'Văn bản mới',
       docCategory: 'Công văn điều hành',
       direction: 'Nội bộ ban hành',
-      issuingAuthority: 'Ban Giám Đốc KIYOVN',
-      signerName: 'Người ký thẩm quyền',
-      signerPosition: 'Tổng Giám Đốc (CEO)',
+      issuingAuthority: 'Nội bộ',
+      signerName: '',
+      signerPosition: '',
       issuedDate: new Date().toISOString().slice(0, 10),
       effectiveDate: new Date().toISOString().slice(0, 10),
       expirationDate: 'Vĩnh viễn',
       securityLevel: 'Nội bộ công ty',
-      storageLocation: 'Kho Dữ Liệu Số Đám Mây',
+      storageLocation: '',
       fileFormat: 'DOCX',
-      fileSize: '16.5 KB',
-      caSigned: true,
-      sha256Hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      status: 'Mới ban hành',
+      fileSize: '',
+      caSigned: false,
+      sha256Hash: '',
+      status: 'Dự thảo thẩm định',
       tags: ['Văn bản số', 'Word'],
       summary: '',
     };
@@ -122,31 +142,84 @@ export const DocumentsModule: React.FC = () => {
     setDocxEditorOpen(true);
   };
 
-  const handleOpenEditDocx = (doc: EnterpriseDocItem) => {
-    setEditorDocItem(doc);
-    setDocxEditorOpen(true);
+  const handleOpenEditDocx = async (doc: EnterpriseDocItem) => {
+    try {
+      const fileId = doc.wordFileNodeId || (doc.fileFormat === 'DOCX' ? doc.fileNodeId : '');
+      if (fileId) await saveFileBlob(doc.key, (await filesApi.download(fileId)).data);
+      setEditorDocItem(doc);
+      setDocxEditorOpen(true);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không tải được bản Word đã lưu.'); }
   };
 
+  const openMetadata = (doc?: EnterpriseDocItem) => {
+    setEditingDoc(doc || null); setAttachment(null); setUploadedFile(null); form.resetFields();
+    form.setFieldsValue(doc ? { ...doc, expirationDate: doc.expirationDate === 'Vĩnh viễn' ? '' : doc.expirationDate, tags: (doc.tags || []).join(', ') } : {
+      direction: 'Nội bộ ban hành', docCategory: 'Quy chế & Quyết định', securityLevel: 'Nội bộ công ty', status: 'Mới ban hành',
+      issuedDate: new Date().toISOString().slice(0, 10), effectiveDate: new Date().toISOString().slice(0, 10),
+    });
+    setModalOpen(true);
+  };
+
+  const persist = async (doc: EnterpriseDocItem) => {
+    const exists = data.some(item => item.key === doc.key);
+    const response = exists ? await collectionsApi.update<EnterpriseDocItem>('enterprise_documents', doc.key, doc) : await collectionsApi.create('enterprise_documents', doc, doc.key);
+    const saved = response.data.record;
+    setData(previous => [saved, ...previous.filter(item => item.key !== saved.key)]);
+    void dataService.refreshGenericData('enterprise_documents').catch(() => message.warning('Đã lưu hồ sơ, chưa làm mới được bộ nhớ danh mục.'));
+    if (selectedDoc?.key === saved.key) setSelectedDoc(saved);
+    return saved;
+  };
+
+  const upload = async (blob: Blob, name: string) => {
+    const workspace = await filesApi.list(null, false, true);
+    return (await filesApi.upload(blob, name, workspace.data.context.parentId, 'enterprise_documents')).data.file;
+  };
+
+  const downloadOriginal = async (doc: EnterpriseDocItem) => {
+    const id = doc.fileNodeId || doc.wordFileNodeId;
+    if (!id) { message.warning('Hồ sơ chưa có tệp gốc. Vui lòng đính kèm hoặc lưu bản Word.'); return; }
+    try { downloadFile(doc.fileName || doc.wordFileName || `${doc.docCode}.docx`, (await filesApi.download(id)).data); }
+    catch (error: any) { message.error(error?.response?.data?.message || 'Không tải được tệp gốc.'); }
+  };
+
+  const exportRegister = () => downloadFile('Danh_muc_van_ban.xlsx', generateValidXlsxBlob([
+    ['Số văn bản', 'Trích yếu', 'Phân loại', 'Chiều văn bản', 'Đơn vị ban hành', 'Người ký', 'Ngày ban hành', 'Ngày hiệu lực', 'Hết hiệu lực', 'Độ mật', 'Trạng thái', 'Tệp gốc', 'SHA-256'],
+    ...filteredData.map(doc => [doc.docCode, doc.title, doc.docCategory, doc.direction, doc.issuingAuthority, doc.signerName, doc.issuedDate, doc.effectiveDate, doc.expirationDate, doc.securityLevel, doc.status, doc.fileNodeId ? doc.fileName || '' : doc.wordFileNodeId ? doc.wordFileName || '' : '', doc.fileNodeId ? doc.sha256Hash || '' : doc.wordFileNodeId ? doc.wordSha256Hash || '' : '']),
+  ]));
+
+  const printSlip = (doc: EnterpriseDocItem) => downloadFile(`${doc.docCode.replace(/[^a-z0-9_-]/gi, '_')}_Phieu_van_thu.pdf`, generateValidPdfBlob('PHIEU VAN THU', doc.docCode, [
+    doc.title, `Phan loai: ${doc.docCategory}`, `Don vi: ${doc.issuingAuthority}`, `Nguoi ky khai bao: ${doc.signerName || 'Chua khai bao'}`,
+    `Ban hanh: ${doc.issuedDate} | Hieu luc: ${doc.effectiveDate}`, `Trang thai: ${doc.status}`, `Do mat: ${doc.securityLevel}`, `Luu tru: ${doc.storageLocation || 'Chua khai bao'}`,
+    doc.summary || '', `SHA-256 tep goc: ${doc.fileNodeId ? doc.sha256Hash || 'Chua doi soat' : 'Chua dinh kem'}`, 'Phieu du lieu luu tru. Chua xac minh chu ky so CA.',
+  ]));
+
   const totalDocs = data.length;
-  const totalConfidential = data.filter((d) => d.securityLevel.includes('Mật')).length;
-  const totalCaSigned = data.filter((d) => d.caSigned).length;
+  const totalConfidential = data.filter((d) => /mật/i.test(d.securityLevel || '')).length;
+  const totalCaSigned = data.filter((d) => d.caSigned && d.caVerifiedAt).length;
   const totalDraft = data.filter((d) => d.status === 'Dự thảo thẩm định').length;
 
-  const handleCreate = (values: any) => {
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+    let file = uploadedFile;
+    if (attachment && !file) { file = await upload(attachment, attachment.name); setUploadedFile(file); }
     const newDoc: EnterpriseDocItem = {
+      ...editingDoc,
       ...values,
-      key: String(Date.now()),
+      key: editingDoc?.key || crypto.randomUUID(),
       expirationDate: values.expirationDate || 'Vĩnh viễn',
-      fileFormat: 'PDF',
-      fileSize: '2.1 MB',
-      caSigned: values.caSigned ?? true,
-      sha256Hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      tags: (values.tags || 'Văn thư, 2026').split(',').map((t: string) => t.trim()),
+      fileNodeId: file?.id || editingDoc?.fileNodeId || '',
+      caSigned: false,
+      tags: String(values.tags || '').split(',').map((t: string) => t.trim()).filter(Boolean),
     };
-    const nextItems = [newDoc, ...data]; setData(nextItems); dataService.saveGenericData('enterprise_documents', nextItems);
-    message.success(`Đã ban hành văn bản mới: ${values.title} (${values.docCode})`);
+    await persist(newDoc);
+    message.success(`Đã lưu hồ sơ văn bản: ${values.title} (${values.docCode})`);
     setModalOpen(false);
     form.resetFields();
+    setAttachment(null); setUploadedFile(null);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể lưu hồ sơ văn bản.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -157,7 +230,7 @@ export const DocumentsModule: React.FC = () => {
       (item.docCode || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.signerName || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.issuingAuthority || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      item.tags.some((t) => t.toLowerCase().includes(searchText.toLowerCase()));
+      (item.tags || []).some((t) => t.toLowerCase().includes(searchText.toLowerCase()));
     return matchCategory && matchSecurity && matchSearch;
   });
 
@@ -186,7 +259,7 @@ export const DocumentsModule: React.FC = () => {
             Ban hành: <strong>{record.issuingAuthority}</strong>
           </div>
           <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
-            {record.tags.map((t, idx) => (
+            {(record.tags || []).map((t, idx) => (
               <Tag key={idx} color="default" style={{ fontSize: 10.5, margin: 0, padding: '0 4px' }}>
                 #{t}
               </Tag>
@@ -242,7 +315,7 @@ export const DocumentsModule: React.FC = () => {
       width: 120,
       render: (_: any, r: EnterpriseDocItem) => (
         <div>
-          {r.caSigned ? (
+          {r.caSigned && r.caVerifiedAt ? (
             <Tag color="green" icon={<SafetyCertificateOutlined />}>
               Token CA
             </Tag>
@@ -291,11 +364,8 @@ export const DocumentsModule: React.FC = () => {
           <Button
             size="small"
             icon={<DownloadOutlined />}
-            onClick={() => {
-              const safeCode = record.docCode.replace(/[^a-zA-Z0-9]/g, '_');
-              downloadFile(`${safeCode}_Van_Ban.pdf`);
-              message.success(`Đã tải xuống văn bản ${record.docCode} thành công!`);
-            }}
+            title="Tải tệp gốc"
+            onClick={() => downloadOriginal(record)}
           />
         </div>
       ),
@@ -310,7 +380,7 @@ export const DocumentsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalDocs} văn bản
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>100% Lưu trữ an toàn đám mây</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Hồ sơ và tệp đính kèm trên máy chủ</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Văn bản mật &amp; Tuyệt mật (ISO)</div>
@@ -324,7 +394,7 @@ export const DocumentsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalCaSigned} hồ sơ ({totalDocs > 0 ? Math.round((totalCaSigned / totalDocs) * 100) : 0}%)
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Hợp chuẩn giao dịch điện tử</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Chưa kết nối dịch vụ xác minh chứng thư CA</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Dự thảo đang thẩm định</div>
@@ -391,12 +461,12 @@ export const DocumentsModule: React.FC = () => {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => setModalOpen(true)}
+            onClick={() => openMetadata()}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Ban hành văn bản
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục văn bản ra tệp Excel thành công!')}>
+          <Button icon={<DownloadOutlined />} onClick={exportRegister}>
             Xuất Excel
           </Button>
         </div>
@@ -407,7 +477,7 @@ export const DocumentsModule: React.FC = () => {
       </div>
 
       <Modal
-        title="Ban Hành Văn Bản Quy Phạm &amp; Hồ Sơ Lưu Trữ Mới"
+        title={editingDoc ? 'Cập nhật hồ sơ văn bản' : 'Ban Hành Văn Bản Quy Phạm & Hồ Sơ Lưu Trữ Mới'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -422,7 +492,6 @@ export const DocumentsModule: React.FC = () => {
             docCategory: 'Quy chế & Quyết định',
             securityLevel: 'Nội bộ công ty',
             status: 'Mới ban hành',
-            caSigned: true,
             issuedDate: new Date().toISOString().substring(0, 10),
             effectiveDate: new Date().toISOString().substring(0, 10),
           }}
@@ -501,10 +570,25 @@ export const DocumentsModule: React.FC = () => {
             <Input.TextArea rows={2} placeholder="Nội dung điều khoản quan trọng..." />
           </Form.Item>
 
+          <Form.Item name="status" label="Trạng thái hồ sơ" rules={[{ required: true }]}>
+            <Select options={['Dự thảo thẩm định', 'Mới ban hành', 'Đang hiệu lực', 'Hết hiệu lực / Lưu kho'].map(value => ({ value, label: value }))} />
+          </Form.Item>
+          <Form.Item name="expirationDate" label="Ngày hết hiệu lực (để trống nếu vĩnh viễn)">
+            <Input type="date" />
+          </Form.Item>
+          <label style={{ display: 'block', marginTop: 12 }}>Tệp gốc đính kèm (PDF, DOCX, XLSX, ảnh; tối đa 50 MB)
+            <input type="file" accept=".pdf,.docx,.xlsx,image/*" onChange={event => {
+              const file = event.target.files?.[0] || null;
+              if (file && file.size > 50 * 1024 * 1024) { message.error('Tệp tối đa 50 MB.'); event.target.value = ''; return; }
+              setAttachment(file); setUploadedFile(null);
+            }} />
+          </label>
+          <div style={{ fontSize: 12, marginTop: 4 }}>{attachment?.name || editingDoc?.fileName || 'Chưa đính kèm tệp gốc'}</div>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Ban hành văn bản
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingDoc ? 'Lưu hồ sơ' : 'Ban hành văn bản'}
             </Button>
           </div>
         </Form>
@@ -517,28 +601,28 @@ export const DocumentsModule: React.FC = () => {
         onClose={() => setDrawerOpen(false)}
         width={680}
       >
-        {selectedDoc && (
+        {currentDoc && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Header Document Box */}
             <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>{selectedDoc.docCode}</div>
+                  <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>{currentDoc.docCode}</div>
                   <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-                    {selectedDoc.title}
+                    {currentDoc.title}
                   </div>
                 </div>
-                <Tag color={selectedDoc.status === 'Đang hiệu lực' ? 'success' : 'processing'}>
-                  {selectedDoc.status}
+                <Tag color={currentDoc.status === 'Đang hiệu lực' ? 'success' : 'processing'}>
+                  {currentDoc.status}
                 </Tag>
               </div>
 
               <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                <Tag color="blue">{selectedDoc.docCategory}</Tag>
-                <Tag color={selectedDoc.securityLevel.includes('Mật') ? 'red' : 'green'}>
-                  {selectedDoc.securityLevel}
+                <Tag color="blue">{currentDoc.docCategory}</Tag>
+                <Tag color={currentDoc.securityLevel.includes('Mật') ? 'red' : 'green'}>
+                  {currentDoc.securityLevel}
                 </Tag>
-                {selectedDoc.caSigned && (
+                {currentDoc.caSigned && currentDoc.caVerifiedAt && (
                   <Tag color="purple" icon={<SafetyCertificateOutlined />}>
                     Đã ký Token Viettel-CA
                   </Tag>
@@ -554,29 +638,29 @@ export const DocumentsModule: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 12.5 }}>
                 <div>
                   <span style={{ color: '#64748B' }}>Đơn vị ban hành:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedDoc.issuingAuthority}</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{currentDoc.issuingAuthority}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Người ký duyệt:</span>
                   <div style={{ fontWeight: 700, color: '#0F172A' }}>
-                    {selectedDoc.signerName} ({selectedDoc.signerPosition})
+                    {currentDoc.signerName} ({currentDoc.signerPosition})
                   </div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Ngày ban hành:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedDoc.issuedDate}</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{currentDoc.issuedDate}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Ngày có hiệu lực:</span>
-                  <div style={{ fontWeight: 700, color: '#16A34A' }}>{selectedDoc.effectiveDate}</div>
+                  <div style={{ fontWeight: 700, color: '#16A34A' }}>{currentDoc.effectiveDate}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Thời hạn lưu trữ:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedDoc.expirationDate}</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{currentDoc.expirationDate}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Vị trí lưu trữ:</span>
-                  <div style={{ fontWeight: 700, color: '#2563EB' }}>{selectedDoc.storageLocation}</div>
+                  <div style={{ fontWeight: 700, color: '#2563EB' }}>{currentDoc.storageLocation}</div>
                 </div>
               </div>
             </div>
@@ -584,7 +668,7 @@ export const DocumentsModule: React.FC = () => {
             {/* Summary */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Nội dung trích yếu chi tiết:</div>
-              <div style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.6 }}>{selectedDoc.summary}</div>
+              <div style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.6 }}>{currentDoc.summary}</div>
             </div>
 
             {/* Cryptographic SHA-256 Checksum */}
@@ -593,10 +677,10 @@ export const DocumentsModule: React.FC = () => {
                 <KeyOutlined style={{ color: '#7C3AED' }} /> Đối Soát Tính Toàn Vẹn Mã Băm (SHA-256):
               </div>
               <div style={{ background: '#0F172A', color: '#10B981', padding: '8px 12px', borderRadius: 6, fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' }}>
-                {selectedDoc.sha256Hash}
+                {currentDoc.fileNodeId ? currentDoc.sha256Hash || 'Chưa có mã băm' : currentDoc.wordFileNodeId ? currentDoc.wordSha256Hash || 'Chưa có mã băm' : 'Chưa có tệp để tính mã băm'}
               </div>
               <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <CheckCircleOutlined /> Văn bản nguyên bản 100%, không có dấu hiệu chỉnh sửa sau khi ký duyệt.
+                <CheckCircleOutlined /> Mã băm được tính từ nội dung tệp lúc lưu hồ sơ. Chưa xác minh chữ ký số CA.
               </div>
             </div>
 
@@ -604,28 +688,33 @@ export const DocumentsModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
               <Button
                 icon={<FileWordOutlined />}
-                onClick={() => handleOpenEditDocx(selectedDoc)}
+                onClick={() => handleOpenEditDocx(currentDoc)}
                 style={{ flex: 1, color: '#2B579A', borderColor: '#2B579A', fontWeight: 600 }}
               >
                 Soạn thảo Word (.docx)
               </Button>
               <Button
                 icon={<DownloadOutlined />}
-                onClick={() => {
-                  downloadFile(`${selectedDoc.docCode}.pdf`);
-                  message.success(`Đã tải file văn bản ${selectedDoc.docCode}`);
-                }}
+                onClick={() => downloadOriginal(currentDoc)}
                 style={{ flex: 1 }}
               >
-                Tải Tệp PDF Scan
+                Tải tệp gốc / Word
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in phiếu lưu trữ văn thư cho hồ sơ ${selectedDoc.docCode}`)}
+                onClick={() => printSlip(currentDoc)}
                 style={{ flex: 1 }}
               >
                 In Phiếu Văn Thư
               </Button>
+              <Button onClick={() => openMetadata(currentDoc)}>Sửa hồ sơ</Button>
+              <Button danger onClick={() => Modal.confirm({
+                title: `Xóa hồ sơ ${currentDoc.docCode}?`, content: 'Tệp đính kèm vẫn được giữ trong kho tệp.',
+                onOk: async () => {
+                  try { await collectionsApi.remove('enterprise_documents', currentDoc.key); setData(previous => previous.filter(item => item.key !== currentDoc.key)); setDrawerOpen(false); message.success('Đã xóa hồ sơ.'); void dataService.refreshGenericData('enterprise_documents').catch(() => {}); }
+                  catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xóa hồ sơ.'); throw error; }
+                },
+              })}>Xóa hồ sơ</Button>
             </div>
           </div>
         )}
@@ -639,10 +728,15 @@ export const DocumentsModule: React.FC = () => {
           fileKey={editorDocItem.key}
           initialContent={buildDocxInitialContent(editorDocItem)}
           onClose={() => setDocxEditorOpen(false)}
-          onSaveSuccess={(updatedName) => {
-            const exists = data.some(d => d.key === editorDocItem.key);
-            if (!exists) {
-              const nextItems = [editorDocItem, ...data]; setData(nextItems); dataService.saveGenericData('enterprise_documents', nextItems);
+          onSaveSuccess={async (updatedName, blob) => {
+            if (!blob) throw new Error('Chưa tạo được nội dung Word.');
+            const file = await upload(blob, updatedName);
+            try {
+              const saved = await persist({ ...editorDocItem, wordFileNodeId: file.id });
+              setEditorDocItem(saved);
+            } catch (error) {
+              await filesApi.remove(file.id).catch(() => {});
+              throw error;
             }
           }}
         />

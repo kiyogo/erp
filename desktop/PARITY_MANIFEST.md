@@ -1,6 +1,6 @@
 # Kiyo Desktop Parity Manifest
 
-The native and WebAssembly launchers both consume `crates/kiyo-ui`. They must
+The native and WebAssembly launchers both consume `ui`. They must
 not create a second implementation of the same screen in another UI stack.
 
 ## Acceptance rule

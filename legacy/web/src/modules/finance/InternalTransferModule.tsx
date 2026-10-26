@@ -1,5 +1,4 @@
-import { dataService } from '../../services/dataService';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -16,36 +15,36 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { financeTransfersApi, type FinanceInternalTransfer, type FinanceTransferAccount } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
-export interface EnterpriseInternalTransferRecord {
-  key: string;
-  transferCode: string;
-  sourceAccount: string;
-  destinationAccount: string;
-  amount: number;
-  fee: number;
-  transferDate: string;
-  time: string;
-  executor: string;
-  approver: string;
-  purpose: string;
-  transferMethod: 'Napas 247' | 'CITAD Liên Ngân Hàng' | 'Rút séc / Nộp tiền mặt két';
-  status: 'Thành công' | 'Đang chuyển' | 'Đã hủy';
-}
+export type EnterpriseInternalTransferRecord = FinanceInternalTransfer;
 
 const INITIAL_TRANSFERS: EnterpriseInternalTransferRecord[] = [];
 
 export const InternalTransferModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseInternalTransferRecord[]>(INITIAL_TRANSFERS);
+  const [accounts, setAccounts] = useState<FinanceTransferAccount[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const requestId = useRef('');
+  const pending = useRef(false);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const response = await financeTransfersApi.getAll();
+      setData(response.data.data);
+      setAccounts(response.data.accounts);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được sổ điều chuyển nội bộ.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const list = dataService.getGenericData('finance_internal_transfers');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('finance_internal_transfers');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
+    void loadData();
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -56,33 +55,93 @@ export const InternalTransferModule: React.FC = () => {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedTransfer, setSelectedTransfer] = useState<EnterpriseInternalTransferRecord | null>(null);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
 
-  const totalTransferred = data.filter((d) => d.status === 'Thành công').reduce((sum, item) => sum + item.amount, 0);
-  const totalFees = data.reduce((sum, item) => sum + item.fee, 0);
+  const totalTransferred = data.filter((d) => d.ledgerRecorded && d.status === 'Thành công').reduce((sum, item) => sum + item.amount, 0);
+  const totalFees = data.filter(d => d.ledgerRecorded && d.status !== 'Đã hủy').reduce((sum, item) => sum + item.fee, 0);
   const pendingCount = data.filter((d) => d.status === 'Đang chuyển').length;
 
-  const handleCreate = (values: any) => {
+  const handleCreate = async (values: any) => {
+    if (pending.current) return;
     if (values.sourceAccount === values.destinationAccount) {
       message.error('Tài khoản nguồn và tài khoản đích không được trùng nhau!');
       return;
     }
-    const val = Number(values.amount) || 0;
-    const newItem: EnterpriseInternalTransferRecord = {
-      ...values,
-      key: String(Date.now()),
-      transferCode: `TRF-2026-00${data.length + 1}`,
-      amount: val,
-      fee: values.transferMethod === 'Rút séc / Nộp tiền mặt két' ? 0 : 2200,
-      transferDate: values.transferDate || new Date().toISOString().substring(0, 10),
-      time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-      executor: 'Nguyễn Huy Tùng (Kế toán)',
-      approver: 'Phạm Thu Hương (Kế toán trưởng)',
-      status: 'Thành công',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_internal_transfers', nextItems);
-    message.success(`Đã thực hiện lệnh chuyển tiền nội bộ: ${newItem.transferCode}`);
-    setModalOpen(false);
-    form.resetFields();
+    const amount = Number(values.amount);
+    const fee = Number(values.fee || 0);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(fee) || fee < 0) {
+      message.error('Số tiền phải là số nguyên dương và phí phải là số nguyên không âm.');
+      return;
+    }
+    pending.current = true;
+    setSaving(true);
+    try {
+      requestId.current ||= crypto.randomUUID();
+      const response = await financeTransfersApi.create({
+        requestId: requestId.current,
+        sourceAccountId: values.sourceAccount,
+        destinationAccountId: values.destinationAccount,
+        amount, fee,
+        transferDate: values.transferDate,
+        transferMethod: values.transferMethod,
+        purpose: values.purpose,
+      });
+      message.success(`Đã ghi sổ điều chuyển nội bộ: ${response.data.transfer.transferCode}`);
+      setModalOpen(false);
+      form.resetFields();
+      await loadData();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể ghi sổ điều chuyển.');
+    } finally {
+      pending.current = false;
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!selectedTransfer || pending.current) return;
+    if (!cancelReason.trim()) { message.error('Vui lòng nhập lý do hủy.'); return; }
+    pending.current = true;
+    setSaving(true);
+    try {
+      const response = await financeTransfersApi.cancel(selectedTransfer.key, cancelReason);
+      setSelectedTransfer(response.data.transfer);
+      setCancelModalOpen(false);
+      await loadData();
+      message.success('Đã hủy đồng thời các chứng từ của lệnh điều chuyển.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể hủy lệnh điều chuyển.');
+    } finally {
+      pending.current = false;
+      setSaving(false);
+    }
+  };
+
+  const handlePrint = () => {
+    if (!selectedTransfer) return;
+    const popup = window.open('', '_blank');
+    if (!popup) { message.error('Trình duyệt đã chặn cửa sổ in. Vui lòng cho phép mở cửa sổ.'); return; }
+    popup.document.write('<!doctype html><html lang="vi"><head><meta charset="UTF-8"><title>Phiếu điều chuyển nội bộ</title><style>@page{size:A5;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px;line-height:1.6}h1{font-size:18px}</style></head><body></body></html>');
+    const heading = popup.document.createElement('h1');
+    heading.textContent = 'PHIẾU GHI SỔ ĐIỀU CHUYỂN NỘI BỘ';
+    popup.document.body.appendChild(heading);
+    for (const text of [
+      `Mã: ${selectedTransfer.transferCode}`, `Ngày: ${selectedTransfer.transferDate} ${selectedTransfer.time || ''}`,
+      `Nguồn: ${selectedTransfer.sourceAccount}`, `Đích: ${selectedTransfer.destinationAccount}`,
+      `Số tiền: ${selectedTransfer.amount.toLocaleString('vi-VN')} ₫; Phí thực tế: ${(selectedTransfer.fee || 0).toLocaleString('vi-VN')} ₫`,
+      `Nội dung: ${selectedTransfer.purpose}`, `Người ghi sổ: ${selectedTransfer.executor || 'Chưa xác minh'}`,
+      `Trạng thái: ${selectedTransfer.status === 'Đã hủy' ? 'Đã hủy' : selectedTransfer.ledgerRecorded ? 'Đã ghi sổ nội bộ' : 'Lệnh cũ chưa đối chiếu'}`,
+      ...(selectedTransfer.canceledAt ? [`Người hủy: ${selectedTransfer.canceledBy}; ${selectedTransfer.canceledAt}`, `Lý do: ${selectedTransfer.cancelReason}`] : []),
+      'Phiếu ghi nhận sổ quỹ nội bộ. Xác nhận giao dịch ngân hàng cần đối chiếu chứng từ ngân hàng.',
+    ]) {
+      const paragraph = popup.document.createElement('p');
+      paragraph.textContent = text;
+      popup.document.body.appendChild(paragraph);
+    }
+    popup.document.close();
+    popup.focus();
+    popup.print();
   };
 
   const filteredData = data.filter((item) => {
@@ -151,12 +210,12 @@ export const InternalTransferModule: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 140,
-      render: (st: string) => {
+      render: (st: string, record: EnterpriseInternalTransferRecord) => {
         let color = 'default';
         if (st === 'Thành công') color = 'success';
         if (st === 'Đang chuyển') color = 'processing';
         if (st === 'Đã hủy') color = 'error';
-        return <Tag color={color}>{st}</Tag>;
+        return <Tag color={color}>{st === 'Đã hủy' ? st : record.ledgerRecorded ? 'Đã ghi sổ nội bộ' : 'Chưa đối chiếu sổ quỹ'}</Tag>;
       },
     },
     {
@@ -183,7 +242,7 @@ export const InternalTransferModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng luân chuyển vốn nội bộ tháng 8</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng luân chuyển vốn đã ghi sổ</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalTransferred.toLocaleString('vi-VN')} ₫
           </div>
@@ -193,9 +252,9 @@ export const InternalTransferModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số lệnh chuyển tiền hoàn tất</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {data.filter((d) => d.status === 'Thành công').length} Lệnh giao dịch
+            {data.filter((d) => d.ledgerRecorded && d.status === 'Thành công').length} Lệnh giao dịch
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã hạch toán đầy đủ vào Sổ Nhật Ký Chung</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Có chứng từ thu và chi liên kết trong sổ quỹ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -203,7 +262,7 @@ export const InternalTransferModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: pendingCount > 0 ? '#D97706' : '#64748B', marginTop: 4 }}>
             {pendingCount} Giao dịch
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Tiền đang chuyển (TK 113)</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Lệnh cũ cần đối chiếu chứng từ thực tế</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -211,7 +270,7 @@ export const InternalTransferModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {totalFees.toLocaleString('vi-VN')} ₫
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tối ưu qua kênh Napas247 nội địa</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Phí thực tế do người lập ghi nhận</div>
         </div>
       </div>
 
@@ -249,7 +308,10 @@ export const InternalTransferModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ chuyển tiền nội bộ')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('So_dieu_chuyen_noi_bo.xlsx', generateValidXlsxBlob([
+            ['Mã lệnh', 'Ngày', 'Tài khoản nguồn', 'Tài khoản đích', 'Số tiền (VNĐ)', 'Phí thực tế (VNĐ)', 'Nội dung', 'Người lập', 'Trạng thái'],
+            ...filteredData.map(item => [item.transferCode, item.transferDate, item.sourceAccount, item.destinationAccount, item.amount, item.fee || 0, item.purpose, item.executor || '', item.status === 'Đã hủy' ? 'Đã hủy' : item.ledgerRecorded ? 'Đã ghi sổ nội bộ' : 'Chưa đối chiếu sổ quỹ']),
+          ]))}>
             Xuất Sao Kê
           </Button>
 
@@ -258,11 +320,13 @@ export const InternalTransferModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              requestId.current = crypto.randomUUID();
+              const active = accounts.filter(account => account.status === 'Đang hoạt động');
               form.setFieldsValue({
-                sourceAccount: 'Vietcombank - 0011004589999 (VND)',
-                destinationAccount: 'Techcombank - 1903456789001 (VND)',
-                transferMethod: 'Napas 247',
-                amount: 50000000,
+                sourceAccount: active[0]?.key,
+                destinationAccount: active[1]?.key,
+                transferMethod: 'Ghi sổ nội bộ',
+                fee: 0,
                 transferDate: new Date().toISOString().substring(0, 10),
               });
               setModalOpen(true);
@@ -276,7 +340,7 @@ export const InternalTransferModule: React.FC = () => {
 
       {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} />
       </div>
 
       {/* MODAL: Lập Lệnh Chuyển Tiền Nội Bộ */}
@@ -288,36 +352,28 @@ export const InternalTransferModule: React.FC = () => {
         width={640}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
+          <p>Ghi nhận điều chuyển vào sổ quỹ sau khi giao dịch thực tế đã được thực hiện. Chọn tài khoản hoặc quỹ đang hoạt động.</p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="sourceAccount" label="Tài khoản nguồn (Xuất tiền)" rules={[{ required: true }]}>
               <Select
-                options={[
-                  { label: 'Vietcombank - 0011004589999 (VND)', value: 'Vietcombank - 0011004589999 (VND)' },
-                  { label: 'Techcombank - 1903456789001 (VND)', value: 'Techcombank - 1903456789001 (VND)' },
-                  { label: 'MB Bank - 0888999999 (VND)', value: 'MB Bank - 0888999999 (VND)' },
-                  { label: 'Quỹ Tiền Mặt Trụ Sở Chính (Két)', value: 'Quỹ Tiền Mặt Trụ Sở Chính (Két)' },
-                ]}
+                options={accounts.filter(account => account.status === 'Đang hoạt động').map(account => ({ label: `${account.name} — ${account.balance.toLocaleString('vi-VN')} ₫`, value: account.key }))}
               />
             </Form.Item>
             <Form.Item name="destinationAccount" label="Tài khoản đích (Nhận tiền)" rules={[{ required: true }]}>
               <Select
-                options={[
-                  { label: 'Vietcombank - 0011004589999 (VND)', value: 'Vietcombank - 0011004589999 (VND)' },
-                  { label: 'Techcombank - 1903456789001 (VND)', value: 'Techcombank - 1903456789001 (VND)' },
-                  { label: 'MB Bank - 0888999999 (VND)', value: 'MB Bank - 0888999999 (VND)' },
-                  { label: 'Quỹ Tiền Mặt Trụ Sở Chính (Két)', value: 'Quỹ Tiền Mặt Trụ Sở Chính (Két)' },
-                ]}
+                options={accounts.filter(account => account.status === 'Đang hoạt động').map(account => ({ label: `${account.name} — ${account.balance.toLocaleString('vi-VN')} ₫`, value: account.key }))}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="amount" label="Số tiền điều chuyển (VNĐ)" rules={[{ required: true }]}>
-              <Input type="number" min={10000} step={10000000} />
+              <Input type="number" min={1} step={1} />
             </Form.Item>
             <Form.Item name="transferMethod" label="Phương thức chuyển tiền" rules={[{ required: true }]}>
               <Select
                 options={[
+                  { label: 'Ghi sổ điều chuyển nội bộ', value: 'Ghi sổ nội bộ' },
                   { label: 'Napas 247 (Tức thì)', value: 'Napas 247' },
                   { label: 'CITAD Liên Ngân Hàng', value: 'CITAD Liên Ngân Hàng' },
                   { label: 'Rút séc / Nộp tiền mặt két', value: 'Rút séc / Nộp tiền mặt két' },
@@ -326,18 +382,22 @@ export const InternalTransferModule: React.FC = () => {
             </Form.Item>
           </div>
 
+          <Form.Item name="fee" label="Phí giao dịch thực tế (VNĐ)">
+            <Input type="number" min={0} step={1} />
+          </Form.Item>
+
           <Form.Item name="purpose" label="Mục đích điều chuyển vốn chi tiết" rules={[{ required: true }]}>
             <Input.TextArea rows={2} placeholder="Ví dụ: Cân đối số dư thanh toán hợp đồng IDC hoặc Bổ sung quỹ két..." />
           </Form.Item>
 
           <Form.Item name="transferDate" label="Ngày thực hiện giao dịch" rules={[{ required: true }]}>
-            <Input type="date" />
+            <Input type="date" max={new Date().toISOString().slice(0, 10)} />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xác nhận thực hiện lệnh chuyển
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Xác nhận ghi sổ điều chuyển
             </Button>
           </div>
         </Form>
@@ -361,7 +421,7 @@ export const InternalTransferModule: React.FC = () => {
                   </div>
                 </div>
                 <Tag color={selectedTransfer.status === 'Thành công' ? 'success' : 'processing'}>
-                  {selectedTransfer.status}
+                  {selectedTransfer.status === 'Đã hủy' ? 'Đã hủy' : selectedTransfer.ledgerRecorded ? 'Đã ghi sổ nội bộ' : 'Chưa đối chiếu sổ quỹ'}
                 </Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
@@ -392,12 +452,13 @@ export const InternalTransferModule: React.FC = () => {
             {/* Accounting Debit / Credit */}
             <div style={{ border: '1px solid #BFDBFE', borderRadius: 8, padding: 14, background: '#EFF6FF' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1D4ED8', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AuditOutlined /> Định Khoản Kế Toán Tự Động:
+                <AuditOutlined /> Đối ứng sổ quỹ nội bộ:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 }}>
-                <div><strong>Nợ TK {selectedTransfer.destinationAccount.includes('Két') ? '1111' : '1121'}</strong>: {selectedTransfer.amount.toLocaleString('vi-VN')} ₫</div>
-                <div><strong>Có TK {selectedTransfer.sourceAccount.includes('Két') ? '1111' : '1121'}</strong>: {selectedTransfer.amount.toLocaleString('vi-VN')} ₫</div>
-                {selectedTransfer.fee > 0 && <div><strong>Nợ TK 6425 / Có TK 1121</strong> (Phí chuyển tiền): {selectedTransfer.fee.toLocaleString()} ₫</div>}
+                <div><strong>Thu vào tài khoản đích</strong>: {selectedTransfer.amount.toLocaleString('vi-VN')} ₫</div>
+                <div><strong>Chi từ tài khoản nguồn</strong>: {selectedTransfer.amount.toLocaleString('vi-VN')} ₫</div>
+                {selectedTransfer.fee > 0 && <div><strong>Chi phí thực tế từ nguồn</strong>: {selectedTransfer.fee.toLocaleString()} ₫</div>}
+                <div>{selectedTransfer.ledgerRecorded ? 'Chứng từ liên kết đã lưu trong sổ quỹ.' : 'Lệnh cũ chưa có chứng từ liên kết để đối chiếu.'}</div>
               </div>
             </div>
 
@@ -409,9 +470,9 @@ export const InternalTransferModule: React.FC = () => {
                 <div style={{ color: '#64748B', marginTop: 2 }}>{selectedTransfer.executor}</div>
               </div>
               <div>
-                <strong>Kế Toán Trưởng Duyệt</strong>
-                <div style={{ color: '#16A34A', fontWeight: 600, marginTop: 12 }}>Đã ký số điện tử</div>
-                <div style={{ color: '#64748B', marginTop: 2 }}>{selectedTransfer.approver}</div>
+                <strong>Xác nhận ngân hàng / phê duyệt</strong>
+                <div style={{ color: '#64748B', fontWeight: 600, marginTop: 12 }}>Cần đối chiếu chứng từ thực tế</div>
+                <div style={{ color: '#64748B', marginTop: 2 }}>{selectedTransfer.ledgerRecorded ? 'Người ghi sổ được xác thực từ phiên đăng nhập.' : 'Thông tin người lập lệnh cũ chưa được xác minh.'}</div>
               </div>
             </div>
 
@@ -419,13 +480,25 @@ export const InternalTransferModule: React.FC = () => {
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               icon={<PrinterOutlined />}
-              onClick={() => message.success(`Đã in Lệnh điều chuyển vốn nội bộ ${selectedTransfer.transferCode}`)}
+              onClick={handlePrint}
             >
               In Phiếu Điều Chuyển Vốn (A5)
             </Button>
+            {selectedTransfer.ledgerRecorded && selectedTransfer.status !== 'Đã hủy' && (
+              <Button danger onClick={() => { setCancelReason(''); setCancelModalOpen(true); }}>Hủy lệnh và hoàn lại số dư sổ quỹ</Button>
+            )}
+            {selectedTransfer.canceledAt && <p>Đã hủy bởi {selectedTransfer.canceledBy} lúc {selectedTransfer.canceledAt}. Lý do: {selectedTransfer.cancelReason}</p>}
           </div>
         )}
       </Drawer>
+      <Modal title="Hủy lệnh điều chuyển nội bộ" open={cancelModalOpen} onCancel={() => setCancelModalOpen(false)} footer={null}>
+        <p>Hủy đồng thời chứng từ thu, chi và phí liên kết. Tài khoản đích phải đủ số dư để hoàn lại lệnh.</p>
+        <Input.TextArea aria-label="Lý do hủy lệnh" value={cancelReason} onChange={event => setCancelReason(event.target.value)} rows={3} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <Button onClick={() => setCancelModalOpen(false)}>Đóng</Button>
+          <Button danger loading={saving} onClick={handleCancel}>Xác nhận hủy lệnh</Button>
+        </div>
+      </Modal>
     </div>
   );
 };

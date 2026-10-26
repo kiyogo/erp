@@ -53,7 +53,7 @@ export interface DocxEditorModalProps {
   initialParagraphs?: string[];
   isSigned?: boolean;
   signInfo?: { signerName: string; certNumber: string; signedAt: string };
-  onSaveSuccess?: (updatedName: string, updatedBlob?: Blob) => void;
+  onSaveSuccess?: (updatedName: string, updatedBlob?: Blob) => void | Promise<void>;
 }
 
 function Btn({ children, cls = "", active = false, onClick, title }: {
@@ -937,6 +937,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   const [align, setAlign] = useState("left");
   const [zoom, setZoom] = useState(100);
   const [words, setWords] = useState(0);
+  const saveInFlightRef = useRef(false);
   const [fontName, setFontName] = useState("Times New Roman");
   const [fontSize, setFontSize] = useState(14);
   const [showFind, setShowFind] = useState(false);
@@ -2085,6 +2086,9 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   }, [clipboardService]);
 
   const handleSave = useCallback(async () => {
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+    try {
     const html = getDocumentHtml();
     const finalName = docName.trim().endsWith(".docx") ? docName.trim() : `${docName.trim()}.docx`;
     const docxBlob = generateValidDocxBlob(html, finalName);
@@ -2102,8 +2106,11 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
       } catch (e) {}
     }
 
-    onSaveSuccess && onSaveSuccess(finalName, docxBlob);
+    if (onSaveSuccess) await onSaveSuccess(finalName, docxBlob);
     notify("Đã lưu tài liệu Word thành công!");
+    } catch (error: any) {
+      notify(error?.response?.data?.message || error?.message || 'Không thể lưu tài liệu. Vui lòng thử lại.');
+    } finally { saveInFlightRef.current = false; }
   }, [docName, fileKey, getDocumentHtml, onSaveSuccess, notify]);
 
   const handleDownloadDocx = useCallback(() => {

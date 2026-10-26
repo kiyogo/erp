@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -18,14 +18,14 @@ import {
   TrophyOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
-
-import { useEffect } from 'react';
-import { collectionsApi } from '../../api/endpoints';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidXlsxBlob, generateValidPdfBlob } from '../../utils/fileExporter';
 
 export interface EnterpriseRewardItem {
   key: string;
+  employeeId?: string;
   rewardCode: string;
   employeeName: string;
   empCode: string;
@@ -38,32 +38,68 @@ export interface EnterpriseRewardItem {
   achievementSummary: string;
   signer: string;
   signerName?: string;
-  status: 'Đã trao giải' | 'Đã ký quyết định' | 'Chờ duyệt';
+  approvedBy?: string;
+  approvedById?: string;
+  approvedAt?: string;
+  awardedBy?: string;
+  awardedById?: string;
+  awardedAt?: string;
+  status: 'Đã trao giải' | 'Đã ký quyết định' | 'Chờ duyệt' | 'Đã trao thưởng' | 'Chờ trao thưởng trong lễ vinh danh';
+}
+
+export function canAwardReward(status: EnterpriseRewardItem['status']): boolean {
+  return status === 'Đã ký quyết định' || status === 'Chờ trao thưởng trong lễ vinh danh';
+}
+
+export function isRewardAwarded(status: EnterpriseRewardItem['status']): boolean {
+  return status === 'Đã trao giải' || status === 'Đã trao thưởng';
+}
+
+export function validateReward(record: Partial<EnterpriseRewardItem>): string {
+  if (!record.employeeId) return 'Vui lòng chọn nhân sự hoặc đại diện tập thể trong hệ thống.';
+  if (!record.rewardCode?.trim() || !record.title?.trim() || !record.department?.trim() || !record.decisionNo?.trim()) return 'Vui lòng nhập đủ mã khen thưởng, số quyết định, danh hiệu và phòng ban.';
+  const date = record.date || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) return 'Ngày quyết định không hợp lệ.';
+  if (!Number.isSafeInteger(record.rewardValue) || record.rewardValue! < 0) return 'Giá trị phần thưởng phải là số nguyên không âm.';
+  if (!['Tiền mặt & Cúp pha lê', 'Chuyến du lịch nghỉ dưỡng 5 sao', 'Cổ phần thưởng ESOP', 'Bằng khen Ban Giám Đốc'].includes(record.rewardType || '')) return 'Hình thức khen thưởng không hợp lệ.';
+  return '';
 }
 
 export const RewardsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseRewardItem[]>([]);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [busyRecord, setBusyRecord] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [deptOptions, setDeptOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingReward, setEditingReward] = useState<EnterpriseRewardItem | null>(null);
   const [form] = Form.useForm();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedReward, setSelectedReward] = useState<EnterpriseRewardItem | null>(null);
+  const [selectedRewardRef, setSelectedReward] = useState<EnterpriseRewardItem | null>(null);
+  const selectedReward = data.find(record => record.key === selectedRewardRef?.key) || selectedRewardRef;
 
   const loadData = async () => {
+    setLoading(true);
     try {
-      const [res, orgUnits] = await Promise.all([
-        collectionsApi.get<EnterpriseRewardItem>('hr_rewards', { limit: 500 }),
+      const [list, staff, orgUnits] = await Promise.all([
+        dataService.refreshGenericData('hr_rewards'),
+        employeesApi.getAll(),
         dataService.fetchOrgUnitsList(),
       ]);
-      const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id })));
+      setEmployees(staff.data.data);
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
-    } catch {
-      setData([]);
+      setLoadError('');
+    } catch (error: any) {
+      setLoadError(error?.response?.data?.message || 'Không thể tải dữ liệu khen thưởng. Vui lòng thử lại.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -71,53 +107,89 @@ export const RewardsModule: React.FC = () => {
     void loadData();
   }, []);
 
-  const totalRewardsValue = data.reduce((sum, item) => sum + item.rewardValue, 0);
-  const awardedCount = data.filter((d) => d.status === 'Đã trao giải').length;
+  const totalRewardsValue = data.reduce((sum, item) => sum + (Number.isFinite(Number(item.rewardValue)) ? Number(item.rewardValue) : 0), 0);
+  const awardedCount = data.filter((d) => isRewardAwarded(d.status)).length;
 
   const handleCreate = async (values: any) => {
-    const newVal = Number(values.rewardValue) || 10000000;
-    const id = `reward-${Date.now()}`;
-    const userRaw = localStorage.getItem('minepanel_user');
-    const currUser = userRaw ? JSON.parse(userRaw) : null;
-    const signer = currUser?.fullName || currUser?.name || 'Ban Giám Đốc';
-
+    if (saving) return;
+    if (editingReward && editingReward.status !== 'Chờ duyệt') { message.error('Chỉ được sửa quyết định đang chờ duyệt.'); return; }
+    const employee = employees.find(item => item.id === values.employeeId || item.userId === values.employeeId);
+    const id = editingReward?.key || `reward-${crypto.randomUUID()}`;
     const newReward: EnterpriseRewardItem = {
+      ...editingReward,
       ...values,
       key: id,
-      empCode: values.empCode || `KY-${String(Date.now()).slice(-3)}`,
-      rewardValue: newVal,
-      signerName: signer,
+      employeeId: employee?.id, employeeName: employee?.name || '', empCode: employee?.employeeCode || employee?.code || '',
+      rewardCode: String(values.rewardCode || '').trim(), title: String(values.title || '').trim(), department: String(values.department || '').trim(), decisionNo: String(values.decisionNo || '').trim(),
+      rewardValue: values.rewardValue === '' || values.rewardValue === undefined || values.rewardValue === null ? NaN : Number(values.rewardValue),
+      achievementSummary: String(values.achievementSummary || '').trim(),
+      signer: editingReward?.signer || '',
       status: 'Chờ duyệt',
     };
+    const validation = validateReward(newReward);
+    if (validation) { message.error(validation); return; }
+    if (data.some(record => record.key !== editingReward?.key && record.rewardCode?.toLowerCase() === newReward.rewardCode.toLowerCase())) { message.error('Mã khen thưởng đã tồn tại.'); return; }
     try {
-      await collectionsApi.create('hr_rewards', newReward, id);
-      message.success(`Đã tạo quyết định khen thưởng cho: ${values.employeeName} (${values.decisionNo})`);
+      setSaving(true);
+      const response = editingReward ? await collectionsApi.update('hr_rewards', id, newReward) : await collectionsApi.create('hr_rewards', newReward, id);
+      setData(previous => editingReward ? previous.map(record => record.key === id ? response.data.record : record) : [response.data.record, ...previous]);
+      message.success(`Đã ${editingReward ? 'cập nhật' : 'tạo'} quyết định khen thưởng chờ duyệt cho: ${employee?.name}`);
       setModalOpen(false);
       form.resetFields();
-      await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tạo quyết định khen thưởng.');
-    }
+    } finally { setSaving(false); }
   };
 
   const handleApproveDecision = async (record: EnterpriseRewardItem) => {
+    if (busyRecord) return;
+    if (record.status !== 'Chờ duyệt') { message.error('Quyết định hiện không ở trạng thái chờ duyệt.'); return; }
     try {
-      await collectionsApi.update('hr_rewards', record.key, { status: 'Đã ký quyết định' });
-      message.success(`Đã phê duyệt và ký quyết định khen thưởng cho ${record.employeeName}`);
-      await loadData();
-    } catch {
-      message.error('Không thể phê duyệt quyết định khen thưởng.');
-    }
+      setBusyRecord(record.key);
+      const response = await collectionsApi.update<EnterpriseRewardItem>('hr_rewards', record.key, { status: 'Đã ký quyết định' });
+      setData(previous => previous.map(item => item.key === record.key ? response.data.record : item));
+      message.success(`Đã ghi nhận phê duyệt nội bộ quyết định khen thưởng cho ${record.employeeName}.`);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể phê duyệt quyết định khen thưởng.'); }
+    finally { setBusyRecord(''); }
   };
 
   const handleConfirmAward = async (record: EnterpriseRewardItem) => {
+    if (busyRecord) return;
+    if (!canAwardReward(record.status)) { message.error('Chỉ được trao thưởng sau khi quyết định đã được phê duyệt.'); return; }
     try {
-      await collectionsApi.update('hr_rewards', record.key, { status: 'Đã trao giải' });
+      setBusyRecord(record.key);
+      const response = await collectionsApi.update<EnterpriseRewardItem>('hr_rewards', record.key, { status: 'Đã trao giải' });
+      setData(previous => previous.map(item => item.key === record.key ? response.data.record : item));
       message.success(`Đã xác nhận trao thưởng thành công cho ${record.employeeName}`);
-      await loadData();
-    } catch {
-      message.error('Không thể cập nhật trạng thái trao thưởng.');
-    }
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái trao thưởng.'); }
+    finally { setBusyRecord(''); }
+  };
+
+  const openReward = (record?: EnterpriseRewardItem) => {
+    setEditingReward(record || null); form.resetFields();
+    const employeeId = record?.employeeId || employees.find(employee => (employee.employeeCode || employee.code) === record?.empCode)?.id;
+    form.setFieldsValue(record ? { ...record, employeeId } : { rewardCode: `KT-${Date.now()}`, rewardType: 'Tiền mặt & Cúp pha lê', rewardValue: 0, date: new Date().toISOString().slice(0, 10) });
+    setModalOpen(true);
+  };
+
+  const exportRewards = () => {
+    downloadFile(`So_vang_khen_thuong_${new Date().toISOString().slice(0, 10)}.xlsx`, generateValidXlsxBlob([
+      ['Mã khen thưởng', 'Mã nhân viên', 'Nhân viên / Đại diện', 'Phòng ban', 'Danh hiệu', 'Hình thức', 'Giá trị (VNĐ)', 'Số quyết định', 'Ngày quyết định', 'Trạng thái', 'Người duyệt', 'Ngày duyệt', 'Người xác nhận trao', 'Ngày trao', 'Thành tích'],
+      ...filteredData.map(record => [record.rewardCode, record.empCode, record.employeeName, record.department, record.title, record.rewardType, Number(record.rewardValue), record.decisionNo, record.date, record.status, record.approvedBy || record.signerName || record.signer || '', record.approvedAt || '', record.awardedBy || '', record.awardedAt || '', record.achievementSummary]),
+    ]));
+    message.success('Đã tải sổ khen thưởng theo bộ lọc hiện tại.');
+  };
+
+  const exportCertificate = (record: EnterpriseRewardItem) => {
+    const approved = record.status !== 'Chờ duyệt';
+    downloadFile(`${record.rewardCode.replace(/[^a-z0-9_-]/gi, '_')}_Bang_khen.pdf`, generateValidPdfBlob(approved ? 'QUYET DINH KHEN THUONG' : 'DU THAO QUYET DINH KHEN THUONG', `${record.decisionNo} | ${record.date}`, [
+      `Nhan su / Dai dien: ${record.employeeName} (${record.empCode})`, `Phong ban: ${record.department}`, `Danh hieu: ${record.title}`, `Hinh thuc: ${record.rewardType}`,
+      `Gia tri: ${Number(record.rewardValue).toLocaleString('vi-VN')} VND`, `Thanh tich: ${record.achievementSummary || 'Chua khai bao'}`,
+      `Trang thai: ${record.status}`, `Nguoi duyet noi bo: ${approved ? record.approvedBy || record.signerName || record.signer || 'Chua co du lieu' : 'Chua phe duyet'}`,
+      `Ngay duyet: ${record.approvedAt || 'Chua co du lieu'}`, `Trao thuong: ${record.awardedAt || 'Chua co du lieu'}`,
+      'Ban xuat du lieu he thong. Viec phe duyet noi bo khong tao chu ky so chung thu CA.',
+    ]));
+    message.success('Đã tải bản PDF quyết định theo dữ liệu hiện tại.');
   };
 
   const filteredData = data.filter((item) => {
@@ -175,7 +247,7 @@ export const RewardsModule: React.FC = () => {
       render: (_: any, r: EnterpriseRewardItem) => (
         <div>
           <div style={{ fontWeight: 700, color: '#16A34A', fontSize: 13 }}>
-            +{r.rewardValue.toLocaleString('vi-VN')} ₫
+            +{Number(r.rewardValue).toLocaleString('vi-VN')} ₫
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
             <GiftOutlined style={{ color: '#009688' }} /> {r.rewardType}
@@ -211,17 +283,21 @@ export const RewardsModule: React.FC = () => {
               type="primary"
               icon={<CheckCircleOutlined />}
               onClick={() => handleApproveDecision(record)}
+              disabled={!!busyRecord}
+              loading={busyRecord === record.key}
               style={{ backgroundColor: '#2563EB', borderColor: '#2563EB', fontSize: 11.5 }}
             >
               Duyệt
             </Button>
           )}
-          {record.status !== 'Đã trao giải' && record.status !== 'Đã trao thưởng' && (
+          {canAwardReward(record.status) && (
             <Button
               size="small"
               type="primary"
               icon={<CheckOutlined />}
               onClick={() => handleConfirmAward(record)}
+              disabled={!!busyRecord}
+              loading={busyRecord === record.key}
               style={{ backgroundColor: '#009688', borderColor: '#009688', fontSize: 11.5 }}
             >
               Trao giải
@@ -244,6 +320,7 @@ export const RewardsModule: React.FC = () => {
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+      {loadError && <div role="alert" style={{ color: '#DC2626', marginBottom: 12 }}>{loadError} <Button size="small" onClick={() => void loadData()}>Tải lại</Button></div>}
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -251,7 +328,7 @@ export const RewardsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalRewardsValue.toLocaleString('vi-VN')} ₫
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Trích từ quỹ phúc lợi &amp; phát triển tài năng</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tổng giá trị quy đổi của các quyết định đã ghi nhận</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -259,7 +336,7 @@ export const RewardsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {data.length} Quyết định
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Đóng góp đột phá vào doanh thu &amp; kỹ thuật</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>{new Set(data.map(record => record.employeeId || record.empCode).filter(Boolean)).size} nhân sự / đại diện được ghi nhận</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -267,15 +344,15 @@ export const RewardsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {awardedCount} / {data.length} Đã trao
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Trao trực tiếp tại Townhall &amp; Year End Party</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>{data.filter(record => canAwardReward(record.status)).length} quyết định đã duyệt, chờ trao thưởng</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ số hài lòng gắn kết nhân sự (eNPS)</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            +72 Điểm (Rất Tốt)
+            Chưa có khảo sát
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>94% nhân viên cảm thấy được ghi nhận xứng đáng</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Chưa có dữ liệu khảo sát để tính chỉ số eNPS</div>
         </div>
       </div>
 
@@ -313,25 +390,14 @@ export const RewardsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ vàng vinh danh khen thưởng')}>
+          <Button icon={<DownloadOutlined />} onClick={exportRewards} disabled={loading || !!loadError}>
             Xuất Sổ Vàng
           </Button>
 
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => {
-              form.resetFields();
-              form.setFieldsValue({
-                rewardCode: `KT-2026/0${data.length + 1}`,
-                decisionNo: `QĐ-0${data.length + 5}/2026/QĐ-BGD`,
-                rewardType: 'Tiền mặt & Cúp pha lê',
-                rewardValue: 15000000,
-                date: new Date().toISOString().substring(0, 10),
-                department: 'Phòng Ban Kỹ Thuật',
-              });
-              setModalOpen(true);
-            }}
+            onClick={() => openReward()}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Quyết định khen thưởng
@@ -341,12 +407,12 @@ export const RewardsModule: React.FC = () => {
 
       {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} loading={loading} />
       </div>
 
       {/* MODAL: Tạo quyết định khen thưởng */}
       <Modal
-        title="Ban Hành Quyết Định Vinh Danh &amp; Khen Thưởng Mới"
+        title={editingReward ? 'Chỉnh sửa quyết định khen thưởng chờ duyệt' : 'Lập Quyết Định Vinh Danh & Khen Thưởng Mới'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -360,22 +426,17 @@ export const RewardsModule: React.FC = () => {
             <Form.Item name="decisionNo" label="Số quyết định BGD" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="date" label="Ngày ký quyết định" rules={[{ required: true }]}>
+            <Form.Item name="date" label="Ngày quyết định" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeName" label="Họ tên nhân sự / Đại diện tập thể" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Hoàng Quốc Dũng" />
+            <Form.Item name="employeeId" label="Nhân sự / Đại diện tập thể" rules={[{ required: true }]}>
+              <Select showSearch placeholder="Chọn nhân sự trong hệ thống" options={employees.map(employee => ({ value: employee.id, label: `${employee.employeeCode || employee.code} · ${employee.name}` }))} onChange={employeeId => { const employee = employees.find(item => item.id === employeeId); if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true }]}>
-              <Select
-                options={deptOptions.length > 0 ? deptOptions : [
-                  { label: 'Ban Giám Đốc', value: 'Ban Giám Đốc' },
-                ]}
-                placeholder="Chọn phòng ban..."
-              />
+              {deptOptions.length ? <Select options={deptOptions} placeholder="Chọn phòng ban..." /> : <Input placeholder="Nhập phòng ban" />}
             </Form.Item>
           </div>
 
@@ -395,18 +456,18 @@ export const RewardsModule: React.FC = () => {
               />
             </Form.Item>
             <Form.Item name="rewardValue" label="Giá trị phần thưởng (VNĐ)" rules={[{ required: true }]}>
-              <Input type="number" step={1000000} />
+              <Input type="number" min={0} step={1} />
             </Form.Item>
           </div>
 
           <Form.Item name="achievementSummary" label="Tóm tắt thành tích đóng góp nổi bật">
-            <Input.TextArea rows={2} placeholder="Mô tả chi tiết những thành tích và đóng góp mang lại giá trị cao cho công ty..." />
+            <Input.TextArea rows={2} maxLength={4000} placeholder="Mô tả chi tiết những thành tích và đóng góp mang lại giá trị cao cho công ty..." />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Ban hành &amp; Vinh danh
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingReward ? 'Lưu thay đổi' : 'Lập quyết định chờ duyệt'}
             </Button>
           </div>
         </Form>
@@ -445,17 +506,20 @@ export const RewardsModule: React.FC = () => {
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Giá trị quy đổi giải thưởng:</span>
                   <strong style={{ color: '#16A34A', fontSize: 14 }}>
-                    +{selectedReward.rewardValue.toLocaleString('vi-VN')} ₫
+                    +{Number(selectedReward.rewardValue).toLocaleString('vi-VN')} ₫
                   </strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Người ký quyết định:</span>
-                  <strong>{selectedReward.signerName}</strong>
+                  <span style={{ color: '#64748B' }}>Người phê duyệt nội bộ:</span>
+                  <strong>{selectedReward.approvedBy || selectedReward.signerName || selectedReward.signer || 'Chưa có dữ liệu phê duyệt'}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Trạng thái trao giải:</span>
-                  <Tag color="success">{selectedReward.status}</Tag>
+                  <Tag color={isRewardAwarded(selectedReward.status) ? 'success' : canAwardReward(selectedReward.status) ? 'processing' : 'warning'}>{selectedReward.status}</Tag>
                 </div>
+                {selectedReward.approvedAt && <div>Phê duyệt: {new Date(selectedReward.approvedAt).toLocaleString('vi-VN')}</div>}
+                {selectedReward.awardedAt && <div>Trao thưởng: {new Date(selectedReward.awardedAt).toLocaleString('vi-VN')} · {selectedReward.awardedBy}</div>}
+                <div style={{ color: '#64748B', fontSize: 11.5 }}>Trạng thái ký quyết định ghi nhận phê duyệt nội bộ trên hệ thống.</div>
               </div>
             </div>
 
@@ -474,19 +538,20 @@ export const RewardsModule: React.FC = () => {
               <Button
                 icon={<PrinterOutlined />}
                 style={{ flex: 1 }}
-                onClick={() => message.success(`Đã xuất file in Bằng Khen Danh Dự cho ${selectedReward.employeeName}`)}
+                onClick={() => exportCertificate(selectedReward)}
               >
                 In Bằng Khen (PDF)
               </Button>
-              {selectedReward.status !== 'Đã trao giải' && (
+              {selectedReward.status === 'Chờ duyệt' && <Button disabled={!!busyRecord || saving} onClick={() => openReward(selectedReward)}>Sửa dự thảo</Button>}
+              {selectedReward.status === 'Chờ duyệt' && <Button type="primary" disabled={!!busyRecord} loading={busyRecord === selectedReward.key} onClick={() => void handleApproveDecision(selectedReward)}>Phê duyệt nội bộ</Button>}
+              {canAwardReward(selectedReward.status) && (
                 <Button
                   type="primary"
                   icon={<CheckOutlined />}
                   style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                  onClick={() => {
-                    handleConfirmAward(selectedReward);
-                    setDrawerOpen(false);
-                  }}
+                  disabled={!!busyRecord}
+                  loading={busyRecord === selectedReward.key}
+                  onClick={() => void handleConfirmAward(selectedReward)}
                 >
                   Xác Nhận Đã Trao Thưởng
                 </Button>

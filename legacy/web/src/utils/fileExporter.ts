@@ -20,68 +20,42 @@ function sanitizeForPdf(str: string): string {
  * Tạo Blob file PDF 1.4 chuẩn quốc tế, mở được trên mọi trình duyệt & Adobe Acrobat
  */
 export function generateValidPdfBlob(title: string, subtitle: string, lines: string[]): Blob {
-  const cleanTitle = sanitizeForPdf(title);
-  const cleanSubtitle = sanitizeForPdf(subtitle);
-  const cleanLines = lines.map(sanitizeForPdf);
-
-  // Tạo luồng nội dung Text Stream
-  let streamText = '';
-  // Header Doanh Nghiệp
-  streamText += `BT\n/F1 16 Tf\n50 780 Td\n(CONG TY CO PHAN CONG NGHE KIYOVN) Tj\nET\n`;
-  streamText += `BT\n/F1 10 Tf\n50 762 Td\n(He thong Quan tri Doanh nghiep & Ho so Dien tu Enterprise) Tj\nET\n`;
-  streamText += `BT\n/F1 10 Tf\n50 748 Td\n(----------------------------------------------------------------------------------------------------) Tj\nET\n`;
-
-  // Tiêu đề tài liệu
-  streamText += `BT\n/F1 14 Tf\n50 715 Td\n(${cleanTitle}) Tj\nET\n`;
-  streamText += `BT\n/F1 10 Tf\n50 695 Td\n(${cleanSubtitle}) Tj\nET\n`;
-  streamText += `BT\n/F1 10 Tf\n50 680 Td\n(----------------------------------------------------------------------------------------------------) Tj\nET\n`;
-
-  // Thân tài liệu
-  let y = 650;
-  for (const line of cleanLines) {
-    if (y < 80) break;
-    streamText += `BT\n/F1 10 Tf\n50 ${y} Td\n(${line}) Tj\nET\n`;
-    y -= 20;
-  }
-
-  // Chữ ký số và chân trang
-  streamText += `BT\n/F1 10 Tf\n50 100 Td\n(----------------------------------------------------------------------------------------------------) Tj\nET\n`;
-  streamText += `BT\n/F1 10 Tf\n50 82 Td\n([DA XAC THUC CHU KY SO HOP LE - KIYOVN ENTERPRISE ROOT CA - SHA256]) Tj\nET\n`;
-  streamText += `BT\n/F1 9 Tf\n50 65 Td\n(Tai lieu so hoa dien tu co gia tri phap ly noi bo theo Nghi dinh 130/2018/ND-CP.) Tj\nET\n`;
-
-  const streamBytes = new TextEncoder().encode(streamText);
-  const streamLength = streamBytes.length;
-
-  const header = `%PDF-1.4\n%\xE2\xE3\xCF\xD3\n`;
-
-  const obj1 = `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`;
-  const obj2 = `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`;
-  const obj3 = `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n`;
-  const obj4 = `4 0 obj\n<< /Length ${streamLength} >>\nstream\n${streamText}\nendstream\nendobj\n`;
-  const obj5 = `5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`;
-
+  // shortcut: built-in PDF fonts transliterate Vietnamese; embed a Unicode font when full typography is required.
+  const wrap = (value: string) => value.split(/\r?\n/).flatMap(line => {
+    const result: string[] = [];
+    while (line.length > 80) {
+      const space = line.lastIndexOf(' ', 80);
+      const end = space > 0 ? space : 80;
+      result.push(line.slice(0, end));
+      line = line.slice(end + (space > 0 ? 1 : 0));
+    }
+    return [...result, line];
+  });
+  const content = [title, subtitle, '', ...lines].flatMap(wrap);
+  const pages = Array.from({ length: Math.max(1, Math.ceil(content.length / 34)) }, (_, i) => content.slice(i * 34, (i + 1) * 34));
   const enc = new TextEncoder();
-  const headerLen = enc.encode(header).length;
-  const o1Len = enc.encode(obj1).length;
-  const o2Len = enc.encode(obj2).length;
-  const o3Len = enc.encode(obj3).length;
-  const o4Len = enc.encode(obj4).length;
-  const o5Len = enc.encode(obj5).length;
-
-  const offset1 = headerLen;
-  const offset2 = offset1 + o1Len;
-  const offset3 = offset2 + o2Len;
-  const offset4 = offset3 + o3Len;
-  const offset5 = offset4 + o4Len;
-  const xrefOffset = offset5 + o5Len;
-
-  const pad = (n: number) => n.toString().padStart(10, '0');
-
-  const xref = `xref\n0 6\n0000000000 65535 f \n${pad(offset1)} 00000 n \n${pad(offset2)} 00000 n \n${pad(offset3)} 00000 n \n${pad(offset4)} 00000 n \n${pad(offset5)} 00000 n \n`;
-  const trailer = `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-
-  const fullPdfStr = header + obj1 + obj2 + obj3 + obj4 + obj5 + xref + trailer;
-  return new Blob([enc.encode(fullPdfStr)], { type: 'application/pdf' });
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  pages.forEach((page, index) => {
+    const stream = page.map((line, row) => `BT /F1 10 Tf 50 ${780 - row * 20} Td (${sanitizeForPdf(line)}) Tj ET`).join('\n')
+      + `\nBT /F1 9 Tf 50 50 Td (Trang ${index + 1} / ${pages.length}) Tj ET\n`;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents ${5 + index * 2} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`);
+    objects.push(`<< /Length ${enc.encode(stream).length} >>\nstream\n${stream}endstream`);
+  });
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(enc.encode(pdf).length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = enc.encode(pdf).length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new Blob([enc.encode(pdf)], { type: 'application/pdf' });
 }
 
 // Bảng tra cứu CRC32 chuẩn ISO 3309
@@ -679,6 +653,29 @@ export function generateValidDocxBlob(html: string, title = 'Van_Ban'): Blob {
 /**
  * Tải file thật về máy tính người dùng
  */
+export function generateValidXlsxBlob(rows: Array<Array<string | number | boolean | null>>): Blob {
+  const enc = new TextEncoder();
+  const column = (index: number): string => {
+    let result = '';
+    for (index++; index > 0; index = Math.floor((index - 1) / 26)) result = String.fromCharCode(65 + (index - 1) % 26) + result;
+    return result;
+  };
+  const sheet = rows.map((row, r) => `<row r="${r + 1}">${row.map((value, c) => {
+    const ref = `${column(c)}${r + 1}`;
+    if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${ref}"><v>${value}</v></c>`;
+    if (typeof value === 'boolean') return `<c r="${ref}" t="b"><v>${Number(value)}</v></c>`;
+    return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${sanitizeXml(value == null ? '' : String(value))}</t></is></c>`;
+  }).join('')}</row>`).join('');
+  const entries = [
+    ['[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'],
+    ['_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ['xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ['xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'],
+    ['xl/worksheets/sheet1.xml', `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheet}</sheetData></worksheet>`],
+  ].map(([name, xml]) => ({ name, data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${xml}`) }));
+  return new Blob([buildZipArchive(entries).buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
 export function downloadFile(filename: string, customContent?: string | Blob): void {
   const lower = filename.toLowerCase();
 

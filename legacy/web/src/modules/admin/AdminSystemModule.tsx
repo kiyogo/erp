@@ -37,22 +37,7 @@ export const AdminSystemModule: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [testingGoogle, setTestingGoogle] = useState(false);
 
-  // Google SSO Configuration State with persistence
-  const [googleConfig, setGoogleConfig] = useState(() => {
-    try {
-      const saved = localStorage.getItem('google_sso_config');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return {
-      clientKey: '782910345612-app-kiyovn-enterprise.apps.googleusercontent.com',
-      clientSecret: 'GOCSPX-9a8181048194018240912409',
-      redirectUri: `${window.location.origin}/api/v1/auth/google/callback`,
-      allowedDomain: '@kiyovn.com',
-      enforceGoogleLogin: '100',
-      configured: true,
-    };
-  });
-
+  const [googleConfig, setGoogleConfig] = useState({ clientKey: '', clientSecret: '', redirectUri: window.location.origin, allowedDomain: '', enforceGoogleLogin: 'optional', configured: false });
   const load = async () => {
     setLoading(true);
     try {
@@ -69,13 +54,11 @@ export const AdminSystemModule: React.FC = () => {
 
   useEffect(() => {
     void load();
-    googleForm.setFieldsValue({
-      clientKey: googleConfig.clientKey,
-      clientSecret: googleConfig.clientSecret,
-      redirectUri: googleConfig.redirectUri,
-      allowedDomain: googleConfig.allowedDomain,
-      enforceGoogleLogin: googleConfig.enforceGoogleLogin,
-    });
+    void systemApi.getGoogleConfig().then(response => {
+      const next = { ...response.data, redirectUri: response.data.redirectUri || window.location.origin };
+      setGoogleConfig(next);
+      googleForm.setFieldsValue(next);
+    }).catch(() => message.error('Không thể tải cấu hình Google.'));
   }, []);
 
   const handleSave = async (values: any) => {
@@ -110,45 +93,32 @@ export const AdminSystemModule: React.FC = () => {
   };
 
   // Google OAuth Form Handlers
-  const handleSaveGoogle = (values: any) => {
-    const nextConfig = {
-      clientKey: String(values.clientKey || '').trim(),
-      clientSecret: String(values.clientSecret || '').trim(),
-      redirectUri: String(values.redirectUri || '').trim(),
-      allowedDomain: String(values.allowedDomain || '').trim(),
-      enforceGoogleLogin: values.enforceGoogleLogin || '100',
-      configured: Boolean(values.clientKey && values.clientSecret && values.redirectUri),
-    };
-    setGoogleConfig(nextConfig);
-    localStorage.setItem('google_sso_config', JSON.stringify(nextConfig));
-    message.success('Đã lưu cấu hình Google OAuth (Client Key, Client Secret & Redirect URI) thành công!');
+  const handleSaveGoogle = async (values: any) => {
+    setSaving(true);
+    try {
+      const response = await systemApi.saveGoogleConfig({ clientKey: values.clientKey, redirectUri: values.redirectUri, allowedDomain: values.allowedDomain, enforceGoogleLogin: values.enforceGoogleLogin });
+      setGoogleConfig(response.data.config);
+      googleForm.setFieldsValue(response.data.config);
+      message.success('Đã lưu cấu hình Google trên máy chủ.');
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể lưu cấu hình Google.'); }
+    finally { setSaving(false); }
   };
 
-  const handleTestGoogleConnection = () => {
-    const key = googleForm.getFieldValue('clientKey');
-    const secret = googleForm.getFieldValue('clientSecret');
-    const redirect = googleForm.getFieldValue('redirectUri');
-
-    if (!key || !secret || !redirect) {
-      message.warning('Vui lòng nhập đủ Client Key, Client Secret và Redirect URI trước khi kiểm tra!');
-      return;
-    }
-
+  const handleTestGoogleConnection = async () => {
     setTestingGoogle(true);
-    setTimeout(() => {
-      setTestingGoogle(false);
-      message.success('Kết nối thử nghiệm tới Google OAuth 2.0 Identity Endpoint THÀNH CÔNG (HTTP 200 OK)!');
-    }, 850);
+    try {
+      const response = await fetch('https://accounts.google.com/.well-known/openid-configuration', { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error('Không thể đọc cấu hình Google.');
+      const discovery = await response.json();
+      if (discovery.issuer !== 'https://accounts.google.com') throw new Error('Cấu hình Google không hợp lệ.');
+      message.success('Đã kết nối dịch vụ Google. Cần đăng nhập thực tế để xác minh Client ID.');
+    } catch { message.error('Không thể kết nối dịch vụ Google.'); }
+    finally { setTestingGoogle(false); }
   };
 
-  const handleCopyRedirectUri = () => {
-    const uri = googleForm.getFieldValue('redirectUri') || googleConfig.redirectUri;
-    if (!uri) {
-      message.warning('Chưa có Redirect URI để sao chép!');
-      return;
-    }
-    navigator.clipboard.writeText(uri);
-    message.success('Đã sao chép Redirect URI vào bộ nhớ tạm!');
+  const handleCopyRedirectUri = async () => {
+    try { await navigator.clipboard.writeText(googleForm.getFieldValue('redirectUri') || googleConfig.redirectUri); message.success('Đã sao chép origin.'); }
+    catch { message.error('Không thể sao chép origin.'); }
   };
 
   return (
@@ -245,7 +215,7 @@ export const AdminSystemModule: React.FC = () => {
             Cấu Hình Đăng Nhập Google SSO (Google Identity OAuth 2.0)
           </div>
           <Tag color={googleConfig.configured ? 'success' : 'warning'}>
-            {googleConfig.configured ? '● Google OAuth đã kết nối' : '○ Google OAuth chưa cấu hình'}
+            {googleConfig.configured ? '● Google Client ID đã cấu hình' : '○ Google OAuth chưa cấu hình'}
           </Tag>
         </div>
 
@@ -271,31 +241,30 @@ export const AdminSystemModule: React.FC = () => {
 
             <Form.Item
               name="clientSecret"
-              label="Client Secret (Khóa bí mật Client)"
-              rules={[{ required: true, message: 'Vui lòng nhập Client Secret!' }]}
+              label="Client Secret (Google Identity không yêu cầu khóa này)"
             >
               <Input.Password
                 prefix={<SafetyCertificateOutlined style={{ color: '#009688' }} />}
-                placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx"
+                placeholder="Không dùng trong luồng đăng nhập hiện tại" disabled
               />
             </Form.Item>
 
             <Form.Item
               name="redirectUri"
-              label="Redirect URI (Đường dẫn chuyển hướng Callback)"
+              label="Authorized JavaScript origin"
               rules={[{ required: true, message: 'Vui lòng nhập Redirect URI!' }]}
             >
               <Input
                 prefix={<LinkOutlined style={{ color: '#009688' }} />}
                 suffix={
-                  <Tooltip title="Sao chép Redirect URI">
+                  <Tooltip title="Sao chép origin">
                     <CopyOutlined
                       onClick={handleCopyRedirectUri}
                       style={{ cursor: 'pointer', color: '#009688' }}
                     />
                   </Tooltip>
                 }
-                placeholder="https://app.kiyovn.vn/api/v1/auth/google/callback"
+                placeholder="https://app.kiyovn.vn"
               />
             </Form.Item>
 
@@ -324,7 +293,7 @@ export const AdminSystemModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, flexWrap: 'wrap', gap: 10 }}>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Button icon={<CopyOutlined />} onClick={handleCopyRedirectUri}>
-                Sao chép Redirect URI
+                Sao chép origin
               </Button>
               <Button icon={<ApiOutlined />} loading={testingGoogle} onClick={handleTestGoogleConnection}>
                 Kiểm tra kết nối Google OAuth

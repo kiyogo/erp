@@ -1,4 +1,7 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceNumber, employeeAttendanceFields, leaveBalance } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -19,6 +22,7 @@ import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip
 
 export interface EnterpriseLeaveSummaryItem {
   key: string;
+  year?: number;
   employeeCode: string;
   employeeName: string;
   position: string;
@@ -37,13 +41,17 @@ const INITIAL_LEAVES_SUMMARY: EnterpriseLeaveSummaryItem[] = [];
 
 export const LeaveSummaryModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseLeaveSummaryItem[]>(INITIAL_LEAVES_SUMMARY);
+  const [employees, setEmployees] = useState(dataService.getEmployees());
+  const [saving, setSaving] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
+    void dataService.refreshGenericData('attendance_leave_summary').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
     const list = dataService.getGenericData('attendance_leave_summary');
     setData(Array.isArray(list) ? list : []);
     dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
     const unsub = dataService.subscribe(() => {
+      setEmployees(dataService.getEmployees());
       const updated = dataService.getGenericData('attendance_leave_summary');
       setData(Array.isArray(updated) ? updated : []);
       dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
@@ -64,35 +72,26 @@ export const LeaveSummaryModule: React.FC = () => {
   const totalUsed = data.reduce((sum, item) => sum + item.usedLeaves, 0);
   const totalRemaining = data.reduce((sum, item) => sum + item.remainingLeaves, 0);
 
-  const handleCreate = (values: any) => {
-    const std = Number(values.standardQuota) || 12;
-    const sen = Number(values.seniorityQuota) || 0;
-    const car = Number(values.carriedOver) || 0;
-    const used = Number(values.usedLeaves) || 0;
-    const total = std + sen + car;
-    const rem = Math.max(0, total - used);
-    const pct = Math.round((used / total) * 100);
-
-    let st: 'Còn nhiều phép' | 'Sắp hết phép' | 'Đã hết phép' = 'Còn nhiều phép';
-    if (rem === 0) st = 'Đã hết phép';
-    else if (rem <= 3) st = 'Sắp hết phép';
-
-    const newItem: EnterpriseLeaveSummaryItem = {
-      ...values,
-      key: String(Date.now()),
-      standardQuota: std,
-      seniorityQuota: sen,
-      carriedOver: car,
-      totalEntitled: total,
-      usedLeaves: used,
-      remainingLeaves: rem,
-      leaveUsagePct: pct,
-      status: st,
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('attendance_leave_summary', nextItems);
-    message.success(`Đã cập nhật quỹ phép năm cho: ${values.employeeName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const employee = employeeAttendanceFields(employees, values.employeeName);
+      const year = attendanceNumber(values.year, 'Năm theo dõi', 2000, 2200);
+      if (!Number.isInteger(year)) throw new Error('Năm theo dõi phải là số nguyên.');
+      const standardQuota = attendanceNumber(values.standardQuota, 'Phép chuẩn', 0, 366);
+      const seniorityQuota = attendanceNumber(values.seniorityQuota ?? 0, 'Phép thâm niên', 0, 366);
+      const carriedOver = attendanceNumber(values.carriedOver ?? 0, 'Phép chuyển tiếp', 0, 366);
+      const usedLeaves = attendanceNumber(values.usedLeaves ?? 0, 'Phép đã sử dụng', 0, 366);
+      const existing = data.find((item) => item.employeeCode === employee.employeeCode && (item.year || new Date().getFullYear()) === year);
+      const record = { ...values, ...employee, key: existing?.key || crypto.randomUUID(), year, standardQuota, seniorityQuota, carriedOver, openingUsedLeaves: usedLeaves, ...leaveBalance(standardQuota, seniorityQuota, carriedOver, usedLeaves) };
+      if (existing) await collectionsApi.update('attendance_leave_summary', existing.key, record);
+      else await collectionsApi.create('attendance_leave_summary', record);
+      await dataService.refreshGenericData('attendance_leave_summary');
+      message.success(`Đã cập nhật quỹ phép năm cho: ${employee.employeeName}`);
+      setModalOpen(false); form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu quỹ phép.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -209,9 +208,9 @@ export const LeaveSummaryModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã sử dụng nghỉ trong năm</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
-            {totalUsed} Ngày phép ({Math.round((totalUsed / totalEntitledAll) * 100)}%)
+            {totalUsed} Ngày phép ({(totalEntitledAll ? Math.round((totalUsed / totalEntitledAll) * 100) : 0)}%)
           </div>
-          <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Được hạch toán chi trả 100% lương đầy đủ</div>
+          <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Theo số liệu điều chỉnh quỹ phép đã lưu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -219,15 +218,15 @@ export const LeaveSummaryModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalRemaining} Ngày phép
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Có thể sử dụng đến hết 31/12/2026</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Theo năm theo dõi của từng sổ phép</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chính sách phép thâm niên</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng phép thâm niên đã ghi nhận</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            +1 Ngày / 5 Năm
+            {data.reduce((sum, item) => sum + item.seniorityQuota, 0)} Ngày
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tự động cộng dồn theo thâm niên cống hiến</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Theo cấu hình quỹ phép của từng nhân viên</div>
         </div>
       </div>
 
@@ -266,7 +265,7 @@ export const LeaveSummaryModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo tổng hợp quỹ phép năm')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Quy_phep_nam.xlsx', generateValidXlsxBlob([['Năm', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Phép chuẩn', 'Thâm niên', 'Chuyển tiếp', 'Tổng quỹ', 'Đã nghỉ', 'Còn lại'], ...filteredData.map((item) => [item.year || new Date().getFullYear(), item.employeeCode, item.employeeName, item.department, item.standardQuota, item.seniorityQuota, item.carriedOver, item.totalEntitled, item.usedLeaves, item.remainingLeaves])]))}>
             Xuất Báo Cáo
           </Button>
 
@@ -276,8 +275,7 @@ export const LeaveSummaryModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                employeeCode: `KY-0${data.length + 10}`,
-                department: 'Phòng Ban Kỹ Thuật',
+                year: new Date().getFullYear(),
                 standardQuota: 12,
                 seniorityQuota: 0,
                 carriedOver: 0,
@@ -308,28 +306,28 @@ export const LeaveSummaryModule: React.FC = () => {
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeCode" label="Mã nhân viên" rules={[{ required: true }]}>
-              <Input />
+              <Input readOnly />
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
+            <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
                 placeholder="Chọn phòng ban trực thuộc..."
-                options={departmentOptions}
+                options={Array.from(new Set([...departmentOptions.map((item) => item.value), ...employees.map((item) => item.department)].filter(Boolean))).map((value) => ({ label: value, value }))}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân sự" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Hoàng Văn Thắng" />
+              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) { const existing = data.find((item) => item.employeeCode === employee.code && (item.year || new Date().getFullYear()) === Number(form.getFieldValue('year'))); form.setFieldsValue({ ...(existing || {}), employeeName: employee.key, employeeCode: employee.code, department: employee.department, position: employee.position, usedLeaves: (existing as any)?.openingUsedLeaves ?? existing?.usedLeaves ?? 0 }); } }} />
             </Form.Item>
-            <Form.Item name="position" label="Chức danh" rules={[{ required: true }]}>
+            <Form.Item name="position" label="Chức danh">
               <Input placeholder="Ví dụ: Senior DevOps" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="standardQuota" label="Phép chuẩn năm" rules={[{ required: true }]}>
-              <Input type="number" min={12} max={18} />
+              <Input type="number" min={0} max={366} step={0.5} />
             </Form.Item>
             <Form.Item name="seniorityQuota" label="Phép thâm niên">
               <Input type="number" min={0} max={5} />
@@ -339,13 +337,16 @@ export const LeaveSummaryModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="usedLeaves" label="Số ngày phép đã sử dụng trong năm">
-            <Input type="number" min={0} max={25} />
+          <Form.Item name="year" label="Năm theo dõi" rules={[{ required: true }]}>
+            <Input type="number" min={2000} max={2200} />
+          </Form.Item>
+          <Form.Item name="usedLeaves" label="Phép đã sử dụng (số liệu điều chỉnh)">
+            <Input type="number" min={0} max={366} step={0.5} />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu &amp; Cập nhật quỹ phép
             </Button>
           </div>
@@ -381,7 +382,7 @@ export const LeaveSummaryModule: React.FC = () => {
             {/* Leave Balance Overview */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-                Cơ Cấu Hạn Mức Phép Năm 2026:
+                Cơ Cấu Hạn Mức Phép Năm {selectedSummary.year || new Date().getFullYear()}:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -393,7 +394,7 @@ export const LeaveSummaryModule: React.FC = () => {
                   <strong style={{ color: '#009688' }}>+{selectedSummary.seniorityQuota} Ngày</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Phép năm 2025 chuyển tiếp:</span>
+                  <span style={{ color: '#64748B' }}>Phép năm trước chuyển tiếp:</span>
                   <strong style={{ color: '#2563EB' }}>+{selectedSummary.carriedOver} Ngày</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 6 }}>
@@ -417,7 +418,7 @@ export const LeaveSummaryModule: React.FC = () => {
                 Chính Sách Thanh Toán Phép Tồn Cuối Năm:
               </div>
               <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
-                Theo Quy chế nội bộ KIYO, trường hợp đến 31/12/2026 nhân sự không sử dụng hết phép năm sẽ được chi trả bằng tiền mặt theo công thức: <code>(Lương đóng BHXH / 22) × Số ngày phép còn lại</code> vào kỳ lương Tháng 01/2027.
+                Chưa cấu hình chính sách thanh toán phép tồn. Sổ phép hiện ghi nhận hạn mức và số ngày sử dụng do cán bộ nhân sự điều chỉnh; cần đối chiếu với các đơn nghỉ đã duyệt.
               </div>
             </div>
 
@@ -425,8 +426,7 @@ export const LeaveSummaryModule: React.FC = () => {
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => {
-                message.success(`Đã in sổ theo dõi phép năm cho ${selectedSummary.employeeName}`);
-                setDrawerOpen(false);
+                downloadFile(`So_phep_${selectedSummary.employeeCode}.pdf`, generateValidPdfBlob('Sổ theo dõi phép năm', `${selectedSummary.employeeName} - ${selectedSummary.year || new Date().getFullYear()}`, [`Mã nhân viên: ${selectedSummary.employeeCode}`, `Phòng ban: ${selectedSummary.department}`, `Phép chuẩn: ${selectedSummary.standardQuota}`, `Phép thâm niên: ${selectedSummary.seniorityQuota}`, `Tồn năm trước: ${selectedSummary.carriedOver}`, `Tổng quỹ: ${selectedSummary.totalEntitled}`, `Đã sử dụng: ${selectedSummary.usedLeaves}`, `Còn lại: ${selectedSummary.remainingLeaves}`]));
               }}
             >
               In Sổ Phép Năm Cá Nhân (PDF)

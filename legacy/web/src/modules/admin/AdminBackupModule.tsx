@@ -17,7 +17,9 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Button, message, Tag, Drawer, Card, Tooltip, Progress, Select } from '../../custom-ui';
-import { dataService } from '../../services/dataService';
+import api from '../../api/axios';
+import { downloadFile } from '../../utils/fileExporter';
+import { formatFileSize } from '../../utils/fileStorage';
 
 export interface EnterpriseBackupItem {
   key: string;
@@ -30,72 +32,36 @@ export interface EnterpriseBackupItem {
   location: string;
   checksumSha256: string;
   rtoEstimated: string;
-  status: 'Toàn vẹn 100%' | 'Đang nén dữ liệu';
+  status: string;
+  sizeBytes: number;
+  verifiedAt?: string;
+  actualChecksumSha256?: string;
+  available?: boolean;
+  restorable?: boolean;
 }
 
-const DEFAULT_BACKUPS: EnterpriseBackupItem[] = [
-  {
-    key: '1',
-    code: 'SNAP-2026-0827-01',
-    name: 'Sao lưu toàn hệ thống định kỳ đầu tuần',
-    type: 'Full System',
-    size: '14.5 GB',
-    createdAt: '2026-08-27 02:00:00',
-    creator: 'Hệ thống tự động',
-    location: 'IDC Tân Thuận Cold S3 Bucket #01',
-    checksumSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-    rtoEstimated: '≤ 35 giây',
-    status: 'Toàn vẹn 100%',
-  },
-  {
-    key: '2',
-    code: 'SNAP-2026-0826-02',
-    name: 'Sao lưu Database MySQL & SQLite dữ liệu chính',
-    type: 'Database',
-    size: '2.8 GB',
-    createdAt: '2026-08-26 23:30:00',
-    creator: 'Trần Tuấn Anh (CTO)',
-    location: 'Offsite Cloud Backup DC #02',
-    checksumSha256: 'a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0',
-    rtoEstimated: '≤ 15 giây',
-    status: 'Toàn vẹn 100%',
-  },
-  {
-    key: '3',
-    code: 'SNAP-2026-0825-01',
-    name: 'Sao lưu kho lưu trữ tài liệu Storage Blob',
-    type: 'Storage Blob',
-    size: '42.1 GB',
-    createdAt: '2026-08-25 03:00:00',
-    creator: 'Hệ thống tự động',
-    location: 'IDC Viettel Hòa Lạc DC #03',
-    checksumSha256: 'f7e6d5c4b3a29182736451928374650192837465019283746501928374650192',
-    rtoEstimated: '≤ 60 giây',
-    status: 'Toàn vẹn 100%',
-  },
-];
+type BackupCapabilities = { database: boolean; fullSystem: boolean; storageBlob: boolean; restore: boolean; autoDaily: boolean; engine: string; reason?: string; maxArchiveBytes?: number; maxEntries?: number };
 
 export const AdminBackupModule: React.FC = () => {
-  const [data, setData] = useState<EnterpriseBackupItem[]>(() => {
-    const list = dataService.getGenericData('admin_backups');
-    return Array.isArray(list) && list.length > 0 ? list : DEFAULT_BACKUPS;
-  });
+  const [data, setData] = useState<EnterpriseBackupItem[]>([]);
+  const [capabilities, setCapabilities] = useState<BackupCapabilities>({ database: false, fullSystem: false, storageBlob: false, restore: false, autoDaily: false, engine: '' });
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [busyKey, setBusyKey] = useState('');
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get<{ data: EnterpriseBackupItem[]; capabilities: BackupCapabilities }>('/admin/backups');
+      setData(response.data.data);
+      setCapabilities(response.data.capabilities);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được danh sách tệp sao lưu.');
+    } finally { setLoading(false); }
+  };
 
   useEffect(() => {
-    const list = dataService.getGenericData('admin_backups');
-    if (Array.isArray(list) && list.length > 0) {
-      setData(list);
-    } else {
-      setData(DEFAULT_BACKUPS);
-      dataService.saveGenericData('admin_backups', DEFAULT_BACKUPS);
-    }
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('admin_backups');
-      if (Array.isArray(updated) && updated.length > 0) {
-        setData(updated);
-      }
-    });
-    return unsub;
+    void loadData();
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -106,39 +72,81 @@ export const AdminBackupModule: React.FC = () => {
   const [selectedBackup, setSelectedBackup] = useState<EnterpriseBackupItem | null>(null);
   const [form] = Form.useForm();
 
-  const handleCreate = (values: any) => {
-    const newBackup: EnterpriseBackupItem = {
-      key: String(Date.now()),
-      code: `SNAP-2026-0827-0${data.length + 1}`,
-      name: values.name,
-      type: values.type || 'Full System',
-      size: '14.5 GB',
-      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      creator: 'Trần Tuấn Anh (CTO)',
-      location: 'IDC Tân Thuận Cold S3 Bucket #01',
-      checksumSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      rtoEstimated: '≤ 35 giây',
-      status: 'Toàn vẹn 100%',
-    };
-    const nextItems = [newBackup, ...data];
-    setData(nextItems);
-    dataService.saveGenericData('admin_backups', nextItems);
-    message.success('Đã tạo bản sao lưu snapshot hệ thống thành công!');
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    if (!String(values.name || '').trim()) { message.error('Vui lòng nhập tên bản sao lưu.'); return; }
+    const supported = values.type === 'Full System' ? capabilities.fullSystem : values.type === 'Database' ? capabilities.database : values.type === 'Storage Blob' && capabilities.storageBlob;
+    if (!supported) { message.error(capabilities.reason || 'Phạm vi sao lưu chưa được máy chủ hỗ trợ.'); return; }
+    setSaving(true);
+    try {
+      const response = await api.post<{ backup: EnterpriseBackupItem }>('/admin/backups', { name: String(values.name).trim(), type: values.type }, { timeout: 0 });
+      setData(items => [response.data.backup, ...items.filter(item => item.key !== response.data.backup.key)]);
+      message.success('Đã tạo tệp ZIP sao lưu thực tế trên máy chủ.');
+      setModalOpen(false);
+      form.resetFields();
+      await loadData();
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể tạo tệp sao lưu.'); }
+    finally { setSaving(false); }
   };
 
-  const handleRestore = (code: string) => {
+  const handleRestore = (record: EnterpriseBackupItem) => {
+    if (!capabilities.restore || !record.restorable) {
+      Modal.info({ title: 'Khôi phục cần quy trình triển khai có kiểm soát', content: 'Máy chủ hiện hỗ trợ tạo, xác minh và tải bản sao lưu; chưa hỗ trợ khôi phục tự động. Hãy tải bản ZIP đã xác minh, bảo quản khóa mã hóa gốc riêng và thực hiện khôi phục trong môi trường bảo trì. Dữ liệu đang chạy chưa được thay đổi.' });
+      return;
+    }
     Modal.confirm({
-      title: `Khôi phục dữ liệu từ bản Snapshot ${code}?`,
-      content: 'Hệ thống sẽ đồng bộ lại toàn bộ dữ liệu cơ sở dữ liệu và tệp tin theo bản sao lưu này. Quá trình mất khoảng 30 giây.',
+      title: `Khôi phục dữ liệu từ bản Snapshot ${record.code}?`,
+      content: 'Khôi phục sẽ thay đổi dữ liệu đang chạy. Chỉ tiếp tục sau khi đã kiểm tra bản sao lưu và chuẩn bị phương án phục hồi.',
       okText: 'Xác nhận khôi phục',
       cancelText: 'Hủy bỏ',
       okButtonProps: { danger: true },
-      onOk: () => {
-        message.success(`Đã khôi phục thành công toàn bộ hệ thống từ bản sao lưu ${code}`);
+      onOk: async () => {
+        try {
+          await api.post(`/admin/backups/${encodeURIComponent(record.key)}/restore`, { confirmation: record.code }, { timeout: 0 });
+          message.success('Máy chủ đã hoàn tất khôi phục bản sao lưu.');
+          await loadData();
+        } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể khôi phục dữ liệu.'); }
       },
     });
+  };
+
+  const handleVerify = async (record: EnterpriseBackupItem) => {
+    setBusyKey(record.key);
+    try {
+      const response = await api.post<{ backup: EnterpriseBackupItem }>(`/admin/backups/${encodeURIComponent(record.key)}/verify`, {}, { timeout: 0 });
+      const backup = response.data.backup;
+      setData(items => items.map(item => item.key === backup.key ? backup : item));
+      setSelectedBackup(selected => selected?.key === backup.key ? backup : selected);
+      if (backup.status === 'Đã xác minh SHA-256') message.success('Mã băm tệp sao lưu khớp với hồ sơ gốc.');
+      else message.error('Tệp sao lưu không khớp mã băm đã ghi nhận.');
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xác minh tệp sao lưu.'); }
+    finally { setBusyKey(''); }
+  };
+
+  const handleDownload = async (record: EnterpriseBackupItem) => {
+    setBusyKey(record.key);
+    try {
+      const response = await api.get<Blob>(`/admin/backups/${encodeURIComponent(record.key)}/download`, { responseType: 'blob', timeout: 0 });
+      if (response.data.size === 0) throw new Error('Máy chủ trả tệp sao lưu rỗng.');
+      downloadFile(`${record.code}.zip`, response.data);
+    } catch (error: any) {
+      let reason = error?.response?.data?.message || error?.message;
+      if (error?.response?.data instanceof Blob) {
+        try { reason = JSON.parse(await error.response.data.text()).message; } catch {}
+      }
+      message.error(reason || 'Không thể tải tệp sao lưu.');
+    } finally { setBusyKey(''); }
+  };
+
+  const handlePrint = () => {
+    if (!selectedBackup) return;
+    const popup = window.open('', '_blank');
+    if (!popup) { message.error('Trình duyệt đã chặn cửa sổ in. Vui lòng cho phép mở cửa sổ.'); return; }
+    popup.document.write('<!doctype html><html lang="vi"><head><meta charset="UTF-8"><title>Hồ sơ sao lưu</title><style>@page{size:A4;margin:20mm}body{font-family:Arial,sans-serif;line-height:1.6;overflow-wrap:anywhere}</style></head><body></body></html>');
+    for (const text of ['HỒ SƠ TỆP SAO LƯU', `Mã: ${selectedBackup.code}`, `Tên: ${selectedBackup.name}`, `Phạm vi: ${selectedBackup.type}`, `Người tạo: ${selectedBackup.creator}`, `Thời điểm: ${selectedBackup.createdAt}`, `Dung lượng: ${formatFileSize(selectedBackup.sizeBytes)}`, `SHA-256 gốc: ${selectedBackup.checksumSha256}`, `Xác minh gần nhất: ${selectedBackup.verifiedAt || 'Chưa có'}`, `Trạng thái: ${selectedBackup.status}`, 'Khôi phục tự động chưa được hỗ trợ; khóa mã hóa gốc phải được bảo quản riêng.']) {
+      const paragraph = popup.document.createElement('p'); paragraph.textContent = text; popup.document.body.appendChild(paragraph);
+    }
+    popup.document.close(); popup.focus(); popup.print();
   };
 
   const filteredData = data.filter((d) => {
@@ -184,7 +192,7 @@ export const AdminBackupModule: React.FC = () => {
       dataIndex: 'size',
       key: 'size',
       width: 110,
-      render: (s: string) => <span style={{ color: '#1E40AF', fontWeight: 700 }}>{s}</span>,
+      render: (_: string, record: EnterpriseBackupItem) => <span style={{ color: '#1E40AF', fontWeight: 700 }}>{formatFileSize(record.sizeBytes)}</span>,
     },
     {
       title: 'Người thực hiện',
@@ -198,7 +206,7 @@ export const AdminBackupModule: React.FC = () => {
       key: 'status',
       width: 160,
       render: (s: string) => (
-        <Tag color="success" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Tag color={s === 'Đã xác minh SHA-256' ? 'success' : 'error'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <SafetyCertificateOutlined /> {s}
         </Tag>
       ),
@@ -222,14 +230,15 @@ export const AdminBackupModule: React.FC = () => {
           <Button
             size="small"
             icon={<DownloadOutlined />}
-            onClick={() => message.success(`Đang tải xuống tệp sao lưu ${record.code}.tar.gz`)}
+            loading={busyKey === record.key}
+            onClick={() => void handleDownload(record)}
           >
             Tải tệp
           </Button>
           <Button
             size="small"
             type="primary"
-            onClick={() => handleRestore(record.code)}
+            onClick={() => handleRestore(record)}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Khôi phục
@@ -248,31 +257,31 @@ export const AdminBackupModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} bản snapshot
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phân tán 2 Data Center (Tân Thuận &amp; Duy Tân)</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tệp ZIP vật lý được ghi nhận trên máy chủ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Độ tin cậy toàn vẹn khôi phục</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tệp có lần xác minh SHA-256 thành công</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            100% SHA-256
+            {data.filter(item => item.available !== false && item.status === 'Đã xác minh SHA-256').length}/{data.length} tệp
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tự động kiểm tra Checksum hàng ngày</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Xác minh lại theo yêu cầu hoặc trước khi tải</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phục hồi mục tiêu (RTO)</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            ≤ 30 Giây
+            Chưa đo kiểm
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Phục hồi nóng không cần dừng server</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Khôi phục cần quy trình triển khai có kiểm soát</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chu kỳ tự động hóa sao lưu</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>
-            02:00 Sáng Mỗi Ngày
+            {capabilities.autoDaily ? 'Theo cấu hình máy chủ' : 'Chưa cấu hình lịch'}
           </div>
-          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Ghi đè bản cũ sau 30 ngày lưu trữ</div>
+          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Dung lượng tệp hiện có: {formatFileSize(data.filter(item => item.available !== false).reduce((sum, item) => sum + item.sizeBytes, 0))}</div>
         </div>
       </div>
 
@@ -313,11 +322,16 @@ export const AdminBackupModule: React.FC = () => {
           />
 
           <Button
+            icon={<ReloadOutlined />}
+            loading={loading}
+            onClick={() => void loadData()}
+          >Làm mới</Button>
+          <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
-              form.setFieldsValue({ type: 'Full System' });
+              form.setFieldsValue({ type: capabilities.fullSystem ? 'Full System' : capabilities.database ? 'Database' : 'Storage Blob' });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -334,6 +348,8 @@ export const AdminBackupModule: React.FC = () => {
           columns={columns}
           rowKey="key"
           pagination={{ pageSize: 8 }}
+          loading={loading}
+          locale={{ emptyText: 'Chưa có tệp sao lưu vật lý. Tạo một bản sao lưu để bắt đầu.' }}
         />
       </div>
 
@@ -353,20 +369,22 @@ export const AdminBackupModule: React.FC = () => {
           <Form.Item name="type" label="Phân loại phạm vi sao lưu" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: 'Toàn bộ hệ thống (Full System DB + Files)', value: 'Full System' },
-                { label: 'Chỉ Cơ sở dữ liệu PostgreSQL', value: 'Database' },
-                { label: 'Chỉ Kho tài liệu số hóa (Storage Blob)', value: 'Storage Blob' },
+                { label: `Toàn bộ dữ liệu (DB + Files)${capabilities.fullSystem ? '' : ' — chưa được hỗ trợ'}`, value: 'Full System' },
+                { label: `Chỉ cơ sở dữ liệu ${capabilities.engine || ''}${capabilities.database ? '' : ' — chưa được hỗ trợ'}`, value: 'Database' },
+                { label: `Chỉ kho tài liệu số hóa (Storage Blob)${capabilities.storageBlob ? '' : ' — chưa được hỗ trợ'}`, value: 'Storage Blob' },
               ]}
             />
           </Form.Item>
 
           <div style={{ padding: '12px 14px', background: '#F8FAFC', borderRadius: 6, fontSize: 12.5, color: '#334155', border: '1px solid #E2E8F0' }}>
-            Hệ thống sẽ tạo bản snapshot đầy đủ gồm cơ sở dữ liệu PostgreSQL, kho tài liệu văn thư số, và toàn bộ nhật ký kiểm toán với mã băm SHA-256 an toàn.
+            Máy chủ tạo tệp ZIP thật theo phạm vi đã chọn, có manifest và mã băm SHA-256. Khóa mã hóa gốc cần được bảo quản riêng. Khôi phục tự động và lịch sao lưu chưa được hỗ trợ.
+            {capabilities.reason && <p>{capabilities.reason}</p>}
+            {capabilities.maxArchiveBytes && <p>Giới hạn bản ZIP: {formatFileSize(capabilities.maxArchiveBytes)}, tối đa {capabilities.maxEntries?.toLocaleString('vi-VN')} tệp.</p>}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Bắt đầu sao lưu
             </Button>
           </div>
@@ -390,7 +408,7 @@ export const AdminBackupModule: React.FC = () => {
                     {selectedBackup.name}
                   </div>
                 </div>
-                <Tag color="success">{selectedBackup.status}</Tag>
+                <Tag color={selectedBackup.status === 'Đã xác minh SHA-256' ? 'success' : 'error'}>{selectedBackup.status}</Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 Thời điểm tạo: <strong>{selectedBackup.createdAt}</strong> · Bởi: <strong>{selectedBackup.creator}</strong>
@@ -403,7 +421,7 @@ export const AdminBackupModule: React.FC = () => {
                 <CloudServerOutlined /> Thông Số Hạ Tầng Lưu Trữ:
               </div>
               <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
-                <div>Dung lượng nén: <strong style={{ color: '#1E40AF' }}>{selectedBackup.size}</strong></div>
+                <div>Dung lượng ZIP (không nén): <strong style={{ color: '#1E40AF' }}>{formatFileSize(selectedBackup.sizeBytes)}</strong></div>
                 <div>Phân loại: <Tag color="blue">{selectedBackup.type}</Tag></div>
                 <div>Vị trí lưu trữ vật lý: <strong>{selectedBackup.location}</strong></div>
                 <div>Thời gian phục hồi ước tính (RTO): <strong style={{ color: '#16A34A' }}>{selectedBackup.rtoEstimated}</strong></div>
@@ -419,7 +437,7 @@ export const AdminBackupModule: React.FC = () => {
                 {selectedBackup.checksumSha256}
               </div>
               <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <CheckCircleOutlined /> Khớp 100% với bản ghi lưu trữ gốc, sẵn sàng cho công tác DR (Disaster Recovery)
+                <CheckCircleOutlined /> Xác minh gần nhất: {selectedBackup.verifiedAt || 'Chưa có'} · {selectedBackup.status}
               </div>
             </div>
 
@@ -427,17 +445,22 @@ export const AdminBackupModule: React.FC = () => {
               <Button
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => handleRestore(selectedBackup.code)}
+                onClick={() => handleRestore(selectedBackup)}
               >
                 Khôi Phục Bản Này Ngay
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in biên bản bàn giao sao lưu ${selectedBackup.code}`)}
+                onClick={handlePrint}
               >
                 In Biên Bản (A4)
               </Button>
             </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Button loading={busyKey === selectedBackup.key} onClick={() => void handleVerify(selectedBackup)}>Xác minh SHA-256 lại</Button>
+              <Button icon={<DownloadOutlined />} loading={busyKey === selectedBackup.key} onClick={() => void handleDownload(selectedBackup)}>Tải tệp ZIP</Button>
+            </div>
+            {selectedBackup.actualChecksumSha256 && selectedBackup.actualChecksumSha256 !== selectedBackup.checksumSha256 && <p>Mã băm hiện tại không khớp: {selectedBackup.actualChecksumSha256}</p>}
           </div>
         )}
       </Drawer>

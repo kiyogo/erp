@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   useLocation } from 'react-router-dom';
 import {
@@ -14,7 +14,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Switch } from '../../custom-ui';
-import { financeBankAccountsApi, FinanceBankAccount, financeCashApi, FinanceCashTransaction } from '../../api/endpoints';
+import { financeBankAccountsApi, FinanceBankAccount, financeCashApi, FinanceCashTransaction, financeTransfersApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export const BankAccountsModule: React.FC = () => {
   const location = useLocation();
@@ -34,6 +35,9 @@ export const BankAccountsModule: React.FC = () => {
   const [statementPickerOpen, setStatementPickerOpen] = useState(false);
   const [form] = Form.useForm();
   const [transferForm] = Form.useForm();
+  const [transferring, setTransferring] = useState(false);
+  const transferRequestId = useRef('');
+  const transferPending = useRef(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -59,7 +63,7 @@ export const BankAccountsModule: React.FC = () => {
 
   const completedBankTransactions = transactions.filter((item) => item.status === 'Đã hoàn thành');
   const ledgerBalance = completedBankTransactions.reduce((sum, item) => sum + (item.type === 'Thu' ? item.amount : -item.amount), 0);
-  const totalBalance = data.reduce((sum, item) => sum + item.balance, 0) + ledgerBalance;
+  const totalBalance = data.reduce((sum, item) => sum + (item.currentBalance ?? item.balance), 0);
   const accountSummaries = Array.from(
     completedBankTransactions.reduce((map, item) => {
       const current = map.get(item.account) || { key: item.account, account: item.account, income: 0, expense: 0, balance: 0 };
@@ -89,8 +93,9 @@ export const BankAccountsModule: React.FC = () => {
   };
 
   const handleTransfer = async (values: any) => {
-    const amt = Number(values.amount) || 0;
-    if (amt <= 0) {
+    if (transferPending.current) return;
+    const amt = Number(values.amount);
+    if (!Number.isSafeInteger(amt) || amt <= 0) {
       message.error('Vui lòng nhập số tiền chuyển hợp lệ.');
       return;
     }
@@ -98,36 +103,28 @@ export const BankAccountsModule: React.FC = () => {
       message.error('Tài khoản nguồn và tài khoản đích không được trùng nhau.');
       return;
     }
+    transferPending.current = true;
+    setTransferring(true);
     try {
-      const timestamp = new Date().toISOString().slice(0, 10);
-      await financeCashApi.create({
-        source: 'bank',
-        type: 'Chi',
-        category: 'Chuyển tiền nội bộ',
+      transferRequestId.current ||= crypto.randomUUID();
+      await financeTransfersApi.create({
+        requestId: transferRequestId.current,
+        sourceAccountId: values.fromAccount,
+        destinationAccountId: values.toAccount,
         amount: amt,
-        account: values.fromAccount,
-        recipientOrPayer: values.toAccount,
-        date: timestamp,
-        status: 'Đã hoàn thành',
-        note: `Chuyển sang ${values.toAccount}: ${values.note || ''}`,
+        transferDate: new Date().toISOString().slice(0, 10),
+        purpose: values.note,
+        transferMethod: 'Ghi sổ nội bộ',
       });
-      await financeCashApi.create({
-        source: 'bank',
-        type: 'Thu',
-        category: 'Chuyển tiền nội bộ',
-        amount: amt,
-        account: values.toAccount,
-        recipientOrPayer: values.fromAccount,
-        date: timestamp,
-        status: 'Đã hoàn thành',
-        note: `Nhận từ ${values.fromAccount}: ${values.note || ''}`,
-      });
-      message.success(`Đã thực hiện chuyển khoản ${amt.toLocaleString('vi-VN')} ₫ thành công!`);
+      message.success(`Đã ghi sổ điều chuyển nội bộ ${amt.toLocaleString('vi-VN')} ₫.`);
       setTransferModalOpen(false);
       transferForm.resetFields();
       await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể thực hiện chuyển tiền nội bộ.');
+    } finally {
+      transferPending.current = false;
+      setTransferring(false);
     }
   };
 
@@ -165,9 +162,9 @@ export const BankAccountsModule: React.FC = () => {
       title: 'Số dư khả dụng',
       dataIndex: 'balance',
       key: 'balance',
-      render: (val: number) => (
+      render: (val: number, record: FinanceBankAccount) => (
         <span style={{ fontWeight: 700, fontSize: 14.5, color: '#2E7D32' }}>
-          {val.toLocaleString('vi-VN')} ₫
+          {(record.currentBalance ?? val).toLocaleString('vi-VN')} ₫
         </span>
       ),
     },
@@ -195,7 +192,12 @@ export const BankAccountsModule: React.FC = () => {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<SwapOutlined />} onClick={() => setTransferModalOpen(true)}>
+          <Button icon={<SwapOutlined />} onClick={() => {
+            transferForm.resetFields();
+            transferRequestId.current = crypto.randomUUID();
+            transferForm.setFieldsValue({ fromAccount: data[0]?.key, toAccount: data[1]?.key });
+            setTransferModalOpen(true);
+          }}>
             Chuyển tiền nội bộ
           </Button>
           {isAccounts && (
@@ -255,7 +257,11 @@ export const BankAccountsModule: React.FC = () => {
               style={{ width: 340, borderRadius: 6 }}
               allowClear
             />
-            <Button icon={<DownloadOutlined />} onClick={() => message.warning('Chưa có dịch vụ xuất Excel thật cho sổ tiền gửi.')}>
+            <Button icon={<DownloadOutlined />} onClick={() => downloadFile('So_tien_gui.xlsx', generateValidXlsxBlob([
+              ['Mã chứng từ', 'Tài khoản', 'Loại', 'Số tiền (VNĐ)', 'Đối tác', 'Nội dung', 'Ngày', 'Trạng thái'],
+              ...transactions.filter(item => !searchText || [item.code, item.account, item.recipientOrPayer, item.category].some(value => value.toLowerCase().includes(searchText.toLowerCase())))
+                .map(item => [item.code, item.account, item.type, item.amount, item.recipientOrPayer, item.category, item.date, item.status]),
+            ]))}>
               Xuất sổ tiền gửi
             </Button>
           </div>
@@ -413,22 +419,23 @@ export const BankAccountsModule: React.FC = () => {
         width={480}
       >
         <Form form={transferForm} layout="vertical" onFinish={handleTransfer} style={{ marginTop: 16 }}>
-          <Form.Item name="fromAccount" label="Tài khoản nguồn (Trích tiền)" initialValue={data[0]?.bankName || ''}>
-            <Select options={(data || []).filter(d => d != null).map((d) => ({ label: `${d?.bankName || 'Ngân hàng'} (${d?.accountNumber || ''})`, value: d?.bankName || '' }))} />
+          <p>Ghi nhận điều chuyển vào sổ quỹ sau khi giao dịch thực tế đã được thực hiện.</p>
+          <Form.Item name="fromAccount" label="Tài khoản nguồn (Trích tiền)" rules={[{ required: true }]}>
+            <Select options={data.filter(d => d.status === 'Đang hoạt động').map(d => ({ label: `${d.bankName} (${d.accountNumber})`, value: d.key }))} />
           </Form.Item>
-          <Form.Item name="toAccount" label="Tài khoản đích (Nhận tiền)" initialValue={data[1]?.bankName || ''}>
-            <Select options={(data || []).filter(d => d != null).map((d) => ({ label: `${d?.bankName || 'Ngân hàng'} (${d?.accountNumber || ''})`, value: d?.bankName || '' }))} />
+          <Form.Item name="toAccount" label="Tài khoản đích (Nhận tiền)" rules={[{ required: true }]}>
+            <Select options={data.filter(d => d.status === 'Đang hoạt động').map(d => ({ label: `${d.bankName} (${d.accountNumber})`, value: d.key }))} />
           </Form.Item>
           <Form.Item name="amount" label="Số tiền chuyển (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền' }]}>
-            <Input type="number" min={10000} step={1000000} />
+            <Input type="number" min={1} step={1} />
           </Form.Item>
-          <Form.Item name="note" label="Nội dung điều chuyển" initialValue="Điều chuyển dòng tiền nội bộ phục vụ thanh toán hợp đồng">
+          <Form.Item name="note" label="Nội dung điều chuyển" rules={[{ required: true }]}>
             <Input.TextArea rows={2} />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setTransferModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xác nhận chuyển khoản
+            <Button type="primary" htmlType="submit" loading={transferring} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Xác nhận ghi sổ điều chuyển
             </Button>
           </div>
         </Form>

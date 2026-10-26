@@ -20,6 +20,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export const EmployeeTimesheetModule: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
@@ -30,6 +32,7 @@ export const EmployeeTimesheetModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
   const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
 
   const loadData = () => {
     setData(dataService.getEmployeeTimesheets());
@@ -37,28 +40,31 @@ export const EmployeeTimesheetModule: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    const unsubscribe = dataService.subscribe(loadData);
     const timer = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString('vi-VN'));
     }, 1000);
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); unsubscribe(); };
   }, []);
 
-  const handleCheckin = () => {
-    dataService.addEmployeeCheckin('in');
-    message.success('Check-in chấm công vào ca thành công (Vị trí: Keangnam Landmark 72)!');
-    loadData();
+  const handleClock = async (type: 'in' | 'out') => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await dataService.addEmployeeCheckin(type);
+      message.success(type === 'in' ? 'Đã ghi nhận giờ vào.' : 'Đã ghi nhận giờ ra.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể ghi nhận chấm công.');
+    } finally { setSaving(false); }
   };
 
-  const handleCheckout = () => {
-    dataService.addEmployeeCheckin('out');
-    message.success('Check-out chấm công ra ca thành công!');
-    loadData();
-  };
-
-  const handleExplain = (values: any) => {
-    message.success(`Đã gửi đơn giải trình chấm công ngày ${values.date} thành công!`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleExplain = async (values: any) => {
+    try {
+      await collectionsApi.create('attendance_explanations', { ...values, key: crypto.randomUUID(), status: 'Chờ duyệt' });
+      message.success(`Đã lưu giải trình ngày ${values.date}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể gửi giải trình.'); }
   };
 
   const filteredData = data.filter((item) => {
@@ -182,7 +188,7 @@ export const EmployeeTimesheetModule: React.FC = () => {
           <div>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#212121' }}>{currentTime}</div>
             <div style={{ fontSize: 12, color: '#757575', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <EnvironmentOutlined style={{ color: '#009688' }} /> Địa điểm: Trụ sở Keangnam Landmark 72 (Geofence Verified)
+              <EnvironmentOutlined style={{ color: '#009688' }} /> Chấm công trực tuyến · Chưa xác minh vị trí
             </div>
           </div>
         </div>
@@ -191,14 +197,16 @@ export const EmployeeTimesheetModule: React.FC = () => {
           <Button
             type="primary"
             icon={<CheckCircleOutlined />}
-            onClick={handleCheckin}
+            onClick={() => handleClock('in')}
+            disabled={saving}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Check-in Vào ca
           </Button>
           <Button
             icon={<LogoutOutlined />}
-            onClick={handleCheckout}
+            onClick={() => handleClock('out')}
+            disabled={saving}
             style={{ borderColor: '#1565C0', color: '#1565C0' }}
           >
             Check-out Ra ca
@@ -212,10 +220,10 @@ export const EmployeeTimesheetModule: React.FC = () => {
           >
             Giải trình công
           </Button>
-          <Button icon={<PrinterOutlined />} onClick={() => message.success('Đã in phiếu chấm công tháng (A4)')}>
+          <Button icon={<PrinterOutlined />} onClick={() => window.print()}>
             In Phiếu (A4)
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất bảng chấm công cá nhân ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Cham_cong_ca_nhan.xlsx', generateValidXlsxBlob([['Ngày', 'Giờ vào', 'Giờ ra', 'Thời lượng', 'Trạng thái', 'Ghi chú'], ...filteredData.map(item => [item.date, item.checkIn, item.checkOut, item.duration, item.status, item.note])]))}>
             Xuất Excel
           </Button>
         </div>
@@ -226,30 +234,30 @@ export const EmployeeTimesheetModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E0E0E0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12, color: '#757575', fontWeight: 500 }}>Số ngày làm việc thực tế</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#009688', marginTop: 4 }}>
-            {data.length} / 22 ngày
+            {data.filter(item => item.checkIn).length} ngày đã ghi nhận
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Đạt tiến độ công tháng</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo dữ liệu chấm công đã lưu</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E0E0E0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12, color: '#757575', fontWeight: 500 }}>Tỷ lệ đi làm đúng giờ</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#2E7D32', marginTop: 4 }}>
-            98.5%
+            {data.filter(item => item.status === 'Đúng giờ' || item.status === 'Đi muộn').length ? `${Math.round(data.filter(item => item.status === 'Đúng giờ').length / data.filter(item => item.status === 'Đúng giờ' || item.status === 'Đi muộn').length * 100)}%` : 'Chờ đối soát'}
           </div>
-          <div style={{ fontSize: 11.5, color: '#2E7D32', marginTop: 2 }}>Tuân thủ nội quy xuất sắc</div>
+          <div style={{ fontSize: 11.5, color: '#2E7D32', marginTop: 2 }}>Theo kết quả đối soát giờ làm</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E0E0E0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12, color: '#757575', fontWeight: 500 }}>Giờ làm thêm OT lũy kế</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#1565C0', marginTop: 4 }}>
-            7.5 Giờ
+            {dataService.getEmployeeOvertime().filter(item => item.status === 'Đã duyệt OT').reduce((sum, item) => sum + Number(item.totalHours || 0), 0)} Giờ
           </div>
-          <div style={{ fontSize: 11.5, color: '#1565C0', marginTop: 2 }}>Hệ số lương OT 150% - 200%</div>
+          <div style={{ fontSize: 11.5, color: '#1565C0', marginTop: 2 }}>Theo đơn làm thêm đã phê duyệt</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E0E0E0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12, color: '#757575', fontWeight: 500 }}>Định mức công tiêu chuẩn</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#7C3AED', marginTop: 4 }}>
-            22 Công
+            Chưa cấu hình
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Nghỉ thứ 7 &amp; Chủ nhật</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Cần định mức theo lịch làm việc</div>
         </div>
       </div>
 
@@ -332,8 +340,8 @@ export const EmployeeTimesheetModule: React.FC = () => {
               </div>
               <div style={{ marginTop: 12, fontSize: 12, color: '#475569', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div><ClockCircleOutlined style={{ color: '#0284C7', marginRight: 6 }} />Tổng thời lượng: <strong>{selectedRecord.duration}</strong></div>
-                <div><EnvironmentOutlined style={{ color: '#EF4444', marginRight: 6 }} />Máy quẹt thẻ: <strong>Máy khuôn mặt Tầng 18 Keangnam</strong></div>
-                <div><GlobalOutlined style={{ color: '#16A34A', marginRight: 6 }} />Xác thực Geofence: <strong style={{ color: '#16A34A' }}>Hợp lệ (Bán kính 25m)</strong></div>
+                <div><EnvironmentOutlined style={{ color: '#EF4444', marginRight: 6 }} />Nguồn: <strong>{selectedRecord.source || 'Chưa xác định'}</strong></div>
+                <div><GlobalOutlined style={{ color: '#16A34A', marginRight: 6 }} />Vị trí: <strong>{selectedRecord.locationVerified ? 'Đã xác minh' : 'Chưa xác minh'}</strong></div>
                 <div><EditOutlined style={{ color: '#6366F1', marginRight: 6 }} />Ghi chú ca: <strong>{selectedRecord.note}</strong></div>
               </div>
             </div>
@@ -350,7 +358,7 @@ export const EmployeeTimesheetModule: React.FC = () => {
               >
                 Gửi giải trình ngày này
               </Button>
-              <Button style={{ flex: 1 }} onClick={() => message.success(`Đã sao chép log quẹt thẻ ngày ${selectedRecord.date}`)}>
+              <Button style={{ flex: 1 }} onClick={async () => { try { await navigator.clipboard.writeText(JSON.stringify(selectedRecord, null, 2)); message.success('Đã sao chép log.'); } catch { message.error('Không thể sao chép log.'); } }}>
                 Sao chép Log
               </Button>
             </div>
