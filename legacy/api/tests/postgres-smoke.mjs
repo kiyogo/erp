@@ -61,6 +61,15 @@ try {
   const pgPayrollEntries = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:08/2031');
   assert.equal(pgPayrollEntries.length, 4);
   await request(`/collections/finance_general_ledger/${encodeURIComponent(pgPayrollEntries[0].key)}`, 'DELETE', undefined, 409); completed++;
+  await request('/collections/payroll/pg-payroll-post', 'PATCH', { patch: { status: 'Đã chi trả' } });
+  const pgAdjustment = await request('/finance/payroll/adjustment-preview', 'POST', pgPayroll);
+  assert.deepEqual(pgAdjustment.lines.map((item) => item.amount), [950]);
+  const pgAdjustmentRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/payroll/adjustment-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgAdjustment.fingerprint }) });
+    return response.status;
+  }));
+  assert.deepEqual(pgAdjustmentRace.sort((a, b) => a - b), [201, 422]);
+  assert.equal((await request('/collections/finance_payroll_adjustments')).data.filter((item) => item.period === '08/2031').length, 1); completed++;
   const pgLicense = (await request('/assets/licenses', 'POST', { licenseCode: 'PG-LIC-01', softwareName: 'PG license', vendor: 'PG vendor', category: 'Văn phòng & Cộng tác', licenseType: 'Theo người dùng', productKey: 'PG-SECRET-123', seatsTotal: 1, seatsAllocated: 0, annualCost: 0, billingCycle: 'Hàng năm', purchaseDate: '2026-01-01', expireDate: '2028-01-01', assignedDepartment: 'IT', assignedAdmin: 'PG admin' }, 201)).record;
   const pgLicenseRace = await Promise.all(['one@example.test', 'two@example.test'].map(async (email) => {
     const response = await fetch(`${base}/assets/licenses/${pgLicense.key}/allocate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name: 'PG user', email }) });

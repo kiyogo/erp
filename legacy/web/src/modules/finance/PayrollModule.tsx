@@ -26,6 +26,7 @@ export const PayrollModule: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).format(new Date()).split('-').reverse().join('/'));
   const [employerCharge, setEmployerCharge] = useState('');
   const [postingLedger, setPostingLedger] = useState(false);
+  const [postedPeriods, setPostedPeriods] = useState<string[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<PayrollRecord | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -85,6 +86,14 @@ export const PayrollModule: React.FC = () => {
     return dataService.subscribe(loadData);
   }, []);
 
+  useEffect(() => {
+    if (!isAccounting) return;
+    let active = true;
+    payrollLedgerApi.postedPeriods().then(({ data: response }) => { if (active) setPostedPeriods(response.periods); })
+      .catch(() => { if (active) message.error('Không tải được các kỳ lương đã ghi sổ.'); });
+    return () => { active = false; };
+  }, [isAccounting]);
+
   const periodData = filterPayrollForMonth(data, selectedMonth);
   const totalPayroll = periodData.reduce((sum, item) => sum + item.netSalary, 0);
   const grossPayroll = periodData.reduce((sum, item) => sum + item.baseSalary + item.allowance + item.bonus, 0);
@@ -92,7 +101,7 @@ export const PayrollModule: React.FC = () => {
   const employeeInsurance = periodData.reduce((sum, item) => sum + item.insuranceDeduction, 0);
   const taxWithholding = periodData.reduce((sum, item) => sum + item.taxDeduction, 0);
   const paidPayroll = periodData.filter((item) => item.status === 'Đã chi trả').reduce((sum, item) => sum + item.netSalary, 0);
-  const availableMonths = Array.from(new Set([selectedMonth, ...data.map((item) => normalizePayrollMonth(item.month)).filter((month): month is string => Boolean(month))]))
+  const availableMonths = Array.from(new Set([selectedMonth, ...postedPeriods, ...data.map((item) => normalizePayrollMonth(item.month)).filter((month): month is string => Boolean(month))]))
     .filter((month) => normalizePayrollMonth(month))
     .sort((a, b) => `${b.slice(3)}-${b.slice(0, 2)}`.localeCompare(`${a.slice(3)}-${a.slice(0, 2)}`))
     .map((value) => ({ value, label: `Tháng ${value.slice(0, 2)} / ${value.slice(3)}` }));
@@ -139,6 +148,7 @@ export const PayrollModule: React.FC = () => {
           try {
             const saved = await payrollLedgerApi.post({ ...request, fingerprint: preview.fingerprint });
             await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
+            setPostedPeriods((periods) => Array.from(new Set([...periods, preview.period])));
             message.success(`Đã ghi ${saved.data.lines.length} bút toán lương kỳ ${preview.period} vào Sổ Cái.`);
           } catch (error: any) {
             message.error(error?.response?.data?.message || 'Không thể ghi bút toán lương vào Sổ Cái.');
@@ -147,6 +157,34 @@ export const PayrollModule: React.FC = () => {
         },
       });
     } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xem trước bút toán lương.'); }
+    finally { setPostingLedger(false); }
+  };
+
+  const adjustPayrollLedger = async () => {
+    if (!normalizePayrollMonth(selectedMonth)) { message.error('Chọn kỳ lương hợp lệ để điều chỉnh.'); return; }
+    if (employerCharge.trim() === '' || !Number.isSafeInteger(Number(employerCharge)) || Number(employerCharge) < 0) {
+      message.error('Nhập số tiền bảo hiểm doanh nghiệp đã đối chiếu.'); return;
+    }
+    const request = { period: selectedMonth, employerInsurance: Number(employerCharge) };
+    setPostingLedger(true);
+    try {
+      const preview = (await payrollLedgerApi.previewAdjustment(request)).data;
+      Modal.confirm({
+        title: `Ghi điều chỉnh lương kỳ ${preview.period}?`,
+        content: <div><div>{preview.employeeCount} phiếu lương hiện tại</div>{preview.lines.map((line) => <div key={line.description}>{line.description}: Nợ {line.debitAccount}, Có {line.creditAccount}, {line.amount.toLocaleString('vi-VN')} ₫</div>)}</div>,
+        okText: 'Ghi điều chỉnh', cancelText: 'Hủy',
+        onOk: async () => {
+          try {
+            const saved = await payrollLedgerApi.postAdjustment({ ...request, fingerprint: preview.fingerprint });
+            await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
+            message.success(`Đã ghi ${saved.data.lines.length} bút toán điều chỉnh kỳ ${preview.period}.`);
+          } catch (error: any) {
+            message.error(error?.response?.data?.message || 'Không thể ghi điều chỉnh lương.');
+            throw error;
+          }
+        },
+      });
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xem trước điều chỉnh lương.'); }
     finally { setPostingLedger(false); }
   };
 
@@ -353,6 +391,7 @@ export const PayrollModule: React.FC = () => {
               <Input type="number" min={0} value={employerCharge} onChange={(event) => setEmployerCharge(event.target.value)} placeholder="Nhập số tiền" />
             </label>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Button icon={<AuditOutlined />} loading={postingLedger} disabled={!normalizePayrollMonth(selectedMonth)} onClick={adjustPayrollLedger}>Điều chỉnh bút toán</Button>
               <Button type="primary" icon={<AuditOutlined />} loading={postingLedger} disabled={periodData.length === 0 || !normalizePayrollMonth(selectedMonth)} onClick={postPayrollToLedger} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 Hạch toán ghi Sổ Cái
               </Button>

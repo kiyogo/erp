@@ -3337,10 +3337,11 @@ function payrollMonth(value) {
   return month >= 1 && month <= 12 && year ? `${String(month).padStart(2, '0')}/${year}` : '';
 }
 
-async function payrollLedgerPreview(period, employerInsurance, actor) {
+async function payrollLedgerPreview(period, employerInsurance, actor, allowEmpty = false) {
   const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll' ORDER BY record_key ASC").all();
   const records = rows.map(publicCollectionRecord).filter((record) => record && payrollMonth(record.month) === period);
-  if (!records.length) throw new HttpError(422, 'Kỳ lương không có dữ liệu hợp lệ để hạch toán.');
+  if (!records.length && !allowEmpty) throw new HttpError(422, 'Kỳ lương không có dữ liệu hợp lệ để hạch toán.');
+  if (!records.length && employerInsurance !== 0) throw new HttpError(422, 'Kỳ lương không có phiếu, khoản doanh nghiệp đóng phải là 0.');
   const seen = new Set();
   const totals = { gross: 0, employeeInsurance: 0, tax: 0, paid: 0 };
   for (const record of records) {
@@ -3360,7 +3361,7 @@ async function payrollLedgerPreview(period, employerInsurance, actor) {
     totals.gross += gross; totals.employeeInsurance += insurance; totals.tax += tax;
     if (record.status === 'Đã chi trả') totals.paid += net;
   }
-  if (!Object.values(totals).every(Number.isSafeInteger) || totals.gross <= 0) throw new HttpError(422, 'Tổng tiền lương không hợp lệ.');
+  if (!Object.values(totals).every(Number.isSafeInteger) || (records.length && totals.gross <= 0)) throw new HttpError(422, 'Tổng tiền lương không hợp lệ.');
   const lines = [
     { description: `Ghi nhận lương phải trả kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 334', amount: totals.gross },
     { description: `Trích bảo hiểm phần doanh nghiệp kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 338', amount: employerInsurance },
@@ -5228,7 +5229,7 @@ async function handleRequest(request, response) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng phải được ghi qua chức năng bán hàng.');
   }
 
-  if ((collectionMatch || collectionRecordMatch) && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'finance_payroll_postings') {
+  if ((collectionMatch || collectionRecordMatch) && ['finance_payroll_postings', 'finance_payroll_adjustments'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Bảng đối chiếu lương do chức năng hạch toán quản lý.');
   }
@@ -6471,6 +6472,13 @@ async function handleRequest(request, response) {
     }
   }
 
+  if (request.method === 'GET' && resource === '/finance/payroll/posted-periods') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_payroll_postings' ORDER BY record_key").all();
+    sendJson(response, 200, { periods: rows.map((row) => payrollMonth(row.record_key)).filter(Boolean) });
+    return;
+  }
+
   if (request.method === 'POST' && ['/finance/payroll/ledger-preview', '/finance/payroll/ledger-post'].includes(resource)) {
     const actor = await requireAdmin(request);
     const input = await readJson(request);
@@ -6508,6 +6516,67 @@ async function handleRequest(request, response) {
     });
     const { records: _records, ...publicResult } = result;
     sendJson(response, posting ? 201 : 200, publicResult);
+    return;
+  }
+
+  if (request.method === 'POST' && ['/finance/payroll/adjustment-preview', '/finance/payroll/adjustment-post'].includes(resource)) {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request);
+    const period = payrollMonth(input.period);
+    if (!period) throw new HttpError(422, 'Kỳ lương không hợp lệ.');
+    if (input.employerInsurance === undefined || input.employerInsurance === null || input.employerInsurance === '') throw new HttpError(422, 'Nhập số tiền doanh nghiệp đóng đã đối chiếu.');
+    const employerInsurance = optionalAmount(input.employerInsurance, 'Bảo hiểm doanh nghiệp');
+    const posting = resource.endsWith('adjustment-post');
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('payroll'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      }
+      const originalRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payroll_postings' AND record_key = ?").get(period);
+      if (!originalRow) throw new HttpError(409, 'Kỳ lương chưa có bản đối chiếu hạch toán. Cần kiểm tra chứng từ cũ trước khi điều chỉnh.');
+      const original = publicCollectionRecord(originalRow);
+      const sourceReference = `payroll:${period}`;
+      const existing = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceReference') = ? LIMIT 1").get(sourceReference);
+      if (!existing) throw new HttpError(409, 'Không tìm thấy bút toán gốc của kỳ lương.');
+      const adjustmentRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payroll_adjustments' AND json_extract(payload_json, '$.period') = ?").all(period);
+      const adjustments = adjustmentRows.map(publicCollectionRecord).sort((a, b) => a.sequence - b.sequence);
+      const previous = adjustments.at(-1) || original;
+      const reviewed = await payrollLedgerPreview(period, employerInsurance, actor, true);
+      const accountKey = (line) => `${line.debitAccount}|${line.creditAccount}`;
+      const priorLines = new Map(previous.lines.map((line) => [accountKey(line), line]));
+      const currentLines = new Map(reviewed.lines.map((line) => [accountKey(line), line]));
+      const keys = new Set([...priorLines.keys(), ...currentLines.keys()]);
+      const lines = [];
+      for (const key of keys) {
+        const before = priorLines.get(key);
+        const after = currentLines.get(key);
+        const difference = (after?.amount || 0) - (before?.amount || 0);
+        if (!Number.isSafeInteger(difference)) throw new HttpError(422, 'Chênh lệch hạch toán không hợp lệ.');
+        if (!difference) continue;
+        const reference = after || before;
+        lines.push({ description: `Điều chỉnh: ${reference.description}`, debitAccount: difference > 0 ? reference.debitAccount : reference.creditAccount, creditAccount: difference > 0 ? reference.creditAccount : reference.debitAccount, amount: Math.abs(difference) });
+      }
+      if (!lines.length) throw new HttpError(422, 'Không có chênh lệch cần ghi sổ.');
+      const fingerprint = createHash('sha256').update(JSON.stringify({ actorId: actor.id, period, previousKey: previous.key, sequence: adjustments.length, priorLines: previous.lines, reviewedFingerprint: reviewed.fingerprint, lines })).digest('hex');
+      result = { period, employerInsurance, employeeCount: reviewed.employeeCount, sequence: adjustments.length + 1, lines, fingerprint };
+      if (!posting) return;
+      if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi điều chỉnh.');
+      const timestamp = now();
+      const id = randomUUID();
+      const entryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      const insert = await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)");
+      for (const [index, line] of lines.entries()) {
+        const key = `payroll:${period.replace('/', '-')}:adjustment:${id}:${index + 1}`;
+        const entry = { key, voucherCode: `BL-${period.replace('/', '')}-DC${result.sequence}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, createdById: actor.id, createdAt: timestamp };
+        await insert.run(randomUUID(), key, actor.id, JSON.stringify(entry), timestamp, timestamp);
+      }
+      const snapshot = { key: id, period, sequence: result.sequence, employerInsurance, records: reviewed.records, lines: reviewed.lines, adjustmentLines: lines, fingerprint, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
+      await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_payroll_adjustments', ?, ?, ?, ?, ?)")
+        .run(randomUUID(), id, actor.id, JSON.stringify(snapshot), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'adjust_payroll', 'finance_general_ledger', sourceReference, { sequence: result.sequence, entries: lines.length });
+    });
+    sendJson(response, posting ? 201 : 200, result);
     return;
   }
 

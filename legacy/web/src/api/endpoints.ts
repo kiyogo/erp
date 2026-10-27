@@ -877,6 +877,9 @@ export const softwareLicensesApi = {
 };
 
 export const payrollLedgerApi = {
+  postedPeriods: () => api.get<{ periods: string[] }>('/finance/payroll/posted-periods'),
   preview: (data: { period: string; employerInsurance: number }) => api.post<{ period: string; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/ledger-preview', data),
   post: (data: { period: string; employerInsurance: number; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/ledger-post', data),
+  previewAdjustment: (data: { period: string; employerInsurance: number }) => api.post<{ period: string; sequence: number; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/adjustment-preview', data),
+  postAdjustment: (data: { period: string; employerInsurance: number; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/adjustment-post', data),
 };

@@ -95,6 +95,48 @@ test('payroll ledger posts reviewed figures atomically and prevents duplicate or
   await request('/finance/payroll/ledger-preview', 'POST', input, 403, { ...headers, Authorization: `Bearer ${user.access_token || user.token}` });
 });
 
+test('payroll ledger adjustments preserve prior snapshots and post only reviewed differences', async () => {
+  const record = { key: 'adjust-payroll-1', employeeCode: 'ADJ-ONE', employeeName: 'Điều chỉnh', month: '2032-01', status: 'Đã chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 };
+  await request('/collections/payroll', 'POST', { record }, 201);
+  const input = { period: '01/2032', employerInsurance: 200 };
+  const initial = await request('/finance/payroll/ledger-preview', 'POST', input);
+  await request('/finance/payroll/ledger-post', 'POST', { ...input, fingerprint: initial.fingerprint }, 201);
+  await request('/finance/payroll/adjustment-preview', 'POST', input, 422);
+  await request('/collections/payroll/adjust-payroll-1', 'PATCH', { patch: { status: 'Chưa chi trả', allowance: 0, netSalary: 850 } });
+  const stale = await request('/finance/payroll/adjustment-preview', 'POST', input);
+  assert.deepEqual(stale.lines.map((item) => [item.debitAccount, item.creditAccount, item.amount]), [['TK 334', 'TK 642', 100], ['TK 112', 'TK 334', 950]]);
+  await request('/collections/payroll/adjust-payroll-1', 'PATCH', { patch: { bonus: 10, netSalary: 860 } });
+  await request('/finance/payroll/adjustment-post', 'POST', { ...input, fingerprint: stale.fingerprint }, 409);
+  const current = await request('/finance/payroll/adjustment-preview', 'POST', input);
+  const race = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/payroll/adjustment-post`, { method: 'POST', headers, body: JSON.stringify({ ...input, fingerprint: current.fingerprint }) });
+    return response.status;
+  }));
+  assert.deepEqual(race.sort((a, b) => a - b), [201, 422]);
+  const snapshots = (await request('/collections/finance_payroll_adjustments')).data.filter((entry) => entry.period === input.period);
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0].records[0].netSalary, 860);
+  assert.equal((await request('/collections/finance_payroll_postings/01%2F2032')).record.records[0].netSalary, 950);
+  await request(`/collections/finance_payroll_adjustments/${snapshots[0].key}`, 'DELETE', undefined, 409);
+  await request('/collections/payroll/adjust-payroll-1', 'PATCH', { patch: { status: 'Đã chi trả' } });
+  const next = await request('/finance/payroll/adjustment-preview', 'POST', input);
+  assert.equal(next.sequence, 2);
+  assert.deepEqual(next.lines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [['TK 334', 'TK 112', 860]]);
+  await request('/finance/payroll/adjustment-post', 'POST', { ...input, fingerprint: next.fingerprint }, 201);
+  await request('/collections/payroll/adjust-payroll-1', 'DELETE');
+  assert.ok((await request('/finance/payroll/posted-periods')).periods.includes(input.period));
+  await request('/finance/payroll/adjustment-preview', 'POST', input, 422);
+  const emptyInput = { period: input.period, employerInsurance: 0 };
+  const removed = await request('/finance/payroll/adjustment-preview', 'POST', emptyInput);
+  assert.equal(removed.employeeCount, 0);
+  assert.equal(removed.lines.length, 5);
+  await request('/finance/payroll/adjustment-post', 'POST', { ...emptyInput, fingerprint: removed.fingerprint }, 201);
+  await request('/finance/payroll/adjustment-preview', 'POST', emptyInput, 422);
+  await request('/finance/payroll/adjustment-preview', 'POST', { period: '12/2031', employerInsurance: 0 }, 409);
+  const user = await request('/auth/login', 'POST', { email: 'payroll-ledger-user@example.test', password: 'Payroll-Ledger-26!Secure' });
+  await request('/finance/payroll/adjustment-preview', 'POST', input, 403, { ...headers, Authorization: `Bearer ${user.access_token || user.token}` });
+});
+
 test('software licenses persist protected keys and serialize seat allocation and renewal', async () => {
   assert.equal((await request('/assets/licenses')).data.find((item) => item.key === 'legacy-license').productKey, 'OLD-SECRET-123');
   assert.equal((await request('/assets/licenses/legacy-license/allocate', 'POST', { name: 'Người cũ', email: 'legacy@example.test', deviceCode: '' })).record.productKey, 'OLD-SECRET-123');
