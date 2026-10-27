@@ -187,6 +187,31 @@ try {
   assert.deepEqual(linkedEarnRace.map((item) => item.status).sort((a, b) => a - b), [201, 409]);
   assert.equal(linkedEarnRace.find((item) => item.status === 201).body.entry.reference, pgLinkedSale.code);
   assert.equal((await request('/crm/loyalty')).customers.find((item) => item.key === promotionCustomer.key).balance, expectedBalance + 10); completed++;
+  await request('/collections/crm_promotions', 'POST', { record: {
+    ...promotionRecord('pg-order-promotion', 'PG-KM-ORDER'), target: 'Tất cả khách hàng', eligibleItemCodes: [],
+    unit: 'đơn hàng', applyOnce: true, customerKeys: [promotionCustomer.key],
+  } }, 201);
+  const pgDiscountSale = { ...pgSaleInput, customerId: promotionCustomer.key, amount: 1000, promotionKeys: ['pg-order-promotion'] };
+  const pgPreview = await request('/finance/sales/promotion-preview', 'POST', pgDiscountSale);
+  assert.equal(pgPreview.netAmount, 900);
+  const pgDiscountRace = await Promise.all(['pg-discount-sale-a', 'pg-discount-sale-b'].map(async (requestId) => {
+    const response = await fetch(`${base}/finance/documents`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ...pgDiscountSale, promotionFingerprint: pgPreview.fingerprint, requestId }),
+    });
+    return { requestId, status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(pgDiscountRace.map((item) => item.status).sort((a, b) => a - b), [201, 409]);
+  const pgDiscountSaved = pgDiscountRace.find((item) => item.status === 201);
+  assert.equal(pgDiscountSaved.body.document.amount, 900);
+  assert.equal(typeof pgDiscountSaved.body.document.paidAmount, 'number');
+  assert.equal(typeof pgDiscountSaved.body.document.vatAmount, 'number');
+  const pgDebt = (await request('/finance/debts')).data.find((item) => item.partnerName === promotionCustomer.name && item.type === 'Phải thu');
+  assert.equal(typeof pgDebt.totalAmount, 'number');
+  assert.equal(typeof pgDebt.paidAmount, 'number');
+  assert.equal((await request('/finance/documents', 'POST', { ...pgDiscountSale, promotionFingerprint: pgPreview.fingerprint, requestId: pgDiscountSaved.requestId })).replayed, true);
+  assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === pgDiscountSaved.body.document.key).discountAmount, 100);
+  await request('/collections/finance_sale_promotions', 'PUT', { records: [] }, 409); completed++;
   const supplierEvaluationInput = { key: 'pg-supplier-evaluation', evalCode: 'PG-NCC-DG-1', supplierId: supplier.key, evalPeriod: 'Quý IV / 2026', qualityScore: 35, deliveryScore: 25, priceScore: 18, serviceScore: 8, evaluator: 'Forged', evaluatorId: 'forged', totalScore: 0, tier: 'Hạng C' };
   const supplierEvaluation = (await request('/collections/crm_supplier_evaluations', 'POST', { record: supplierEvaluationInput }, 201)).record;
   assert.equal(supplierEvaluation.supplierName, updatedSupplier.name);

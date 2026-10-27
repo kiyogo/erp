@@ -435,6 +435,22 @@ export const financePaymentsApi = {
   recordPayment: (key: string, sourceAccountId: string, settlementReference: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/execute`, { sourceAccountId, settlementReference }),
 };
 
+export type SalePromotionApplication = {
+  key: string;
+  code: string;
+  name: string;
+  discountKind: 'Phần trăm' | 'Số tiền';
+  discountValue: number;
+  basis: number;
+  discount: number;
+};
+export type SalePromotionPreview = {
+  grossAmount: number;
+  discountAmount: number;
+  netAmount: number;
+  applications: SalePromotionApplication[];
+  fingerprint: string;
+};
 export type FinanceDocument = {
   key: string;
   code: string;
@@ -455,9 +471,16 @@ export type FinanceDocument = {
   updatedAt: string;
   customerId?: string;
   customerCode?: string;
+  grossAmount?: number;
+  discountAmount?: number;
+  appliedPromotions?: SalePromotionApplication[];
 };
 
-export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmount' | 'createdAt' | 'updatedAt'>;
+export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions'> & {
+  promotionKeys?: string[];
+  promotionFingerprint?: string;
+  requestId?: string;
+};
 
 export type FinanceDebt = {
   key: string;
@@ -472,7 +495,9 @@ export type FinanceDebt = {
 
 export const financeDocumentsApi = {
   getAll: (params?: { documentType?: FinanceDocument['documentType']; subtype?: string }) => api.get<{ data: FinanceDocument[] }>('/finance/documents', { params }),
-  create: (data: CreateFinanceDocument) => api.post<{ document: FinanceDocument }>('/finance/documents', data),
+  create: (data: CreateFinanceDocument) => api.post<{ document: FinanceDocument; replayed?: boolean }>('/finance/documents', data),
+  previewSalePromotions: (data: { customerId: string; promotionKeys: string[]; subtype: string; status: string; amount: number; documentDate: string; vatRate: number; vatAmount: number }) =>
+    api.post<SalePromotionPreview>('/finance/sales/promotion-preview', data),
   getDebts: () => api.get<{ data: FinanceDebt[] }>('/finance/debts'),
   linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
 };

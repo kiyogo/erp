@@ -196,6 +196,61 @@ test('loyalty points can reference only completed sales linked to the same CRM c
   await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key }, 403, userHeaders);
 });
 
+test('sales apply eligible order discounts atomically and preserve the reviewed amount', async () => {
+  const customer = (await request('/crm/contacts', 'POST', { name: 'Khách kiểm thử chiết khấu', type: 'customer' }, 201)).contact;
+  const other = (await request('/crm/contacts', 'POST', { name: 'Khách ngoài phạm vi', type: 'customer' }, 201)).contact;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const promo = (key, overrides = {}) => ({
+    key, code: key.toUpperCase(), name: key, startDate: today, endDate: '2099-12-31', promotionType: 'Chiết khấu',
+    target: 'Tất cả khách hàng', enabled: true, allowConcurrent: false, eligibleItemCodes: [], amountBasis: 'Thành tiền trước thuế',
+    orgUnitKeys: [], employeeIds: [], applyOnce: false, combinablePromotionKeys: [], taxCondition: 'Bất kỳ', minimumSubtotal: 0,
+    unitPrice: 0, unit: 'đơn hàng', customerKeys: [], discountKind: 'Phần trăm', discountValue: 10, ...overrides,
+  });
+  const sale = { documentType: 'sale', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 1000, paidAmount: 0, documentDate: today, dueDate: '', description: 'Kiểm thử chiết khấu', taxCode: '', vatRate: 0, vatAmount: 0, customerId: customer.key };
+  const preview = (keys, overrides = {}) => request('/finance/sales/promotion-preview', 'POST', { ...sale, promotionKeys: keys, ...overrides });
+  await request('/collections/crm_promotions', 'POST', { record: promo('promo-once', { applyOnce: true, customerKeys: [customer.key] }) }, 201);
+  const calculated = await preview(['promo-once']);
+  assert.equal(calculated.discountAmount, 100);
+  assert.equal(calculated.netAmount, 900);
+  await request('/finance/sales/promotion-preview', 'POST', { ...sale, customerId: other.key, promotionKeys: ['promo-once'] }, 422);
+  const payload = { ...sale, promotionKeys: ['promo-once'], promotionFingerprint: calculated.fingerprint, requestId: 'promotion-sale-1', discountAmount: 999 };
+  const saved = (await request('/finance/documents', 'POST', payload, 201)).document;
+  assert.equal(saved.amount, 900);
+  assert.equal(saved.grossAmount, 1000);
+  assert.equal(saved.discountAmount, 100);
+  assert.equal(saved.appliedPromotions[0].discount, 100);
+  assert.equal((await request('/finance/documents', 'POST', payload)).replayed, true);
+  await request('/finance/documents', 'POST', { ...payload, amount: 1100 }, 409);
+  await request('/finance/sales/promotion-preview', 'POST', { ...sale, promotionKeys: ['promo-once'] }, 409);
+  assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === saved.key).discountAmount, 100);
+  await request('/collections/finance_sale_promotions', 'PUT', { records: [] }, 409);
+
+  await request('/collections/crm_promotions', 'POST', { record: promo('promo-stack-a', { allowConcurrent: true }) }, 201);
+  await request('/collections/crm_promotions', 'POST', { record: promo('promo-stack-b', { allowConcurrent: true, combinablePromotionKeys: ['promo-stack-a'], discountKind: 'Số tiền', discountValue: 100 }) }, 201);
+  await request('/finance/sales/promotion-preview', 'POST', { ...sale, promotionKeys: ['promo-stack-a', 'promo-stack-b'] }, 422);
+  await request('/collections/crm_promotions/promo-stack-a', 'PATCH', { patch: { combinablePromotionKeys: ['promo-stack-b'] } });
+  const stacked = await preview(['promo-stack-a', 'promo-stack-b']);
+  assert.deepEqual(stacked.applications.map((item) => [item.basis, item.discount]), [[1000, 100], [900, 100]]);
+  assert.equal(stacked.netAmount, 800);
+  await request('/finance/documents', 'POST', { ...sale, paidAmount: 850, promotionKeys: ['promo-stack-a', 'promo-stack-b'], promotionFingerprint: stacked.fingerprint, requestId: 'promo-overpaid' }, 422);
+  await request('/finance/sales/promotion-preview', 'POST', { ...sale, subtype: 'Báo giá', promotionKeys: ['promo-stack-a'] }, 422);
+  await request('/finance/sales/promotion-preview', 'POST', { ...sale, vatRate: 10, vatAmount: 90, promotionKeys: ['promo-stack-a'] }, 422);
+  await request('/collections/crm_promotions', 'POST', { record: promo('promo-items', { eligibleItemCodes: ['SKU-1'] }) }, 201);
+  await request('/finance/sales/promotion-preview', 'POST', { ...sale, promotionKeys: ['promo-items'] }, 422);
+
+  await request('/collections/crm_promotions', 'POST', { record: promo('promo-stale') }, 201);
+  const stale = await preview(['promo-stale']);
+  await request('/collections/crm_promotions/promo-stale', 'PATCH', { patch: { discountValue: 20 } });
+  await request('/finance/documents', 'POST', { ...sale, promotionKeys: ['promo-stale'], promotionFingerprint: stale.fingerprint, requestId: 'promo-stale-sale' }, 409);
+  await request('/collections/crm_promotions', 'POST', { record: promo('promo-race', { applyOnce: true }) }, 201);
+  const racingPreview = await preview(['promo-race']);
+  const racing = await Promise.all(['promo-sale-race-a', 'promo-sale-race-b'].map(async (requestId) => {
+    const response = await fetch(`${base}/finance/documents`, { method: 'POST', headers, body: JSON.stringify({ ...sale, promotionKeys: ['promo-race'], promotionFingerprint: racingPreview.fingerprint, requestId }) });
+    return response.status;
+  }));
+  assert.deepEqual(racing.sort((a, b) => a - b), [201, 409]);
+});
+
 test('meeting rooms enforce server-owned booking identities, room policy, conflicts and cancellation history', async () => {
   const room = (await request('/collections/meeting_rooms', 'POST', { record: {
     key: 'meeting-room-api', name: 'Phòng họp API', capacity: 8, location: 'Tầng 4', equipment: ['Màn hình'], status: 'Tạm ngưng', createdBy: 'Giả mạo',

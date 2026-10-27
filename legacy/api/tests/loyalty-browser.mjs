@@ -63,6 +63,14 @@ try {
   const saleResponse = await fetch(`${apiUrl}/finance/documents`, { method: 'POST', headers, body: JSON.stringify({ documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: customer.name, amount: 500000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 0, vatAmount: 0 }) });
   assert.equal(saleResponse.status, 201);
   const legacySale = (await saleResponse.json()).document;
+  const orderPromotion = await fetch(`${apiUrl}/collections/crm_promotions`, { method: 'POST', headers, body: JSON.stringify({ record: {
+    key: 'browser-order-promo', code: 'UI-ORDER-10', name: 'Chiết khấu kiểm thử', startDate: today, endDate: '2099-12-31',
+    promotionType: 'Chiết khấu', target: 'Tất cả khách hàng', enabled: true, allowConcurrent: false,
+    eligibleItemCodes: [], amountBasis: 'Thành tiền trước thuế', orgUnitKeys: [], employeeIds: [], applyOnce: false,
+    combinablePromotionKeys: [], taxCondition: 'Bất kỳ', minimumSubtotal: 0, unitPrice: 0, unit: 'đơn hàng',
+    customerKeys: [customer.key], discountKind: 'Phần trăm', discountValue: 10,
+  } }) });
+  assert.equal(orderPromotion.status, 201);
   const chrome = process.env.TEST_CHROME_PATH || (existsSync('C:/Program Files/Google/Chrome/Application/chrome.exe') ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : puppeteer.executablePath());
   browser = await puppeteer.launch({ headless: true, executablePath: chrome, args: ['--no-sandbox', '--disable-gpu'] });
   page = await browser.newPage();
@@ -89,9 +97,14 @@ try {
     }, label);
     const element = handle.asElement();
     assert.ok(element, `Missing input: ${label}`);
-    await element.click({ clickCount: 3 });
+    await element.click();
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.down(modifier);
+    await page.keyboard.press('KeyA');
+    await page.keyboard.up(modifier);
     await page.keyboard.press('Backspace');
     await element.type(value);
+    assert.equal(await element.evaluate(input => input.value), value, `Unexpected input value: ${label}`);
     await handle.dispose();
   }
   async function choose(label, option) {
@@ -159,11 +172,21 @@ try {
   await fill('Nội dung hàng hóa', 'UI-SALE-CREATED');
   await fill('Tổng tiền', '350000');
   await choose('Trạng thái', 'Đã bàn giao');
+  await choose('Chương trình khuyến mại', 'UI-ORDER-10');
+  await clickButton('Tính khuyến mại', false, true);
+  await page.waitForFunction(() => document.querySelector('.ant-modal-root')?.innerText.includes('315.000'), { timeout: 15000 });
+  await fill('Tổng tiền', '360000');
+  await page.waitForFunction(() => !document.querySelector('.ant-modal-root')?.innerText.includes('Tổng tiền sau khuyến mại'), { timeout: 10000 });
+  await clickButton('Lưu chứng từ', false, true);
+  await page.waitForFunction(() => document.body.innerText.includes('Vui lòng tính lại khuyến mại'), { timeout: 10000 });
+  assert.ok(await page.$('.ant-modal-root form'), 'A changed amount must not submit before recalculation');
+  await clickButton('Tính khuyến mại', false, true);
+  await page.waitForFunction(() => document.querySelector('.ant-modal-root')?.innerText.includes('324.000'), { timeout: 15000 });
   await clickButton('Lưu chứng từ', false, true);
   await page.waitForFunction(() => !document.querySelector('.ant-modal-root'), { timeout: 15000 });
   let salesResponse = await fetch(`${apiUrl}/finance/documents?documentType=sale`, { headers });
   let salesDocuments = (await salesResponse.json()).data;
-  assert.ok(salesDocuments.some(item => item.description === 'UI-SALE-CREATED' && item.customerId === customer.key && item.partnerName === customer.name && item.status === 'Đã bàn giao'));
+  assert.ok(salesDocuments.some(item => item.description === 'UI-SALE-CREATED' && item.customerId === customer.key && item.partnerName === customer.name && item.status === 'Đã bàn giao' && item.grossAmount === 360000 && item.discountAmount === 36000 && item.amount === 324000));
   await page.waitForFunction(code => [...document.querySelectorAll('tr')].some(row => row.textContent.includes(code)), { timeout: 15000 }, legacySale.code);
   await page.evaluate(code => {
     const row = [...document.querySelectorAll('tr')].find(item => item.textContent.includes(code));
@@ -227,7 +250,7 @@ try {
   promotion = (await promotionsResponse.json()).data.find(item => item.name === 'Khuyến mại kiểm thử giao diện');
   assert.equal(promotion.enabled, true);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: 'earn, insufficient balance, redeem, fulfill, reload, create linked sale, link existing sale, earn from sale, promotion tags and activation', database: directory }));
+  console.log(JSON.stringify({ checks: 'earn, insufficient balance, redeem, fulfill, reload, preview and apply sale discount, link existing sale, earn from sale, promotion tags and activation', database: directory }));
 } catch (error) {
   if (page) console.error((await page.$eval('body', node => node.innerText).catch(() => '')).slice(-3000));
   throw error;

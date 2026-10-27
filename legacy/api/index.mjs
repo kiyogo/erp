@@ -1035,7 +1035,15 @@ function publicCashTransaction(row) {
   };
 }
 
+function financeStoredInteger(value) {
+  const result = typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value)) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(result) || result < 0) throw new HttpError(500, 'Dữ liệu số tiền không hợp lệ');
+  return result;
+}
+
 function publicFinanceDocument(row) {
+  const amount = financeStoredInteger(row.amount);
+  const paidAmount = financeStoredInteger(row.paid_amount);
   return {
     key: row.id,
     code: row.code,
@@ -1043,15 +1051,15 @@ function publicFinanceDocument(row) {
     subtype: row.subtype,
     partnerName: row.partner_name,
     description: row.description,
-    amount: row.amount,
-    paidAmount: row.paid_amount,
-    remainingAmount: Math.max(0, row.amount - row.paid_amount),
+    amount,
+    paidAmount,
+    remainingAmount: Math.max(0, amount - paidAmount),
     documentDate: row.document_date,
     dueDate: row.due_date || '',
     status: row.status,
     taxCode: row.tax_code,
-    vatRate: row.vat_rate,
-    vatAmount: row.vat_amount,
+    vatRate: financeStoredInteger(row.vat_rate),
+    vatAmount: financeStoredInteger(row.vat_amount),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -3293,6 +3301,15 @@ async function saleCustomerLinks() {
   return rows.map(publicCollectionRecord).filter(Boolean);
 }
 
+async function salePromotionSnapshots() {
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_sale_promotions'").all();
+  return rows.map(publicCollectionRecord).filter(Boolean);
+}
+
+function publicSalePromotion(snapshot) {
+  return snapshot ? { grossAmount: snapshot.grossAmount, discountAmount: snapshot.discountAmount, appliedPromotions: snapshot.applications } : {};
+}
+
 async function insertSaleCustomerLink(saleId, saleCode, customer, actor, timestamp) {
   const link = {
     key: saleId, saleCode, customerId: customer.id, customerCode: customer.code, customerName: customer.name,
@@ -3303,6 +3320,78 @@ async function insertSaleCustomerLink(saleId, saleCode, customer, actor, timesta
     .run(randomUUID(), saleId, actor.id, JSON.stringify(link), timestamp, timestamp);
   await recordAuditEvent(actor.id, 'link_sale_customer', 'finance_sale_customer_links', saleId, { customerId: customer.id });
   return link;
+}
+
+function salePromotionKeys(input) {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input) || input.length > 10) throw new HttpError(422, 'Danh sách khuyến mại không hợp lệ.');
+  const keys = input.map((key) => requiredText(key, 'Chương trình khuyến mại', 160));
+  if (new Set(keys).size !== keys.length) throw new HttpError(422, 'Chương trình khuyến mại không được chọn trùng.');
+  return keys;
+}
+
+async function calculateSalePromotions(document, customer, actor, keys) {
+  if (!keys.length || !customer) throw new HttpError(422, 'Chọn khách hàng CRM và chương trình khuyến mại.');
+  if (document.documentType !== 'sale' || !['Đơn bán hàng', 'Hợp đồng bán'].includes(document.subtype)
+    || !['Đang triển khai', 'Đã bàn giao'].includes(document.status)) throw new HttpError(422, 'Khuyến mại chỉ áp dụng cho đơn hoặc hợp đồng bán đang thực hiện.');
+  if (document.vatRate !== 0 || document.vatAmount !== 0) throw new HttpError(422, 'Chứng từ có thuế cần được tính theo dòng hàng trước khi áp dụng khuyến mại.');
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const promotions = [];
+  for (const key of keys) {
+    const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'crm_promotions' AND record_key = ? LIMIT 1").get(key);
+    const promotion = row && publicCollectionRecord(row);
+    if (!promotion || promotion.promotionType !== 'Chiết khấu' || !promotion.enabled
+      || promotion.startDate > today || promotion.endDate < today
+      || promotion.startDate > document.documentDate || promotion.endDate < document.documentDate) {
+      throw new HttpError(422, 'Chương trình không hoạt động hoặc không phù hợp ngày chứng từ.');
+    }
+    const target = String(promotion.target || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('vi-VN');
+    if (target !== 'tất cả khách hàng') throw new HttpError(422, 'Đối tượng chương trình cần được xác định cụ thể trước khi áp dụng tự động.');
+    if (!Array.isArray(promotion.customerKeys) || (promotion.customerKeys.length && !promotion.customerKeys.includes(customer.id))) {
+      throw new HttpError(422, 'Khách hàng không thuộc phạm vi chương trình.');
+    }
+    if (!Array.isArray(promotion.employeeIds) || (promotion.employeeIds.length && !promotion.employeeIds.includes(actor.id))) {
+      throw new HttpError(403, 'Người lập chứng từ không thuộc phạm vi chương trình.');
+    }
+    if (!Array.isArray(promotion.eligibleItemCodes) || promotion.eligibleItemCodes.length
+      || Number(promotion.unitPrice) !== 0 || String(promotion.unit || '').trim().toLocaleLowerCase('vi-VN') !== 'đơn hàng') {
+      throw new HttpError(422, 'Chương trình cần thông tin dòng hàng hoặc đơn giá chưa có trên chứng từ.');
+    }
+    if (!Array.isArray(promotion.orgUnitKeys) || promotion.orgUnitKeys.length) throw new HttpError(422, 'Chương trình theo cơ cấu tổ chức cần xác định đơn vị của chứng từ.');
+    if (promotion.taxCondition === 'Có thuế') throw new HttpError(422, 'Chương trình chỉ áp dụng cho chứng từ có thuế.');
+    if (!['Bất kỳ', 'Không thuế'].includes(promotion.taxCondition)) throw new HttpError(422, 'Điều kiện thuế của chương trình không hợp lệ.');
+    if (!Number.isSafeInteger(promotion.minimumSubtotal) || document.amount < promotion.minimumSubtotal) throw new HttpError(422, 'Chứng từ chưa đạt điều kiện thành tiền của chương trình.');
+    promotions.push(promotion);
+  }
+  if (promotions.length > 1) {
+    for (const promotion of promotions) {
+      if (!promotion.allowConcurrent || !Array.isArray(promotion.combinablePromotionKeys)
+        || promotions.some((other) => other.key !== promotion.key && !promotion.combinablePromotionKeys.includes(other.key))) {
+        throw new HttpError(422, 'Các chương trình được chọn chưa cho phép áp dụng đồng thời với nhau.');
+      }
+    }
+  }
+  if (promotions.some((promotion) => promotion.applyOnce)) {
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_sale_promotions'").all();
+    const used = rows.map((row) => parseJsonObject(row.payload_json)).filter((record) => record.customerId === customer.id);
+    if (promotions.some((promotion) => promotion.applyOnce && used.some((record) => Array.isArray(record.applications) && record.applications.some((item) => item.key === promotion.key)))) {
+      throw new HttpError(409, 'Khách hàng đã sử dụng chương trình chỉ áp dụng một lần.');
+    }
+  }
+  let remaining = document.amount;
+  const applications = promotions.map((promotion) => {
+    const value = Number(promotion.discountValue);
+    if (!Number.isSafeInteger(value) || value <= 0 || (promotion.discountKind === 'Phần trăm' && value > 100)
+      || !['Phần trăm', 'Số tiền'].includes(promotion.discountKind)) throw new HttpError(422, 'Giá trị chiết khấu không hợp lệ.');
+    const discount = promotion.discountKind === 'Phần trăm' ? Number((BigInt(remaining) * BigInt(value) + 50n) / 100n) : value;
+    if (discount <= 0 || discount >= remaining) throw new HttpError(422, 'Chiết khấu phải lớn hơn 0 và nhỏ hơn số tiền còn lại.');
+    const basis = remaining;
+    remaining -= discount;
+    return { key: promotion.key, code: promotion.code, name: promotion.name, discountKind: promotion.discountKind, discountValue: value, basis, discount };
+  });
+  const result = { grossAmount: document.amount, discountAmount: document.amount - remaining, netAmount: remaining, applications };
+  const fingerprint = createHash('sha256').update(JSON.stringify({ actorId: actor.id, customerId: customer.id, date: document.documentDate, subtype: document.subtype, status: document.status, ...result })).digest('hex');
+  return { ...result, fingerprint };
 }
 
 function validateCashTransaction(input) {
@@ -5078,9 +5167,9 @@ async function handleRequest(request, response) {
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
 
   if ((collectionMatch || collectionRecordMatch)
-    && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'finance_sale_customer_links') {
+    && ['finance_sale_customer_links', 'finance_sale_promotions'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
-    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Liên kết khách hàng phải được ghi qua chức năng bán hàng.');
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng phải được ghi qua chức năng bán hàng.');
   }
 
   if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
@@ -6239,6 +6328,18 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'POST' && resource === '/finance/sales/promotion-preview') {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request);
+    const customerId = requiredText(input.customerId, 'Khách hàng', 160);
+    const customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
+    if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
+    const document = validateFinanceDocument({ ...input, documentType: 'sale', partnerName: customer.name, paidAmount: 0 });
+    const result = await calculateSalePromotions(document, customer, actor, salePromotionKeys(input.promotionKeys));
+    sendJson(response, 200, result);
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/finance/documents') {
     await requireAdmin(request);
     const documentType = url.searchParams.get('documentType');
@@ -6258,12 +6359,15 @@ async function handleRequest(request, response) {
     }
     const sql = `SELECT * FROM finance_documents${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY document_date DESC, created_at DESC`;
     const rows = await db.prepare(sql).all(...params);
-    const links = rows.some((row) => row.document_type === 'sale') ? await saleCustomerLinks() : [];
+    const hasSales = rows.some((row) => row.document_type === 'sale');
+    const links = hasSales ? await saleCustomerLinks() : [];
+    const promotions = hasSales ? await salePromotionSnapshots() : [];
     const linksBySale = new Map(links.map((link) => [link.key, link]));
+    const promotionsBySale = new Map(promotions.map((snapshot) => [snapshot.key, snapshot]));
     sendJson(response, 200, { data: rows.map((row) => {
       const document = publicFinanceDocument(row);
       const link = linksBySale.get(row.id);
-      return link ? { ...document, customerId: link.customerId, customerCode: link.customerCode } : document;
+      return { ...document, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(promotionsBySale.get(row.id)) };
     }) });
     return;
   }
@@ -6273,21 +6377,48 @@ async function handleRequest(request, response) {
     const input = await readJson(request);
     const customerId = optionalText(input.customerId, 'Khách hàng', 160);
     if (customerId && input.documentType !== 'sale') throw new HttpError(422, 'Liên kết khách hàng chỉ áp dụng cho chứng từ bán hàng.');
+    const promotionKeys = salePromotionKeys(input.promotionKeys);
+    if (promotionKeys.length && (!customerId || input.documentType !== 'sale')) throw new HttpError(422, 'Chọn khách hàng CRM cho chứng từ bán có khuyến mại.');
+    const requestId = promotionKeys.length ? requiredText(input.requestId, 'Mã yêu cầu', 160) : '';
+    const fingerprint = promotionKeys.length ? requiredText(input.promotionFingerprint, 'Kết quả tính khuyến mại', 64) : '';
     let document;
     let link;
-    const id = randomUUID();
+    let snapshot;
+    let replayed = false;
+    let id = randomUUID();
     const timestamp = now();
     const insertDocument = await db.prepare(`INSERT INTO finance_documents (
       id, document_type, code, subtype, partner_name, description, amount, paid_amount,
       document_date, due_date, status, tax_code, vat_rate, vat_amount, created_by, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     await db.transaction(async () => {
+      if (promotionKeys.length && db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('crm_promotions'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_sale_promotions'))");
+      }
       let customer;
       if (customerId) {
         customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
         if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
       }
       document = validateFinanceDocument({ ...input, partnerName: customer ? customer.name : input.partnerName });
+      if (promotionKeys.length) {
+        const requestHash = createHash('sha256').update(JSON.stringify({ actorId: actor.id, customerId, promotionKeys, fingerprint, document })).digest('hex');
+        const existing = (await salePromotionSnapshots()).find((item) => item.requestId === requestId);
+        if (existing) {
+          if (existing.requestHash !== requestHash) throw new HttpError(409, 'Mã yêu cầu đã được dùng cho chứng từ khác.');
+          id = existing.key;
+          snapshot = existing;
+          link = { customerId: existing.customerId, customerCode: existing.customerCode };
+          replayed = true;
+          return;
+        }
+        const calculated = await calculateSalePromotions(document, customer, actor, promotionKeys);
+        if (calculated.fingerprint !== fingerprint) throw new HttpError(409, 'Điều kiện khuyến mại đã thay đổi. Vui lòng tính lại trước khi lưu.');
+        if (document.paidAmount > calculated.netAmount) throw new HttpError(422, 'Số tiền đã thu không được vượt số tiền sau khuyến mại.');
+        document.amount = calculated.netAmount;
+        snapshot = { key: id, customerId, customerCode: customer.code, requestId, requestHash, ...calculated, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
+      }
       document.code = await nextUniqueCode(document.documentType === 'sale' ? 'SALE' : document.documentType === 'purchase' ? 'PUR' : 'INV', 'finance_documents');
       await insertDocument.run(
         id,
@@ -6309,10 +6440,17 @@ async function handleRequest(request, response) {
         timestamp,
       );
       if (customer) link = await insertSaleCustomerLink(id, document.code, customer, actor, timestamp);
+      if (snapshot) {
+        await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, 'finance_sale_promotions', ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), id, actor.id, JSON.stringify(snapshot), timestamp, timestamp);
+        await recordAuditEvent(actor.id, 'apply_sale_promotions', 'finance_sale_promotions', id, { customerId, promotionKeys, discountAmount: snapshot.discountAmount });
+      }
       await insertAutomaticCashTransaction(document, actor.id, timestamp);
     });
     const saved = publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id));
-    sendJson(response, 201, { document: link ? { ...saved, customerId: link.customerId, customerCode: link.customerCode } : saved });
+    const result = { ...saved, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(snapshot) };
+    sendJson(response, replayed ? 200 : 201, promotionKeys.length ? { document: result, replayed } : { document: result });
     return;
   }
 
@@ -6365,9 +6503,9 @@ async function handleRequest(request, response) {
       key: `${row.type}-${row.partner_name}-${index}`,
       partnerName: row.partner_name,
       type: row.type,
-      totalAmount: row.total_amount,
-      paidAmount: row.paid_amount,
-      remainingAmount: Math.max(0, row.total_amount - row.paid_amount),
+      totalAmount: financeStoredInteger(row.total_amount),
+      paidAmount: financeStoredInteger(row.paid_amount),
+      remainingAmount: Math.max(0, financeStoredInteger(row.total_amount) - financeStoredInteger(row.paid_amount)),
       dueDate: row.due_date,
       status: Date.parse(`${row.due_date}T00:00:00.000Z`) < Date.now() ? 'Quá hạn' : 'Đúng hạn',
     }));
@@ -6407,7 +6545,7 @@ async function handleRequest(request, response) {
     sendJson(response, 200, {
       customers: customers.map((customer) => ({ key: customer.id, code: customer.code, name: customer.name, status: customer.status, balance: balances.get(customer.id) || 0 })),
       entries,
-      sales: saleRows.filter((sale) => links.has(sale.id)).map((sale) => ({ key: sale.id, code: sale.code, customerId: links.get(sale.id).customerId, amount: sale.amount, documentDate: sale.document_date })),
+      sales: saleRows.filter((sale) => links.has(sale.id)).map((sale) => ({ key: sale.id, code: sale.code, customerId: links.get(sale.id).customerId, amount: financeStoredInteger(sale.amount), documentDate: sale.document_date })),
     });
     return;
   }
@@ -6469,7 +6607,7 @@ async function handleRequest(request, response) {
         points, delta, balanceAfter: nextBalance, reference, rewardName, note,
         status: type === 'earn' ? 'Đã ghi nhận' : 'Chờ trao', createdAt: timestamp,
         createdBy: actor.name, createdById: actor.id,
-        ...(sale ? { saleId: sale.id, saleCode: sale.code, saleAmount: sale.amount, saleDate: sale.document_date } : {}),
+        ...(sale ? { saleId: sale.id, saleCode: sale.code, saleAmount: financeStoredInteger(sale.amount), saleDate: sale.document_date } : {}),
       };
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'crm_loyalty_ledger', ?, ?, ?, ?, ?)`)
