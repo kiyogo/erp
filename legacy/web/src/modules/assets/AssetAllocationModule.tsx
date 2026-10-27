@@ -50,10 +50,9 @@ export interface AllocationItem {
 }
 
 import { useEffect } from 'react';
-import { collectionsApi, employeesApi } from '../../api/endpoints';
+import { assetAllocationsApi, collectionsApi, employeesApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
-import { buildAllocationAssetUpdate, findAssetByCode } from './assetOperations';
 import { findAllocationQuotaRule, type AssetSystemRule } from './assetSystemRules';
 
 export const AssetAllocationModule: React.FC = () => {
@@ -91,7 +90,7 @@ export const AssetAllocationModule: React.FC = () => {
         collectionsApi.get<AssetSystemRule>('asset_systems', { limit: 500 }),
       ]);
       const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key })));
       setAssets(assetRes.data?.data || []);
       setEmployees((employeeRes.data?.data || []).filter((employee: any) => employee.status !== 'Đã nghỉ việc'));
       setSystemRules(systemConfigRes.data?.data || []);
@@ -135,13 +134,6 @@ export const AssetAllocationModule: React.FC = () => {
     setModalOpen(true);
   };
 
-  const currentActor = () => {
-    try {
-      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
-      return String(user?.name || user?.fullName || user?.email || 'Tài khoản hiện tại');
-    } catch { return 'Tài khoản hiện tại'; }
-  };
-
   const handleCreate = async (values: any) => {
     if (saving) return;
     const isAllocate = values.type === 'Cấp phát';
@@ -159,56 +151,23 @@ export const AssetAllocationModule: React.FC = () => {
       return;
     }
     setSaving(true);
-    let oldAsset: any = null;
-    let assetUpdated = false;
     try {
-      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
-      oldAsset = findAssetByCode(assetsResponse.data?.data || [], String(values.assetCode || ''));
       const employee = employees.find((item) => String(item.code || item.employeeCode) === String(values.employeeCode));
       if (!employee) throw new Error('Chọn nhân viên còn đang làm việc trong danh sách nhân sự.');
-      if (isAllocate && oldAsset.status !== 'Trong kho') {
-        throw new Error('Chỉ cấp phát tài sản đang ở kho; hãy kiểm tra trạng thái hoặc hoàn tất thu hồi trước.');
-      }
-      const key = `allocation-${crypto.randomUUID()}`;
-      const newItem: AllocationItem = {
+      const saved = (await assetAllocationsApi.create({
         ...values,
-        key,
-        assetCode: String(oldAsset.code || oldAsset.assetCode),
-        assetName: String(oldAsset.name || oldAsset.assetName || ''),
-        category: String(oldAsset.category || ''),
-        serialNo: String(oldAsset.serialNo || oldAsset.serialNumber || values.serialNo || ''),
         employeeCode: String(employee.code || employee.employeeCode),
-        employeeName: String(employee.name || employee.fullName || '').trim(),
-        department: String(employee.department || values.department || ''),
-        position: String(employee.position || values.position || ''),
         compensationAmount,
-        signedByReceiver: false,
-        receivedAt: isAllocate ? undefined : new Date().toLocaleString('sv-SE'),
-        receivedByAccount: isAllocate ? undefined : currentActor(),
-        status: isAllocate ? 'Chờ nhân viên ký xác nhận' : 'Đã thu hồi về kho',
-      };
-      if (!isAllocate) {
-        const updatedAsset = buildAllocationAssetUpdate(oldAsset, 'Thu hồi', newItem.employeeName, newItem.department, currentActor(), newItem.allocatedDate, newItem.ticketCode, newItem.condition);
-        await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
-        assetUpdated = true;
-      }
-      await collectionsApi.create('asset_allocations', newItem, key);
-      await Promise.allSettled([dataService.refreshGenericData('asset_allocations'), ...(assetUpdated ? [dataService.refreshGenericData('asset_items')] : [])]);
+      })).data.record as AllocationItem;
+      await Promise.allSettled([dataService.refreshGenericData('asset_allocations'), ...(isAllocate ? [] : [dataService.refreshGenericData('asset_items')])]);
       message.success(isAllocate
-        ? `Đã lập biên bản ${newItem.ticketCode}; chờ người nhận xác nhận trước khi cập nhật tài sản.`
-        : `Đã lưu biên bản thu hồi ${newItem.ticketCode} và cập nhật danh mục tài sản.`);
+        ? `Đã lập biên bản ${saved.ticketCode}; chờ người nhận xác nhận trước khi cập nhật tài sản.`
+        : `Đã lưu biên bản thu hồi ${saved.ticketCode} và cập nhật danh mục tài sản.`);
       setModalOpen(false);
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      let rollbackFailed = false;
-      if (assetUpdated && oldAsset) {
-        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
-        catch { rollbackFailed = true; }
-      }
-      message.error(rollbackFailed
-        ? 'Không lưu được biên bản và cũng chưa thể hoàn tác thay đổi tài sản; hãy đối chiếu danh mục tài sản.'
-        : error?.response?.data?.message || error?.message || 'Không thể tạo biên bản cấp phát/thu hồi.');
+      message.error(error?.response?.data?.message || error?.message || 'Không thể tạo biên bản cấp phát/thu hồi.');
     } finally {
       setSaving(false);
     }
@@ -227,36 +186,15 @@ export const AssetAllocationModule: React.FC = () => {
       return;
     }
     setSaving(true);
-    const nowStr = new Date().toLocaleString('sv-SE');
-    let oldAsset: any = null;
-    let assetUpdated = false;
     try {
-      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
-      oldAsset = findAssetByCode(assetsResponse.data?.data || [], signTarget.assetCode);
-      const updatedAsset = buildAllocationAssetUpdate(oldAsset, 'Cấp phát', signTarget.employeeName, signTarget.department, currentActor(), nowStr, signTarget.ticketCode, signTarget.condition);
-      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
-      assetUpdated = true;
-      await collectionsApi.update('asset_allocations', signTarget.key, {
-        signedByReceiver: true,
-        signedByName: receiverNameInput.trim(),
-        signedByAccount: currentActor(),
-        signedAt: nowStr,
-        status: 'Đã bàn giao hoàn tất',
-      });
+      await assetAllocationsApi.confirm(signTarget.key, receiverNameInput.trim());
       await Promise.allSettled([dataService.refreshGenericData('asset_allocations'), dataService.refreshGenericData('asset_items')]);
       message.success(`Đã lưu xác nhận bàn giao ${signTarget.ticketCode} và cập nhật người giữ tài sản.`);
       setSignModalOpen(false);
       setDrawerOpen(false);
       await loadData();
     } catch (error: any) {
-      let rollbackFailed = false;
-      if (assetUpdated && oldAsset) {
-        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
-        catch { rollbackFailed = true; }
-      }
-      message.error(rollbackFailed
-        ? 'Không lưu được xác nhận và chưa thể hoàn tác danh mục tài sản; hãy đối chiếu hồ sơ tài sản và biên bản.'
-        : error?.response?.data?.message || error?.message || 'Không thể lưu xác nhận bàn giao.');
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu xác nhận bàn giao.');
     } finally {
       setSaving(false);
     }
@@ -503,7 +441,7 @@ export const AssetAllocationModule: React.FC = () => {
         width={740}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="ticketCode" label="Mã biên bản" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: CP-2026-088" />
             </Form.Item>
@@ -529,7 +467,7 @@ export const AssetAllocationModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 14 }}>
             <Form.Item name="assetCode" label="Tài sản trong danh mục" rules={[{ required: true, message: 'Chọn tài sản trong danh mục' }]}>
               <Select
                 showSearch
@@ -550,7 +488,7 @@ export const AssetAllocationModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="employeeCode" label="Nhân viên nhận / bàn giao" rules={[{ required: true, message: 'Chọn nhân viên' }]}>
               <Select
                 showSearch
@@ -588,7 +526,7 @@ export const AssetAllocationModule: React.FC = () => {
             />
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="handoverPerson" label="Cán bộ bàn giao" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Lê Hoàng Yến (HR)" />
             </Form.Item>
@@ -608,7 +546,7 @@ export const AssetAllocationModule: React.FC = () => {
             <Input placeholder="Ví dụ: Củ sạc 140W Type-C, Túi chống sốc, Chuột Bluetooth, Cáp chuyển đổi..." />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 14 }}>
             <Form.Item name="compensationAmount" label="Số tiền bồi thường" initialValue={0}>
               <Input type="number" min={0} step={100000} placeholder="0 đ nếu nguyên vẹn" />
             </Form.Item>

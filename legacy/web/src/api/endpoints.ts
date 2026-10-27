@@ -888,3 +888,8 @@ export const assetTransfersApi = {
   create: (data: Record<string, unknown>) => api.post<{ transfer: any }>('/assets/transfers', data),
   transition: (key: string, action: 'approve' | 'reject' | 'receive', data: Record<string, unknown> = {}) => api.post<{ transfer: any }>(`/assets/transfers/${encodeURIComponent(key)}/${action}`, data),
 };
+
+export const assetAllocationsApi = {
+  create: (data: Record<string, unknown>) => api.post<{ record: any }>('/assets/allocations', data),
+  confirm: (key: string, receiverName: string) => api.post<{ record: any }>(`/assets/allocations/${encodeURIComponent(key)}/confirm`, { receiverName }),
+};

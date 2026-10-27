@@ -59,6 +59,70 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
   return body;
 }
 
+test('asset allocations and returns keep inventory and tickets atomic', async () => {
+  await request('/users', 'POST', { email: 'asset-allocation-user@example.test', name: 'Nhân viên cấp phát', password: 'Asset-Allocation-26!Secure', employeeCode: 'ALLOCATION-USER', role: 'USER', department: 'Công nghệ', position: 'Kỹ sư' }, 201);
+  const employees = await request('/employees');
+  const employee = employees.data.find((item) => item.employeeCode === 'ALLOCATION-USER');
+  assert.ok(employee);
+  const asset = { key: 'allocation-asset-test', code: 'TS-ALLOCATION-API', name: 'Máy cấp phát', status: 'Trong kho', location: 'Kho A', department: 'IT', assignedTo: '', originalPrice: 1000, history: [] };
+  await request('/collections/asset_items', 'POST', { record: asset }, 201);
+  await request('/collections/asset_items', 'POST', { record: { ...asset, key: 'allocation-asset-date-test', code: 'TS-ALLOCATION-DATE', name: 'Máy kiểm tra ngày' } }, 201);
+  const input = { ticketCode: 'CP-API-01', type: 'Cấp phát', assetCode: asset.code, employeeCode: employee.employeeCode, department: 'Giả mạo', position: 'Giả mạo', handoverPerson: 'Thủ kho', allocatedDate: '2030-01-01', expectedReturnDate: 'Vô thời hạn', purpose: 'Cấp phát chính thức cho nhân viên mới', condition: 'Tốt', accessories: 'Sạc', compensationAmount: 0, notes: 'Đủ phụ kiện', status: 'Đã bàn giao hoàn tất', signedByAccount: 'Giả mạo' };
+  const created = (await request('/assets/allocations', 'POST', input, 201)).record;
+  assert.equal(created.status, 'Chờ nhân viên ký xác nhận');
+  assert.equal(created.signedByReceiver, false);
+  assert.equal(created.employeeName, employee.name);
+  assert.equal(created.department, 'Công nghệ');
+  assert.equal(created.createdById, session.user.id);
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.status, 'Trong kho');
+  await request('/assets/allocations', 'POST', { ...input, ticketCode: 'CP-API-02' }, 409);
+  await request('/assets/allocations', 'POST', { ...input, ticketCode: 'CP-API-03', assetCode: 'TS-ALLOCATION-DATE', expectedReturnDate: 'hôm sau' }, 422);
+  await request('/collections/asset_allocations', 'PUT', { records: [] }, 409);
+  await request(`/collections/asset_allocations/${created.key}`, 'PATCH', { patch: { status: 'Đã bàn giao hoàn tất' } }, 409);
+  await request(`/assets/allocations/${created.key}/confirm`, 'POST', { receiverName: 'Người khác' }, 422);
+
+  let fixture = new DatabaseSync(env.KIYOVN_DB_PATH);
+  fixture.exec(`CREATE TRIGGER fail_allocation_update BEFORE UPDATE ON collection_records WHEN NEW.scope = 'asset_allocations' AND NEW.record_key = '${created.key}' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+  await request(`/assets/allocations/${created.key}/confirm`, 'POST', { receiverName: created.employeeName }, 500);
+  fixture.exec('DROP TRIGGER fail_allocation_update');
+  fixture.close();
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.status, 'Trong kho');
+  assert.equal((await request(`/collections/asset_allocations/${created.key}`)).record.status, 'Chờ nhân viên ký xác nhận');
+
+  const confirmations = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/assets/allocations/${created.key}/confirm`, { method: 'POST', headers, body: JSON.stringify({ receiverName: created.employeeName, signedByAccount: 'Giả mạo' }) });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(confirmations.map((item) => item.status).sort((a, b) => a - b), [200, 409]);
+  const allocated = (await request(`/collections/asset_allocations/${created.key}`)).record;
+  const allocatedAsset = (await request(`/collections/asset_items/${asset.key}`)).record;
+  assert.equal(allocated.status, 'Đã bàn giao hoàn tất');
+  assert.equal(allocated.signedByAccountId, session.user.id);
+  assert.equal(allocatedAsset.status, 'Đang sử dụng');
+  assert.equal(allocatedAsset.assignedTo, created.employeeName);
+  assert.equal(allocatedAsset.history.filter((item) => item.action === 'Cấp phát tài sản').length, 1);
+
+  const returnInput = { ...input, ticketCode: 'TH-API-01', type: 'Thu hồi', expectedReturnDate: '', purpose: 'Thu hồi định kỳ nâng cấp' };
+  fixture = new DatabaseSync(env.KIYOVN_DB_PATH);
+  fixture.exec("CREATE TRIGGER fail_allocation_insert BEFORE INSERT ON collection_records WHEN NEW.scope = 'asset_allocations' AND NEW.record_key != 'allocation-asset-test' BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+  await request('/assets/allocations', 'POST', returnInput, 500);
+  fixture.exec('DROP TRIGGER fail_allocation_insert');
+  fixture.close();
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.status, 'Đang sử dụng');
+  const returned = (await request('/assets/allocations', 'POST', returnInput, 201)).record;
+  assert.equal(returned.status, 'Đã thu hồi về kho');
+  assert.equal(returned.receivedByAccountId, session.user.id);
+  const returnedAsset = (await request(`/collections/asset_items/${asset.key}`)).record;
+  assert.equal(returnedAsset.status, 'Trong kho');
+  assert.equal(returnedAsset.assignedTo, '');
+  assert.equal(returnedAsset.history.filter((item) => item.action === 'Thu hồi tài sản').length, 1);
+
+  const userLogin = await request('/auth/login', 'POST', { email: 'asset-allocation-user@example.test', password: 'Asset-Allocation-26!Secure' });
+  const userHeaders = { ...headers, Authorization: `Bearer ${userLogin.access_token || userLogin.token}` };
+  await request('/collections/asset_allocations', 'GET', undefined, 403, userHeaders);
+  await request('/assets/allocations', 'POST', input, 403, userHeaders);
+});
+
 test('asset transfers enforce decisions and receive asset and document atomically', async () => {
   const asset = { key: 'transfer-asset-test', code: 'TS-TRANSFER-API', name: 'Máy kiểm thử', status: 'Đang sử dụng', location: 'Kho A', department: 'IT', assignedTo: 'Người A', originalPrice: 1000, netBookValue: 700, history: [] };
   await request('/collections/asset_items', 'POST', { record: asset }, 201);

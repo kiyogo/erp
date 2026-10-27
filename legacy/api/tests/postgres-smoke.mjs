@@ -62,6 +62,36 @@ try {
   assert.equal(pgMovedAsset.location, 'PG B');
   assert.equal(pgMovedAsset.history.filter((item) => item.action === 'Điều chuyển tài sản').length, 1);
   assert.equal((await request(`/collections/asset_transfers/${pgAssetTransfer.key}`)).record.status, 'Đã điều chuyển hoàn tất'); completed++;
+  const allocationEmployee = (await request('/users', 'POST', {
+    email: 'pg-allocation-user@example.test', name: 'PG allocation user', employeeCode: 'PG-ALLOCATION-USER',
+    password: 'PG-Allocation-User-26!Secure', role: 'USER', department: 'PG Operations', position: 'PG Engineer',
+  }, 201)).user;
+  await request('/collections/asset_items', 'POST', { record: {
+    key: 'pg-allocation-asset', code: 'PG-ALLOCATION-ASSET', name: 'PG allocation device', status: 'Trong kho', history: [],
+  } }, 201);
+  const allocation = (await request('/assets/allocations', 'POST', {
+    ticketCode: 'PG-CP-01', type: 'Cấp phát', assetCode: 'PG-ALLOCATION-ASSET', employeeCode: allocationEmployee.employeeCode,
+    handoverPerson: 'PG storekeeper', allocatedDate: '2031-01-01', expectedReturnDate: 'Vô thời hạn',
+    purpose: 'Cấp phát chính thức cho nhân viên mới', condition: 'Tốt', accessories: 'Sạc', compensationAmount: 0,
+  }, 201)).record;
+  assert.equal(allocation.status, 'Chờ nhân viên ký xác nhận');
+  const allocationRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/assets/allocations/${allocation.key}/confirm`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ receiverName: allocation.employeeName }),
+    });
+    return response.status;
+  }));
+  assert.deepEqual(allocationRace.sort((a, b) => a - b), [200, 409]);
+  const allocatedAsset = (await request('/collections/asset_items/pg-allocation-asset')).record;
+  assert.equal(allocatedAsset.status, 'Đang sử dụng');
+  assert.equal(allocatedAsset.assignedTo, allocation.employeeName);
+  const pgReturn = (await request('/assets/allocations', 'POST', {
+    ticketCode: 'PG-TH-01', type: 'Thu hồi', assetCode: 'PG-ALLOCATION-ASSET', employeeCode: allocationEmployee.employeeCode,
+    handoverPerson: 'PG storekeeper', allocatedDate: '2031-02-01', purpose: 'Thu hồi định kỳ nâng cấp', condition: 'Đã kiểm tra',
+  }, 201)).record;
+  assert.equal(pgReturn.status, 'Đã thu hồi về kho');
+  assert.equal((await request('/collections/asset_items/pg-allocation-asset')).record.status, 'Trong kho'); completed++;
   await request('/collections/payroll', 'POST', { record: { key: 'pg-payroll-post', employeeCode: 'PG-PAY-1', employeeName: 'PG employee', month: '2031-08', status: 'Chưa chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 } }, 201);
   const pgPayroll = { period: '08/2031', employerInsurance: 200 };
   const pgPayrollPreview = await request('/finance/payroll/ledger-preview', 'POST', pgPayroll);

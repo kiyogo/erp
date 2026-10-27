@@ -5222,6 +5222,11 @@ async function handleRequest(request, response) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Vui lòng xử lý điều chuyển qua chức năng tài sản.');
   }
 
+  if ((collectionMatch || collectionRecordMatch) && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_allocations') {
+    await requireAdmin(request);
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Vui lòng xử lý cấp phát và thu hồi qua chức năng tài sản.');
+  }
+
   if ((collectionMatch || collectionRecordMatch)
     && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_licenses') {
     await requireAdmin(request);
@@ -6404,6 +6409,120 @@ async function handleRequest(request, response) {
   }
 
   const assetTransferAction = /^\/assets\/transfers\/([^/]+)\/(approve|reject|receive)$/.exec(resource);
+  const assetAllocationAction = /^\/assets\/allocations\/([^/]+)\/confirm$/.exec(resource);
+  if (request.method === 'POST' && (resource === '/assets/allocations' || assetAllocationAction)) {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request);
+    const timestamp = now();
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_allocations'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
+      }
+      const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'asset_allocations'").all();
+      const existing = rows.map((row) => parseJsonObject(row.payload_json));
+      if (!assetAllocationAction) {
+        const ticketCode = requiredText(input.ticketCode, 'Mã biên bản', 80);
+        const type = oneOf(input.type, 'Loại nghiệp vụ', ['Cấp phát', 'Thu hồi']);
+        const assetCode = requiredText(input.assetCode, 'Mã tài sản', 160);
+        const employeeCode = requiredText(input.employeeCode, 'Mã nhân viên', 80);
+        const employee = await db.prepare(`SELECT u.id, u.name, u.employee_code, u.is_active, p.department, p.position, p.employment_status
+          FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+          WHERE LOWER(u.employee_code) = LOWER(?) AND u.role != 'ADMIN' AND u.is_active = 1`).get(employeeCode);
+        if (!employee || employee.employment_status === 'Đã nghỉ việc') throw new HttpError(422, 'Chọn nhân viên đang làm việc trong danh bạ.');
+        const assetRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items'").all();
+        const matches = assetRows.map((row) => ({ row, asset: publicCollectionRecord(row) }))
+          .filter(({ asset }) => String(asset?.code || asset?.assetCode || '').trim().toLocaleLowerCase('vi-VN') === assetCode.trim().toLocaleLowerCase('vi-VN'));
+        if (!matches.length) throw new HttpError(404, 'Không tìm thấy tài sản trong danh mục.');
+        if (matches.length !== 1) throw new HttpError(409, 'Mã tài sản bị trùng trong danh mục.');
+        const { row: assetRow } = matches[0];
+        const asset = publicCollectionRecord(assetRow);
+        if (existing.some((item) => String(item.ticketCode || '').trim().toLocaleLowerCase('vi-VN') === ticketCode.toLocaleLowerCase('vi-VN'))) throw new HttpError(409, 'Mã biên bản đã tồn tại.');
+        if (existing.some((item) => item.assetKey === asset.key && item.status === 'Chờ nhân viên ký xác nhận')) throw new HttpError(409, 'Tài sản đã có biên bản cấp phát đang chờ xác nhận.');
+        const allocatedDate = requiredIsoDate(input.allocatedDate, 'Ngày bàn giao hoặc thu hồi');
+        const expectedReturnDate = optionalText(input.expectedReturnDate, 'Hạn trả dự kiến', 40);
+        if (expectedReturnDate && expectedReturnDate.normalize('NFKC').trim().toLocaleLowerCase('vi-VN') !== 'vô thời hạn') {
+          requiredIsoDate(expectedReturnDate, 'Hạn trả dự kiến');
+          if (expectedReturnDate < allocatedDate) throw new HttpError(422, 'Hạn trả dự kiến không được trước ngày bàn giao.');
+        }
+        const condition = requiredText(input.condition, 'Tình trạng tài sản', 2000);
+        const employeeName = requiredText(employee.name, 'Tên nhân viên', 255);
+        const same = (left, right) => String(left || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN') === String(right || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN');
+        if (type === 'Cấp phát' && asset.status !== 'Trong kho') throw new HttpError(409, 'Chỉ cấp phát tài sản đang ở kho.');
+        if (type === 'Thu hồi') {
+          if (asset.status !== 'Đang sử dụng' || !same(asset.assignedTo, employeeName)) throw new HttpError(409, 'Tài sản không đang được giữ bởi nhân viên trong biên bản.');
+        }
+        const department = String(employee.department || '').trim() || requiredText(input.department, 'Phòng ban', 255);
+        const position = String(employee.position || '').trim() || optionalText(input.position, 'Chức vụ', 255);
+        const assetOrigin = { status: String(asset.status || ''), assignedTo: String(asset.assignedTo || ''), department: String(asset.department || ''), location: String(asset.location || '') };
+        result = {
+          key: randomUUID(), ticketCode, type,
+          assetKey: asset.key, assetCode: requiredText(asset.code || asset.assetCode, 'Mã tài sản', 160),
+          assetName: requiredText(asset.name || asset.assetName, 'Tên tài sản', 255), category: String(asset.category || ''),
+          serialNo: String(asset.serialNo || asset.serialNumber || ''), employeeCode: employee.employee_code,
+          employeeId: employee.id, employeeName, department, position,
+          handoverPerson: requiredText(input.handoverPerson, 'Cán bộ bàn giao', 255),
+          allocatedDate, expectedReturnDate,
+          purpose: oneOf(input.purpose, 'Mục đích', ['Cấp phát chính thức cho nhân viên mới', 'Cấp phát theo dự án ngắn hạn', 'Thay thế thiết bị bảo hành', 'Thu hồi do nhân viên nghỉ việc', 'Thu hồi định kỳ nâng cấp', 'Thu hồi do chuyển đổi vị trí']),
+          condition, accessories: optionalText(input.accessories, 'Phụ kiện', 2000),
+          compensationAmount: optionalAmount(input.compensationAmount, 'Số tiền bồi thường'),
+          signedByReceiver: false, notes: optionalText(input.notes, 'Ghi chú', 4000), assetOrigin,
+          status: type === 'Cấp phát' ? 'Chờ nhân viên ký xác nhận' : 'Đã thu hồi về kho',
+          createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+        };
+        if (type === 'Thu hồi') {
+          result.receivedAt = timestamp;
+          result.receivedByAccount = actor.name;
+          result.receivedByAccountId = actor.id;
+          const updatedAsset = {
+            ...asset, status: 'Trong kho', assignedTo: '',
+            history: [...(Array.isArray(asset.history) ? asset.history : []), {
+              key: randomUUID(), date: timestamp, action: 'Thu hồi tài sản', actor: actor.name, actorId: actor.id,
+              note: `Biên bản ${ticketCode}; thu hồi từ ${employeeName}; tình trạng: ${condition}`,
+            }],
+          };
+          await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+        }
+        await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'asset_allocations', ?, ?, ?, ?, ?)")
+          .run(randomUUID(), result.key, actor.id, JSON.stringify(result), timestamp, timestamp);
+        await recordAuditEvent(actor.id, type === 'Cấp phát' ? 'create_asset_allocation' : 'return_asset', 'asset_allocations', result.key, { assetKey: asset.key });
+      } else {
+        const key = requiredText(decodeURIComponent(assetAllocationAction[1]), 'Mã biên bản', 160);
+        const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_allocations' AND record_key = ?").get(key);
+        if (!row) throw new HttpError(404, 'Không tìm thấy biên bản cấp phát.');
+        const allocation = publicCollectionRecord(row);
+        if (allocation.type !== 'Cấp phát' || allocation.status !== 'Chờ nhân viên ký xác nhận') throw new HttpError(409, 'Biên bản không còn chờ xác nhận bàn giao.');
+        const receiverName = requiredText(input.receiverName, 'Tên người nhận xác nhận', 255);
+        const same = (left, right) => String(left || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN') === String(right || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN');
+        if (!same(receiverName, allocation.employeeName)) throw new HttpError(422, 'Tên xác nhận phải khớp với nhân viên nhận trên biên bản.');
+        const employee = await db.prepare(`SELECT u.id, u.is_active, p.employment_status FROM users u
+          LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.role != 'ADMIN'`).get(allocation.employeeId);
+        if (!employee || !employee.is_active || employee.employment_status === 'Đã nghỉ việc') throw new HttpError(409, 'Nhân viên nhận không còn hoạt động; cần lập lại biên bản với nhân viên phù hợp.');
+        const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ?").get(allocation.assetKey);
+        if (!assetRow) throw new HttpError(404, 'Không tìm thấy tài sản gốc.');
+        const asset = publicCollectionRecord(assetRow);
+        const origin = allocation.assetOrigin || {};
+        if (asset.status !== 'Trong kho' || !same(asset.status, origin.status) || !same(asset.assignedTo, origin.assignedTo)
+          || !same(asset.department, origin.department) || !same(asset.location, origin.location)) throw new HttpError(409, 'Thông tin tài sản đã thay đổi trong lúc chờ xác nhận. Cần đối chiếu trước khi bàn giao.');
+        if (existing.some((item) => item.key !== key && item.assetKey === asset.key && item.status === 'Chờ nhân viên ký xác nhận')) throw new HttpError(409, 'Tài sản đang có biên bản cấp phát khác chờ xác nhận.');
+        const updatedAsset = {
+          ...asset, status: 'Đang sử dụng', assignedTo: allocation.employeeName, department: allocation.department,
+          history: [...(Array.isArray(asset.history) ? asset.history : []), {
+            key: randomUUID(), date: timestamp, action: 'Cấp phát tài sản', actor: actor.name, actorId: actor.id,
+            note: `Biên bản ${allocation.ticketCode}; người nhận ${allocation.employeeName}; tình trạng: ${allocation.condition}`,
+          }],
+        };
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+        result = { ...allocation, signedByReceiver: true, signedByName: allocation.employeeName, signedByAccount: actor.name, signedByAccountId: actor.id, signedAt: timestamp, status: 'Đã bàn giao hoàn tất' };
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(result), timestamp, row.id);
+        await recordAuditEvent(actor.id, 'confirm_asset_allocation', 'asset_allocations', key, { assetKey: asset.key });
+      }
+    });
+    sendJson(response, assetAllocationAction ? 200 : 201, { record: result });
+    return;
+  }
+
   if (request.method === 'POST' && (resource === '/assets/transfers' || assetTransferAction)) {
     const actor = await requireAdmin(request);
     const input = await readJson(request);
