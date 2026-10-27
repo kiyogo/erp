@@ -565,7 +565,7 @@ export const WorkflowsModule: React.FC = () => {
             </div>
             <div style={{ display: 'grid', gap: 8 }}>
               {workflowFormFields.map((field, index) => (
-                <div key={`${index}-${field.fieldName}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'center' }}>
+                <div key={`workflow-form-field-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'center' }}>
                   <Input
                     aria-label={`Mã trường ${index + 1}`}
                     value={field.fieldName}

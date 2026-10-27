@@ -51,6 +51,7 @@ export interface ApprovalRequestItem {
   currentApproverId?: string;
   currentApprover?: string;
   canDecide?: boolean;
+  approvalCanRejectLevels?: boolean[];
   delegatedFor?: string;
   department: string;
   currentLevel: number;
@@ -176,6 +177,7 @@ export const WorkflowRequestsModule: React.FC = () => {
     .filter((d) => d.status === 'Chờ bạn ký duyệt' && (isAdmin || d.canDecide))
     .reduce((sum, d) => sum + (Number(d.budgetAmount) || 0), 0);
   const approvedTodayCount = data.filter((d) => d.status === 'Đã phê duyệt' || d.status === 'Đã ký số phê duyệt').length;
+  const canRejectRequest = (item: ApprovalRequestItem) => item.approvalCanRejectLevels?.[Math.max(0, Number(item.currentLevel || 1) - 1)] !== false;
   const activeBlueprints = blueprints.filter((blueprint) => blueprint.status === 'Đang áp dụng');
   const workflowOptions = activeBlueprints.length
     ? activeBlueprints.map((blueprint) => ({ label: `${blueprint.workflowCode}: ${blueprint.workflowName}`, value: blueprint.workflowCode }))
@@ -616,9 +618,9 @@ export const WorkflowRequestsModule: React.FC = () => {
             {
               title: 'Hành động',
               key: 'actions',
-              width: 220,
+              width: 320,
               render: (_: any, r: ApprovalRequestItem) => (
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <Button
                     size="small"
                     icon={<EyeOutlined />}
@@ -642,14 +644,27 @@ export const WorkflowRequestsModule: React.FC = () => {
                       >
                         Phê duyệt
                       </Button>
-                      <Button
-                        size="small"
-                        danger
-                        icon={<CloseCircleOutlined />}
-                        onClick={() => handleOpenRejectModal(r, 'reject')}
-                      >
-                        Từ chối
-                      </Button>
+                      {canRejectRequest(r) && (
+                        <>
+                          <Button
+                            size="small"
+                            icon={<EditOutlined />}
+                            title="Yêu cầu người gửi bổ sung hồ sơ"
+                            onClick={() => handleOpenRejectModal(r, 'modify')}
+                            style={{ color: '#B45309', borderColor: '#F59E0B' }}
+                          >
+                            Yêu cầu bổ sung
+                          </Button>
+                          <Button
+                            size="small"
+                            danger
+                            icon={<CloseCircleOutlined />}
+                            onClick={() => handleOpenRejectModal(r, 'reject')}
+                          >
+                            Từ chối
+                          </Button>
+                        </>
+                      )}
                     </>
                   ) : r.status === 'Chờ bạn ký duyệt' ? (
                     <span style={{ fontSize: 11.5, color: '#64748B', fontStyle: 'italic' }}>Đang chờ phê duyệt</span>
@@ -1101,6 +1116,31 @@ export const WorkflowRequestsModule: React.FC = () => {
                 >
                   Phê duyệt ngay
                 </Button>
+              )}
+              {detailItem.status === 'Chờ bạn ký duyệt' && (isAdmin || detailItem.canDecide) && canRejectRequest(detailItem) && (
+                <>
+                  <Button
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      handleOpenRejectModal(detailItem, 'modify');
+                    }}
+                    style={{ color: '#B45309', borderColor: '#F59E0B', flex: 1 }}
+                  >
+                    Yêu cầu bổ sung
+                  </Button>
+                  <Button
+                    danger
+                    icon={<CloseCircleOutlined />}
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      handleOpenRejectModal(detailItem, 'reject');
+                    }}
+                    style={{ flex: 1 }}
+                  >
+                    Từ chối
+                  </Button>
+                </>
               )}
               {detailItem.status === 'Yêu cầu bổ sung' && detailItem.requesterId === user?.id && (
                 <Button type="primary" icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); handleOpenResubmission(detailItem); }} style={{ backgroundColor: '#D97706', borderColor: '#D97706', flex: 1 }}>
