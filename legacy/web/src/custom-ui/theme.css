@@ -1873,8 +1873,30 @@ textarea.ant-input {
   column-gap: 4px !important;
 }
 
-.ant-modal .ant-select-selection-item {
-  margin: 2px 0 !important;
+.ant-modal .ant-select-multiple .ant-select-selector,
+.ant-select-multiple .ant-select-selector {
+  gap: 3px 4px !important;
+  row-gap: 3px !important;
+  column-gap: 4px !important;
+  align-content: flex-start !important;
+  align-items: center !important;
+  padding: 3px 6px !important;
+  height: auto !important;
+  min-height: 32px !important;
+}
+
+.ant-modal .ant-select-selection-item,
+.ant-select-selection-item {
+  margin: 0 !important;
+  height: 22px !important;
+  line-height: 20px !important;
+}
+
+.ant-modal .ant-select-multiple input,
+.ant-select-multiple input {
+  height: 22px !important;
+  line-height: 22px !important;
+  margin: 0 !important;
 }
 
 .ant-modal .ant-modal-body > div[style*="flexDirection: column"],
