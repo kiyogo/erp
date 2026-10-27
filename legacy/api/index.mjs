@@ -5167,6 +5167,12 @@ async function handleRequest(request, response) {
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
 
   if ((collectionMatch || collectionRecordMatch)
+    && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_licenses') {
+    await requireAdmin(request);
+    throw new HttpError(409, 'Vui lòng sử dụng chức năng quản lý bản quyền.');
+  }
+
+  if ((collectionMatch || collectionRecordMatch)
     && ['finance_sale_customer_links', 'finance_sale_promotions'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng phải được ghi qua chức năng bán hàng.');
@@ -6326,6 +6332,80 @@ async function handleRequest(request, response) {
     });
     sendJson(response, 200, { transfer });
     return;
+  }
+
+  const licenseAction = /^\/assets\/licenses\/([^/]+)\/(allocate|renew)$/.exec(resource);
+  if (resource === '/assets/licenses' || licenseAction) {
+    const actor = await requireAdmin(request);
+    const scope = 'asset_licenses';
+    if (request.method === 'GET' && !licenseAction) {
+      const rows = await db.prepare('SELECT * FROM collection_records WHERE scope = ? ORDER BY updated_at DESC, record_key ASC').all(scope);
+      const data = rows.map(publicCollectionRecord).filter(Boolean).map((item) => ({ ...item, productKey: decryptField(item.productKey || '', 'system') }));
+      sendJson(response, 200, { data });
+      return;
+    }
+    if (request.method === 'POST') {
+      const input = await readJson(request);
+      let result;
+      await db.transaction(async () => {
+        if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        const timestamp = now();
+        if (!licenseAction) {
+          const licenseCode = requiredText(input.licenseCode, 'Mã bản quyền', 80);
+          const rows = await db.prepare('SELECT payload_json FROM collection_records WHERE scope = ?').all(scope);
+          if (rows.some((row) => String(parseJsonObject(row.payload_json).licenseCode || '').trim().toLocaleLowerCase('vi-VN') === licenseCode.toLocaleLowerCase('vi-VN'))) throw new HttpError(409, 'Mã bản quyền đã tồn tại.');
+          const seatsTotal = requiredAmount(input.seatsTotal, 'Tổng số ghế');
+          const seatsAllocated = optionalAmount(input.seatsAllocated, 'Số ghế đã dùng');
+          if (seatsAllocated > seatsTotal) throw new HttpError(422, 'Số ghế đã dùng vượt tổng số ghế.');
+          const purchaseDate = requiredIsoDate(input.purchaseDate, 'Ngày mua');
+          const expireDate = requiredIsoDate(input.expireDate, 'Ngày hết hạn');
+          if (expireDate < purchaseDate) throw new HttpError(422, 'Ngày hết hạn không được trước ngày mua.');
+          const productKey = requiredText(input.productKey, 'Mã kích hoạt', 4000);
+          result = {
+            key: randomUUID(), licenseCode, softwareName: requiredText(input.softwareName, 'Tên phần mềm', 255),
+            vendor: requiredText(input.vendor, 'Nhà cung cấp', 255), category: requiredText(input.category, 'Nhóm phần mềm', 120),
+            licenseType: requiredText(input.licenseType, 'Hình thức cấp phép', 120), productKey: encryptField(productKey, 'system'),
+            seatsTotal, seatsAllocated, annualCost: optionalAmount(input.annualCost, 'Chi phí'),
+            billingCycle: requiredText(input.billingCycle, 'Kỳ thanh toán', 120), purchaseDate, expireDate,
+            assignedDepartment: requiredText(input.assignedDepartment, 'Phòng ban', 255),
+            assignedAdmin: requiredText(input.assignedAdmin, 'Người quản trị', 255), notes: optionalText(input.notes, 'Ghi chú', 4000),
+            allocatedUsers: [], renewals: [], createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+          };
+          await db.prepare('INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(randomUUID(), scope, result.key, actor.id, JSON.stringify(result), timestamp, timestamp);
+          await recordAuditEvent(actor.id, 'create_license', scope, result.key, { licenseCode });
+        } else {
+          const key = requiredText(decodeURIComponent(licenseAction[1]), 'Khóa bản quyền', 160);
+          const row = await db.prepare('SELECT * FROM collection_records WHERE scope = ? AND record_key = ?').get(scope, key);
+          if (!row) throw new HttpError(404, 'Không tìm thấy bản quyền.');
+          result = publicCollectionRecord(row);
+          if (licenseAction[2] === 'allocate') {
+            const seatsTotal = requiredAmount(result.seatsTotal, 'Tổng số ghế');
+            const seatsAllocated = optionalAmount(result.seatsAllocated, 'Số ghế đã dùng');
+            if (seatsAllocated >= seatsTotal) throw new HttpError(409, 'Đã hết ghế bản quyền.');
+            const name = requiredText(input.name, 'Họ tên', 255);
+            const email = normalizeEmail(input.email);
+            const allocatedUsers = Array.isArray(result.allocatedUsers) ? result.allocatedUsers : [];
+            if (allocatedUsers.some((item) => String(item.email || '').trim().toLowerCase() === email && item.status !== 'Tạm khóa')) throw new HttpError(409, 'Email đã được cấp ghế cho bản quyền này.');
+            result.allocatedUsers = [{ name, email, deviceCode: optionalText(input.deviceCode, 'Thiết bị', 120), assignedDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()), status: 'Đang dùng', assignedBy: actor.name, assignedById: actor.id }, ...allocatedUsers];
+            result.seatsAllocated = seatsAllocated + 1;
+          } else {
+            const expireDate = requiredIsoDate(input.expireDate, 'Ngày hết hạn mới');
+            const previousExpireDate = requiredIsoDate(result.expireDate, 'Ngày hết hạn hiện tại');
+            if (expireDate <= previousExpireDate) throw new HttpError(422, 'Ngày hết hạn mới phải sau ngày hiện tại.');
+            const annualCost = optionalAmount(input.annualCost, 'Chi phí');
+            result.renewals = [...(Array.isArray(result.renewals) ? result.renewals : []), { previousExpireDate, expireDate, annualCost, recordedAt: timestamp, recordedBy: actor.name, recordedById: actor.id }];
+            result.expireDate = expireDate;
+            result.annualCost = annualCost;
+          }
+          if (result.productKey && !isEncrypted(result.productKey)) result.productKey = encryptField(result.productKey, 'system');
+          await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE scope = ? AND record_key = ?').run(JSON.stringify(result), timestamp, scope, key);
+          await recordAuditEvent(actor.id, licenseAction[2] === 'allocate' ? 'allocate_license' : 'renew_license', scope, key);
+        }
+      });
+      sendJson(response, licenseAction ? 200 : 201, { record: { ...result, productKey: decryptField(result.productKey || '', 'system') } });
+      return;
+    }
   }
 
   if (request.method === 'POST' && resource === '/finance/sales/promotion-preview') {

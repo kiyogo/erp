@@ -50,6 +50,16 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  const pgLicense = (await request('/assets/licenses', 'POST', { licenseCode: 'PG-LIC-01', softwareName: 'PG license', vendor: 'PG vendor', category: 'Văn phòng & Cộng tác', licenseType: 'Theo người dùng', productKey: 'PG-SECRET-123', seatsTotal: 1, seatsAllocated: 0, annualCost: 0, billingCycle: 'Hàng năm', purchaseDate: '2026-01-01', expireDate: '2028-01-01', assignedDepartment: 'IT', assignedAdmin: 'PG admin' }, 201)).record;
+  const pgLicenseRace = await Promise.all(['one@example.test', 'two@example.test'].map(async (email) => {
+    const response = await fetch(`${base}/assets/licenses/${pgLicense.key}/allocate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name: 'PG user', email }) });
+    return response.status;
+  }));
+  assert.deepEqual(pgLicenseRace.sort((a, b) => a - b), [200, 409]);
+  assert.equal((await request('/assets/licenses')).data.find((item) => item.key === pgLicense.key).seatsAllocated, 1);
+  assert.equal((await request(`/assets/licenses/${pgLicense.key}/renew`, 'POST', { expireDate: '2029-01-01', annualCost: 0 })).record.renewals.length, 1);
+  await request('/collections/asset_licenses', 'GET', undefined, 409); completed++;
+
   const meetingToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const meetingDate = new Date(Date.parse(`${meetingToday}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
   const meetingRoom = (await request('/collections/meeting_rooms', 'POST', { record: {

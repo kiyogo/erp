@@ -868,3 +868,10 @@ export const ekycApi = {
       `/ekyc/session/${encodeURIComponent(token)}/status${userId ? `?userId=${encodeURIComponent(userId)}` : ''}`
     ),
 };
+
+export const softwareLicensesApi = {
+  getAll: () => api.get<{ data: any[] }>('/assets/licenses'),
+  create: (data: Record<string, unknown>) => api.post<{ record: any }>('/assets/licenses', data),
+  allocate: (key: string, data: { name: string; email: string; deviceCode: string }) => api.post<{ record: any }>(`/assets/licenses/${encodeURIComponent(key)}/allocate`, data),
+  renew: (key: string, data: { expireDate: string; annualCost: number }) => api.post<{ record: any }>(`/assets/licenses/${encodeURIComponent(key)}/renew`, data),
+};

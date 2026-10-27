@@ -1,4 +1,5 @@
-import { dataService } from '../../services/dataService';
+import { softwareLicensesApi } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -58,17 +59,25 @@ export interface SoftwareLicense {
 
 const INITIAL_LICENSES: SoftwareLicense[] = [];
 
+function withStatus(item: SoftwareLicense): SoftwareLicense {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const expiry = Date.parse(`${item.expireDate}T00:00:00Z`);
+  const days = (expiry - Date.parse(`${today}T00:00:00Z`)) / 86400000;
+  return { ...item, status: Number.isFinite(days) ? days < 0 ? 'Hết hạn' : days <= 30 ? 'Sắp hết hạn' : 'Đang kích hoạt' : item.status };
+}
+
 export const LicensesModule: React.FC = () => {
   const [data, setData] = useState<SoftwareLicense[]>(INITIAL_LICENSES);
+  const [saving, setSaving] = useState(false);
+  const [renewOpen, setRenewOpen] = useState(false);
+  const [renewDate, setRenewDate] = useState('');
+  const [renewCost, setRenewCost] = useState('');
 
   useEffect(() => {
-    const list = dataService.getGenericData('asset_licenses');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('asset_licenses');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
+    let active = true;
+    softwareLicensesApi.getAll().then(({ data: response }) => { if (active) setData(response.data.map(withStatus)); })
+      .catch(() => { if (active) message.error('Không tải được danh sách bản quyền.'); });
+    return () => { active = false; };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -88,83 +97,69 @@ export const LicensesModule: React.FC = () => {
   const [form] = Form.useForm();
 
   // Metrics
-  const totalSeats = data.reduce((sum, item) => sum + item.seatsTotal, 0);
-  const totalAllocated = data.reduce((sum, item) => sum + item.seatsAllocated, 0);
-  const totalCost = data.reduce((sum, item) => sum + item.annualCost, 0);
+  const totalSeats = data.reduce((sum, item) => sum + (Number(item.seatsTotal) || 0), 0);
+  const totalAllocated = data.reduce((sum, item) => sum + (Number(item.seatsAllocated) || 0), 0);
+  const totalCost = data.reduce((sum, item) => sum + (Number(item.annualCost) || 0), 0);
   const expiringCount = data.filter((d) => d.status === 'Sắp hết hạn').length;
   const utilizationRate = totalSeats > 0 ? Math.round((totalAllocated / totalSeats) * 100) : 0;
 
   const handleOpenCreate = () => {
     form.resetFields();
     form.setFieldsValue({
-      licenseCode: `LIC-APP-0${data.length + 1}`,
+      licenseCode: '',
       category: 'Bộ công cụ Lập trình',
       licenseType: 'Theo người dùng',
       billingCycle: 'Hàng năm',
       purchaseDate: new Date().toISOString().substring(0, 10),
-      expireDate: new Date(Date.now() + 365 * 86400000).toISOString().substring(0, 10),
-      seatsAllocated: 5,
-      seatsTotal: 10,
-      annualCost: 50000000,
-      assignedDepartment: 'Phòng Ban Kỹ Thuật',
-      assignedAdmin: 'Quản trị hệ thống',
+      expireDate: '',
+      seatsAllocated: 0,
+      seatsTotal: 1,
+      annualCost: 0,
+      assignedDepartment: '',
+      assignedAdmin: '',
     });
     setModalOpen(true);
   };
 
-  const handleCreate = (values: any) => {
-    const total = Number(values.seatsTotal) || 10;
-    const allocated = Number(values.seatsAllocated) || 0;
-    const newLic: SoftwareLicense = {
-      ...values,
-      key: String(Date.now()),
-      seatsTotal: total,
-      seatsAllocated: allocated,
-      annualCost: Number(values.annualCost) || 50000000,
-      complianceAuditStatus: 'Tuân thủ 100%',
-      status: 'Đang kích hoạt',
-      allocatedUsers: [],
-    };
-    const nextItems = [newLic, ...data]; setData(nextItems); dataService.saveGenericData('asset_licenses', nextItems);
-    message.success(`Đã đăng ký bản quyền phần mềm: ${values.softwareName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    setSaving(true);
+    try {
+      const response = await softwareLicensesApi.create(values);
+      setData((current) => [withStatus(response.data.record), ...current]);
+      message.success('Đã đăng ký bản quyền phần mềm.');
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) { message.error(error?.response?.data?.error || error?.response?.data?.message || 'Không lưu được bản quyền.'); }
+    finally { setSaving(false); }
   };
 
-  const handleAddSeat = () => {
+  const handleAddSeat = async () => {
     if (!detailItem) return;
-    if (!seatName || !seatEmail) {
-      message.error('Vui lòng nhập họ tên và email người nhận bản quyền');
-      return;
-    }
-    if (detailItem.seatsAllocated >= detailItem.seatsTotal) {
-      message.error('Đã hết ghế bản quyền. Hãy mua thêm!');
-      return;
-    }
+    setSaving(true);
+    try {
+      const response = await softwareLicensesApi.allocate(detailItem.key, { name: seatName, email: seatEmail, deviceCode: seatDevice });
+      const updated = withStatus(response.data.record);
+      setData((current) => current.map((item) => item.key === updated.key ? updated : item));
+      setDetailItem(updated);
+      message.success('Đã ghi nhận cấp ghế.');
+      setSeatModalOpen(false);
+      setSeatName(''); setSeatEmail(''); setSeatDevice('');
+    } catch (error: any) { message.error(error?.response?.data?.error || error?.response?.data?.message || 'Không cấp được ghế.'); }
+    finally { setSaving(false); }
+  };
 
-    const newAlloc: LicenseUserAllocation = {
-      name: seatName,
-      email: seatEmail,
-      assignedDate: new Date().toISOString().substring(0, 10),
-      deviceCode: seatDevice || 'TS-DEVICE',
-      status: 'Đang dùng',
-    };
-
-    const updatedItem = {
-      ...detailItem,
-      seatsAllocated: detailItem.seatsAllocated + 1,
-      allocatedUsers: [newAlloc, ...(detailItem.allocatedUsers || [])],
-    };
-
-    const updated = data.map((d) => (d.key === detailItem.key ? updatedItem : d));
-    setDetailItem(updatedItem);
-    setData(updated);
-    dataService.saveGenericData('asset_licenses', updated);
-    message.success(`Đã cấp phát License cho nhân viên ${seatName}!`);
-    setSeatModalOpen(false);
-    setSeatName('');
-    setSeatEmail('');
-    setSeatDevice('');
+  const handleRenew = async () => {
+    if (!detailItem || !renewDate || renewCost === '') { message.error('Nhập ngày hết hạn mới và chi phí.'); return; }
+    setSaving(true);
+    try {
+      const response = await softwareLicensesApi.renew(detailItem.key, { expireDate: renewDate, annualCost: Number(renewCost) });
+      const updated = withStatus(response.data.record);
+      setData((current) => current.map((item) => item.key === updated.key ? updated : item));
+      setDetailItem(updated);
+      setRenewOpen(false);
+      message.success('Đã ghi nhận thông tin gia hạn.');
+    } catch (error: any) { message.error(error?.response?.data?.error || error?.response?.data?.message || 'Không ghi nhận được gia hạn.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -175,7 +170,7 @@ export const LicensesModule: React.FC = () => {
       (item.assignedDepartment || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.productKey || '').toLowerCase().includes(searchText.toLowerCase());
 
-    const matchCategory = categoryFilter === 'all' || item.category === categoryFilter;
+    const matchCategory = categoryFilter === 'all' || (item.category || '').split(' (')[0] === categoryFilter;
     const matchStatus = statusFilter === 'all' || item.status === statusFilter;
 
     return matchSearch && matchCategory && matchStatus;
@@ -214,9 +209,9 @@ export const LicensesModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Mức độ tuân thủ</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            100% Hợp pháp
+            {data.length} hồ sơ
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đầy đủ chứng chỉ OEM/Enterprise bản quyền</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Cần đối chiếu chứng từ bản quyền</div>
         </div>
       </div>
 
@@ -237,11 +232,12 @@ export const LicensesModule: React.FC = () => {
             style={{ width: 220 }}
             options={[
               { label: 'Tất cả nhóm phần mềm', value: 'all' },
-              { label: 'Bộ công cụ Lập trình', value: 'Bộ công cụ Lập trình (DevTools)' },
-              { label: 'Hệ điều hành & Máy chủ', value: 'Hệ điều hành & Máy chủ (OS/Server)' },
+              { label: 'Bộ công cụ Lập trình', value: 'Bộ công cụ Lập trình' },
+              { label: 'Hệ điều hành & Máy chủ', value: 'Hệ điều hành & Máy chủ' },
               { label: 'Nền tảng Đám mây & SaaS', value: 'Nền tảng Đám mây & SaaS' },
-              { label: 'Thiết kế & Đồ họa', value: 'Thiết kế & Đồ họa (Design)' },
-              { label: 'Văn phòng & Cộng tác', value: 'Văn phòng & Cộng tác (Workspace)' },
+              { label: 'Thiết kế & Đồ họa', value: 'Thiết kế & Đồ họa' },
+              { label: 'Bảo mật & Giám sát', value: 'Bảo mật & Giám sát' },
+              { label: 'Văn phòng & Cộng tác', value: 'Văn phòng & Cộng tác' },
             ]}
           />
           <Select
@@ -258,7 +254,7 @@ export const LicensesModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo kiểm kê bản quyền phần mềm')}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('kiem_ke_ban_quyen.xlsx', generateValidXlsxBlob([['Mã', 'Phần mềm', 'Nhà cung cấp', 'Nhóm', 'Loại', 'Ghế đã dùng', 'Tổng ghế', 'Chi phí', 'Ngày mua', 'Ngày hết hạn', 'Phòng ban', 'Quản trị', 'Trạng thái'], ...filteredData.map((item) => [item.licenseCode, item.softwareName, item.vendor, item.category, item.licenseType, item.seatsAllocated, item.seatsTotal, item.annualCost, item.purchaseDate, item.expireDate, item.assignedDepartment, item.assignedAdmin, item.status])]))}>
             Xuất Excel
           </Button>
           <Button
@@ -312,7 +308,7 @@ export const LicensesModule: React.FC = () => {
               key: 'seats',
               width: 170,
               render: (_: any, r: SoftwareLicense) => {
-                const pct = Math.round((r.seatsAllocated / r.seatsTotal) * 100);
+                const pct = r.seatsTotal > 0 ? Math.round((r.seatsAllocated / r.seatsTotal) * 100) : 0;
                 return (
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, marginBottom: 2 }}>
@@ -332,7 +328,7 @@ export const LicensesModule: React.FC = () => {
               render: (v: number, r: SoftwareLicense) => (
                 <div>
                   <span style={{ fontWeight: 700, color: '#16A34A', fontSize: 13 }}>
-                    {v.toLocaleString('vi-VN')} ₫
+                    {Number(v || 0).toLocaleString('vi-VN')} ₫
                   </span>
                   <div style={{ fontSize: 11, color: '#64748B' }}>{r.billingCycle}</div>
                 </div>
@@ -388,30 +384,30 @@ export const LicensesModule: React.FC = () => {
         width={760}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 14 }}>
             <Form.Item name="licenseCode" label="Mã License" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: LIC-DATADOG-01" />
             </Form.Item>
             <Form.Item name="category" label="Phân nhóm phần mềm" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Bộ công cụ Lập trình', value: 'Bộ công cụ Lập trình (DevTools)' },
-                  { label: 'Hệ điều hành & Máy chủ', value: 'Hệ điều hành & Máy chủ (OS/Server)' },
+                  { label: 'Bộ công cụ Lập trình', value: 'Bộ công cụ Lập trình' },
+                  { label: 'Hệ điều hành & Máy chủ', value: 'Hệ điều hành & Máy chủ' },
                   { label: 'Nền tảng Đám mây & SaaS', value: 'Nền tảng Đám mây & SaaS' },
-                  { label: 'Thiết kế & Đồ họa', value: 'Thiết kế & Đồ họa (Design)' },
-                  { label: 'Bảo mật & Giám sát', value: 'Bảo mật & Giám sát (Security)' },
-                  { label: 'Văn phòng & Cộng tác', value: 'Văn phòng & Cộng tác (Workspace)' },
+                  { label: 'Thiết kế & Đồ họa', value: 'Thiết kế & Đồ họa' },
+                  { label: 'Bảo mật & Giám sát', value: 'Bảo mật & Giám sát' },
+                  { label: 'Văn phòng & Cộng tác', value: 'Văn phòng & Cộng tác' },
                 ]}
               />
             </Form.Item>
             <Form.Item name="licenseType" label="Hình thức cấp phép" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Theo người dùng', value: 'Theo người dùng (Per User)' },
-                  { label: 'Doanh nghiệp', value: 'Doanh nghiệp (Enterprise)' },
-                  { label: 'Theo máy chủ', value: 'Theo máy chủ (Per Core)' },
-                  { label: 'Vĩnh viễn', value: 'Vĩnh viễn (Perpetual)' },
-                  { label: 'Thuê bao', value: 'Thuê bao (SaaS)' },
+                  { label: 'Theo người dùng', value: 'Theo người dùng' },
+                  { label: 'Doanh nghiệp', value: 'Doanh nghiệp' },
+                  { label: 'Theo máy chủ', value: 'Theo máy chủ' },
+                  { label: 'Vĩnh viễn', value: 'Vĩnh viễn' },
+                  { label: 'Thuê bao', value: 'Thuê bao' },
                 ]}
               />
             </Form.Item>
@@ -421,7 +417,7 @@ export const LicensesModule: React.FC = () => {
             <Input placeholder="Ví dụ: Datadog APM & Cloud Infrastructure Monitoring" />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="vendor" label="Hãng phát triển / Nhà cung cấp" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Datadog Inc / Microsoft / Oracle" />
             </Form.Item>
@@ -430,7 +426,7 @@ export const LicensesModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1.2fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1.2fr', gap: 14 }}>
             <Form.Item name="seatsAllocated" label="Số ghế đã dùng" rules={[{ required: true }]}>
               <Input type="number" min={0} />
             </Form.Item>
@@ -440,9 +436,9 @@ export const LicensesModule: React.FC = () => {
             <Form.Item name="billingCycle" label="Kỳ thanh toán" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { label: 'Hàng năm', value: 'Hàng năm (Annual)' },
-                  { label: 'Hàng tháng', value: 'Hàng tháng (Monthly)' },
-                  { label: 'Vĩnh viễn', value: 'Vĩnh viễn (One-off)' },
+                  { label: 'Hàng năm', value: 'Hàng năm' },
+                  { label: 'Hàng tháng', value: 'Hàng tháng' },
+                  { label: 'Vĩnh viễn', value: 'Vĩnh viễn' },
                 ]}
               />
             </Form.Item>
@@ -451,7 +447,7 @@ export const LicensesModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="purchaseDate" label="Ngày mua bản quyền" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
@@ -463,13 +459,15 @@ export const LicensesModule: React.FC = () => {
             </Form.Item>
           </div>
 
+          <Form.Item name="assignedAdmin" label="Người quản trị" rules={[{ required: true }]}><Input /></Form.Item>
+
           <Form.Item name="notes" label="Ghi chú điều khoản hợp đồng & Bảo mật">
             <Input.TextArea rows={2} placeholder="Nhập các điều khoản gia hạn hoặc tài khoản quản trị..." />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Đăng ký bản quyền
             </Button>
           </div>
@@ -516,9 +514,9 @@ export const LicensesModule: React.FC = () => {
                   <Button
                     size="small"
                     icon={<CopyOutlined />}
-                    onClick={() => {
-                      navigator.clipboard?.writeText(detailItem.productKey);
-                      message.success('Đã sao chép Product Key vào bộ nhớ tạm');
+                    onClick={async () => {
+                      try { await navigator.clipboard.writeText(detailItem.productKey); message.success('Đã sao chép mã kích hoạt.'); }
+                      catch { message.error('Không sao chép được mã kích hoạt.'); }
                     }}
                   >
                     Copy
@@ -543,7 +541,7 @@ export const LicensesModule: React.FC = () => {
               <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 10, background: '#EFF6FF' }}>
                 <div style={{ fontSize: 11, color: '#1E40AF' }}>CHI PHÍ / NĂM</div>
                 <div style={{ fontSize: 18, fontWeight: 800, color: '#2563EB', marginTop: 2 }}>
-                  {detailItem.annualCost.toLocaleString('vi-VN')} ₫
+                  {Number(detailItem.annualCost || 0).toLocaleString('vi-VN')} ₫
                 </div>
                 <div style={{ fontSize: 11, color: '#64748B' }}>{detailItem.billingCycle}</div>
               </div>
@@ -618,15 +616,15 @@ export const LicensesModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất chứng thư bản quyền ${detailItem.licenseCode} (PDF)`)}
+                onClick={() => downloadFile(`${detailItem.licenseCode.replace(/[^a-z0-9_-]/gi, '_')}_ban_quyen.pdf`, generateValidPdfBlob('PHIEU THEO DOI BAN QUYEN', detailItem.licenseCode, [detailItem.softwareName, `Nha cung cap: ${detailItem.vendor}`, `So ghe: ${detailItem.seatsAllocated}/${detailItem.seatsTotal}`, `Ngay mua: ${detailItem.purchaseDate}`, `Ngay het han: ${detailItem.expireDate}`, `Phong ban: ${detailItem.assignedDepartment}`, `Quan tri: ${detailItem.assignedAdmin}`, 'Phieu theo doi noi bo, khong thay the chung thu cua nha cung cap.']))}
                 style={{ flex: 1 }}
               >
-                In Chứng Thư Bản Quyền (PDF)
+                In phiếu theo dõi PDF
               </Button>
               <Button
                 type="primary"
                 icon={<ReloadOutlined />}
-                onClick={() => message.success(`Đã tạo tờ trình gia hạn hợp đồng bản quyền ${detailItem.licenseCode}`)}
+                onClick={() => { setRenewDate(''); setRenewCost(String(detailItem.annualCost)); setRenewOpen(true); }}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
                 Gia hạn hợp đồng
@@ -636,6 +634,14 @@ export const LicensesModule: React.FC = () => {
         )}
       </Drawer>
 
+      <Modal title="Ghi nhận gia hạn bản quyền" open={renewOpen} onCancel={() => setRenewOpen(false)} footer={null} width={460}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
+          <label>Ngày hết hạn mới<Input type="date" value={renewDate} onChange={(event) => setRenewDate(event.target.value)} /></label>
+          <label>Chi phí<Input type="number" min={0} value={renewCost} onChange={(event) => setRenewCost(event.target.value)} /></label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={() => setRenewOpen(false)}>Hủy</Button><Button type="primary" loading={saving} onClick={handleRenew}>Ghi nhận</Button></div>
+        </div>
+      </Modal>
+
       {/* MODAL: Cấp phát ghế bản quyền nhanh */}
       <Modal
         title="Cấp Phát Ghế Bản Quyền Cho Nhân Viên Mới"
@@ -644,7 +650,7 @@ export const LicensesModule: React.FC = () => {
         footer={null}
         width={460}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
           <div>
             <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
               Họ và tên nhân sự:
@@ -684,6 +690,7 @@ export const LicensesModule: React.FC = () => {
               type="primary"
               icon={<CheckCircleOutlined />}
               onClick={handleAddSeat}
+              loading={saving}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
               Xác nhận cấp phát

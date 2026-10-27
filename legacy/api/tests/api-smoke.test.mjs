@@ -27,6 +27,7 @@ const migrationFixture = new DatabaseSync(env.KIYOVN_DB_PATH);
 const fixtureActor = migrationFixture.prepare('SELECT id FROM users WHERE email = ?').get(env.SEED_ADMIN_EMAIL);
 migrationFixture.prepare('DELETE FROM system_settings WHERE setting_key = ?').run('attendance_canonical_scopes_v1');
 migrationFixture.prepare('INSERT INTO collection_records VALUES (?, ?, ?, ?, ?, ?, ?)').run('migration-fixture', 'employee_leaves', 'legacy-leave', fixtureActor.id, JSON.stringify({ key: 'legacy-leave', employeeId: fixtureActor.id, code: 'NP-OLD', fromDate: '2026-10-01', toDate: '2026-10-01', days: 1, type: 'Nghỉ phép năm', reason: 'Legacy request', status: 'Chờ duyệt' }), new Date().toISOString(), new Date().toISOString());
+migrationFixture.prepare('INSERT INTO collection_records VALUES (?, ?, ?, ?, ?, ?, ?)').run('legacy-license-fixture', 'asset_licenses', 'legacy-license', fixtureActor.id, JSON.stringify({ key: 'legacy-license', licenseCode: 'LEGACY-LIC', softwareName: 'Bản cũ', productKey: 'OLD-SECRET-123', seatsTotal: 2, seatsAllocated: 0, annualCost: 0, expireDate: '2028-01-01', allocatedUsers: [] }), new Date().toISOString(), new Date().toISOString());
 migrationFixture.close();
 const server = spawn(process.execPath, ['index.mjs'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 let logs = '';
@@ -56,6 +57,44 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
   assert.equal(response.status, expected, JSON.stringify(body));
   return body;
 }
+
+test('software licenses persist protected keys and serialize seat allocation and renewal', async () => {
+  assert.equal((await request('/assets/licenses')).data.find((item) => item.key === 'legacy-license').productKey, 'OLD-SECRET-123');
+  assert.equal((await request('/assets/licenses/legacy-license/allocate', 'POST', { name: 'Người cũ', email: 'legacy@example.test', deviceCode: '' })).record.productKey, 'OLD-SECRET-123');
+  const input = { licenseCode: 'LIC-TEST-ONE', softwareName: 'Ứng dụng thử', vendor: 'Hãng thử', category: 'Văn phòng & Cộng tác', licenseType: 'Theo người dùng', productKey: 'TEST-SECRET-123', seatsTotal: 2, seatsAllocated: 1, annualCost: 0, billingCycle: 'Hàng năm', purchaseDate: '2026-01-01', expireDate: '2027-01-01', assignedDepartment: 'IT', assignedAdmin: 'Quản trị', notes: '' };
+  const created = (await request('/assets/licenses', 'POST', input, 201)).record;
+  assert.equal(created.productKey, input.productKey);
+  assert.equal(created.annualCost, 0);
+  await request('/assets/licenses', 'POST', { ...input, licenseCode: 'lic-test-one' }, 409);
+  await request('/assets/licenses', 'POST', { ...input, licenseCode: 'INVALID', seatsAllocated: 3 }, 422);
+  await request('/assets/licenses', 'POST', { ...input, licenseCode: 'INVALID-DATE', expireDate: '2025-01-01' }, 422);
+  await request('/collections/asset_licenses', 'GET', undefined, 409);
+  await request('/collections/asset_licenses', 'PUT', { records: [] }, 409);
+  const attempts = await Promise.all(['one@example.test', 'two@example.test'].map(async (email) => {
+    const response = await fetch(`${base}/assets/licenses/${created.key}/allocate`, { method: 'POST', headers, body: JSON.stringify({ name: 'Người thử', email, deviceCode: '' }) });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(attempts.map((item) => item.status).sort((a, b) => a - b), [200, 409]);
+  const saved = attempts.find((item) => item.status === 200).body.record;
+  assert.equal(saved.seatsAllocated, 2);
+  assert.equal(saved.allocatedUsers[0].deviceCode, '');
+  await request(`/assets/licenses/${created.key}/renew`, 'POST', { expireDate: '2026-12-31', annualCost: 0 }, 422);
+  const renewed = (await request(`/assets/licenses/${created.key}/renew`, 'POST', { expireDate: '2028-01-01', annualCost: 0 })).record;
+  assert.equal(renewed.renewals[0].previousExpireDate, '2027-01-01');
+  assert.equal(renewed.expireDate, '2028-01-01');
+  assert.equal((await request('/assets/licenses')).data.find((item) => item.key === created.key).productKey, input.productKey);
+  const stored = new DatabaseSync(env.KIYOVN_DB_PATH, { readOnly: true });
+  const persisted = stored.prepare('SELECT payload_json FROM collection_records WHERE scope = ? AND record_key = ?').get('asset_licenses', created.key).payload_json;
+  stored.close();
+  assert.ok(!persisted.includes(input.productKey));
+  assert.match(JSON.parse(persisted).productKey, /^ENC:/);
+  await request('/users', 'POST', { email: 'license-user@example.test', name: 'Người thử', password: 'License-Test-26!Secure', employeeCode: 'LICENSE-TEST', role: 'USER' }, 201);
+  const loginUser = await request('/auth/login', 'POST', { email: 'license-user@example.test', password: 'License-Test-26!Secure' });
+  const userHeaders = { ...headers, Authorization: `Bearer ${loginUser.access_token || loginUser.token}` };
+  await request('/assets/licenses', 'GET', undefined, 403, userHeaders);
+  await request('/collections/asset_licenses', 'GET', undefined, 403, userHeaders);
+  await request(`/assets/licenses/${created.key}/allocate`, 'POST', { name: 'Test', email: 'x@example.test' }, 403, userHeaders);
+});
 
 test('anonymous access is rejected', async () => {
   assert.equal((await fetch(`${base}/collections/finance_budgets`)).status, 401);
