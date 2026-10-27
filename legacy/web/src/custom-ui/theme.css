@@ -1819,6 +1819,13 @@ textarea.ant-input {
   gap: 14px !important;
 }
 
+.ant-modal form > *,
+.ant-modal .ant-form > *,
+.ant-modal-body > * {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
 .ant-modal-footer {
   padding: 0 !important;
   margin: 0 !important;
@@ -1832,24 +1839,44 @@ textarea.ant-input {
   margin: 0 !important;
 }
 
+.ant-modal [style*="justifyContent: 'flex-end'"],
+.ant-modal [style*="justify-content: flex-end"],
+.ant-modal [style*="justify-content:flex-end"],
+.ant-modal form > div:last-child,
+.ant-modal .ant-form > div:last-child {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  gap: 14px !important;
+}
+
 .ant-modal .k-form-grid-2,
 .ant-modal .k-form-grid-3,
 .ant-modal .k-form-grid-4,
 .ant-modal [style*="gridTemplateColumns"],
 .ant-modal [style*="grid-template-columns"] {
   gap: 14px !important;
-}
-
-.ant-modal .ant-form-item {
+  margin-top: 0 !important;
   margin-bottom: 0 !important;
 }
 
-.ant-modal .ant-modal-body > div[style*="flexDirection: column"],
-.ant-modal .ant-modal-body > div[style*="flex-direction: column"],
-.ant-modal .ant-modal-body > div[style*="flexDirection: 'column'"] {
+.ant-modal .ant-form-item {
+  margin: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.ant-modal [style*="gap"],
+.ant-modal div[style*="gap"] {
+  gap: 14px !important;
+}
+
+.ant-modal .ant-modal-body div[style*="flexDirection: column"],
+.ant-modal .ant-modal-body div[style*="flex-direction: column"],
+.ant-modal .ant-modal-body div[style*="flexDirection: 'column'"] {
   gap: 14px !important;
   padding-top: 0 !important;
   margin-top: 0 !important;
+  margin-bottom: 0 !important;
 }
 
 .ant-modal-body::-webkit-scrollbar,
