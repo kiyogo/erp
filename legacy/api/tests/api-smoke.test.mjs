@@ -123,6 +123,83 @@ test('asset allocations and returns keep inventory and tickets atomic', async ()
   await request('/assets/allocations', 'POST', input, 403, userHeaders);
 });
 
+test('asset repair decisions update inventory and repair history atomically', async () => {
+  const asset = { key: 'repair-asset-test', code: 'TS-REPAIR-API', name: 'Máy cần sửa', status: 'Đang sử dụng', location: 'Phòng máy', department: 'Công nghệ', assignedTo: 'Nhân viên A', history: [] };
+  await request('/collections/asset_items', 'POST', { record: asset }, 201);
+  const validationAsset = { ...asset, key: 'repair-validation-asset', code: 'TS-REPAIR-VALIDATION', name: 'Máy kiểm tra dữ liệu', assignedTo: '' };
+  await request('/collections/asset_items', 'POST', { record: validationAsset }, 201);
+  const input = {
+    repairCode: 'SC-API-01', assetCode: asset.code, assetName: 'Giả mạo', serialNo: 'Giả mạo', requester: 'Nhân viên A', department: 'Công nghệ',
+    severity: 'Cao (P2)', repairUnit: 'Trung tâm bảo hành chính hãng', vendor: 'Trung tâm sửa chữa', vendorContact: '0900000000',
+    issueDescription: 'Máy không khởi động', rootCause: 'Chưa xác định', solution: 'Kiểm tra bo mạch', replacedParts: '',
+    estimatedCost: 2500000, actualCost: 999999, costBearing: 'Công ty chi trả', startDate: '2030-01-01', expectedEndDate: '2030-01-04',
+    warrantyAfterRepair: '90 ngày', status: 'Đã sửa xong & Bàn giao', approver: 'Giả mạo',
+  };
+  const created = (await request('/assets/repairs', 'POST', input, 201)).record;
+  assert.equal(created.status, 'Chờ duyệt báo giá');
+  assert.equal(created.assetName, asset.name);
+  assert.equal(created.serialNo, '');
+  assert.equal(created.actualCost, 0);
+  assert.equal(created.createdById, session.user.id);
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.status, 'Đang sửa chữa');
+  await request('/assets/repairs', 'POST', { ...input, repairCode: 'SC-API-02' }, 409);
+  await request('/assets/repairs', 'POST', { ...input, repairCode: 'SC-API-DATE', assetCode: validationAsset.code, expectedEndDate: 'bad' }, 422);
+  await request('/assets/repairs', 'POST', { ...input, repairCode: 'SC-API-FRACTION', assetCode: validationAsset.code, estimatedCost: 1.5 }, 422);
+  await request('/collections/asset_repairs', 'PUT', { records: [] }, 409);
+  await request(`/collections/asset_repairs/${created.key}`, 'PATCH', { patch: { status: 'Đã sửa xong & Bàn giao' } }, 409);
+
+  const approvalRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/assets/repairs/${created.key}/approve`, { method: 'POST', headers, body: JSON.stringify({ approver: 'Giả mạo' }) });
+    return response.status;
+  }));
+  assert.deepEqual(approvalRace.sort((a, b) => a - b), [200, 409]);
+  let repair = (await request(`/collections/asset_repairs/${created.key}`)).record;
+  assert.equal(repair.approver, session.user.name);
+  assert.equal(repair.approverId, session.user.id);
+  assert.equal(repair.status, 'Đang sửa chữa tại hãng');
+
+  repair = (await request(`/assets/repairs/${created.key}/transition`, 'POST', { status: 'Chờ linh kiện thay thế' })).record;
+  assert.equal(repair.status, 'Chờ linh kiện thay thế');
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.history.filter(item => item.action === 'Chờ linh kiện thay thế').length, 1);
+  repair = (await request(`/assets/repairs/${created.key}/transition`, 'POST', { status: 'Đang sửa chữa tại hãng' })).record;
+  assert.equal(repair.status, 'Đang sửa chữa tại hãng');
+
+  let fixture = new DatabaseSync(env.KIYOVN_DB_PATH);
+  fixture.exec(`CREATE TRIGGER fail_repair_update BEFORE UPDATE ON collection_records WHEN NEW.scope = 'asset_repairs' AND NEW.record_key = '${created.key}' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+  await request(`/assets/repairs/${created.key}/complete`, 'POST', { actualCost: 0, completionNotes: 'Nghiệm thu đạt' }, 500);
+  fixture.exec('DROP TRIGGER fail_repair_update');
+  fixture.close();
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.status, 'Đang sửa chữa');
+  assert.equal((await request(`/collections/asset_repairs/${created.key}`)).record.status, 'Đang sửa chữa tại hãng');
+
+  repair = (await request(`/assets/repairs/${created.key}/complete`, 'POST', { actualCost: 0, completionNotes: 'Nghiệm thu đạt' })).record;
+  assert.equal(repair.status, 'Đã sửa xong & Bàn giao');
+  assert.equal(repair.actualCost, 0);
+  assert.equal(repair.completedById, session.user.id);
+  const restored = (await request(`/collections/asset_items/${asset.key}`)).record;
+  assert.equal(restored.status, 'Đang sử dụng');
+  assert.equal(restored.assignedTo, asset.assignedTo);
+  assert.equal(restored.history.filter(item => item.action === 'Hoàn tất sửa chữa').length, 1);
+
+  await request('/users', 'POST', { email: 'asset-repair-user@example.test', name: 'Người dùng sửa chữa', password: 'Asset-Repair-26!Secure', employeeCode: 'REPAIR-USER', role: 'USER' }, 201);
+  const userLogin = await request('/auth/login', 'POST', { email: 'asset-repair-user@example.test', password: 'Asset-Repair-26!Secure' });
+  const userHeaders = { ...headers, Authorization: `Bearer ${userLogin.access_token || userLogin.token}` };
+  await request('/collections/asset_repairs', 'GET', undefined, 403, userHeaders);
+  await request('/assets/repairs', 'POST', input, 403, userHeaders);
+  await request(`/assets/repairs/${created.key}/approve`, 'POST', {}, 403, userHeaders);
+
+  const unrepairableAsset = { ...asset, key: 'repair-unrepairable-asset', code: 'TS-REPAIR-UNREPAIRABLE', status: 'Trong kho', assignedTo: '' };
+  await request('/collections/asset_items', 'POST', { record: unrepairableAsset }, 201);
+  const unrepairable = (await request('/assets/repairs', 'POST', {
+    ...input, repairCode: 'SC-API-UNREPAIRABLE', assetCode: unrepairableAsset.code, requester: 'Thủ kho',
+  }, 201)).record;
+  await request(`/assets/repairs/${unrepairable.key}/approve`, 'POST', {});
+  const rejected = (await request(`/assets/repairs/${unrepairable.key}/transition`, 'POST', { status: 'Không thể sửa chữa', note: 'Thiếu linh kiện' })).record;
+  assert.equal(rejected.status, 'Không thể sửa chữa');
+  assert.equal((await request(`/collections/asset_items/${unrepairableAsset.key}`)).record.status, 'Chờ thanh lý');
+  await request(`/assets/repairs/${unrepairable.key}/complete`, 'POST', { actualCost: 1, completionNotes: 'Không được nghiệm thu' }, 409);
+});
+
 test('asset transfers enforce decisions and receive asset and document atomically', async () => {
   const asset = { key: 'transfer-asset-test', code: 'TS-TRANSFER-API', name: 'Máy kiểm thử', status: 'Đang sử dụng', location: 'Kho A', department: 'IT', assignedTo: 'Người A', originalPrice: 1000, netBookValue: 700, history: [] };
   await request('/collections/asset_items', 'POST', { record: asset }, 201);

@@ -5227,6 +5227,11 @@ async function handleRequest(request, response) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Vui lòng xử lý cấp phát và thu hồi qua chức năng tài sản.');
   }
 
+  if ((collectionMatch || collectionRecordMatch) && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_repairs') {
+    await requireAdmin(request);
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Vui lòng xử lý phiếu sửa chữa qua chức năng tài sản.');
+  }
+
   if ((collectionMatch || collectionRecordMatch)
     && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_licenses') {
     await requireAdmin(request);
@@ -6520,6 +6525,140 @@ async function handleRequest(request, response) {
       }
     });
     sendJson(response, assetAllocationAction ? 200 : 201, { record: result });
+    return;
+  }
+
+  const assetRepairAction = /^\/assets\/repairs\/([^/]+)\/(approve|transition|complete)$/.exec(resource);
+  if (request.method === 'POST' && (resource === '/assets/repairs' || assetRepairAction)) {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request);
+    const timestamp = now();
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_repairs'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
+      }
+      const same = (left, right) => String(left || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN') === String(right || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN');
+      const assetRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items'").all();
+      const findAsset = (code) => {
+        const matches = assetRows.map((row) => ({ row, asset: publicCollectionRecord(row) }))
+          .filter(({ asset }) => same(asset?.code || asset?.assetCode, code));
+        if (!matches.length) throw new HttpError(404, 'Không tìm thấy tài sản trong danh mục.');
+        if (matches.length !== 1) throw new HttpError(409, 'Mã tài sản bị trùng trong danh mục.');
+        return matches[0];
+      };
+      const addHistory = (asset, action, note) => ({
+        ...asset,
+        history: [...(Array.isArray(asset.history) ? asset.history : []), {
+          key: randomUUID(), date: timestamp, action, actor: actor.name, actorId: actor.id, note,
+        }],
+      });
+
+      if (!assetRepairAction) {
+        const repairCode = requiredText(input.repairCode, 'Mã phiếu sửa', 80);
+        const assetCode = requiredText(input.assetCode, 'Mã tài sản', 160);
+        const { row: assetRow, asset } = findAsset(assetCode);
+        const existingRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'asset_repairs'").all();
+        const existing = existingRows.map((row) => parseJsonObject(row.payload_json));
+        if (existing.some((item) => same(item.repairCode, repairCode))) throw new HttpError(409, 'Mã phiếu sửa đã tồn tại.');
+        if (existing.some((item) => item.assetKey === asset.key && !['Đã sửa xong & Bàn giao', 'Không thể sửa chữa'].includes(item.status))) {
+          throw new HttpError(409, 'Tài sản đã có phiếu sửa chữa đang mở.');
+        }
+        if (!['Trong kho', 'Đang sử dụng'].includes(asset.status)) throw new HttpError(409, 'Chỉ tiếp nhận sửa tài sản trong kho hoặc đang sử dụng.');
+        const startDate = requiredIsoDate(input.startDate, 'Ngày gửi máy');
+        const expectedEndDate = requiredIsoDate(input.expectedEndDate, 'Ngày dự kiến hoàn thành');
+        if (expectedEndDate < startDate) throw new HttpError(422, 'Ngày dự kiến hoàn thành không được trước ngày gửi máy.');
+        if (input.estimatedCost === undefined || input.estimatedCost === null || input.estimatedCost === '') throw new HttpError(422, 'Nhập chi phí dự toán.');
+        const assetOrigin = {
+          status: String(asset.status || ''), assignedTo: String(asset.assignedTo || ''),
+          department: String(asset.department || ''), location: String(asset.location || ''),
+        };
+        result = {
+          key: randomUUID(), repairCode, assetKey: asset.key,
+          assetCode: requiredText(asset.code || asset.assetCode, 'Mã tài sản', 160),
+          assetName: requiredText(asset.name || asset.assetName, 'Tên tài sản', 255),
+          category: String(asset.category || ''), serialNo: String(asset.serialNo || asset.serialNumber || ''),
+          requester: requiredText(input.requester, 'Người báo hỏng', 255),
+          department: requiredText(input.department, 'Phòng ban', 255),
+          severity: oneOf(input.severity, 'Mức độ nghiêm trọng', ['Khẩn cấp (P1)', 'Cao (P2)', 'Trung bình (P3)', 'Thấp']),
+          repairUnit: oneOf(input.repairUnit, 'Hình thức sửa chữa', ['Nội bộ IT Cty', 'Trung tâm bảo hành chính hãng', 'Đơn vị dịch vụ ngoài']),
+          vendor: requiredText(input.vendor, 'Đơn vị sửa chữa', 255), vendorContact: optionalText(input.vendorContact, 'Liên hệ đơn vị sửa chữa', 255),
+          issueDescription: requiredText(input.issueDescription, 'Mô tả sự cố', 4000),
+          rootCause: optionalText(input.rootCause, 'Nguyên nhân', 2000), solution: optionalText(input.solution, 'Phương án khắc phục', 2000),
+          replacedParts: optionalText(input.replacedParts, 'Linh kiện thay thế', 2000),
+          estimatedCost: optionalAmount(input.estimatedCost, 'Chi phí dự toán'), actualCost: 0,
+          costBearing: oneOf(input.costBearing, 'Nguồn kinh phí', ['Bảo hành miễn phí hãng', 'Công ty chi trả', 'Bảo hiểm chi trả', 'Cá nhân bồi thường']),
+          startDate, expectedEndDate, warrantyAfterRepair: optionalText(input.warrantyAfterRepair, 'Bảo hành sau sửa', 255),
+          status: 'Chờ duyệt báo giá', approver: '', notes: optionalText(input.notes, 'Ghi chú', 4000), assetOrigin,
+          createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+        };
+        const updatedAsset = addHistory({ ...asset, status: 'Đang sửa chữa' }, 'Bắt đầu sửa chữa', `Phiếu ${repairCode}; ${result.issueDescription}`);
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+        await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'asset_repairs', ?, ?, ?, ?, ?)")
+          .run(randomUUID(), result.key, actor.id, JSON.stringify(result), timestamp, timestamp);
+        await recordAuditEvent(actor.id, 'create_asset_repair', 'asset_repairs', result.key, { assetKey: asset.key });
+      } else {
+        const key = requiredText(decodeURIComponent(assetRepairAction[1]), 'Mã phiếu sửa', 160);
+        const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_repairs' AND record_key = ?").get(key);
+        if (!row) throw new HttpError(404, 'Không tìm thấy phiếu sửa chữa.');
+        const repair = publicCollectionRecord(row);
+        const transition = assetRepairAction[2];
+        if (transition === 'approve') {
+          if (repair.status !== 'Chờ duyệt báo giá') throw new HttpError(409, 'Phiếu không còn chờ duyệt báo giá.');
+          const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ?").get(repair.assetKey);
+          if (!assetRow) throw new HttpError(404, 'Không tìm thấy tài sản gốc.');
+          const asset = publicCollectionRecord(assetRow);
+          const origin = repair.assetOrigin || {};
+          if (asset.status !== 'Đang sửa chữa' || !same(asset.assignedTo, origin.assignedTo)
+            || !same(asset.department, origin.department) || !same(asset.location, origin.location)) {
+            throw new HttpError(409, 'Thông tin tài sản đã thay đổi so với lúc tiếp nhận sửa chữa; cần đối chiếu trước khi cập nhật.');
+          }
+          result = { ...repair, status: 'Đang sửa chữa tại hãng', approver: actor.name, approverId: actor.id, approvedAt: timestamp, updatedAt: timestamp };
+        } else {
+          const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ?").get(repair.assetKey);
+          if (!assetRow) throw new HttpError(404, 'Không tìm thấy tài sản gốc.');
+          const asset = publicCollectionRecord(assetRow);
+          const origin = repair.assetOrigin || {};
+          if (asset.status !== 'Đang sửa chữa' || !same(asset.assignedTo, origin.assignedTo)
+            || !same(asset.department, origin.department) || !same(asset.location, origin.location)) {
+            throw new HttpError(409, 'Thông tin tài sản đã thay đổi so với lúc tiếp nhận sửa chữa; cần đối chiếu trước khi cập nhật.');
+          }
+          if (transition === 'complete') {
+            if (repair.status !== 'Đang sửa chữa tại hãng') throw new HttpError(409, 'Chỉ nghiệm thu khi phiếu đang sửa chữa.');
+            if (input.actualCost === undefined || input.actualCost === null || input.actualCost === '') throw new HttpError(422, 'Nhập chi phí thực tế.');
+            const actualCost = optionalAmount(input.actualCost, 'Chi phí thực tế');
+            const completionNotes = requiredText(input.completionNotes, 'Kết quả nghiệm thu', 2000);
+            result = {
+              ...repair, status: 'Đã sửa xong & Bàn giao', actualCost, completedDate: timestamp,
+              completedBy: actor.name, completedById: actor.id,
+              notes: [repair.notes, `Nghiệm thu: ${completionNotes}`].filter(Boolean).join('\n'), updatedAt: timestamp,
+            };
+            const restoredStatus = origin.status === 'Đang sử dụng' ? 'Đang sử dụng' : 'Trong kho';
+            const updatedAsset = addHistory({ ...asset, status: restoredStatus }, 'Hoàn tất sửa chữa', `Phiếu ${repair.repairCode}; ${completionNotes}`);
+            await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+          } else {
+            const nextStatus = oneOf(input.status, 'Trạng thái sửa chữa', ['Đang sửa chữa tại hãng', 'Chờ linh kiện thay thế', 'Không thể sửa chữa']);
+            const source = repair.status;
+            const allowed = nextStatus === 'Đang sửa chữa tại hãng'
+              ? source === 'Chờ linh kiện thay thế'
+              : nextStatus === 'Chờ linh kiện thay thế'
+                ? source === 'Đang sửa chữa tại hãng'
+                : ['Đang sửa chữa tại hãng', 'Chờ linh kiện thay thế'].includes(source);
+            if (!allowed) throw new HttpError(409, 'Trạng thái phiếu không cho phép chuyển theo yêu cầu.');
+            const note = optionalText(input.note, 'Ghi chú chuyển trạng thái', 1000);
+            result = { ...repair, status: nextStatus, notes: [repair.notes, `${timestamp} | ${actor.name} | ${nextStatus}${note ? `: ${note}` : ''}`].filter(Boolean).join('\n'), updatedAt: timestamp };
+            const assetStatus = nextStatus === 'Không thể sửa chữa' ? 'Chờ thanh lý' : 'Đang sửa chữa';
+            const action = nextStatus === 'Đang sửa chữa tại hãng' ? 'Tiếp tục sửa chữa' : nextStatus;
+            const updatedAsset = addHistory({ ...asset, status: assetStatus }, action, `Phiếu ${repair.repairCode}${note ? `; ${note}` : ''}`);
+            await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+          }
+        }
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(result), timestamp, row.id);
+        await recordAuditEvent(actor.id, `asset_repair_${transition}`, 'asset_repairs', key, { assetKey: repair.assetKey, status: result.status });
+      }
+    });
+    sendJson(response, assetRepairAction ? 200 : 201, { record: result });
     return;
   }
 

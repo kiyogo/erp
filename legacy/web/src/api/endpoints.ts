@@ -893,3 +893,9 @@ export const assetAllocationsApi = {
   create: (data: Record<string, unknown>) => api.post<{ record: any }>('/assets/allocations', data),
   confirm: (key: string, receiverName: string) => api.post<{ record: any }>(`/assets/allocations/${encodeURIComponent(key)}/confirm`, { receiverName }),
 };
+
+export const assetRepairsApi = {
+  create: (data: Record<string, unknown>) => api.post<{ record: any }>('/assets/repairs', data),
+  transition: (key: string, action: 'approve' | 'transition' | 'complete', data: Record<string, unknown> = {}) =>
+    api.post<{ record: any }>(`/assets/repairs/${encodeURIComponent(key)}/${action}`, data),
+};

@@ -92,6 +92,31 @@ try {
   }, 201)).record;
   assert.equal(pgReturn.status, 'Đã thu hồi về kho');
   assert.equal((await request('/collections/asset_items/pg-allocation-asset')).record.status, 'Trong kho'); completed++;
+  await request('/collections/asset_items', 'POST', { record: {
+    key: 'pg-repair-asset', code: 'PG-REPAIR-ASSET', name: 'PG repair device', status: 'Đang sử dụng',
+    location: 'PG office', department: 'Operations', assignedTo: 'PG staff', history: [],
+  } }, 201);
+  const pgRepair = (await request('/assets/repairs', 'POST', {
+    repairCode: 'PG-REPAIR-01', assetCode: 'PG-REPAIR-ASSET', requester: 'PG staff', department: 'Operations',
+    severity: 'Cao (P2)', repairUnit: 'Trung tâm bảo hành chính hãng', vendor: 'PG service', issueDescription: 'PG repair integration',
+    estimatedCost: 0, costBearing: 'Bảo hành miễn phí hãng', startDate: '2031-03-01', expectedEndDate: '2031-03-05',
+  }, 201)).record;
+  assert.equal((await request('/collections/asset_items/pg-repair-asset')).record.status, 'Đang sửa chữa');
+  const pgRepairApproval = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/assets/repairs/${pgRepair.key}/approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({}),
+    });
+    return response.status;
+  }));
+  assert.deepEqual(pgRepairApproval.sort((a, b) => a - b), [200, 409]);
+  await request(`/assets/repairs/${pgRepair.key}/transition`, 'POST', { status: 'Chờ linh kiện thay thế' });
+  await request(`/assets/repairs/${pgRepair.key}/transition`, 'POST', { status: 'Đang sửa chữa tại hãng' });
+  const pgCompletedRepair = (await request(`/assets/repairs/${pgRepair.key}/complete`, 'POST', { actualCost: 0, completionNotes: 'PG completed' })).record;
+  assert.equal(pgCompletedRepair.status, 'Đã sửa xong & Bàn giao');
+  assert.equal(pgCompletedRepair.completedById, login.user.id);
+  const pgRestoredAsset = (await request('/collections/asset_items/pg-repair-asset')).record;
+  assert.equal(pgRestoredAsset.status, 'Đang sử dụng');
+  assert.equal(pgRestoredAsset.assignedTo, 'PG staff'); completed++;
   await request('/collections/payroll', 'POST', { record: { key: 'pg-payroll-post', employeeCode: 'PG-PAY-1', employeeName: 'PG employee', month: '2031-08', status: 'Chưa chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 } }, 201);
   const pgPayroll = { period: '08/2031', employerInsurance: 200 };
   const pgPayrollPreview = await request('/finance/payroll/ledger-preview', 'POST', pgPayroll);

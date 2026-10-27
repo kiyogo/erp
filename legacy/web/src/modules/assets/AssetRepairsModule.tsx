@@ -50,10 +50,9 @@ export interface RepairItem {
 }
 
 import { useEffect } from 'react';
-import { collectionsApi } from '../../api/endpoints';
+import { assetRepairsApi, collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
-import { buildRepairAssetUpdate, findAssetByCode } from './assetOperations';
 
 export const AssetRepairsModule: React.FC = () => {
   const [data, setData] = useState<RepairItem[]>([]);
@@ -83,7 +82,7 @@ export const AssetRepairsModule: React.FC = () => {
         collectionsApi.get<any>('asset_items', { limit: 500 }),
       ]);
       const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key })));
       setAssets(assetRes.data?.data || []);
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
     } catch (error: any) {
@@ -123,13 +122,6 @@ export const AssetRepairsModule: React.FC = () => {
     setModalOpen(true);
   };
 
-  const currentActor = () => {
-    try {
-      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
-      return String(user?.name || user?.fullName || user?.email || 'Tài khoản hiện tại');
-    } catch { return 'Tài khoản hiện tại'; }
-  };
-
   const handleCreate = async (values: any) => {
     if (saving) return;
     if (data.some((item) => item.repairCode.trim().toLocaleLowerCase() === String(values.repairCode).trim().toLocaleLowerCase())) {
@@ -137,47 +129,20 @@ export const AssetRepairsModule: React.FC = () => {
       return;
     }
     const estimatedCost = Number(values.estimatedCost);
-    if (!Number.isFinite(estimatedCost) || estimatedCost < 0 || String(values.expectedEndDate) < String(values.startDate)) {
-      message.error('Dự toán phải là số không âm và ngày dự kiến không sớm hơn ngày gửi sửa.');
+    if (!Number.isSafeInteger(estimatedCost) || estimatedCost < 0 || estimatedCost > 1_000_000_000_000 || String(values.expectedEndDate) < String(values.startDate)) {
+      message.error('Dự toán phải là số nguyên không âm hợp lệ và ngày dự kiến không sớm hơn ngày gửi sửa.');
       return;
     }
     setSaving(true);
-    let oldAsset: any = null;
-    let assetUpdated = false;
     try {
-      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
-      oldAsset = findAssetByCode(assetsResponse.data?.data || [], String(values.assetCode || ''));
-      const key = `repair-${crypto.randomUUID()}`;
-      const newItem: RepairItem = {
-        ...values,
-        key,
-        assetCode: String(oldAsset.code || oldAsset.assetCode),
-        assetName: String(oldAsset.name || oldAsset.assetName || ''),
-        category: String(oldAsset.category || ''),
-        serialNo: String(oldAsset.serialNo || oldAsset.serialNumber || ''),
-        estimatedCost,
-        actualCost: 0,
-        approver: '',
-        status: 'Chờ duyệt báo giá',
-      };
-      const updatedAsset = buildRepairAssetUpdate(oldAsset, currentActor(), new Date().toLocaleString('sv-SE'), newItem.repairCode, 'Bắt đầu sửa chữa', newItem.issueDescription);
-      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
-      assetUpdated = true;
-      await collectionsApi.create('asset_repairs', newItem, key);
+      const saved = (await assetRepairsApi.create({ ...values, estimatedCost })).data.record as RepairItem;
       await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), dataService.refreshGenericData('asset_items')]);
-      message.success(`Đã lưu phiếu ${newItem.repairCode} và chuyển tài sản sang trạng thái sửa chữa.`);
+      message.success(`Đã lưu phiếu ${saved.repairCode} và chuyển tài sản sang trạng thái sửa chữa.`);
       setModalOpen(false);
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      let rollbackFailed = false;
-      if (assetUpdated && oldAsset) {
-        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
-        catch { rollbackFailed = true; }
-      }
-      message.error(rollbackFailed
-        ? 'Không lưu được phiếu và chưa thể hoàn tác trạng thái tài sản; hãy đối chiếu danh mục tài sản.'
-        : error?.response?.data?.message || error?.message || 'Không thể tạo phiếu sửa chữa.');
+      message.error(error?.response?.data?.message || error?.message || 'Không thể tạo phiếu sửa chữa.');
     } finally {
       setSaving(false);
     }
@@ -185,16 +150,13 @@ export const AssetRepairsModule: React.FC = () => {
 
   const handleApproveQuote = async (record: RepairItem) => {
     if (saving || record.status !== 'Chờ duyệt báo giá') return;
-    const nowStr = new Date().toLocaleString('sv-SE');
     setSaving(true);
     try {
-      await collectionsApi.update('asset_repairs', record.key, {
-        status: 'Đang sửa chữa tại hãng',
-        approvedAt: nowStr,
-        approver: currentActor(),
-      });
+      const approved = (await assetRepairsApi.transition(record.key, 'approve')).data.record as RepairItem;
+      setData((current) => current.map((item) => item.key === approved.key ? approved : item));
+      setDetailItem((current) => current?.key === approved.key ? approved : current);
       await dataService.refreshGenericData('asset_repairs').catch(() => []);
-      message.success(`Đã lưu phê duyệt báo giá ${record.repairCode} bởi ${currentActor()}.`);
+      message.success(`Đã lưu phê duyệt báo giá ${record.repairCode} bởi ${approved.approver}.`);
       await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể duyệt báo giá.');
@@ -213,36 +175,15 @@ export const AssetRepairsModule: React.FC = () => {
     if (!validSource) return;
 
     setSaving(true);
-    const nowStr = new Date().toLocaleString('sv-SE');
-    const actor = currentActor();
-    let oldAsset: any = null;
-    let assetUpdated = false;
     try {
-      if (nextStatus !== 'Đang sửa chữa tại hãng') {
-        const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
-        oldAsset = findAssetByCode(assetsResponse.data?.data || [], record.assetCode);
-        const assetAction = nextStatus === 'Chờ linh kiện thay thế' ? 'Chờ linh kiện thay thế' : 'Không thể sửa chữa';
-        const note = nextStatus === 'Không thể sửa chữa' ? 'Đã xác nhận không thể sửa; chuyển chờ thanh lý.' : 'Tạm dừng chờ linh kiện thay thế.';
-        const updatedAsset = buildRepairAssetUpdate(oldAsset, actor, nowStr, record.repairCode, assetAction, note);
-        await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
-        assetUpdated = true;
-      }
-      await collectionsApi.update('asset_repairs', record.key, {
-        status: nextStatus,
-        notes: [record.notes, `${nowStr} | ${actor} | ${nextStatus}`].filter(Boolean).join('\n'),
-      });
-      await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), ...(assetUpdated ? [dataService.refreshGenericData('asset_items')] : [])]);
+      const updated = (await assetRepairsApi.transition(record.key, 'transition', { status: nextStatus })).data.record as RepairItem;
+      setData((current) => current.map((item) => item.key === updated.key ? updated : item));
+      setDetailItem((current) => current?.key === updated.key ? updated : current);
+      await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), dataService.refreshGenericData('asset_items')]);
       message.success(`Đã lưu trạng thái ${nextStatus} cho phiếu ${record.repairCode}.`);
       await loadData();
     } catch (error: any) {
-      let rollbackFailed = false;
-      if (assetUpdated && oldAsset) {
-        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
-        catch { rollbackFailed = true; }
-      }
-      message.error(rollbackFailed
-        ? 'Không lưu được trạng thái phiếu và chưa thể hoàn tác tài sản; hãy đối chiếu danh mục và phiếu sửa.'
-        : error?.response?.data?.message || error?.message || 'Không thể cập nhật trạng thái sửa chữa.');
+      message.error(error?.response?.data?.message || error?.message || 'Không thể cập nhật trạng thái sửa chữa.');
     } finally {
       setSaving(false);
     }
@@ -266,40 +207,25 @@ export const AssetRepairsModule: React.FC = () => {
   const handleConfirmComplete = async () => {
     if (!completeTarget || saving || completeTarget.status !== 'Đang sửa chữa tại hãng') return;
     const actualCost = Number(actualCostInput);
-    if (actualCostInput === '' || !Number.isFinite(actualCost) || actualCost < 0 || !completeNotes.trim()) {
-      message.error('Nhập chi phí thực tế không âm và kết quả nghiệm thu.');
+    if (actualCostInput === '' || !Number.isSafeInteger(actualCost) || actualCost < 0 || actualCost > 1_000_000_000_000 || !completeNotes.trim()) {
+      message.error('Nhập chi phí thực tế là số nguyên không âm hợp lệ và kết quả nghiệm thu.');
       return;
     }
     setSaving(true);
-    const nowStr = new Date().toLocaleString('sv-SE');
-    let oldAsset: any = null;
-    let assetUpdated = false;
     try {
-      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
-      oldAsset = findAssetByCode(assetsResponse.data?.data || [], completeTarget.assetCode);
-      const updatedAsset = buildRepairAssetUpdate(oldAsset, currentActor(), nowStr, completeTarget.repairCode, 'Hoàn tất sửa chữa', completeNotes);
-      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
-      assetUpdated = true;
-      await collectionsApi.update('asset_repairs', completeTarget.key, {
-        status: 'Đã sửa xong & Bàn giao',
+      const completed = (await assetRepairsApi.transition(completeTarget.key, 'complete', {
         actualCost,
-        completedDate: nowStr,
-        notes: [completeTarget.notes, `Nghiệm thu: ${completeNotes.trim()}`].filter(Boolean).join('\n'),
-      });
+        completionNotes: completeNotes.trim(),
+      })).data.record as RepairItem;
+      setData((current) => current.map((item) => item.key === completed.key ? completed : item));
+      setDetailItem((current) => current?.key === completed.key ? completed : current);
       await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), dataService.refreshGenericData('asset_items')]);
       message.success(`Đã lưu nghiệm thu ${completeTarget.repairCode} và trả trạng thái tài sản về sử dụng/kho.`);
       setCompleteModalOpen(false);
       setDrawerOpen(false);
       await loadData();
     } catch (error: any) {
-      let rollbackFailed = false;
-      if (assetUpdated && oldAsset) {
-        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
-        catch { rollbackFailed = true; }
-      }
-      message.error(rollbackFailed
-        ? 'Không lưu được nghiệm thu và chưa thể hoàn tác trạng thái tài sản; hãy đối chiếu danh mục và phiếu sửa.'
-        : error?.response?.data?.message || error?.message || 'Không thể nghiệm thu sửa chữa.');
+      message.error(error?.response?.data?.message || error?.message || 'Không thể nghiệm thu sửa chữa.');
     } finally {
       setSaving(false);
     }
@@ -533,6 +459,7 @@ export const AssetRepairsModule: React.FC = () => {
                       size="small"
                       type="primary"
                       icon={<CheckOutlined />}
+                      disabled={saving}
                       onClick={() => handleApproveQuote(r)}
                       style={{ backgroundColor: '#009688', borderColor: '#009688' }}
                       title="Duyệt báo giá"
@@ -545,6 +472,7 @@ export const AssetRepairsModule: React.FC = () => {
                       size="small"
                       type="primary"
                       icon={<SafetyCertificateOutlined />}
+                      disabled={saving}
                       onClick={() => handleOpenCompleteModal(r)}
                       style={{ backgroundColor: '#16A34A', borderColor: '#16A34A' }}
                       title="Nghiệm thu & bàn giao"
@@ -554,14 +482,14 @@ export const AssetRepairsModule: React.FC = () => {
                   )}
                   {r.status === 'Đang sửa chữa tại hãng' && (
                     <>
-                      <Button size="small" onClick={() => handleRepairStatusUpdate(r, 'Chờ linh kiện thay thế')} title="Tạm dừng chờ linh kiện">Chờ linh kiện</Button>
-                      <Button size="small" danger onClick={() => confirmUnrepairable(r)} title="Đóng phiếu và chuyển chờ thanh lý">Không thể sửa</Button>
+                      <Button size="small" disabled={saving} onClick={() => handleRepairStatusUpdate(r, 'Chờ linh kiện thay thế')} title="Tạm dừng chờ linh kiện">Chờ linh kiện</Button>
+                      <Button size="small" danger disabled={saving} onClick={() => confirmUnrepairable(r)} title="Đóng phiếu và chuyển chờ thanh lý">Không thể sửa</Button>
                     </>
                   )}
                   {r.status === 'Chờ linh kiện thay thế' && (
                     <>
-                      <Button size="small" type="primary" onClick={() => handleRepairStatusUpdate(r, 'Đang sửa chữa tại hãng')}>Tiếp tục sửa</Button>
-                      <Button size="small" danger onClick={() => confirmUnrepairable(r)}>Không thể sửa</Button>
+                      <Button size="small" type="primary" disabled={saving} onClick={() => handleRepairStatusUpdate(r, 'Đang sửa chữa tại hãng')}>Tiếp tục sửa</Button>
+                      <Button size="small" danger disabled={saving} onClick={() => confirmUnrepairable(r)}>Không thể sửa</Button>
                     </>
                   )}
                 </div>
@@ -581,7 +509,7 @@ export const AssetRepairsModule: React.FC = () => {
         width={760}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="repairCode" label="Mã phiếu sửa" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: SC-2026-020" />
             </Form.Item>
@@ -606,7 +534,7 @@ export const AssetRepairsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 14 }}>
             <Form.Item name="assetCode" label="Tài sản trong danh mục" rules={[{ required: true, message: 'Chọn tài sản trong danh mục' }]}>
               <Select
                 showSearch
@@ -630,7 +558,7 @@ export const AssetRepairsModule: React.FC = () => {
             <Input.TextArea rows={2} placeholder="Mô tả cụ thể: sọc màn hình, máy không lên nguồn, liệt phím, pin phồng..." />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="rootCause" label="Nguyên nhân sơ bộ">
               <Input placeholder="Ví dụ: Chai pin theo thời gian, va đập hoặc ẩm mạch..." />
             </Form.Item>
@@ -639,7 +567,7 @@ export const AssetRepairsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="vendor" label="Đơn vị / Trung tâm sửa chữa" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Dell Care Service Center" />
             </Form.Item>
@@ -658,7 +586,7 @@ export const AssetRepairsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="estimatedCost" label="Dự toán kinh phí sửa (VNĐ)" rules={[{ required: true }]}>
               <Input type="number" min={0} step={100000} placeholder="Ví dụ: 2500000" />
             </Form.Item>
@@ -670,7 +598,7 @@ export const AssetRepairsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="requester" label="Người báo hỏng" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Hoàng Quốc Dũng" />
             </Form.Item>
@@ -687,7 +615,7 @@ export const AssetRepairsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Xác nhận gửi phiếu sửa chữa
             </Button>
           </div>
@@ -808,6 +736,7 @@ export const AssetRepairsModule: React.FC = () => {
                 <Button
                   type="primary"
                   icon={<CheckOutlined />}
+                  disabled={saving}
                   onClick={() => handleApproveQuote(detailItem)}
                   style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
                 >
@@ -819,19 +748,20 @@ export const AssetRepairsModule: React.FC = () => {
                   <Button
                     type="primary"
                     icon={<SafetyCertificateOutlined />}
+                    disabled={saving}
                     onClick={() => handleOpenCompleteModal(detailItem)}
                     style={{ backgroundColor: '#16A34A', borderColor: '#16A34A', flex: 1 }}
                   >
                     Nghiệm thu bàn giao
                   </Button>
-                  <Button onClick={() => handleRepairStatusUpdate(detailItem, 'Chờ linh kiện thay thế')}>Chờ linh kiện</Button>
-                  <Button danger onClick={() => confirmUnrepairable(detailItem)}>Không thể sửa</Button>
+                  <Button disabled={saving} onClick={() => handleRepairStatusUpdate(detailItem, 'Chờ linh kiện thay thế')}>Chờ linh kiện</Button>
+                  <Button danger disabled={saving} onClick={() => confirmUnrepairable(detailItem)}>Không thể sửa</Button>
                 </>
               )}
               {detailItem.status === 'Chờ linh kiện thay thế' && (
                 <>
-                  <Button type="primary" onClick={() => handleRepairStatusUpdate(detailItem, 'Đang sửa chữa tại hãng')}>Tiếp tục sửa</Button>
-                  <Button danger onClick={() => confirmUnrepairable(detailItem)}>Không thể sửa</Button>
+                  <Button type="primary" disabled={saving} onClick={() => handleRepairStatusUpdate(detailItem, 'Đang sửa chữa tại hãng')}>Tiếp tục sửa</Button>
+                  <Button danger disabled={saving} onClick={() => confirmUnrepairable(detailItem)}>Không thể sửa</Button>
                 </>
               )}
             </div>
@@ -889,6 +819,7 @@ export const AssetRepairsModule: React.FC = () => {
               <Button
                 type="primary"
                 icon={<CheckCircleOutlined />}
+                disabled={saving}
                 onClick={handleConfirmComplete}
                 style={{ backgroundColor: '#16A34A', borderColor: '#16A34A' }}
               >
