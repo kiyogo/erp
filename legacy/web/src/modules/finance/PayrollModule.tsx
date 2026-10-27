@@ -6,9 +6,9 @@ import {
   AuditOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Drawer, Select, Button, message, Card, Tag } from '../../custom-ui';
+import { Modal, Drawer, Select, Button, Input, message, Card, Tag } from '../../custom-ui';
 import { dataService, PayrollRecord } from '../../services/dataService';
-import { collectionsApi, systemApi } from '../../api/endpoints';
+import { payrollLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { filterPayrollForMonth, normalizePayrollMonth, payrollBankRows, payrollReportRows } from './payrollExports';
 
@@ -23,7 +23,9 @@ export const PayrollModule: React.FC = () => {
   const isAccounting = currentPath === '/finance/payroll/accounting';
 
   const [data, setData] = useState<PayrollRecord[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState('08/2026');
+  const [selectedMonth, setSelectedMonth] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).format(new Date()).split('-').reverse().join('/'));
+  const [employerCharge, setEmployerCharge] = useState('');
+  const [postingLedger, setPostingLedger] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<PayrollRecord | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -90,14 +92,11 @@ export const PayrollModule: React.FC = () => {
   const employeeInsurance = periodData.reduce((sum, item) => sum + item.insuranceDeduction, 0);
   const taxWithholding = periodData.reduce((sum, item) => sum + item.taxDeduction, 0);
   const paidPayroll = periodData.filter((item) => item.status === 'Đã chi trả').reduce((sum, item) => sum + item.netSalary, 0);
-  const availableMonths = Array.from(new Set([...['08/2026', '07/2026', '06/2026'], ...data.map((item) => item.month).filter(Boolean)]))
-    .map((month) => {
-      const normalized = normalizePayrollMonth(month);
-      return normalized ? { value: normalized, label: `Tháng ${normalized.slice(0, 2)} / ${normalized.slice(3)}` } : null;
-    })
-    .filter((option): option is { value: string; label: string } => Boolean(option))
-    .filter((option, index, all) => all.findIndex((candidate) => candidate.value === option.value) === index)
-    .sort((a, b) => b.value.localeCompare(a.value));
+  const availableMonths = Array.from(new Set([selectedMonth, ...data.map((item) => normalizePayrollMonth(item.month)).filter((month): month is string => Boolean(month))]))
+    .filter((month) => normalizePayrollMonth(month))
+    .sort((a, b) => `${b.slice(3)}-${b.slice(0, 2)}`.localeCompare(`${a.slice(3)}-${a.slice(0, 2)}`))
+    .map((value) => ({ value, label: `Tháng ${value.slice(0, 2)} / ${value.slice(3)}` }));
+  if (data.some((item) => !normalizePayrollMonth(item.month))) availableMonths.push({ value: 'Chưa xác định kỳ', label: 'Chưa xác định kỳ' });
 
   const exportPayrollReport = (report: 'payroll' | 'attendance' | 'insurance' | 'tax', fileName: string, successText: string) => {
     downloadFile(fileName, generateValidXlsxBlob(payrollReportRows(periodData, report, selectedMonth)));
@@ -123,69 +122,32 @@ export const PayrollModule: React.FC = () => {
     }
   };
 
-  const postPayrollToLedger = () => {
-    if (periodData.length === 0 || grossPayroll <= 0) {
-      message.warning('Kỳ lương này chưa có dữ liệu để hạch toán.');
-      return;
+  const postPayrollToLedger = async () => {
+    if (!normalizePayrollMonth(selectedMonth)) { message.error('Chọn kỳ lương hợp lệ để ghi sổ.'); return; }
+    if (employerCharge.trim() === '' || !Number.isSafeInteger(Number(employerCharge)) || Number(employerCharge) < 0) {
+      message.error('Nhập số tiền bảo hiểm doanh nghiệp đã đối chiếu.'); return;
     }
-    const inconsistent = periodData.find((record) => Math.abs(record.netSalary - (record.baseSalary + record.allowance + record.bonus - record.insuranceDeduction - record.taxDeduction)) > 1);
-    if (inconsistent) {
-      message.error(`Phiếu lương ${inconsistent.employeeCode} chưa cân đối giữa thu nhập, khấu trừ và thực lĩnh.`);
-      return;
-    }
-
-    Modal.confirm({
-      title: `Ghi sổ các bút toán lương kỳ ${selectedMonth}?`,
-      content: 'Hệ thống sẽ tạo chứng từ trong Sổ Cái. Kiểm tra lại dữ liệu lương trước khi xác nhận.',
-      okText: 'Ghi sổ',
-      cancelText: 'Hủy',
-      onOk: async () => {
-        const sourceReference = `payroll:${selectedMonth}`;
-        const createdKeys: string[] = [];
-        try {
-          const ledger = await dataService.refreshGenericData('finance_general_ledger');
-          if (ledger.some((entry: any) => entry.sourceReference === sourceReference)) {
-            message.warning(`Kỳ lương ${selectedMonth} đã có chứng từ trong Sổ Cái.`);
-            return;
-          }
-          let author = 'Người dùng hiện tại';
+    const request = { period: selectedMonth, employerInsurance: Number(employerCharge) };
+    setPostingLedger(true);
+    try {
+      const preview = (await payrollLedgerApi.preview(request)).data;
+      Modal.confirm({
+        title: `Ghi sổ các bút toán lương kỳ ${preview.period}?`,
+        content: <div><div>{preview.employeeCount} phiếu lương</div>{preview.lines.map((line) => <div key={line.description}>{line.description}: {line.amount.toLocaleString('vi-VN')} ₫</div>)}</div>,
+        okText: 'Ghi sổ', cancelText: 'Hủy',
+        onOk: async () => {
           try {
-            const currentUser = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
-            author = currentUser?.name || currentUser?.fullName || currentUser?.email || author;
-          } catch { /* Use the generic signed-in label when cached identity data is malformed. */ }
-          const journalLines = [
-            { description: `Ghi nhận lương phải trả kỳ ${selectedMonth}`, debitAccount: 'TK 642', creditAccount: 'TK 334', amount: grossPayroll },
-            { description: `Trích bảo hiểm phần doanh nghiệp kỳ ${selectedMonth}`, debitAccount: 'TK 642', creditAccount: 'TK 338', amount: employerInsurance },
-            { description: `Khấu trừ bảo hiểm người lao động kỳ ${selectedMonth}`, debitAccount: 'TK 334', creditAccount: 'TK 338', amount: employeeInsurance },
-            { description: `Khấu trừ thuế TNCN kỳ ${selectedMonth}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: taxWithholding },
-            { description: `Ghi nhận lương đã chi kỳ ${selectedMonth}`, debitAccount: 'TK 334', creditAccount: 'TK 112', amount: paidPayroll },
-          ].filter((line) => line.amount > 0);
-          for (const [index, line] of journalLines.entries()) {
-            const key = `payroll:${selectedMonth.replace('/', '-')}:${index + 1}`;
-            await collectionsApi.create('finance_general_ledger', {
-              key,
-              voucherCode: `BL-${selectedMonth.replace('/', '')}-${index + 1}`,
-              entryDate: new Date().toISOString().slice(0, 10),
-              ...line,
-              author,
-              status: 'Đã ghi sổ cái',
-              sourceModule: 'payroll',
-              sourceReference,
-            });
-            createdKeys.push(key);
+            const saved = await payrollLedgerApi.post({ ...request, fingerprint: preview.fingerprint });
+            await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
+            message.success(`Đã ghi ${saved.data.lines.length} bút toán lương kỳ ${preview.period} vào Sổ Cái.`);
+          } catch (error: any) {
+            message.error(error?.response?.data?.message || 'Không thể ghi bút toán lương vào Sổ Cái.');
+            throw error;
           }
-          await dataService.refreshGenericData('finance_general_ledger');
-          message.success(`Đã ghi ${createdKeys.length} bút toán lương kỳ ${selectedMonth} vào Sổ Cái.`);
-        } catch (error: any) {
-          const rollback = await Promise.allSettled(createdKeys.map((key) => collectionsApi.remove('finance_general_ledger', key)));
-          const rollbackFailed = rollback.some((result) => result.status === 'rejected');
-          if (!rollbackFailed && createdKeys.length > 0) await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
-          message.error(rollbackFailed
-            ? 'Ghi sổ bị lỗi và chưa thể hoàn tác toàn bộ. Cần đối chiếu Sổ Cái trước khi chạy lại.'
-            : error?.response?.data?.message || 'Không thể ghi bút toán lương vào Sổ Cái.');
-        }
-      },
-    });
+        },
+      });
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xem trước bút toán lương.'); }
+    finally { setPostingLedger(false); }
   };
 
   const handlePayOut = (record: PayrollRecord) => Modal.confirm({
@@ -209,7 +171,7 @@ export const PayrollModule: React.FC = () => {
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>Kỳ lương:</span>
-        <Select value={selectedMonth} onChange={setSelectedMonth} options={availableMonths} style={{ width: 160 }} />
+        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); }} options={availableMonths} style={{ width: 160 }} />
       </div>
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
@@ -260,11 +222,11 @@ export const PayrollModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Doanh nghiệp đóng (21.5%)</div>
+              <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Ước tính doanh nghiệp đóng</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
                 {employerInsurance.toLocaleString('vi-VN')} ₫
               </div>
-              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>BHXH 17% + BHYT 3% + BHTN 1% + KPCĐ 0.5%</div>
+              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>Ước tính 21,5% lương cơ bản, cần đối chiếu</div>
             </div>
             <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: 16 }}>
               <div style={{ fontSize: 12.5, color: '#92400E', fontWeight: 600 }}>Người lao động trích nộp (10.5%)</div>
@@ -373,7 +335,7 @@ export const PayrollModule: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
               {[
                 { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 642', credit: 'Có TK 334', amount: grossPayroll },
-                { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 642', credit: 'Có TK 338', amount: employerInsurance },
+                { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 642', credit: 'Có TK 338', amount: Number(employerCharge) || 0 },
                 { desc: 'Khấu trừ bảo hiểm người lao động', debit: 'Nợ TK 334', credit: 'Có TK 338', amount: employeeInsurance },
                 { desc: 'Khấu trừ thuế TNCN', debit: 'Nợ TK 334', credit: 'Có TK 3335', amount: taxWithholding },
                 { desc: 'Ghi nhận lương đã chi', debit: 'Nợ TK 334', credit: 'Có TK 112', amount: paidPayroll },
@@ -387,8 +349,11 @@ export const PayrollModule: React.FC = () => {
                 </div>
               ))}
             </div>
+            <label style={{ display: 'block', marginBottom: 14 }}>Bảo hiểm doanh nghiệp đã đối chiếu
+              <Input type="number" min={0} value={employerCharge} onChange={(event) => setEmployerCharge(event.target.value)} placeholder="Nhập số tiền" />
+            </label>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Button type="primary" icon={<AuditOutlined />} disabled={periodData.length === 0} onClick={postPayrollToLedger} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              <Button type="primary" icon={<AuditOutlined />} loading={postingLedger} disabled={periodData.length === 0 || !normalizePayrollMonth(selectedMonth)} onClick={postPayrollToLedger} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 Hạch toán ghi Sổ Cái
               </Button>
             </div>

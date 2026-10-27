@@ -28,6 +28,7 @@ const fixtureActor = migrationFixture.prepare('SELECT id FROM users WHERE email 
 migrationFixture.prepare('DELETE FROM system_settings WHERE setting_key = ?').run('attendance_canonical_scopes_v1');
 migrationFixture.prepare('INSERT INTO collection_records VALUES (?, ?, ?, ?, ?, ?, ?)').run('migration-fixture', 'employee_leaves', 'legacy-leave', fixtureActor.id, JSON.stringify({ key: 'legacy-leave', employeeId: fixtureActor.id, code: 'NP-OLD', fromDate: '2026-10-01', toDate: '2026-10-01', days: 1, type: 'Nghỉ phép năm', reason: 'Legacy request', status: 'Chờ duyệt' }), new Date().toISOString(), new Date().toISOString());
 migrationFixture.prepare('INSERT INTO collection_records VALUES (?, ?, ?, ?, ?, ?, ?)').run('legacy-license-fixture', 'asset_licenses', 'legacy-license', fixtureActor.id, JSON.stringify({ key: 'legacy-license', licenseCode: 'LEGACY-LIC', softwareName: 'Bản cũ', productKey: 'OLD-SECRET-123', seatsTotal: 2, seatsAllocated: 0, annualCost: 0, expireDate: '2028-01-01', allocatedUsers: [] }), new Date().toISOString(), new Date().toISOString());
+migrationFixture.prepare('INSERT INTO collection_records VALUES (?, ?, ?, ?, ?, ?, ?)').run('legacy-ledger-collision', 'finance_general_ledger', 'payroll:11-2030:2', fixtureActor.id, JSON.stringify({ key: 'payroll:11-2030:2', sourceModule: 'legacy', amount: 100 }), new Date().toISOString(), new Date().toISOString());
 migrationFixture.close();
 const server = spawn(process.execPath, ['index.mjs'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 let logs = '';
@@ -57,6 +58,42 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
   assert.equal(response.status, expected, JSON.stringify(body));
   return body;
 }
+
+test('payroll ledger posts reviewed figures atomically and prevents duplicate or forged entries', async () => {
+  const record = { key: 'payroll-ledger-test-1', employeeCode: 'P-ONE', employeeName: 'Nhân viên', month: '2030-10', status: 'Đã chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 };
+  await request('/collections/payroll', 'POST', { record }, 201);
+  const input = { period: '10/2030', employerInsurance: 200 };
+  const preview = await request('/finance/payroll/ledger-preview', 'POST', input);
+  assert.deepEqual(preview.lines.map((line) => line.amount), [1100, 200, 100, 50, 950]);
+  await request('/collections/payroll/payroll-ledger-test-1', 'PATCH', { patch: { allowance: 200, netSalary: 1050 } });
+  await request('/finance/payroll/ledger-post', 'POST', { ...input, fingerprint: preview.fingerprint }, 409);
+  const updatedPreview = await request('/finance/payroll/ledger-preview', 'POST', input);
+  const race = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/payroll/ledger-post`, { method: 'POST', headers, body: JSON.stringify({ ...input, fingerprint: updatedPreview.fingerprint }) });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(race.map((item) => item.status).sort((a, b) => a - b), [201, 409]);
+  const ledger = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:10/2030');
+  assert.equal(ledger.length, 5);
+  const snapshot = (await request('/collections/finance_payroll_postings/10%2F2030')).record;
+  assert.equal(snapshot.records[0].netSalary, 1050);
+  assert.equal(snapshot.createdById, session.user.id);
+  await request('/collections/finance_payroll_postings', 'PUT', { records: [] }, 409);
+  assert.equal(ledger[0].author, session.user.name);
+  await request(`/collections/finance_general_ledger/${encodeURIComponent(ledger[0].key)}`, 'PATCH', { patch: { amount: 999 } }, 409);
+  await request(`/collections/finance_general_ledger/${encodeURIComponent(ledger[0].key)}`, 'DELETE', undefined, 409);
+  await request('/collections/finance_general_ledger', 'PUT', { records: [] }, 409);
+  await request('/collections/finance_general_ledger', 'POST', { record: { key: 'forged-payroll', sourceModule: 'payroll', sourceReference: 'payroll:10/2030' } }, 409);
+  await request('/finance/payroll/ledger-preview', 'POST', { period: '13/2030', employerInsurance: 0 }, 422);
+  await request('/finance/payroll/ledger-preview', 'POST', { period: '10/2031', employerInsurance: 0 }, 422);
+  await request('/collections/payroll', 'POST', { record: { ...record, key: 'payroll-ledger-test-bad', month: '11/2030' } }, 201);
+  const collision = await request('/finance/payroll/ledger-preview', 'POST', { period: '11/2030', employerInsurance: 200 });
+  await request('/finance/payroll/ledger-post', 'POST', { period: '11/2030', employerInsurance: 200, fingerprint: collision.fingerprint }, 409);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:11/2030').length, 0);
+  await request('/users', 'POST', { email: 'payroll-ledger-user@example.test', name: 'Người thử', password: 'Payroll-Ledger-26!Secure', employeeCode: 'PAYROLL-TEST', role: 'USER' }, 201);
+  const user = await request('/auth/login', 'POST', { email: 'payroll-ledger-user@example.test', password: 'Payroll-Ledger-26!Secure' });
+  await request('/finance/payroll/ledger-preview', 'POST', input, 403, { ...headers, Authorization: `Bearer ${user.access_token || user.token}` });
+});
 
 test('software licenses persist protected keys and serialize seat allocation and renewal', async () => {
   assert.equal((await request('/assets/licenses')).data.find((item) => item.key === 'legacy-license').productKey, 'OLD-SECRET-123');

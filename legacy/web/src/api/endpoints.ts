@@ -875,3 +875,8 @@ export const softwareLicensesApi = {
   allocate: (key: string, data: { name: string; email: string; deviceCode: string }) => api.post<{ record: any }>(`/assets/licenses/${encodeURIComponent(key)}/allocate`, data),
   renew: (key: string, data: { expireDate: string; annualCost: number }) => api.post<{ record: any }>(`/assets/licenses/${encodeURIComponent(key)}/renew`, data),
 };
+
+export const payrollLedgerApi = {
+  preview: (data: { period: string; employerInsurance: number }) => api.post<{ period: string; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/ledger-preview', data),
+  post: (data: { period: string; employerInsurance: number; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/ledger-post', data),
+};

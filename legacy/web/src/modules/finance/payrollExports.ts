@@ -11,18 +11,22 @@ export type PayrollBankAccount = {
 
 export function normalizePayrollMonth(value: unknown): string | null {
   const text = String(value ?? '').trim();
-  const match = text.match(/(?:^|\D)(\d{1,2})[/-](\d{4})(?:\D|$)/);
-  if (match) return `${match[1].padStart(2, '0')}/${match[2]}`;
-  const isoMatch = text.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?/);
-  if (isoMatch) return `${isoMatch[2].padStart(2, '0')}/${isoMatch[1]}`;
-  return null;
+  const match = text.match(/^(\d{1,2})[/-](\d{4})$/);
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/);
+  const month = Number(match ? match[1] : isoMatch ? isoMatch[2] : 0);
+  const year = match ? match[2] : isoMatch ? isoMatch[1] : '';
+  if (isoMatch?.[3]) {
+    const day = Number(isoMatch[3]);
+    const date = new Date(Date.UTC(Number(year), month - 1, day));
+    if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  }
+  return year && month >= 1 && month <= 12 ? `${String(month).padStart(2, '0')}/${year}` : null;
 }
 
 export function filterPayrollForMonth(records: PayrollRecord[], month: string): PayrollRecord[] {
+  if (month === 'Chưa xác định kỳ') return records.filter((record) => !normalizePayrollMonth(record.month));
   const wanted = normalizePayrollMonth(month);
-  const datedRecords = records.filter((record) => normalizePayrollMonth(record.month));
-  if (!wanted || datedRecords.length === 0) return records;
-  return datedRecords.filter((record) => normalizePayrollMonth(record.month) === wanted);
+  return wanted ? records.filter((record) => normalizePayrollMonth(record.month) === wanted) : [];
 }
 
 export function payrollReportRows(records: PayrollRecord[], report: 'payroll' | 'attendance' | 'insurance' | 'tax', month: string): Array<Array<string | number | null>> {

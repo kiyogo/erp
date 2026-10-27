@@ -18,7 +18,10 @@ test('payroll periods normalize supported month formats and filter dated records
   assert.equal(exports.normalizePayrollMonth('2026-08-31'), '08/2026');
   assert.equal(exports.normalizePayrollMonth('08/2026'), '08/2026');
   assert.deepEqual(exports.filterPayrollForMonth([payroll(), payroll({ key: 'pay-02', month: '07/2026' })], '08/2026').map((item) => item.key), ['pay-01']);
-  assert.equal(exports.filterPayrollForMonth([payroll({ month: '' })], '08/2026').length, 1);
+  assert.equal(exports.filterPayrollForMonth([payroll({ month: '' })], '08/2026').length, 0);
+  assert.equal(exports.filterPayrollForMonth([payroll({ month: '' })], 'Chưa xác định kỳ').length, 1);
+  assert.equal(exports.normalizePayrollMonth('13/2026'), null);
+  assert.equal(exports.normalizePayrollMonth('2026-02-30'), null);
 });
 
 test('payroll workbook rows contain only stored attendance and calculated deductions', () => {

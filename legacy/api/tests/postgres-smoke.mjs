@@ -50,6 +50,17 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  await request('/collections/payroll', 'POST', { record: { key: 'pg-payroll-post', employeeCode: 'PG-PAY-1', employeeName: 'PG employee', month: '2031-08', status: 'Chưa chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 } }, 201);
+  const pgPayroll = { period: '08/2031', employerInsurance: 200 };
+  const pgPayrollPreview = await request('/finance/payroll/ledger-preview', 'POST', pgPayroll);
+  const pgPayrollRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/payroll/ledger-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgPayrollPreview.fingerprint }) });
+    return response.status;
+  }));
+  assert.deepEqual(pgPayrollRace.sort((a, b) => a - b), [201, 409]);
+  const pgPayrollEntries = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:08/2031');
+  assert.equal(pgPayrollEntries.length, 4);
+  await request(`/collections/finance_general_ledger/${encodeURIComponent(pgPayrollEntries[0].key)}`, 'DELETE', undefined, 409); completed++;
   const pgLicense = (await request('/assets/licenses', 'POST', { licenseCode: 'PG-LIC-01', softwareName: 'PG license', vendor: 'PG vendor', category: 'Văn phòng & Cộng tác', licenseType: 'Theo người dùng', productKey: 'PG-SECRET-123', seatsTotal: 1, seatsAllocated: 0, annualCost: 0, billingCycle: 'Hàng năm', purchaseDate: '2026-01-01', expireDate: '2028-01-01', assignedDepartment: 'IT', assignedAdmin: 'PG admin' }, 201)).record;
   const pgLicenseRace = await Promise.all(['one@example.test', 'two@example.test'].map(async (email) => {
     const response = await fetch(`${base}/assets/licenses/${pgLicense.key}/allocate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name: 'PG user', email }) });
