@@ -3288,6 +3288,23 @@ async function loyaltyEntries() {
   return rows.map(publicCollectionRecord).filter(Boolean);
 }
 
+async function saleCustomerLinks() {
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_sale_customer_links'").all();
+  return rows.map(publicCollectionRecord).filter(Boolean);
+}
+
+async function insertSaleCustomerLink(saleId, saleCode, customer, actor, timestamp) {
+  const link = {
+    key: saleId, saleCode, customerId: customer.id, customerCode: customer.code, customerName: customer.name,
+    createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+  };
+  await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+    VALUES (?, 'finance_sale_customer_links', ?, ?, ?, ?, ?)`)
+    .run(randomUUID(), saleId, actor.id, JSON.stringify(link), timestamp, timestamp);
+  await recordAuditEvent(actor.id, 'link_sale_customer', 'finance_sale_customer_links', saleId, { customerId: customer.id });
+  return link;
+}
+
 function validateCashTransaction(input) {
   return {
     code: '',
@@ -5060,6 +5077,12 @@ async function handleRequest(request, response) {
   const collectionMatch = /^\/collections\/([^/]+)$/.exec(resource);
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
 
+  if ((collectionMatch || collectionRecordMatch)
+    && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'finance_sale_customer_links') {
+    await requireAdmin(request);
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Liên kết khách hàng phải được ghi qua chức năng bán hàng.');
+  }
+
   if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
     && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'crm_loyalty_ledger') {
     await requireAdmin(request);
@@ -6235,14 +6258,23 @@ async function handleRequest(request, response) {
     }
     const sql = `SELECT * FROM finance_documents${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY document_date DESC, created_at DESC`;
     const rows = await db.prepare(sql).all(...params);
-    sendJson(response, 200, { data: rows.map(publicFinanceDocument) });
+    const links = rows.some((row) => row.document_type === 'sale') ? await saleCustomerLinks() : [];
+    const linksBySale = new Map(links.map((link) => [link.key, link]));
+    sendJson(response, 200, { data: rows.map((row) => {
+      const document = publicFinanceDocument(row);
+      const link = linksBySale.get(row.id);
+      return link ? { ...document, customerId: link.customerId, customerCode: link.customerCode } : document;
+    }) });
     return;
   }
 
   if (request.method === 'POST' && resource === '/finance/documents') {
     const actor = await requireAdmin(request);
-    const document = validateFinanceDocument(await readJson(request));
-    document.code = await nextUniqueCode(document.documentType === 'sale' ? 'SALE' : document.documentType === 'purchase' ? 'PUR' : 'INV', 'finance_documents');
+    const input = await readJson(request);
+    const customerId = optionalText(input.customerId, 'Khách hàng', 160);
+    if (customerId && input.documentType !== 'sale') throw new HttpError(422, 'Liên kết khách hàng chỉ áp dụng cho chứng từ bán hàng.');
+    let document;
+    let link;
     const id = randomUUID();
     const timestamp = now();
     const insertDocument = await db.prepare(`INSERT INTO finance_documents (
@@ -6250,6 +6282,13 @@ async function handleRequest(request, response) {
       document_date, due_date, status, tax_code, vat_rate, vat_amount, created_by, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     await db.transaction(async () => {
+      let customer;
+      if (customerId) {
+        customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
+        if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
+      }
+      document = validateFinanceDocument({ ...input, partnerName: customer ? customer.name : input.partnerName });
+      document.code = await nextUniqueCode(document.documentType === 'sale' ? 'SALE' : document.documentType === 'purchase' ? 'PUR' : 'INV', 'finance_documents');
       await insertDocument.run(
         id,
         document.documentType,
@@ -6269,9 +6308,38 @@ async function handleRequest(request, response) {
         timestamp,
         timestamp,
       );
+      if (customer) link = await insertSaleCustomerLink(id, document.code, customer, actor, timestamp);
       await insertAutomaticCashTransaction(document, actor.id, timestamp);
     });
-    sendJson(response, 201, { document: publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id)) });
+    const saved = publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id));
+    sendJson(response, 201, { document: link ? { ...saved, customerId: link.customerId, customerCode: link.customerCode } : saved });
+    return;
+  }
+
+  const saleCustomerMatch = /^\/finance\/sales\/([^/]+)\/customer$/.exec(resource);
+  if (request.method === 'POST' && saleCustomerMatch) {
+    const actor = await requireAdmin(request);
+    const saleId = requiredText(decodeURIComponent(saleCustomerMatch[1]), 'Chứng từ bán', 160);
+    const customerId = requiredText((await readJson(request)).customerId, 'Khách hàng', 160);
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_sale_customer_links'))");
+      const sale = await db.prepare("SELECT id, code, partner_name, status FROM finance_documents WHERE id = ? AND document_type = 'sale'").get(saleId);
+      if (!sale || sale.status === 'Đã hủy') throw new HttpError(422, 'Chứng từ bán không tồn tại hoặc đã hủy.');
+      const customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
+      if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
+      const existingRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_sale_customer_links' AND record_key = ? LIMIT 1").get(saleId);
+      if (existingRow) {
+        const existing = publicCollectionRecord(existingRow);
+        if (existing.customerId !== customerId) throw new HttpError(409, 'Chứng từ đã liên kết với khách hàng khác.');
+        result = { link: existing, replayed: true };
+        return;
+      }
+      const normalizeName = (value) => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('vi-VN');
+      if (normalizeName(sale.partner_name) !== normalizeName(customer.name)) throw new HttpError(422, 'Tên khách hàng trong chứng từ phải khớp danh bạ để liên kết.');
+      result = { link: await insertSaleCustomerLink(sale.id, sale.code, customer, actor, now()), replayed: false };
+    });
+    sendJson(response, 200, result);
     return;
   }
 
@@ -6334,9 +6402,12 @@ async function handleRequest(request, response) {
     const entries = await loyaltyEntries();
     const balances = loyaltyBalances(entries);
     const customers = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE contact_type = 'customer' ORDER BY name, code").all();
+    const links = new Map((await saleCustomerLinks()).map((link) => [link.key, link]));
+    const saleRows = await db.prepare("SELECT id, code, amount, document_date FROM finance_documents WHERE document_type = 'sale' AND status = 'Đã bàn giao' AND subtype <> 'Báo giá' ORDER BY document_date DESC, created_at DESC").all();
     sendJson(response, 200, {
       customers: customers.map((customer) => ({ key: customer.id, code: customer.code, name: customer.name, status: customer.status, balance: balances.get(customer.id) || 0 })),
       entries,
+      sales: saleRows.filter((sale) => links.has(sale.id)).map((sale) => ({ key: sale.id, code: sale.code, customerId: links.get(sale.id).customerId, amount: sale.amount, documentDate: sale.document_date })),
     });
     return;
   }
@@ -6348,7 +6419,9 @@ async function handleRequest(request, response) {
     const type = oneOf(input.type, 'Loại giao dịch điểm', ['earn', 'redeem']);
     const customerId = requiredText(input.customerId, 'Khách hàng', 160);
     const points = requiredAmount(input.points, 'Số điểm');
-    const reference = requiredText(input.reference, 'Mã tham chiếu', 160);
+    const saleId = optionalText(input.saleId, 'Chứng từ bán hàng', 160);
+    if (saleId && type !== 'earn') throw new HttpError(422, 'Chỉ giao dịch tích điểm được gắn chứng từ bán hàng.');
+    let reference = saleId ? '' : requiredText(input.reference, 'Mã tham chiếu', 160);
     const rewardName = type === 'redeem' ? requiredText(input.rewardName, 'Phần thưởng', 255) : '';
     const note = optionalText(input.note, 'Ghi chú', 1000);
     let result;
@@ -6359,7 +6432,8 @@ async function handleRequest(request, response) {
       const existing = entries.find((entry) => entry.key === requestId);
       if (existing) {
         if (existing.type !== type || existing.customerId !== customerId || existing.points !== points
-          || existing.reference !== reference || existing.rewardName !== rewardName || existing.note !== note) {
+          || String(existing.saleId || '') !== saleId || (!saleId && existing.reference !== reference)
+          || existing.rewardName !== rewardName || existing.note !== note) {
           throw new HttpError(409, 'Mã yêu cầu đã được dùng cho giao dịch khác.');
         }
         result = { entry: existing, balance: balances.get(customerId) || 0, replayed: true };
@@ -6367,6 +6441,19 @@ async function handleRequest(request, response) {
       }
       const customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
       if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
+      let sale;
+      if (saleId) {
+        sale = await db.prepare("SELECT id, code, subtype, status, amount, document_date FROM finance_documents WHERE id = ? AND document_type = 'sale'").get(saleId);
+        const linkRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_sale_customer_links' AND record_key = ? LIMIT 1").get(saleId);
+        const link = linkRow && publicCollectionRecord(linkRow);
+        if (!sale || sale.status !== 'Đã bàn giao' || sale.subtype === 'Báo giá' || !link || link.customerId !== customerId) {
+          throw new HttpError(422, 'Chọn chứng từ bán đã bàn giao và liên kết với đúng khách hàng.');
+        }
+        if (entries.some((entry) => entry.type === 'earn' && entry.saleId === saleId && entry.status !== 'Đã hủy')) {
+          throw new HttpError(409, 'Chứng từ này đã được tích điểm.');
+        }
+        reference = sale.code;
+      }
       if (entries.some((entry) => entry.customerId === customerId && entry.type === type && entry.status !== 'Đã hủy'
         && String(entry.reference || '').toLocaleLowerCase() === reference.toLocaleLowerCase())) {
         throw new HttpError(409, 'Mã tham chiếu đã được ghi nhận cho khách hàng này.');
@@ -6382,6 +6469,7 @@ async function handleRequest(request, response) {
         points, delta, balanceAfter: nextBalance, reference, rewardName, note,
         status: type === 'earn' ? 'Đã ghi nhận' : 'Chờ trao', createdAt: timestamp,
         createdBy: actor.name, createdById: actor.id,
+        ...(sale ? { saleId: sale.id, saleCode: sale.code, saleAmount: sale.amount, saleDate: sale.document_date } : {}),
       };
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'crm_loyalty_ledger', ?, ?, ?, ?, ?)`)

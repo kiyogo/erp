@@ -163,6 +163,30 @@ try {
   assert.deepEqual(decisionRace.map((item) => item.status).sort((a, b) => a - b), [200, 409]);
   const expectedBalance = decisionRace.find((item) => item.status === 200).action === 'fulfill' ? 95 : 105;
   assert.equal((await request('/crm/loyalty')).customers.find((item) => item.key === promotionCustomer.key).balance, expectedBalance); completed++;
+  const pgSaleInput = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Forged', amount: 500000, paidAmount: 0, documentDate: meetingToday, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 0, vatAmount: 0 };
+  const pgLinkedSale = (await request('/finance/documents', 'POST', { ...pgSaleInput, customerId: promotionCustomer.key }, 201)).document;
+  assert.equal(pgLinkedSale.partnerName, promotionCustomer.name);
+  assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === pgLinkedSale.key).customerId, promotionCustomer.key);
+  const pgLegacySale = (await request('/finance/documents', 'POST', { ...pgSaleInput, partnerName: promotionCustomer.name }, 201)).document;
+  const linkRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/sales/${pgLegacySale.key}/customer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ customerId: promotionCustomer.key }),
+    });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(linkRace.map((item) => item.status), [200, 200]);
+  assert.deepEqual(linkRace.map((item) => item.body.replayed).sort(), [false, true]);
+  const linkedEarnRace = await Promise.all(['pg-linked-earn-a', 'pg-linked-earn-b'].map(async (requestId) => {
+    const response = await fetch(`${base}/crm/loyalty/entries`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ requestId, type: 'earn', customerId: promotionCustomer.key, saleId: pgLinkedSale.key, points: 10, reference: 'Forged' }),
+    });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(linkedEarnRace.map((item) => item.status).sort((a, b) => a - b), [201, 409]);
+  assert.equal(linkedEarnRace.find((item) => item.status === 201).body.entry.reference, pgLinkedSale.code);
+  assert.equal((await request('/crm/loyalty')).customers.find((item) => item.key === promotionCustomer.key).balance, expectedBalance + 10); completed++;
   const supplierEvaluationInput = { key: 'pg-supplier-evaluation', evalCode: 'PG-NCC-DG-1', supplierId: supplier.key, evalPeriod: 'Quý IV / 2026', qualityScore: 35, deliveryScore: 25, priceScore: 18, serviceScore: 8, evaluator: 'Forged', evaluatorId: 'forged', totalScore: 0, tier: 'Hạng C' };
   const supplierEvaluation = (await request('/collections/crm_supplier_evaluations', 'POST', { record: supplierEvaluationInput }, 201)).record;
   assert.equal(supplierEvaluation.supplierName, updatedSupplier.name);

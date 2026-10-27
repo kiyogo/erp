@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { crmLoyaltyApi, type CrmLoyaltyCustomer, type CrmLoyaltyEntry } from '../../api/endpoints';
+import { crmLoyaltyApi, type CrmLoyaltyCustomer, type CrmLoyaltyEntry, type CrmLoyaltySale } from '../../api/endpoints';
 import { KTable } from '../../components/KTable';
 import { Button, Form, Input, Modal, Select, Tag, message } from '../../custom-ui';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -12,6 +12,7 @@ const typeNames: Record<CrmLoyaltyEntry['type'], string> = {
 export const LoyaltyModule: React.FC = () => {
   const [customers, setCustomers] = useState<CrmLoyaltyCustomer[]>([]);
   const [entries, setEntries] = useState<CrmLoyaltyEntry[]>([]);
+  const [sales, setSales] = useState<CrmLoyaltySale[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -19,6 +20,8 @@ export const LoyaltyModule: React.FC = () => {
   const [filter, setFilter] = useState('all');
   const [entryType, setEntryType] = useState<'earn' | 'redeem' | null>(null);
   const [requestId, setRequestId] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedSaleId, setSelectedSaleId] = useState('');
   const [target, setTarget] = useState<CrmLoyaltyEntry | null>(null);
   const [action, setAction] = useState<'fulfill' | 'cancel' | null>(null);
   const [entryForm] = Form.useForm();
@@ -30,6 +33,7 @@ export const LoyaltyModule: React.FC = () => {
       const response = await crmLoyaltyApi.getAll();
       setCustomers(response.data.customers);
       setEntries(response.data.entries);
+      setSales(response.data.sales || []);
       setLoadError(false);
     } catch (error: any) {
       setLoadError(true);
@@ -50,7 +54,9 @@ export const LoyaltyModule: React.FC = () => {
 
   const openEntry = (type: 'earn' | 'redeem', customerId?: string) => {
     entryForm.resetFields();
-    entryForm.setFieldsValue({ customerId: customerId || '', points: '', reference: '', rewardName: '', note: '' });
+    entryForm.setFieldsValue({ customerId: customerId || '', saleId: '', points: '', reference: '', rewardName: '', note: '' });
+    setSelectedCustomerId(customerId || '');
+    setSelectedSaleId('');
     setRequestId(crypto.randomUUID());
     setEntryType(type);
   };
@@ -63,6 +69,7 @@ export const LoyaltyModule: React.FC = () => {
         requestId, type: entryType, customerId: values.customerId, points: Number(values.points),
         reference: String(values.reference || '').trim(), rewardName: entryType === 'redeem' ? String(values.rewardName || '').trim() : '',
         note: String(values.note || '').trim(),
+        ...(entryType === 'earn' && values.saleId ? { saleId: values.saleId } : {}),
       });
       setEntryType(null);
       entryForm.resetFields();
@@ -125,8 +132,8 @@ export const LoyaltyModule: React.FC = () => {
   ];
 
   const exportEntries = () => downloadFile('So_diem_khach_hang.xlsx', generateValidXlsxBlob([
-    ['Thời gian', 'Mã khách hàng', 'Khách hàng', 'Loại', 'Điểm thay đổi', 'Số dư sau giao dịch', 'Tham chiếu', 'Phần thưởng', 'Trạng thái', 'Người ghi nhận', 'Người xử lý', 'Tham chiếu trao thưởng', 'Lý do hủy', 'Ghi chú'],
-    ...visibleEntries.map((entry) => [entry.createdAt, entry.customerCode, entry.customerName, typeNames[entry.type], entry.delta, entry.balanceAfter, entry.reference, entry.rewardName, entry.status, entry.createdBy, entry.handledBy || '', entry.fulfillmentReference || '', entry.cancelReason || '', entry.note]),
+    ['Thời gian', 'Mã khách hàng', 'Khách hàng', 'Loại', 'Điểm thay đổi', 'Số dư sau giao dịch', 'Tham chiếu', 'Chứng từ bán', 'Giá trị chứng từ', 'Phần thưởng', 'Trạng thái', 'Người ghi nhận', 'Người xử lý', 'Tham chiếu trao thưởng', 'Lý do hủy', 'Ghi chú'],
+    ...visibleEntries.map((entry) => [entry.createdAt, entry.customerCode, entry.customerName, typeNames[entry.type], entry.delta, entry.balanceAfter, entry.reference, entry.saleCode || '', entry.saleAmount ?? '', entry.rewardName, entry.status, entry.createdBy, entry.handledBy || '', entry.fulfillmentReference || '', entry.cancelReason || '', entry.note]),
   ]));
 
   return <div aria-busy={loading} style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
@@ -167,10 +174,21 @@ export const LoyaltyModule: React.FC = () => {
 
     <Modal title={entryType === 'earn' ? 'Ghi nhận tích điểm' : 'Đổi điểm lấy thưởng'} open={!!entryType} onCancel={() => setEntryType(null)} footer={null} width={620}>
       <Form form={entryForm} layout="vertical" onFinish={saveEntry} style={{ marginTop: 14 }}>
-        <Form.Item name="customerId" label="Khách hàng" rules={[{ required: true }]}><Select showSearch options={customers.filter((item) => !item.status.toLocaleLowerCase().includes('tạm')).map((item) => ({ value: item.key, label: `${item.code} · ${item.name} · ${item.balance.toLocaleString('vi-VN')} điểm` }))} /></Form.Item>
+        <Form.Item name="customerId" label="Khách hàng" rules={[{ required: true }]}><Select showSearch options={customers.filter((item) => !item.status.toLocaleLowerCase().includes('tạm')).map((item) => ({ value: item.key, label: `${item.code} · ${item.name} · ${item.balance.toLocaleString('vi-VN')} điểm` }))} onChange={(value) => {
+          setSelectedCustomerId(String(value || ''));
+          setSelectedSaleId('');
+          entryForm.setFieldsValue({ saleId: '', reference: '' });
+        }} /></Form.Item>
+        {entryType === 'earn' && <Form.Item name="saleId" label="Chứng từ bán hàng">
+          <Select allowClear showSearch placeholder="Chọn chứng từ đã bàn giao" options={sales.filter((sale) => sale.customerId === selectedCustomerId && !entries.some((item) => item.type === 'earn' && item.saleId === sale.key && item.status !== 'Đã hủy')).map((sale) => ({ value: sale.key, label: `${sale.code} · ${sale.documentDate} · ${Number(sale.amount).toLocaleString('vi-VN')} ₫` }))} onChange={(value) => {
+            const id = String(value || '');
+            setSelectedSaleId(id);
+            entryForm.setFieldsValue({ reference: sales.find((sale) => sale.key === id)?.code || '' });
+          }} />
+        </Form.Item>}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <Form.Item name="points" label="Số điểm" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
-          <Form.Item name="reference" label="Mã tham chiếu" rules={[{ required: true, whitespace: true }]}><Input maxLength={160} /></Form.Item>
+          <Form.Item name="reference" label="Mã tham chiếu" rules={[{ required: true, whitespace: true }]}><Input maxLength={160} disabled={!!selectedSaleId} /></Form.Item>
         </div>
         {entryType === 'redeem' && <Form.Item name="rewardName" label="Phần thưởng" rules={[{ required: true, whitespace: true }]}><Input maxLength={255} /></Form.Item>}
         <Form.Item name="note" label="Ghi chú"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>

@@ -453,6 +453,8 @@ export type FinanceDocument = {
   vatAmount: number;
   createdAt: string;
   updatedAt: string;
+  customerId?: string;
+  customerCode?: string;
 };
 
 export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmount' | 'createdAt' | 'updatedAt'>;
@@ -472,6 +474,7 @@ export const financeDocumentsApi = {
   getAll: (params?: { documentType?: FinanceDocument['documentType']; subtype?: string }) => api.get<{ data: FinanceDocument[] }>('/finance/documents', { params }),
   create: (data: CreateFinanceDocument) => api.post<{ document: FinanceDocument }>('/finance/documents', data),
   getDebts: () => api.get<{ data: FinanceDebt[] }>('/finance/debts'),
+  linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
 };
 
 export type FinanceBankAccount = {
@@ -636,7 +639,12 @@ export type CrmLoyaltyEntry = {
   cancelReason?: string;
   handledAt?: string;
   handledBy?: string;
+  saleId?: string;
+  saleCode?: string;
+  saleAmount?: number;
+  saleDate?: string;
 };
+export type CrmLoyaltySale = { key: string; code: string; customerId: string; amount: number; documentDate: string };
 export type CreateCrmLoyaltyEntry = {
   requestId: string;
   type: 'earn' | 'redeem';
@@ -645,9 +653,10 @@ export type CreateCrmLoyaltyEntry = {
   reference: string;
   rewardName?: string;
   note?: string;
+  saleId?: string;
 };
 export const crmLoyaltyApi = {
-  getAll: () => api.get<{ customers: CrmLoyaltyCustomer[]; entries: CrmLoyaltyEntry[] }>('/crm/loyalty'),
+  getAll: () => api.get<{ customers: CrmLoyaltyCustomer[]; entries: CrmLoyaltyEntry[]; sales: CrmLoyaltySale[] }>('/crm/loyalty'),
   create: (entry: CreateCrmLoyaltyEntry) => api.post<{ entry: CrmLoyaltyEntry; balance: number; replayed: boolean }>('/crm/loyalty/entries', entry),
   fulfill: (key: string, reference: string) => api.post<{ entry: CrmLoyaltyEntry; balance: number }>(`/crm/loyalty/entries/${encodeURIComponent(key)}/fulfill`, { reference }),
   cancel: (key: string, reason: string) => api.post<{ entry: CrmLoyaltyEntry; balance: number }>(`/crm/loyalty/entries/${encodeURIComponent(key)}/cancel`, { reason }),

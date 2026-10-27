@@ -59,6 +59,10 @@ try {
   const customerResponse = await fetch(`${apiUrl}/crm/contacts`, { method: 'POST', headers, body: JSON.stringify({ name: 'Khách hàng kiểm thử giao diện', type: 'customer' }) });
   assert.equal(customerResponse.status, 201);
   const customer = (await customerResponse.json()).contact;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const saleResponse = await fetch(`${apiUrl}/finance/documents`, { method: 'POST', headers, body: JSON.stringify({ documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: customer.name, amount: 500000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 0, vatAmount: 0 }) });
+  assert.equal(saleResponse.status, 201);
+  const legacySale = (await saleResponse.json()).document;
   const chrome = process.env.TEST_CHROME_PATH || (existsSync('C:/Program Files/Google/Chrome/Application/chrome.exe') ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : puppeteer.executablePath());
   browser = await puppeteer.launch({ headless: true, executablePath: chrome, args: ['--no-sandbox', '--disable-gpu'] });
   page = await browser.newPage();
@@ -89,6 +93,16 @@ try {
     await page.keyboard.press('Backspace');
     await element.type(value);
     await handle.dispose();
+  }
+  async function choose(label, option) {
+    const handle = await page.evaluateHandle(text => [...document.querySelectorAll('.ant-modal-root .ant-form-item')]
+      .find(item => item.querySelector('label')?.textContent.includes(text))?.querySelector('.ant-select-selector'), label);
+    const element = handle.asElement();
+    assert.ok(element, `Missing select: ${label}`);
+    await element.click();
+    await handle.dispose();
+    await page.waitForFunction(text => [...document.querySelectorAll('.ant-select-item')].some(item => item.textContent.includes(text)), { timeout: 15000 }, option);
+    await page.evaluate(text => [...document.querySelectorAll('.ant-select-item')].find(item => item.textContent.includes(text)).click(), option);
   }
   async function balance() {
     const response = await fetch(`${apiUrl}/crm/loyalty`, { headers });
@@ -132,6 +146,61 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.body.innerText.includes('Đã trao') && document.body.innerText.includes('UI-REDEEM-1'), { timeout: 30000 });
   assert.equal(await balance(), 70);
+  await page.goto(`${webUrl}/admin/finance/sales`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(code => [...document.querySelectorAll('tr')].some(row => row.textContent.includes(code)), { timeout: 30000 }, legacySale.code);
+  await clickButton('Thêm chứng từ bán');
+  await page.waitForSelector('.ant-modal-root form');
+  await choose('Khách hàng trong danh bạ', customer.code);
+  await page.waitForFunction(name => {
+    const item = [...document.querySelectorAll('.ant-modal-root .ant-form-item')].find(node => node.querySelector('label')?.textContent.includes('Tên khách hàng'));
+    const input = item?.querySelector('input');
+    return input?.disabled && input.value === name;
+  }, { timeout: 10000 }, customer.name);
+  await fill('Nội dung hàng hóa', 'UI-SALE-CREATED');
+  await fill('Tổng tiền', '350000');
+  await choose('Trạng thái', 'Đã bàn giao');
+  await clickButton('Lưu chứng từ', false, true);
+  await page.waitForFunction(() => !document.querySelector('.ant-modal-root'), { timeout: 15000 });
+  let salesResponse = await fetch(`${apiUrl}/finance/documents?documentType=sale`, { headers });
+  let salesDocuments = (await salesResponse.json()).data;
+  assert.ok(salesDocuments.some(item => item.description === 'UI-SALE-CREATED' && item.customerId === customer.key && item.partnerName === customer.name && item.status === 'Đã bàn giao'));
+  await page.waitForFunction(code => [...document.querySelectorAll('tr')].some(row => row.textContent.includes(code)), { timeout: 15000 }, legacySale.code);
+  await page.evaluate(code => {
+    const row = [...document.querySelectorAll('tr')].find(item => item.textContent.includes(code));
+    const button = [...row.querySelectorAll('button')].find(item => item.textContent.trim() === 'Liên kết');
+    if (!button) throw new Error('Missing sale customer link action');
+    button.click();
+  }, legacySale.code);
+  await page.waitForSelector('.ant-modal-root .ant-select-selector');
+  await choose('Khách hàng trong danh bạ', customer.code);
+  await clickButton('Lưu liên kết', false, true);
+  await page.waitForFunction(() => !document.querySelector('.ant-modal-root'), { timeout: 15000 });
+  salesResponse = await fetch(`${apiUrl}/finance/documents?documentType=sale`, { headers });
+  salesDocuments = (await salesResponse.json()).data;
+  assert.equal(salesDocuments.find(item => item.key === legacySale.key).customerId, customer.key);
+
+  await page.goto(`${webUrl}/admin/crm/loyalty`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(() => document.body.innerText.includes('Khách hàng kiểm thử giao diện'), { timeout: 30000 });
+  await clickButton('Tích điểm', true);
+  await page.waitForSelector('.ant-modal-root form');
+  const saleSelect = await page.evaluateHandle(() => [...document.querySelectorAll('.ant-modal-root .ant-form-item')].find(item => item.querySelector('label')?.textContent.includes('Chứng từ bán hàng'))?.querySelector('.ant-select-selector'));
+  assert.ok(saleSelect.asElement(), 'Missing sale selector');
+  await saleSelect.asElement().click();
+  await saleSelect.dispose();
+  await page.waitForFunction(code => [...document.querySelectorAll('.ant-select-item')].some(item => item.textContent.includes(code)), { timeout: 15000 }, legacySale.code);
+  await page.evaluate(code => [...document.querySelectorAll('.ant-select-item')].find(item => item.textContent.includes(code)).click(), legacySale.code);
+  await page.waitForFunction(code => {
+    const item = [...document.querySelectorAll('.ant-modal-root .ant-form-item')].find(node => node.querySelector('label')?.textContent.includes('Mã tham chiếu'));
+    const input = item?.querySelector('input');
+    return input?.disabled && input.value === code;
+  }, { timeout: 10000 }, legacySale.code);
+  await fill('Số điểm', '12');
+  await clickButton('Lưu giao dịch', false, true);
+  await page.waitForFunction(() => !document.querySelector('.ant-modal-root'), { timeout: 15000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('tr')].some(row => row.textContent.includes('Khách hàng kiểm thử giao diện') && row.textContent.includes('82')), { timeout: 15000 });
+  assert.equal(await balance(), 82);
+  const loyaltyResponse = await fetch(`${apiUrl}/crm/loyalty`, { headers });
+  assert.ok((await loyaltyResponse.json()).entries.some(entry => entry.saleId === legacySale.key && entry.reference === legacySale.code && entry.points === 12));
   await page.goto(`${webUrl}/admin/crm/promotions`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => document.body.innerText.includes('Chương trình khuyến mại'), { timeout: 30000 });
   await clickButton('Thêm chương trình');
@@ -158,7 +227,7 @@ try {
   promotion = (await promotionsResponse.json()).data.find(item => item.name === 'Khuyến mại kiểm thử giao diện');
   assert.equal(promotion.enabled, true);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: 'earn, insufficient balance, redeem, fulfill, reload, promotion tags and activation', database: directory }));
+  console.log(JSON.stringify({ checks: 'earn, insufficient balance, redeem, fulfill, reload, create linked sale, link existing sale, earn from sale, promotion tags and activation', database: directory }));
 } catch (error) {
   if (page) console.error((await page.$eval('body', node => node.innerText).catch(() => '')).slice(-3000));
   throw error;

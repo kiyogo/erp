@@ -147,6 +147,55 @@ test('CRM promotion campaigns validate their rules and keep server-owned history
   await request('/collections/crm_promotions', 'GET', undefined, 403, staffHeaders);
 });
 
+test('loyalty points can reference only completed sales linked to the same CRM customer', async () => {
+  const customer = (await request('/crm/contacts', 'POST', { name: 'Khách hàng liên kết chứng từ', type: 'customer' }, 201)).contact;
+  const other = (await request('/crm/contacts', 'POST', { name: 'Khách hàng khác', type: 'customer' }, 201)).contact;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const saleInput = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Tên giả', description: 'Chứng từ kiểm thử', amount: 500000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 0, vatAmount: 0 };
+  const beforeSales = (await request('/finance/documents?documentType=sale')).data.length;
+  await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key, amount: 0 }, 422);
+  await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key, documentType: 'purchase' }, 422);
+  assert.equal((await request('/finance/documents?documentType=sale')).data.length, beforeSales);
+  const sale = (await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key }, 201)).document;
+  assert.equal(sale.customerId, customer.key);
+  assert.equal(sale.customerCode, customer.code);
+  assert.equal(sale.partnerName, customer.name);
+  assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === sale.key).customerId, customer.key);
+  const before = await request('/crm/loyalty');
+  assert.equal(before.customers.find((item) => item.key === customer.key).balance, 0);
+  assert.ok(before.sales.some((item) => item.key === sale.key && item.customerId === customer.key));
+  const earn = { requestId: 'linked-sale-earn', type: 'earn', customerId: customer.key, points: 25, saleId: sale.key, reference: 'Mã giả', note: '' };
+  const saved = (await request('/crm/loyalty/entries', 'POST', earn, 201)).entry;
+  assert.equal(saved.reference, sale.code);
+  assert.equal(saved.saleCode, sale.code);
+  assert.equal(saved.saleAmount, sale.amount);
+  assert.equal((await request('/crm/loyalty/entries', 'POST', earn)).replayed, true);
+  await request('/crm/loyalty/entries', 'POST', { ...earn, requestId: 'linked-sale-duplicate', reference: 'Khác' }, 409);
+  await request('/crm/loyalty/entries', 'POST', { ...earn, requestId: 'linked-sale-wrong-customer', customerId: other.key }, 422);
+  await request('/crm/loyalty/entries', 'POST', { ...earn, requestId: 'linked-sale-missing', saleId: 'missing' }, 422);
+  await request('/collections/finance_sale_customer_links', 'PUT', { records: [] }, 409);
+  const pending = (await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key, status: 'Đang triển khai' }, 201)).document;
+  const quote = (await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key, subtype: 'Báo giá' }, 201)).document;
+  await request('/crm/loyalty/entries', 'POST', { ...earn, requestId: 'linked-sale-pending', saleId: pending.key }, 422);
+  await request('/crm/loyalty/entries', 'POST', { ...earn, requestId: 'linked-sale-quote', saleId: quote.key }, 422);
+  const legacy = (await request('/finance/documents', 'POST', { ...saleInput, partnerName: customer.name }, 201)).document;
+  await request(`/finance/sales/${legacy.key}/customer`, 'POST', { customerId: other.key }, 422);
+  assert.equal((await request(`/finance/sales/${legacy.key}/customer`, 'POST', { customerId: customer.key })).replayed, false);
+  assert.equal((await request(`/finance/sales/${legacy.key}/customer`, 'POST', { customerId: customer.key })).replayed, true);
+  await request(`/finance/sales/${legacy.key}/customer`, 'POST', { customerId: other.key }, 409);
+  const race = await Promise.all(['legacy-sale-earn-a', 'legacy-sale-earn-b'].map(async (requestId) => {
+    const response = await fetch(`${base}/crm/loyalty/entries`, { method: 'POST', headers, body: JSON.stringify({ ...earn, requestId, saleId: legacy.key }) });
+    return response.status;
+  }));
+  assert.deepEqual(race.sort((a, b) => a - b), [201, 409]);
+  await request('/users', 'POST', { email: 'sale-link-user@example.test', name: 'Nhân viên bán hàng', password: 'Sale-Link-Test-26!Secure', employeeCode: 'SALE-LINK-USER', role: 'USER' }, 201);
+  const userSession = await request('/auth/login', 'POST', { email: 'sale-link-user@example.test', password: 'Sale-Link-Test-26!Secure' });
+  const userHeaders = { ...headers, Authorization: `Bearer ${userSession.access_token || userSession.token}` };
+  await request('/collections/finance_sale_customer_links', 'GET', undefined, 403, userHeaders);
+  await request(`/finance/sales/${legacy.key}/customer`, 'POST', { customerId: customer.key }, 403, userHeaders);
+  await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key }, 403, userHeaders);
+});
+
 test('meeting rooms enforce server-owned booking identities, room policy, conflicts and cancellation history', async () => {
   const room = (await request('/collections/meeting_rooms', 'POST', { record: {
     key: 'meeting-room-api', name: 'Phòng họp API', capacity: 8, location: 'Tầng 4', equipment: ['Màn hình'], status: 'Tạm ngưng', createdBy: 'Giả mạo',

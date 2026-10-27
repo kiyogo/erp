@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
-import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
+import { crmContactsApi, financeDocumentsApi, type CrmContact, type FinanceDocument } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 
@@ -28,9 +28,14 @@ export const SalesModule: React.FC = () => {
 
   const [data, setData] = useState<FinanceDocument[]>([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [customers, setCustomers] = useState<CrmContact[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [linkTarget, setLinkTarget] = useState<FinanceDocument | null>(null);
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [linkForm] = Form.useForm();
 
   const isCharts = currentPath === '/finance/sales/charts';
   const isQuotes = currentPath === '/finance/sales/quotes';
@@ -51,8 +56,18 @@ export const SalesModule: React.FC = () => {
     }
   };
 
+  const loadCustomers = async () => {
+    try {
+      const response = await crmContactsApi.getAll('customer');
+      setCustomers(response.data.data || []);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được danh bạ khách hàng.');
+    }
+  };
+
   useEffect(() => {
     void loadData();
+    void loadCustomers();
   }, []);
 
   const filteredData = useMemo(() => {
@@ -81,8 +96,10 @@ export const SalesModule: React.FC = () => {
   }, [data]);
 
   const handleCreate = async (values: any) => {
+    if (saving) return;
     const amount = Number(values.amount) || 0;
     const paidAmount = Number(values.paidAmount) || 0;
+    setSaving(true);
     try {
       await financeDocumentsApi.create({
         documentType: 'sale',
@@ -98,13 +115,35 @@ export const SalesModule: React.FC = () => {
         taxCode: values.taxCode || '',
         vatRate: 0,
         vatAmount: 0,
+        ...(values.customerId ? { customerId: values.customerId } : {}),
       });
       message.success('Đã lưu chứng từ bán hàng và đồng bộ sang dòng tiền nếu có khoản đã thu.');
       setModalOpen(false);
+      setSelectedCustomerId('');
       form.resetFields();
       await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể lưu chứng từ bán hàng.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const normalizeName = (name: string) => String(name || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('vi-VN');
+  const linkOptions = linkTarget ? customers.filter((item) => !item.status.toLocaleLowerCase().includes('tạm') && normalizeName(item.name) === normalizeName(linkTarget.partnerName)) : [];
+  const linkCustomer = async (values: { customerId: string }) => {
+    if (!linkTarget || saving) return;
+    setSaving(true);
+    try {
+      await financeDocumentsApi.linkSaleCustomer(linkTarget.key, values.customerId);
+      setLinkTarget(null);
+      linkForm.resetFields();
+      await loadData();
+      message.success('Đã liên kết chứng từ với khách hàng.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể liên kết khách hàng với chứng từ.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -124,7 +163,7 @@ export const SalesModule: React.FC = () => {
       key: 'partnerName',
       render: (_: any, record: FinanceDocument) => (
         <div>
-          <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}</div>
+          <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}{record.customerCode ? ` · ${record.customerCode}` : ''}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>{record.description || 'Không có diễn giải'}</div>
         </div>
       ),
@@ -135,6 +174,7 @@ export const SalesModule: React.FC = () => {
     { title: 'Đã thu', dataIndex: 'paidAmount', key: 'paidAmount', width: 150, render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{formatMoney(value)}</span> },
     { title: 'Còn phải thu', dataIndex: 'remainingAmount', key: 'remainingAmount', width: 150, render: (value: number) => <strong style={{ color: value > 0 ? '#DC2626' : '#16A34A' }}>{formatMoney(value)}</strong> },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 140, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : value === 'Đã bàn giao' ? 'success' : 'processing'}>{value}</Tag> },
+    { title: 'Khách hàng CRM', key: 'customerLink', width: 150, render: (_: unknown, record: FinanceDocument) => record.customerId ? 'Đã liên kết' : record.status !== 'Đã hủy' ? <Button size="small" onClick={() => { linkForm.resetFields(); setLinkTarget(record); }}>Liên kết</Button> : '—' },
   ];
 
   const renderDynamicChart = () => (
@@ -184,13 +224,14 @@ export const SalesModule: React.FC = () => {
               allowClear
             />
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadData()}>Làm mới</Button>
+              <Button icon={<ReloadOutlined />} loading={loading} onClick={() => { void loadData(); void loadCustomers(); }}>Làm mới</Button>
               {!isOutputInvoices && (
                 <Button
                   type="primary"
                   icon={<PlusOutlined />}
                   onClick={() => {
                     form.resetFields();
+                    setSelectedCustomerId('');
                     form.setFieldsValue({ subtype: isQuotes ? 'Báo giá' : 'Đơn bán hàng', documentDate: new Date().toISOString().substring(0, 10), paidAmount: 0 });
                     setModalOpen(true);
                   }}
@@ -214,9 +255,9 @@ export const SalesModule: React.FC = () => {
         </div>
       )}
 
-      <Modal title="Thêm chứng từ bán hàng" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={620}>
+      <Modal title="Thêm chứng từ bán hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSelectedCustomerId(''); }} footer={null} width={620}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="code" label="Mã chứng từ" rules={[{ required: true, whitespace: true }]}>
               <Input placeholder="Ví dụ: SO-2026-001" />
             </Form.Item>
@@ -224,13 +265,21 @@ export const SalesModule: React.FC = () => {
               <Select options={[{ label: 'Báo giá', value: 'Báo giá' }, { label: 'Đơn bán hàng', value: 'Đơn bán hàng' }, { label: 'Hợp đồng bán', value: 'Hợp đồng bán' }]} />
             </Form.Item>
           </div>
-          <Form.Item name="partnerName" label="Khách hàng" rules={[{ required: true, whitespace: true }]}>
-            <Input />
+          <Form.Item name="customerId" label="Khách hàng trong danh bạ">
+            <Select allowClear showSearch options={customers.filter((item) => !item.status.toLocaleLowerCase().includes('tạm')).map((item) => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={(value) => {
+              const id = String(value || '');
+              setSelectedCustomerId(id);
+              const selected = customers.find((item) => item.key === id);
+              if (selected) form.setFieldsValue({ partnerName: selected.name });
+            }} />
+          </Form.Item>
+          <Form.Item name="partnerName" label="Tên khách hàng" rules={[{ required: true, whitespace: true }]}>
+            <Input disabled={!!selectedCustomerId} />
           </Form.Item>
           <Form.Item name="description" label="Nội dung hàng hóa / dịch vụ">
             <Input.TextArea rows={2} />
           </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="amount" label="Tổng tiền" rules={[{ required: true }]}>
               <Input type="number" min={1} />
             </Form.Item>
@@ -238,7 +287,7 @@ export const SalesModule: React.FC = () => {
               <Input type="number" min={0} />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="documentDate" label="Ngày chứng từ" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
@@ -249,11 +298,24 @@ export const SalesModule: React.FC = () => {
           <Form.Item name="status" label="Trạng thái" initialValue="Đang triển khai">
             <Select options={salesStatusOptions} />
           </Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu chứng từ
             </Button>
+          </div>
+        </Form>
+      </Modal>
+      <Modal title="Liên kết khách hàng với chứng từ" open={!!linkTarget} onCancel={() => setLinkTarget(null)} footer={null} width={560}>
+        <Form form={linkForm} layout="vertical" onFinish={linkCustomer} style={{ marginTop: 14 }}>
+          <div style={{ marginBottom: 14 }}>{linkTarget?.code} · {linkTarget?.partnerName}</div>
+          <Form.Item name="customerId" label="Khách hàng trong danh bạ" rules={[{ required: true }]}>
+            <Select showSearch options={linkOptions.map((item) => ({ value: item.key, label: `${item.code} · ${item.name}` }))} />
+          </Form.Item>
+          {!linkOptions.length && <div style={{ color: '#64748B', marginBottom: 14 }}>Không có khách hàng hoạt động có tên khớp chứng từ.</div>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14 }}>
+            <Button onClick={() => setLinkTarget(null)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" disabled={!linkOptions.length} loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu liên kết</Button>
           </div>
         </Form>
       </Modal>
