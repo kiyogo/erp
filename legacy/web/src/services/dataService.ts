@@ -336,17 +336,33 @@ export interface MeetingRoom {
   capacity: number;
   equipment: string[];
   status: 'Trống' | 'Đang sử dụng' | 'Bảo trì' | string;
+  createdBy?: string;
+  createdById?: string;
+  createdAt?: string;
+  updatedBy?: string;
+  updatedById?: string;
+  updatedAt?: string;
+  history?: Array<{ action: string; actor: string; actorId: string; at: string }>;
 }
 
 export interface RoomBooking {
   key: string;
+  roomKey?: string;
+  roomLocation?: string;
+  roomCapacity?: number;
   roomName: string;
   meetingTitle: string;
   booker: string;
+  bookerId?: string;
   date: string;
   timeSlot: string;
   participantsCount: number;
   status: 'Đã xác nhận' | 'Đã hủy' | string;
+  createdAt?: string;
+  canceledBy?: string;
+  canceledById?: string;
+  canceledAt?: string;
+  history?: Array<{ action: string; actor: string; actorId: string; at: string }>;
 }
 
 export interface HelpdeskTicket {
@@ -687,6 +703,48 @@ class DataService {
     return this.genericCache.get(key) || [];
   }
 
+  public async createGenericRecord(scope: string, record: Record<string, any>): Promise<any> {
+    const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    const response = await collectionsApi.create(key, record);
+    const savedRecord = response.data?.record;
+    if (!savedRecord || typeof savedRecord !== 'object') throw new Error('Máy chủ không trả về bản ghi đã lưu.');
+    const updated = [savedRecord, ...(this.genericCache.get(key) || [])];
+    this.genericCache.set(key, updated);
+    saveToStorage(key, updated);
+    this.notify();
+    return savedRecord;
+  }
+
+  public async updateGenericRecord(scope: string, record: Record<string, any>): Promise<any> {
+    const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    const recordKey = String(record.key ?? record.code ?? '').trim();
+    if (!recordKey) throw new Error('Bản ghi thiếu khóa để cập nhật.');
+    const response = await collectionsApi.update(key, recordKey, record);
+    const savedRecord = response.data?.record;
+    if (!savedRecord || typeof savedRecord !== 'object') throw new Error('Máy chủ không trả về bản ghi đã cập nhật.');
+    const rows = this.genericCache.get(key) || [];
+    const updated = rows.some((item) => String(item.key ?? item.code ?? '') === recordKey)
+      ? rows.map((item) => String(item.key ?? item.code ?? '') === recordKey ? savedRecord : item)
+      : [savedRecord, ...rows];
+    this.genericCache.set(key, updated);
+    saveToStorage(key, updated);
+    this.notify();
+    return savedRecord;
+  }
+
+  public async deleteGenericRecord(scope: string, recordKey: string): Promise<void> {
+    const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    const normalizedRecordKey = String(recordKey || '').trim();
+    if (!normalizedRecordKey) throw new Error('Bản ghi thiếu khóa để xóa.');
+    await collectionsApi.remove(key, normalizedRecordKey);
+    const updated = (this.genericCache.get(key) || []).filter(
+      (item) => String(item.key ?? item.code ?? '') !== normalizedRecordKey,
+    );
+    this.genericCache.set(key, updated);
+    saveToStorage(key, updated);
+    this.notify();
+  }
+
   public saveGenericData(scope: string, rows: any[]): void {
     const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
     this.genericCache.set(key, rows);
@@ -877,10 +935,11 @@ class DataService {
     return this.getGenericData('payroll');
   }
 
-  public updatePayrollStatus(key: string, status: 'Đã chi trả' | 'Chưa chi trả' | 'Chờ duyệt') {
+  public async updatePayrollStatus(key: string, status: 'Đã chi trả' | 'Chưa chi trả' | 'Chờ duyệt'): Promise<void> {
     const current = this.getPayroll();
-    const updated = current.map((p) => (p.key === key ? { ...p, status } : p));
-    this.saveGenericData('payroll', updated);
+    if (!current.some((record) => record.key === key)) throw new Error('Không tìm thấy phiếu lương cần cập nhật.');
+    await collectionsApi.update('payroll', key, { status });
+    await this.refreshGenericData('payroll');
     this.logAction('Chi trả', 'Tiền lương', `Cập nhật trạng thái phiếu lương key: ${key}`);
   }
 

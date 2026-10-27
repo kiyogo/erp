@@ -45,14 +45,31 @@ type LiveRequestItem = {
   totalSteps: number;
   currentApprover: string;
   slaRemainingHours: number;
-  status: 'Chờ xử lý' | 'Đã hoàn thành' | 'Đã từ chối';
+  status: 'Chờ xử lý' | 'Chờ bổ sung' | 'Đã hoàn thành' | 'Đã từ chối';
   budgetAmount?: number;
   timeline: TimelineStep[];
   source: string;
   route: string;
 };
 
-const TODAY = new Date('2026-08-29T00:00:00');
+type ApprovalWorkflowRequest = {
+  key: string;
+  code: string;
+  workflowCode: string;
+  workflowName: string;
+  category: string;
+  requester: string;
+  department: string;
+  submittedAt: string;
+  currentLevel: number;
+  totalLevels: number;
+  roleRequirement: string;
+  slaDeadlineAt?: string;
+  slaHoursTarget?: number;
+  budgetAmount: number;
+  status: string;
+  approvalHistory?: Array<{ level: number; approver: string; decision: string; timestamp: string; comments?: string }>;
+};
 
 const parseDate = (value?: string) => {
   if (!value) return null;
@@ -61,18 +78,18 @@ const parseDate = (value?: string) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const hoursSince = (value?: string) => {
+const hoursSince = (value: string | undefined, nowMs: number) => {
   const parsed = parseDate(value);
   if (!parsed) return 0;
-  return Math.max(0, (TODAY.getTime() - parsed.getTime()) / (1000 * 60 * 60));
+  return Math.max(0, (nowMs - parsed.getTime()) / (1000 * 60 * 60));
 };
 
-const computeSlaRemaining = (submittedDate: string, targetHours: number, isDone: boolean) => {
+const computeSlaRemaining = (submittedDate: string, targetHours: number, isDone: boolean, nowMs: number) => {
   if (isDone) return 0;
-  return Math.max(0, Math.round((targetHours - hoursSince(submittedDate)) * 10) / 10);
+  return Math.max(0, Math.round((targetHours - hoursSince(submittedDate, nowMs)) * 10) / 10);
 };
 
-const mapProposal = (item: EmployeeProposal): LiveRequestItem => {
+const mapProposal = (item: EmployeeProposal, nowMs: number): LiveRequestItem => {
   const isDone = item.status === 'Đã duyệt';
   const isRejected = item.status === 'Từ chối';
   const status: LiveRequestItem['status'] = isRejected ? 'Đã từ chối' : isDone ? 'Đã hoàn thành' : 'Chờ xử lý';
@@ -87,7 +104,7 @@ const mapProposal = (item: EmployeeProposal): LiveRequestItem => {
     currentStep: isDone || isRejected ? 2 : 1,
     totalSteps: 2,
     currentApprover: item.approver || 'Chưa phân công',
-    slaRemainingHours: computeSlaRemaining(item.createdAt || item.date, 24, isDone || isRejected),
+    slaRemainingHours: computeSlaRemaining(item.createdAt || item.date, 24, isDone || isRejected, nowMs),
     status,
     budgetAmount: Number(item.amount || 0),
     timeline: [
@@ -110,7 +127,7 @@ const mapProposal = (item: EmployeeProposal): LiveRequestItem => {
   };
 };
 
-const mapTask = (item: EnterpriseTask): LiveRequestItem => {
+const mapTask = (item: EnterpriseTask, nowMs: number): LiveRequestItem => {
   const isDone = item.status === 'Hoàn thành';
   const isRejected = item.status === 'Tạm dừng';
   const status: LiveRequestItem['status'] = isRejected ? 'Đã từ chối' : isDone ? 'Đã hoàn thành' : 'Chờ xử lý';
@@ -127,7 +144,7 @@ const mapTask = (item: EnterpriseTask): LiveRequestItem => {
     currentStep: isDone || isRejected ? 3 : progressStep,
     totalSteps: 3,
     currentApprover: item.assignee || 'Chưa giao',
-    slaRemainingHours: computeSlaRemaining(submittedDate, 48, isDone || isRejected),
+    slaRemainingHours: computeSlaRemaining(submittedDate, 48, isDone || isRejected, nowMs),
     status,
     timeline: [
       {
@@ -154,7 +171,7 @@ const mapTask = (item: EnterpriseTask): LiveRequestItem => {
   };
 };
 
-const mapContract = (item: ContractPayload): LiveRequestItem => {
+const mapContract = (item: ContractPayload, nowMs: number): LiveRequestItem => {
   const status: LiveRequestItem['status'] =
     item.status === 'Đã hết hạn'
       ? 'Đã từ chối'
@@ -180,7 +197,7 @@ const mapContract = (item: ContractPayload): LiveRequestItem => {
       : item.employeeSignStatus === 'Chưa ký'
         ? (item.employeeName || item.partyBName || 'Bên ký đối tác')
         : 'Đã hoàn tất',
-    slaRemainingHours: computeSlaRemaining(submittedDate, 72, status !== 'Chờ xử lý'),
+    slaRemainingHours: computeSlaRemaining(submittedDate, 72, status !== 'Chờ xử lý', nowMs),
     status,
     budgetAmount: Number(item.contractValue || item.salary || 0),
     timeline: [
@@ -208,7 +225,7 @@ const mapContract = (item: ContractPayload): LiveRequestItem => {
   };
 };
 
-const mapWorkflow = (item: WorkflowItem): LiveRequestItem => {
+const mapWorkflow = (item: WorkflowItem, nowMs: number): LiveRequestItem => {
   const done = item.status === 'Đã phê duyệt';
   const rejected = item.status === 'Bị từ chối';
   return {
@@ -222,8 +239,8 @@ const mapWorkflow = (item: WorkflowItem): LiveRequestItem => {
     currentStep: done || rejected ? 2 : 1,
     totalSteps: 2,
     currentApprover: item.currentApprover || 'Chưa phân công',
-    slaRemainingHours: computeSlaRemaining(item.submittedDate, 24, done || rejected),
-    status: rejected ? 'Đã từ chối' : done ? 'Đã hoàn thành' : 'Chờ xử lý',
+    slaRemainingHours: computeSlaRemaining(item.submittedDate, 24, done || rejected, nowMs),
+    status: rejected ? 'Đã từ chối' : done ? 'Đã hoàn thành' : item.status === 'Yêu cầu bổ sung' ? 'Chờ bổ sung' : 'Chờ xử lý',
     timeline: [
       {
         stepName: 'Khởi tạo quy trình',
@@ -243,17 +260,56 @@ const mapWorkflow = (item: WorkflowItem): LiveRequestItem => {
   };
 };
 
+const mapApprovalRequest = (item: ApprovalWorkflowRequest, nowMs: number): LiveRequestItem => {
+  const done = item.status === 'Đã phê duyệt' || item.status === 'Đã ký số phê duyệt';
+  const rejected = item.status === 'Đã từ chối';
+  const deadline = parseDate(item.slaDeadlineAt);
+  const remaining = done || rejected
+    ? 0
+    : deadline ? Math.max(0, Math.round((deadline.getTime() - nowMs) / 3_600_000 * 10) / 10)
+      : computeSlaRemaining(item.submittedAt, Number(item.slaHoursTarget) || 4, false, nowMs);
+  const history = Array.isArray(item.approvalHistory) ? item.approvalHistory : [];
+  return {
+    key: `approval-${item.key}`,
+    requestCode: item.code,
+    title: item.workflowName,
+    category: item.category,
+    requester: item.requester,
+    department: item.department,
+    submittedDate: item.submittedAt,
+    currentStep: done || rejected ? item.totalLevels : item.currentLevel,
+    totalSteps: item.totalLevels,
+    currentApprover: item.status === 'Yêu cầu bổ sung' ? 'Người gửi bổ sung hồ sơ' : item.roleRequirement,
+    slaRemainingHours: remaining,
+    status: rejected ? 'Đã từ chối' : done ? 'Đã hoàn thành' : 'Chờ xử lý',
+    budgetAmount: Number(item.budgetAmount || 0),
+    timeline: [
+      { stepName: 'Gửi hồ sơ', approver: item.requester, actionTime: item.submittedAt, status: 'completed' },
+      ...history.map((event) => ({ stepName: `Cấp ${event.level}`, approver: event.approver, actionTime: event.timestamp, status: 'completed' as const, note: `${event.decision}${event.comments ? ` · ${event.comments}` : ''}` })),
+      ...(item.status === 'Yêu cầu bổ sung' ? [{ stepName: 'Người gửi bổ sung hồ sơ', approver: item.requester, actionTime: 'Đang chờ bổ sung', status: 'in_progress' as const }] : []),
+      ...(!done && !rejected && item.status !== 'Yêu cầu bổ sung' ? [{ stepName: `Cấp ${item.currentLevel}: ${item.roleRequirement}`, approver: item.roleRequirement, actionTime: 'Đang chờ xử lý', status: 'in_progress' as const }] : []),
+    ],
+    source: 'Workflow nội bộ',
+    route: '/admin/workflows/requests',
+  };
+};
+
 export const WorkflowOverviewModule: React.FC = () => {
   const navigate = useNavigate();
   const [contracts, setContracts] = useState<ContractPayload[]>([]);
   const [proposals, setProposals] = useState<EmployeeProposal[]>([]);
   const [tasks, setTasks] = useState<EnterpriseTask[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
+  const [approvalRequests, setApprovalRequests] = useState<ApprovalWorkflowRequest[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [detailItem, setDetailItem] = useState<LiveRequestItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
-    const syncWorkflows = () => setWorkflows(dataService.getWorkflows());
+    const syncWorkflows = () => {
+      setWorkflows(dataService.getWorkflows());
+      setApprovalRequests(dataService.getGenericData('workflow_requests'));
+    };
     syncWorkflows();
     const unsubscribe = dataService.subscribe(syncWorkflows);
     Promise.allSettled([
@@ -270,17 +326,23 @@ export const WorkflowOverviewModule: React.FC = () => {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const data = useMemo(() => {
     const merged = [
-      ...proposals.map(mapProposal),
-      ...tasks.map(mapTask),
-      ...contracts.map(mapContract),
-      ...workflows.map(mapWorkflow),
+      ...proposals.map((item) => mapProposal(item, nowMs)),
+      ...tasks.map((item) => mapTask(item, nowMs)),
+      ...contracts.map((item) => mapContract(item, nowMs)),
+      ...workflows.map((item) => mapWorkflow(item, nowMs)),
+      ...approvalRequests.map((item) => mapApprovalRequest(item, nowMs)),
     ];
     return merged.sort((left, right) => (parseDate(right.submittedDate)?.getTime() || 0) - (parseDate(left.submittedDate)?.getTime() || 0));
-  }, [contracts, proposals, tasks, workflows]);
+  }, [approvalRequests, contracts, nowMs, proposals, tasks, workflows]);
 
-  const pendingCount = data.filter((item) => item.status === 'Chờ xử lý').length;
+  const pendingCount = data.filter((item) => item.status === 'Chờ xử lý' || item.status === 'Chờ bổ sung').length;
   const overdueCount = data.filter((item) => item.status === 'Chờ xử lý' && item.slaRemainingHours <= 4).length;
   const completedCount = data.filter((item) => item.status === 'Đã hoàn thành').length;
   const pendingBudget = data.filter((item) => item.status === 'Chờ xử lý').reduce((sum, item) => sum + Number(item.budgetAmount || 0), 0);
@@ -316,7 +378,7 @@ export const WorkflowOverviewModule: React.FC = () => {
             {overdueCount} hồ sơ
           </div>
           <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>
-            Tính theo thời gian tạo hồ sơ đến ngày 2026-08-29
+            Tính theo thời điểm hiện tại: {new Date(nowMs).toLocaleDateString('vi-VN')}
           </div>
         </div>
 
@@ -471,7 +533,7 @@ export const WorkflowOverviewModule: React.FC = () => {
               render: (_: any, r: LiveRequestItem) => (
                 <div>
                   <div style={{ fontWeight: 700, color: r.slaRemainingHours <= 4 && r.status === 'Chờ xử lý' ? '#DC2626' : '#0F172A', fontSize: 13 }}>
-                    {r.status === 'Chờ xử lý' ? `${r.slaRemainingHours} giờ` : 'Hoàn tất'}
+                    {r.status === 'Chờ xử lý' ? `${r.slaRemainingHours} giờ` : r.status === 'Chờ bổ sung' ? 'Chờ người gửi' : 'Hoàn tất'}
                   </div>
                   {r.status === 'Chờ xử lý' && r.slaRemainingHours <= 4 && (
                     <Tag icon={<WarningOutlined />} color="error" style={{ marginTop: 2, fontSize: 10.5 }}>Ưu tiên xử lý</Tag>
@@ -485,7 +547,7 @@ export const WorkflowOverviewModule: React.FC = () => {
               key: 'status',
               width: 140,
               render: (value: LiveRequestItem['status']) => (
-                <Tag color={value === 'Đã hoàn thành' ? 'success' : value === 'Đã từ chối' ? 'error' : 'processing'}>
+                <Tag color={value === 'Đã hoàn thành' ? 'success' : value === 'Đã từ chối' ? 'error' : value === 'Chờ bổ sung' ? 'warning' : 'processing'}>
                   {value}
                 </Tag>
               ),
@@ -567,7 +629,7 @@ export const WorkflowOverviewModule: React.FC = () => {
                   <div style={{ fontSize: 12, color: '#009688', fontWeight: 700 }}>{detailItem.requestCode}</div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{detailItem.title}</div>
                 </div>
-                <Tag color={detailItem.status === 'Đã hoàn thành' ? 'success' : detailItem.status === 'Đã từ chối' ? 'error' : 'processing'}>
+                <Tag color={detailItem.status === 'Đã hoàn thành' ? 'success' : detailItem.status === 'Đã từ chối' ? 'error' : detailItem.status === 'Chờ bổ sung' ? 'warning' : 'processing'}>
                   {detailItem.status}
                 </Tag>
               </div>
@@ -614,7 +676,7 @@ export const WorkflowOverviewModule: React.FC = () => {
               <Button
                 type="primary"
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đã mở luồng liên quan tới ${detailItem.requestCode}.`)}
+                onClick={() => navigate(detailItem.route)}
               >
                 Theo dõi hồ sơ
               </Button>

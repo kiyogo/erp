@@ -1,26 +1,22 @@
-import { dataService } from '../../services/dataService';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
   DownloadOutlined,
   CalendarOutlined,
   CheckCircleOutlined,
-  WarningOutlined,
   ClockCircleOutlined,
   EyeOutlined,
   PrinterOutlined,
-  SafetyCertificateOutlined,
   ToolOutlined,
   UserOutlined,
-  CheckOutlined,
-  ThunderboltOutlined,
-  DashboardOutlined,
-  FileProtectOutlined,
-  AlertOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Checkbox } from '../../custom-ui';
+import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Alert, Progress, Checkbox } from '../../custom-ui';
+import { collectionsApi, employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { addMaintenanceCycle, deriveMaintenanceStatus, localIsoDate, MAINTENANCE_CHECKLIST, validateMaintenanceCompletion } from './assetMaintenanceRules';
 
 export interface ChecklistTask {
   item: string;
@@ -31,6 +27,7 @@ export interface ChecklistTask {
 export interface MaintenanceItem {
   key: string;
   maintCode: string;
+  assetKey: string;
   systemName: string;
   category: string;
   assetCodes: string;
@@ -41,678 +38,391 @@ export interface MaintenanceItem {
   lastDate: string;
   nextDate: string;
   responsibleEngineer: string;
+  responsibleEngineerId: string;
   vendorPartner: string;
   checklist: ChecklistTask[];
   estimatedBudget: number;
   actualCost: number;
-  status: 'Đã hoàn thành đúng lịch' | 'Sắp đến hạn' | 'Quá hạn bảo dưỡng' | 'Đang tiến hành bảo dưỡng';
+  status: 'Đã lên lịch' | 'Đã hoàn thành đúng lịch' | 'Sắp đến hạn' | 'Quá hạn bảo dưỡng' | 'Đang tiến hành bảo dưỡng';
   healthScore: number;
   certificateCode: string;
   notes: string;
+  lastCompletedAt?: string;
+  lastCompletionStatus?: string;
+  maintenanceHistory?: Array<{ date: string; dueDate: string; nextDate: string; completedOnTime: boolean; actualCost: number; healthScore: number; checklist: ChecklistTask[]; notes: string; certificateCode: string; completedBy: string; completedAt: string }>;
 }
 
-const INITIAL_MAINTENANCE: MaintenanceItem[] = [];
+type AssetOption = {
+  key: string;
+  code?: string;
+  assetCode?: string;
+  name?: string;
+  assetName?: string;
+  category?: string;
+  status?: string;
+  location?: string;
+  currentLocation?: string;
+  department?: string;
+};
+
+const statusFor = (item: MaintenanceItem) => item.status === 'Đang tiến hành bảo dưỡng'
+  ? item.status
+  : item.nextDate ? deriveMaintenanceStatus(item.nextDate) : item.status;
+
+const errorText = (error: any, fallback: string) => error?.response?.data?.message || error?.message || fallback;
+const codeId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const priorityLabel = (value: string) => value.replace(/\s*\([^)]*\)/g, '');
 
 export const AssetMaintenanceModule: React.FC = () => {
-  const [data, setData] = useState<MaintenanceItem[]>(INITIAL_MAINTENANCE);
-
-  useEffect(() => {
-    const list = dataService.getGenericData('asset_maintenances');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('asset_maintenances');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
-  }, []);
-
+  const [data, setData] = useState<MaintenanceItem[]>([]);
+  const [assets, setAssets] = useState<AssetOption[]>([]);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [frequencyFilter, setFrequencyFilter] = useState<string>('all');
-
-  // Modals & Drawers state
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [frequencyFilter, setFrequencyFilter] = useState('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<MaintenanceItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [performModalOpen, setPerformModalOpen] = useState(false);
   const [performTarget, setPerformTarget] = useState<MaintenanceItem | null>(null);
   const [checklistState, setChecklistState] = useState<ChecklistTask[]>([]);
-  const [healthScoreInput, setHealthScoreInput] = useState<number>(98);
-  const [actualCostInput, setActualCostInput] = useState<number>(0);
-  const [performNotes, setPerformNotes] = useState('Đã hoàn thành toàn bộ checklist bảo dưỡng phòng ngừa theo tiêu chuẩn.');
-
+  const [healthScoreInput, setHealthScoreInput] = useState<number | ''>('');
+  const [actualCostInput, setActualCostInput] = useState<number | ''>('');
+  const [performedDate, setPerformedDate] = useState(localIsoDate());
+  const [certificateInput, setCertificateInput] = useState('');
+  const [performNotes, setPerformNotes] = useState('');
   const [form] = Form.useForm();
 
-  // Metrics
-  const totalSystems = data.length;
-  const upcomingCount = data.filter((d) => d.status.includes('Sắp đến hạn') || d.status.includes('Quá hạn')).length;
-  const avgHealthScore = Math.round(data.reduce((sum, d) => sum + d.healthScore, 0) / (data.length || 1));
-  const completedCount = data.filter((d) => d.status === 'Đã hoàn thành đúng lịch').length;
+  useEffect(() => {
+    let mounted = true;
+    const initial = dataService.getGenericData('asset_maintenances');
+    setData(Array.isArray(initial) ? initial : []);
+    setLoading(true);
+    void Promise.all([
+      dataService.refreshGenericData('asset_maintenances'),
+      collectionsApi.get<AssetOption>('asset_items', { limit: 500 }),
+      employeesApi.getAll(),
+    ]).then(([schedules, assetResponse, employeeResponse]) => {
+      if (!mounted) return;
+      setData(schedules as MaintenanceItem[]);
+      setAssets(assetResponse.data?.data || []);
+      setEmployees((employeeResponse.data?.data || []).filter((employee) => employee.isActive && employee.status !== 'Đã nghỉ việc' && employee.role === 'USER'));
+    }).catch((error: any) => {
+      if (mounted) message.error(errorText(error, 'Không tải được lịch bảo dưỡng, tài sản hoặc nhân viên.'));
+    }).finally(() => { if (mounted) setLoading(false); });
+    const unsubscribe = dataService.subscribe(() => {
+      if (!mounted) return;
+      const updated = dataService.getGenericData('asset_maintenances');
+      setData(Array.isArray(updated) ? updated : []);
+    });
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
+
+  const currentData = useMemo(() => data.map((item) => ({ ...item, status: statusFor(item) })), [data]);
+  const eligibleAssets = assets.filter((asset) => ['Đang sử dụng', 'Trong kho'].includes(String(asset.status))
+    && !data.some((plan) => plan.assetKey === asset.key));
+  const dueCount = currentData.filter((item) => ['Sắp đến hạn', 'Quá hạn bảo dưỡng'].includes(item.status)).length;
+  const completedPlans = currentData.filter((item) => Boolean(item.lastCompletedAt));
+  const ratedPlans = completedPlans.filter((item) => Number.isSafeInteger(item.healthScore) && item.healthScore >= 0 && item.healthScore <= 100);
+  const averageHealth = ratedPlans.length ? Math.round(ratedPlans.reduce((sum, item) => sum + item.healthScore, 0) / ratedPlans.length) : null;
+  const completedCycles = completedPlans.flatMap((item) => item.maintenanceHistory || []).length;
+  const onTimeCycles = completedPlans.flatMap((item) => item.maintenanceHistory || []).filter((entry) => entry.completedOnTime).length;
+
+  const filteredData = currentData.filter((item) => {
+    const query = searchText.trim().toLocaleLowerCase();
+    const matchesSearch = !query || [item.maintCode, item.systemName, item.assetCodes, item.location, item.responsibleEngineer, item.vendorPartner]
+      .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+    return matchesSearch && (statusFilter === 'all' || item.status === statusFilter) && (frequencyFilter === 'all' || item.frequency === frequencyFilter);
+  });
 
   const handleOpenCreate = () => {
+    if (!eligibleAssets.length) {
+      message.warning('Cần có tài sản đang sử dụng hoặc trong kho chưa có kế hoạch bảo dưỡng.');
+      return;
+    }
     form.resetFields();
     form.setFieldsValue({
-      maintCode: `BD-2026-Q${data.length + 1}-0${data.length + 1}`,
+      maintCode: `BD-${localIsoDate().replace(/-/g, '')}-${codeId().slice(0, 6).toUpperCase()}`,
       frequency: 'Hàng quý (3 tháng)',
       maintenanceType: 'Phòng ngừa định kỳ',
-      slaLevel: 'SLA Gold (8h)',
-      location: 'Phòng Máy Chủ IDC Keangnam',
-      responsibleEngineer: 'Trần Tuấn Anh (CTO)',
-      vendorPartner: 'Dell Enterprise ProSupport Plus',
-      lastDate: new Date().toISOString().substring(0, 10),
-      nextDate: new Date(Date.now() + 90 * 86400000).toISOString().substring(0, 10),
-      estimatedBudget: 3500000,
-      healthScore: 98,
+      slaLevel: 'SLA Standard (24h)',
+      nextDate: '',
+      estimatedBudget: 0,
     });
     setModalOpen(true);
   };
 
-  const handleCreate = (values: any) => {
-    const newItem: MaintenanceItem = {
-      ...values,
-      key: String(Date.now()),
-      estimatedBudget: Number(values.estimatedBudget) || 0,
-      actualCost: 0,
-      healthScore: Number(values.healthScore) || 95,
-      certificateCode: `CERT-PM-2026-${String(Date.now()).slice(-3)}`,
-      status: 'Đã hoàn thành đúng lịch',
-      checklist: [
-        { item: 'Kiểm tra ngoại quan, ốc vít và các điểm tiếp xúc cáp', done: true },
-        { item: 'Vệ sinh bụi bẩn khe thông gió và bộ làm mát', done: true },
-        { item: 'Kiểm tra thông số điện áp, nhiệt độ và công suất tải', done: true },
-        { item: 'Cập nhật bản ghi nhật ký vận hành kỹ thuật', done: true },
-      ],
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('asset_maintenances', nextItems);
-    message.success(`Đã thiết lập kế hoạch bảo dưỡng: ${values.maintCode} (${values.systemName})`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: Record<string, any>) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const payload = {
+        ...values,
+        key: `maintenance-${codeId()}`,
+        assetKey: String(values.assetKey || ''),
+        responsibleEngineerId: String(values.responsibleEngineerId || ''),
+        estimatedBudget: Number(values.estimatedBudget || 0),
+        location: String(values.location || '').trim(),
+        vendorPartner: String(values.vendorPartner || '').trim(),
+        lastDate: String(values.lastDate || ''),
+      };
+      const saved = await dataService.createGenericRecord('asset_maintenances', payload) as MaintenanceItem;
+      setData((previous) => [saved, ...previous.filter((item) => item.key !== saved.key)]);
+      setAssets((previous) => previous.filter((asset) => asset.key !== saved.assetKey));
+      message.success(`Đã lưu kế hoạch ${saved.maintCode} cho tài sản ${saved.assetCodes}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(errorText(error, 'Không thể lưu kế hoạch bảo dưỡng.'));
+    } finally { setSaving(false); }
   };
 
-  const handleOpenPerformModal = (item: MaintenanceItem) => {
-    setPerformTarget(item);
-    setChecklistState(item.checklist ? item.checklist.map((c) => ({ ...c, done: true })) : []);
-    setHealthScoreInput(item.healthScore || 98);
-    setActualCostInput(item.estimatedBudget || 0);
-    setPerformNotes(`Đã hoàn tất bảo dưỡng định kỳ hệ thống "${item.systemName}". Đạt chuẩn SLA.`);
-    setPerformModalOpen(true);
+  const applySaved = (saved: MaintenanceItem) => {
+    setData((previous) => previous.map((item) => item.key === saved.key ? saved : item));
+    setDetailItem((previous) => previous?.key === saved.key ? saved : previous);
+    setPerformTarget((previous) => previous?.key === saved.key ? saved : previous);
   };
 
-  const handleToggleChecklist = (idx: number) => {
-    const updated = [...checklistState];
-    updated[idx].done = !updated[idx].done;
-    setChecklistState(updated);
+  const savePatch = async (item: MaintenanceItem, patch: Record<string, unknown>) => {
+    const saved = await dataService.updateGenericRecord('asset_maintenances', { key: item.key, ...patch }) as MaintenanceItem;
+    applySaved(saved);
+    return saved;
   };
 
-  const handleConfirmPerform = () => {
-    if (performTarget) {
-      const today = new Date().toISOString().substring(0, 10);
-      let daysToAdd = 30;
-      if (performTarget.frequency === 'Hàng quý (3 tháng)') daysToAdd = 90;
-      if (performTarget.frequency === 'Định kỳ 6 tháng') daysToAdd = 180;
-      if (performTarget.frequency === 'Hàng năm') daysToAdd = 365;
-
-      const nextDateStr = new Date(Date.now() + daysToAdd * 86400000).toISOString().substring(0, 10);
-
-      const updated = data.map((d) =>
-        d.key === performTarget.key
-          ? {
-              ...d,
-              lastDate: today,
-              nextDate: nextDateStr,
-              status: 'Đã hoàn thành đúng lịch' as const,
-              checklist: checklistState,
-              healthScore: healthScoreInput,
-              actualCost: actualCostInput,
-              notes: `${d.notes || ''} [Bảo dưỡng ngày ${today}: ${performNotes}]`,
-            }
-          : d
-      );
-
-      setData(updated);
-      dataService.saveGenericData('asset_maintenances', updated);
-
-      message.success(`Đã xác nhận hoàn thành bảo dưỡng cho "${performTarget.systemName}"! Kỳ tiếp theo: ${nextDateStr}`);
-      setPerformModalOpen(false);
-      if (detailItem && detailItem.key === performTarget.key) {
-        setDetailItem({
-          ...detailItem,
-          lastDate: today,
-          nextDate: nextDateStr,
-          status: 'Đã hoàn thành đúng lịch',
-          checklist: checklistState,
-          healthScore: healthScoreInput,
-          actualCost: actualCostInput,
-        });
+  const handleOpenPerformModal = async (item: MaintenanceItem) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      let target = item;
+      if (statusFor(item) !== 'Đang tiến hành bảo dưỡng') {
+        target = await savePatch(item, { status: 'Đang tiến hành bảo dưỡng' });
+        message.success(`Đã ghi nhận bắt đầu bảo dưỡng ${item.maintCode}.`);
       }
-    }
+      setPerformTarget(target);
+      setChecklistState((target.checklist || MAINTENANCE_CHECKLIST.map((entry) => ({ item: entry, done: false }))).map((entry) => ({ ...entry })));
+      setHealthScoreInput('');
+      setActualCostInput('');
+      setPerformedDate(localIsoDate());
+      setCertificateInput('');
+      setPerformNotes('');
+      setPerformModalOpen(true);
+    } catch (error: any) {
+      message.error(errorText(error, 'Không thể bắt đầu bảo dưỡng.'));
+    } finally { setSaving(false); }
   };
 
-  const filteredData = data.filter((item) => {
-    const matchSearch =
-      (item.maintCode || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.systemName || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.location || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.responsibleEngineer || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.vendorPartner || '').toLowerCase().includes(searchText.toLowerCase());
+  const handleToggleChecklist = async (index: number) => {
+    if (!performTarget || saving) return;
+    const updated = checklistState.map((entry, idx) => idx === index ? { ...entry, done: !entry.done } : entry);
+    setSaving(true);
+    try {
+      const saved = await savePatch(performTarget, { checklist: updated });
+      setPerformTarget(saved);
+      setChecklistState(saved.checklist.map((entry) => ({ ...entry })));
+    } catch (error: any) {
+      message.error(errorText(error, 'Không lưu được checklist bảo dưỡng.'));
+    } finally { setSaving(false); }
+  };
 
-    const matchStatus = statusFilter === 'all' || item.status === statusFilter;
-    const matchFrequency = frequencyFilter === 'all' || item.frequency === frequencyFilter;
+  const handleConfirmPerform = async () => {
+    if (!performTarget || saving) return;
+    try {
+      const completion = validateMaintenanceCompletion({
+        performedDate, today: localIsoDate(), lastDate: performTarget.lastDate,
+        checklist: checklistState,
+        healthScore: healthScoreInput,
+        actualCost: actualCostInput,
+        notes: performNotes,
+      });
+      const nextDate = addMaintenanceCycle(completion.performedDate, performTarget.frequency);
+      setSaving(true);
+      const saved = await savePatch(performTarget, {
+        status: 'Đã hoàn thành đúng lịch',
+        performedDate: completion.performedDate,
+        actualCost: completion.actualCost,
+        healthScore: completion.healthScore,
+        checklist: checklistState,
+        notes: completion.notes,
+        certificateCode: certificateInput.trim(),
+      });
+      setPerformModalOpen(false);
+      setDetailItem(saved);
+      message.success(`Đã lưu biên bản bảo dưỡng ${saved.maintCode}; kỳ kế tiếp ${saved.nextDate || nextDate}.`);
+    } catch (error: any) {
+      message.error(errorText(error, 'Không thể nghiệm thu bảo dưỡng.'));
+    } finally { setSaving(false); }
+  };
 
-    return matchSearch && matchStatus && matchFrequency;
-  });
+  const exportRegister = () => downloadFile('Lich_bao_duong_tai_san.xlsx', generateValidXlsxBlob([
+    ['Mã kế hoạch', 'Mã tài sản', 'Tên tài sản', 'Vị trí', 'Tần suất', 'Loại bảo dưỡng', 'Kỹ sư phụ trách', 'Đối tác', 'Dự toán', 'Chi phí gần nhất', 'Ngày gần nhất', 'Ngày kế tiếp', 'Điểm sức khỏe', 'Trạng thái'],
+    ...filteredData.map((item) => [item.maintCode, item.assetCodes, item.systemName, item.location, item.frequency, item.maintenanceType, item.responsibleEngineer, item.vendorPartner, item.estimatedBudget, item.actualCost, item.lastDate, item.nextDate, item.healthScore || '', item.status]),
+  ]));
+
+  const printReport = (item: MaintenanceItem) => downloadFile(`${item.maintCode}_Bao_cao_bao_duong.pdf`, generateValidPdfBlob('BIÊN BẢN BẢO DƯỠNG TÀI SẢN', `${item.maintCode} | ${item.assetCodes} - ${item.systemName}`, [
+    `Vị trí: ${item.location || 'Chưa ghi nhận'}`,
+    `Trạng thái: ${statusFor(item)}`,
+    `Loại bảo dưỡng: ${item.maintenanceType}`,
+    `Tần suất: ${item.frequency}`,
+    `Người phụ trách: ${item.responsibleEngineer}`,
+    `Đối tác do người lập khai báo: ${item.vendorPartner || 'Chưa khai báo'}`,
+    `Ngày bảo dưỡng gần nhất: ${item.lastDate || 'Chưa ghi nhận'}`,
+    `Ngày kế tiếp: ${item.nextDate}`,
+    `Dự toán: ${Number(item.estimatedBudget || 0).toLocaleString('vi-VN')} VNĐ`,
+    `Chi phí thực tế gần nhất: ${item.lastCompletedAt ? `${Number(item.actualCost || 0).toLocaleString('vi-VN')} VNĐ` : 'Chưa ghi nhận'}`,
+    `Điểm sức khỏe gần nhất: ${item.lastCompletedAt ? `${item.healthScore}/100` : 'Chưa ghi nhận'}`,
+    `Mã chứng nhận do người dùng nhập: ${item.certificateCode || 'Chưa ghi nhận'}`,
+    'Checklist:',
+    ...(item.checklist || []).map((entry) => `${entry.done ? '[x]' : '[ ]'} ${entry.item}${entry.note ? ` — ${entry.note}` : ''}`),
+    ...(item.notes ? [`Ghi chú nghiệm thu: ${item.notes}`] : []),
+    'Báo cáo phản ánh dữ liệu được lưu trong hệ thống, không xác nhận chứng nhận độc lập hoặc SLA của nhà cung cấp.',
+  ]));
+
+  const statusOptions = [
+    { label: 'Tất cả trạng thái', value: 'all' },
+    { label: 'Đã lên lịch', value: 'Đã lên lịch' },
+    { label: 'Sắp đến hạn', value: 'Sắp đến hạn' },
+    { label: 'Quá hạn bảo dưỡng', value: 'Quá hạn bảo dưỡng' },
+    { label: 'Đang tiến hành bảo dưỡng', value: 'Đang tiến hành bảo dưỡng' },
+  ];
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* KPI Cards Top Header */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hệ thống bảo trì định kỳ</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-            {totalSystems} hệ thống
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Toàn bộ Server, Mạng, UPS &amp; Máy trạm</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Kế hoạch bảo dưỡng tài sản</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>{data.length} kế hoạch</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Mỗi kế hoạch gắn với một tài sản trong danh mục</div>
         </div>
-
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Sắp đến hạn trong 7 ngày</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: upcomingCount > 0 ? '#D97706' : '#16A34A', marginTop: 4 }}>
-            {upcomingCount} lịch bảo dưỡng
-          </div>
-          <div style={{ fontSize: 11.5, color: upcomingCount > 0 ? '#D97706' : '#16A34A', marginTop: 2 }}>
-            {upcomingCount > 0 ? 'Cần sắp xếp kỹ sư thực hiện' : 'Tất cả đã thực hiện đúng lịch'}
-          </div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Đến hạn hoặc quá hạn</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: dueCount ? '#D97706' : '#16A34A', marginTop: 4 }}>{dueCount} kế hoạch</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Tính theo ngày đến hạn trong hồ sơ</div>
         </div>
-
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Điểm sức khỏe hệ thống</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {avgHealthScore} / 100 điểm
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Vận hành ổn định, sẵn sàng 99.99%</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Điểm sức khỏe đã ghi nhận</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: averageHealth === null ? '#64748B' : '#16A34A', marginTop: 4 }}>{averageHealth === null ? 'Chưa có' : `${averageHealth} / 100`}</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{ratedPlans.length} biên bản có điểm đánh giá</div>
         </div>
-
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ tuân thủ ISO 27001</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            100% đạt chuẩn SLA
-          </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Kiểm định an toàn PCCC &amp; Điện áp</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Lần bảo dưỡng đã ghi nhận</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>{completedCycles} lần</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{completedCycles ? `${onTimeCycles} lần trước hoặc đúng hạn kế hoạch` : 'Chưa có biên bản nghiệm thu'}</div>
         </div>
       </div>
 
-      {/* Action Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Input
-            prefix={<SearchOutlined style={{ color: '#bbb' }} />}
-            placeholder="Tìm theo mã kế hoạch, hệ thống, vị trí, kỹ sư, đối tác..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 340, borderRadius: 6 }}
-            allowClear
-          />
-          <Select
-            value={statusFilter}
-            onChange={setStatusFilter}
-            style={{ width: 190 }}
-            options={[
-              { label: 'Tất cả trạng thái', value: 'all' },
-              { label: 'Đã hoàn thành đúng lịch', value: 'Đã hoàn thành đúng lịch' },
-              { label: 'Sắp đến hạn', value: 'Sắp đến hạn (Trong 7 ngày)' },
-              { label: 'Quá hạn bảo dưỡng', value: 'Quá hạn bảo dưỡng' },
-            ]}
-          />
-          <Select
-            value={frequencyFilter}
-            onChange={setFrequencyFilter}
-            style={{ width: 180 }}
-            options={[
-              { label: 'Tất cả tần suất', value: 'all' },
-              { label: 'Hàng tháng', value: 'Hàng tháng' },
-              { label: 'Hàng quý (3 tháng)', value: 'Hàng quý (3 tháng)' },
-              { label: 'Định kỳ 6 tháng', value: 'Định kỳ 6 tháng' },
-              { label: 'Hàng năm', value: 'Hàng năm' },
-            ]}
-          />
+          <Input prefix={<SearchOutlined style={{ color: '#bbb' }} />} placeholder="Tìm theo mã kế hoạch, tài sản, vị trí, kỹ sư..." value={searchText} onChange={(event) => setSearchText(event.target.value)} style={{ width: 340, borderRadius: 6 }} allowClear />
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ width: 210 }} options={statusOptions} />
+          <Select value={frequencyFilter} onChange={setFrequencyFilter} style={{ width: 180 }} options={[
+            { label: 'Tất cả tần suất', value: 'all' },
+            { label: 'Hàng tháng', value: 'Hàng tháng' },
+            { label: 'Hàng quý (3 tháng)', value: 'Hàng quý (3 tháng)' },
+            { label: 'Định kỳ 6 tháng', value: 'Định kỳ 6 tháng' },
+            { label: 'Hàng năm', value: 'Hàng năm' },
+          ]} />
         </div>
-
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất kế hoạch & lịch bảo dưỡng định kỳ')}>
-            Xuất Excel
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleOpenCreate}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-          >
-            Thiết lập lịch bảo dưỡng
-          </Button>
+          <Button icon={<DownloadOutlined />} disabled={!filteredData.length} onClick={exportRegister}>Xuất Excel</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreate} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thiết lập lịch bảo dưỡng</Button>
         </div>
       </div>
 
-      {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable
-          dataSource={filteredData}
-          columns={[
-            {
-              title: 'Mã kế hoạch & SLA',
-              key: 'code',
-              width: 170,
-              render: (_: any, r: MaintenanceItem) => (
-                <div>
-                  <span style={{ fontWeight: 700, color: '#009688', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <CalendarOutlined /> {r.maintCode}
-                  </span>
-                  <Tag color="purple" style={{ marginTop: 3 }}>
-                    {r.slaLevel}
-                  </Tag>
-                </div>
-              ),
-            },
-            {
-              title: 'Hệ thống hạ tầng & Vị trí',
-              key: 'system',
-              render: (_: any, r: MaintenanceItem) => (
-                <div>
-                  <strong style={{ color: '#0F172A', fontSize: 13.5 }}>{r.systemName}</strong>
-                  <div style={{ fontSize: 12, color: '#64748B' }}>
-                    Vị trí: <strong>{r.location}</strong> · Tần suất: <strong style={{ color: '#2563EB' }}>{r.frequency}</strong>
-                  </div>
-                  <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>
-                    Tài sản liên kết: <code>{r.assetCodes}</code>
-                  </div>
-                </div>
-              ),
-            },
-            {
-              title: 'Kỳ bảo dưỡng',
-              key: 'dates',
-              width: 200,
-              render: (_: any, r: MaintenanceItem) => (
-                <div style={{ fontSize: 12 }}>
-                  <div>Lần trước: <strong>{r.lastDate}</strong></div>
-                  <div style={{ marginTop: 2 }}>
-                    Kế tiếp:{' '}
-                    <strong style={{ color: r.status.includes('Sắp đến hạn') ? '#D97706' : '#16A34A' }}>
-                      {r.nextDate}
-                    </strong>
-                  </div>
-                </div>
-              ),
-            },
-            {
-              title: 'Điểm sức khỏe',
-              key: 'health',
-              width: 130,
-              render: (_: any, r: MaintenanceItem) => (
-                <div>
-                  <strong style={{ color: r.healthScore >= 95 ? '#16A34A' : '#D97706', fontSize: 13 }}>
-                    {r.healthScore} / 100
-                  </strong>
-                  <Progress
-                    percent={r.healthScore}
-                    size="small"
-                    strokeColor={r.healthScore >= 95 ? '#16A34A' : '#D97706'}
-                    showInfo={false}
-                  />
-                </div>
-              ),
-            },
-            {
-              title: 'Kỹ sư & Đối tác',
-              key: 'eng',
-              render: (_: any, r: MaintenanceItem) => (
-                <div>
-                  <div style={{ fontWeight: 600, color: '#1E293B' }}>
-                    <UserOutlined style={{ fontSize: 11, color: '#64748B' }} /> {r.responsibleEngineer}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{r.vendorPartner}</div>
-                </div>
-              ),
-            },
-            {
-              title: 'Trạng thái',
-              dataIndex: 'status',
-              key: 'status',
-              render: (s: string) => {
-                let col = 'success';
-                if (s.includes('Sắp đến hạn')) col = 'warning';
-                if (s.includes('Quá hạn')) col = 'error';
-                return <Tag color={col}>{s}</Tag>;
-              },
-            },
-            {
-              title: 'Thao tác',
-              key: 'act',
-              width: 170,
-              render: (_: any, r: MaintenanceItem) => (
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <Button
-                    size="small"
-                    icon={<EyeOutlined />}
-                    onClick={() => {
-                      setDetailItem(r);
-                      setDrawerOpen(true);
-                    }}
-                    title="Xem chi tiết kế hoạch & checklist"
-                  >
-                    Xem
-                  </Button>
-                  <Button
-                    size="small"
-                    type="primary"
-                    icon={<ToolOutlined />}
-                    onClick={() => handleOpenPerformModal(r)}
-                    style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-                    title="Thực hiện nghiệm thu bảo dưỡng"
-                  >
-                    Bảo dưỡng
-                  </Button>
-                </div>
-              ),
-            },
-          ]}
-          pagination={{ pageSize: 8 }}
-        />
+        <KTable loading={loading} dataSource={filteredData} columns={[
+          { title: 'Mã kế hoạch & mức xử lý', key: 'code', width: 180, render: (_: any, row: MaintenanceItem) => <div><span style={{ fontWeight: 700, color: '#009688', display: 'flex', alignItems: 'center', gap: 6 }}><CalendarOutlined /> {row.maintCode}</span><Tag color="purple" style={{ marginTop: 3 }}>{priorityLabel(row.slaLevel)}</Tag></div> },
+          { title: 'Tài sản & vị trí', key: 'asset', render: (_: any, row: MaintenanceItem) => <div><strong style={{ color: '#0F172A', fontSize: 13.5 }}>{row.systemName}</strong><div style={{ fontSize: 12, color: '#64748B' }}>Vị trí: <strong>{row.location || 'Chưa ghi nhận'}</strong> · Tần suất: <strong style={{ color: '#2563EB' }}>{row.frequency}</strong></div><div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Mã tài sản: <code>{row.assetCodes}</code></div></div> },
+          { title: 'Kỳ bảo dưỡng', key: 'dates', width: 190, render: (_: any, row: MaintenanceItem) => <div style={{ fontSize: 12 }}><div>Lần trước: <strong>{row.lastDate || 'Chưa ghi nhận'}</strong></div><div style={{ marginTop: 2 }}>Kế tiếp: <strong style={{ color: statusFor(row) === 'Quá hạn bảo dưỡng' ? '#DC2626' : statusFor(row) === 'Sắp đến hạn' ? '#D97706' : '#2563EB' }}>{row.nextDate}</strong></div></div> },
+          { title: 'Điểm sức khỏe', key: 'health', width: 130, render: (_: any, row: MaintenanceItem) => row.lastCompletedAt ? <div><strong style={{ color: row.healthScore >= 95 ? '#16A34A' : '#D97706', fontSize: 13 }}>{row.healthScore} / 100</strong><Progress percent={row.healthScore} size="small" strokeColor={row.healthScore >= 95 ? '#16A34A' : '#D97706'} showInfo={false} /></div> : <span style={{ color: '#64748B' }}>Chưa ghi nhận</span> },
+          { title: 'Kỹ sư & đối tác', key: 'engineer', render: (_: any, row: MaintenanceItem) => <div><div style={{ fontWeight: 600, color: '#1E293B' }}><UserOutlined style={{ fontSize: 11, color: '#64748B' }} /> {row.responsibleEngineer}</div><div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{row.vendorPartner || 'Chưa khai báo đối tác'}</div></div> },
+          { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (_: string, row: MaintenanceItem) => { const status = statusFor(row); const color = status === 'Quá hạn bảo dưỡng' ? 'error' : status === 'Sắp đến hạn' ? 'warning' : status === 'Đang tiến hành bảo dưỡng' ? 'processing' : 'success'; return <Tag color={color}>{status}</Tag>; } },
+          { title: 'Thao tác', key: 'action', width: 180, render: (_: any, row: MaintenanceItem) => <div style={{ display: 'flex', gap: 6 }}><Button size="small" icon={<EyeOutlined />} onClick={() => { setDetailItem(row); setDrawerOpen(true); }}>Xem</Button><Button size="small" type="primary" icon={<ToolOutlined />} disabled={saving} onClick={() => void handleOpenPerformModal(row)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{statusFor(row) === 'Đang tiến hành bảo dưỡng' ? 'Nghiệm thu' : 'Bắt đầu'}</Button></div> },
+        ]} pagination={{ pageSize: 8 }} />
       </div>
 
-      {/* MODAL: Thiết lập kế hoạch bảo dưỡng mới */}
-      <Modal
-        title="Thiết Lập Kế Hoạch Bảo Dưỡng Phòng Ngừa &amp; SLA Kỹ Thuật"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        footer={null}
-        width={760}
-      >
+      <Modal title="Thiết lập kế hoạch bảo dưỡng tài sản" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={760}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="maintCode" label="Mã kế hoạch" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: BD-2026-Q4-01" />
-            </Form.Item>
-            <Form.Item name="frequency" label="Tần suất bảo dưỡng" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'Hàng tháng (30 ngày)', value: 'Hàng tháng' },
-                  { label: 'Hàng quý (90 ngày)', value: 'Hàng quý (3 tháng)' },
-                  { label: 'Định kỳ 6 tháng (180 ngày)', value: 'Định kỳ 6 tháng' },
-                  { label: 'Hàng năm (365 ngày)', value: 'Hàng năm' },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item name="slaLevel" label="Cấp độ cam kết SLA" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'SLA Platinum', value: 'SLA Platinum (4h)' },
-                  { label: 'SLA Gold', value: 'SLA Gold (8h)' },
-                  { label: 'SLA Standard', value: 'SLA Standard (24h)' },
-                ]}
-              />
-            </Form.Item>
+            <Form.Item name="maintCode" label="Mã kế hoạch" rules={[{ required: true, message: 'Nhập mã kế hoạch.' }]}><Input maxLength={80} /></Form.Item>
+            <Form.Item name="frequency" label="Tần suất bảo dưỡng" rules={[{ required: true }]}><Select options={[
+              { label: 'Hàng tháng (30 ngày)', value: 'Hàng tháng' }, { label: 'Hàng quý (90 ngày)', value: 'Hàng quý (3 tháng)' }, { label: 'Định kỳ 6 tháng (180 ngày)', value: 'Định kỳ 6 tháng' }, { label: 'Hàng năm (365 ngày)', value: 'Hàng năm' },
+            ]} /></Form.Item>
+            <Form.Item name="slaLevel" label="Mức ưu tiên xử lý tham chiếu" rules={[{ required: true }]}><Select options={[
+              { label: 'Platinum · tham chiếu 4 giờ', value: 'SLA Platinum (4h)' }, { label: 'Gold · tham chiếu 8 giờ', value: 'SLA Gold (8h)' }, { label: 'Standard · tham chiếu 24 giờ', value: 'SLA Standard (24h)' },
+            ]} /></Form.Item>
           </div>
-
-          <Form.Item name="systemName" label="Tên hệ thống / Thiết bị bảo dưỡng" rules={[{ required: true, message: 'Nhập tên hệ thống' }]}>
-            <Input placeholder="Ví dụ: Cụm Firewall FortiGate 200F High Availability Cluster" />
+          <Form.Item name="assetKey" label="Tài sản trong danh mục" rules={[{ required: true, message: 'Chọn tài sản thật trong danh mục.' }]}>
+            <Select showSearch placeholder="Chọn tài sản" options={eligibleAssets.map((asset) => ({ value: asset.key, label: `${asset.code || asset.assetCode || asset.key} · ${asset.name || asset.assetName || 'Tài sản'} · ${asset.status}` }))} onChange={(assetKey) => {
+              const asset = eligibleAssets.find((entry) => entry.key === assetKey);
+              if (asset && !form.getFieldValue('location')) form.setFieldsValue({ location: asset.location || asset.currentLocation || asset.department || '' });
+            }} />
           </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 12 }}>
-            <Form.Item name="category" label="Chủng loại thiết bị" initialValue="Hạ tầng Mạng & Bảo mật">
-              <Select
-                options={[
-                  { label: 'Máy chủ & Hạ tầng IDC', value: 'Máy chủ & Hạ tầng IDC' },
-                  { label: 'Hạ tầng Mạng & Bảo mật', value: 'Hạ tầng Mạng & Bảo mật' },
-                  { label: 'Hệ thống Cơ Điện & Làm Mát', value: 'Hệ thống Cơ Điện & Làm Mát' },
-                  { label: 'Hệ thống Điện & Nguồn UPS', value: 'Hệ thống Điện & Nguồn UPS' },
-                  { label: 'Thiết bị IT & Cán bộ nhân viên', value: 'Thiết bị IT & Cán bộ nhân viên' },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item name="assetCodes" label="Mã các tài sản liên kết">
-              <Input placeholder="Ví dụ: TS-FW-01, TS-FW-02" />
-            </Form.Item>
-          </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="location" label="Vị trí lắp đặt cụ thể" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: IDC Viettel Duy Tân - Rack B02" />
-            </Form.Item>
-            <Form.Item name="maintenanceType" label="Loại hình bảo dưỡng">
-              <Select
-                options={[
-                  { label: 'Phòng ngừa định kỳ', value: 'Phòng ngừa định kỳ (PM)' },
-                  { label: 'Kiểm định an toàn PCCC & Điện', value: 'Kiểm định an toàn PCCC & Điện' },
-                  { label: 'Nâng cấp bảo trì Firmware / Patch OS', value: 'Nâng cấp bảo trì Firmware / Patch OS' },
-                ]}
-              />
-            </Form.Item>
+            <Form.Item name="maintenanceType" label="Loại hình bảo dưỡng" rules={[{ required: true }]}><Select options={[
+              { label: 'Phòng ngừa định kỳ', value: 'Phòng ngừa định kỳ' }, { label: 'Kiểm định an toàn PCCC & Điện', value: 'Kiểm định an toàn PCCC & Điện' }, { label: 'Nâng cấp Firmware / Patch OS', value: 'Nâng cấp bảo trì Firmware / Patch OS' },
+            ]} /></Form.Item>
+            <Form.Item name="location" label="Vị trí lắp đặt"><Input maxLength={255} placeholder="Vị trí theo danh mục tài sản" /></Form.Item>
           </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="responsibleEngineer" label="Kỹ sư trưởng phụ trách" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
-            </Form.Item>
-            <Form.Item name="vendorPartner" label="Đối tác hãng kỹ thuật hỗ trợ">
-              <Input placeholder="Ví dụ: Fortinet Enterprise TAC / FPT Telecom" />
-            </Form.Item>
+            <Form.Item name="responsibleEngineerId" label="Kỹ sư phụ trách" rules={[{ required: true, message: 'Chọn nhân viên đang hoạt động.' }]}><Select showSearch placeholder="Chọn nhân viên" options={employees.map((employee) => ({ value: employee.id, label: `${employee.name} · ${employee.employeeCode || employee.code || employee.id}` }))} /></Form.Item>
+            <Form.Item name="vendorPartner" label="Đối tác kỹ thuật (khai báo)" rules={[{ max: 255 }]}><Input maxLength={255} placeholder="Để trống nếu không có" /></Form.Item>
           </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="lastDate" label="Ngày bảo dưỡng gần nhất" rules={[{ required: true }]}>
-              <Input type="date" />
-            </Form.Item>
-            <Form.Item name="nextDate" label="Ngày bảo dưỡng tiếp theo" rules={[{ required: true }]}>
-              <Input type="date" />
-            </Form.Item>
-            <Form.Item name="estimatedBudget" label="Dự toán kinh phí (VNĐ)">
-              <Input type="number" min={0} step={500000} placeholder="Ví dụ: 3500000" />
-            </Form.Item>
+            <Form.Item name="lastDate" label="Ngày bảo dưỡng gần nhất"><Input type="date" /></Form.Item>
+            <Form.Item name="nextDate" label="Ngày bảo dưỡng tiếp theo" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+            <Form.Item name="estimatedBudget" label="Dự toán (VNĐ)" rules={[{ type: 'number', min: 0 }]}><Input type="number" min={0} step={1000} /></Form.Item>
           </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lưu kế hoạch bảo dưỡng
-            </Button>
-          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}><Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button><Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu kế hoạch</Button></div>
         </Form>
       </Modal>
 
-      {/* DRAWER: Xem Chi Tiết Kế Hoạch & Nhật Ký Bảo Dưỡng */}
-      <Drawer
-        title="Hồ Sơ Kỹ Thuật Bảo Dưỡng &amp; Chứng Nhận An Toàn"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={580}
-      >
-        {detailItem && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {/* Header */}
-            <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontSize: 12, color: '#009688', fontWeight: 700 }}>{detailItem.maintCode}</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{detailItem.systemName}</div>
-                </div>
-                <Tag color="purple">{detailItem.slaLevel}</Tag>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Vị trí: <strong>{detailItem.location}</strong> · Tần suất: <strong>{detailItem.frequency}</strong>
-              </div>
-            </div>
-
-            {/* Health Score & Cert */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, background: '#F0FDF4' }}>
-                <div style={{ fontSize: 11.5, color: '#166534', fontWeight: 600 }}>ĐIỂM SỨC KHỎE</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 2 }}>
-                  {detailItem.healthScore} / 100
-                </div>
-                <Progress percent={detailItem.healthScore} size="small" strokeColor="#16A34A" showInfo={false} />
-              </div>
-
-              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, background: '#EFF6FF' }}>
-                <div style={{ fontSize: 11.5, color: '#1E40AF', fontWeight: 600 }}>CHỨNG CHỈ KIỂM ĐỊNH</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#2563EB', marginTop: 6 }}>
-                  <FileProtectOutlined /> {detailItem.certificateCode}
-                </div>
-                <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Đạt chuẩn ISO 27001:2022</div>
-              </div>
-            </div>
-
-            {/* Checklist items */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, fontSize: 12.5 }}>
-              <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-                Hạng mục kiểm tra Checklist ({detailItem.checklist?.filter((c) => c.done).length || 0}/{detailItem.checklist?.length || 0} mục hoàn tất):
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {detailItem.checklist?.map((task, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: '#F8FAFC', padding: 8, borderRadius: 6 }}>
-                    {task.done ? <CheckCircleOutlined style={{ color: '#16A34A', marginTop: 2 }} /> : <ClockCircleOutlined style={{ color: '#D97706', marginTop: 2 }} />}
-                    <div style={{ flex: 1 }}>
-                      <span style={{ color: task.done ? '#0F172A' : '#64748B', fontWeight: task.done ? 600 : 400 }}>{task.item}</span>
-                      {task.note && <div style={{ fontSize: 11, color: '#009688', marginTop: 2 }}>Kết quả: {task.note}</div>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Specs & History */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5, background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748B' }}>Kỹ sư phụ trách:</span>
-                <strong>{detailItem.responsibleEngineer}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748B' }}>Đối tác kỹ thuật:</span>
-                <strong>{detailItem.vendorPartner}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748B' }}>Dự toán / Thực tế:</span>
-                <span>{detailItem.estimatedBudget.toLocaleString('vi-VN')} ₫ / <strong style={{ color: '#16A34A' }}>{detailItem.actualCost.toLocaleString('vi-VN')} ₫</strong></span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748B' }}>Bảo dưỡng gần nhất:</span>
-                <span>{detailItem.lastDate}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748B' }}>Hạn kỳ kế tiếp:</span>
-                <strong style={{ color: '#2563EB' }}>{detailItem.nextDate}</strong>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <Button
-                icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất báo cáo bảo dưỡng ${detailItem.maintCode} (PDF)`)}
-                style={{ flex: 1 }}
-              >
-                In báo cáo (PDF)
-              </Button>
-              <Button
-                type="primary"
-                icon={<ToolOutlined />}
-                onClick={() => handleOpenPerformModal(detailItem)}
-                style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
-              >
-                Tiến hành bảo dưỡng ngay
-              </Button>
-            </div>
+      <Drawer title="Hồ sơ bảo dưỡng tài sản" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={580}>
+        {detailItem && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}><div><div style={{ fontSize: 12, color: '#009688', fontWeight: 700 }}>{detailItem.maintCode}</div><div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{detailItem.systemName}</div></div><Tag color="purple">{priorityLabel(detailItem.slaLevel)}</Tag></div>
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Mã tài sản: <strong>{detailItem.assetCodes}</strong> · Vị trí: <strong>{detailItem.location || 'Chưa ghi nhận'}</strong> · Tần suất: <strong>{detailItem.frequency}</strong></div>
+            <div style={{ marginTop: 8 }}><Tag color={statusFor(detailItem) === 'Quá hạn bảo dưỡng' ? 'error' : statusFor(detailItem) === 'Sắp đến hạn' ? 'warning' : 'processing'}>{statusFor(detailItem)}</Tag></div>
           </div>
-        )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, background: '#F8FAFC' }}><div style={{ fontSize: 11.5, color: '#475569', fontWeight: 600 }}>ĐIỂM SỨC KHỎE GẦN NHẤT</div><div style={{ fontSize: 24, fontWeight: 800, color: detailItem.healthScore ? '#16A34A' : '#64748B', marginTop: 2 }}>{detailItem.healthScore ? `${detailItem.healthScore} / 100` : 'Chưa ghi nhận'}</div>{detailItem.healthScore > 0 && <Progress percent={detailItem.healthScore} size="small" strokeColor="#16A34A" showInfo={false} />}</div>
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, background: '#F8FAFC' }}><div style={{ fontSize: 11.5, color: '#475569', fontWeight: 600 }}>CHỨNG TỪ DO NGƯỜI DÙNG GHI</div><div style={{ fontSize: 13, fontWeight: 700, color: '#2563EB', marginTop: 6 }}>{detailItem.certificateCode || 'Chưa ghi nhận'}</div><div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Hệ thống chưa xác minh chứng nhận bên ngoài.</div></div>
+          </div>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, fontSize: 12.5 }}>
+            <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Checklist kỳ hiện tại ({detailItem.checklist?.filter((entry) => entry.done).length || 0}/{detailItem.checklist?.length || 0} mục hoàn tất)</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{detailItem.checklist?.map((entry, index) => <div key={`${entry.item}-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: '#F8FAFC', padding: 8, borderRadius: 6 }}>{entry.done ? <CheckCircleOutlined style={{ color: '#16A34A', marginTop: 2 }} /> : <ClockCircleOutlined style={{ color: '#D97706', marginTop: 2 }} />}<div style={{ flex: 1 }}><span style={{ color: entry.done ? '#0F172A' : '#64748B', fontWeight: entry.done ? 600 : 400 }}>{entry.item}</span>{entry.note && <div style={{ fontSize: 11, color: '#009688', marginTop: 2 }}>Ghi chú: {entry.note}</div>}</div></div>)}</div>
+          </div>
+          {!!detailItem.maintenanceHistory?.length && <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, fontSize: 12.5 }}><div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Biên bản bảo dưỡng đã lưu</div><div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{detailItem.maintenanceHistory.map((entry, index) => <div key={`${entry.completedAt}-${index}`} style={{ borderLeft: '3px solid #009688', paddingLeft: 10 }}><div style={{ fontWeight: 600 }}>{entry.date} · {entry.completedBy} · {entry.completedOnTime ? 'Đúng hạn' : 'Trễ hạn'}</div><div style={{ color: '#64748B', marginTop: 3 }}>Chi phí {Number(entry.actualCost || 0).toLocaleString('vi-VN')} ₫ · Điểm sức khỏe {entry.healthScore}/100 · Kỳ kế tiếp {entry.nextDate}</div>{entry.notes && <div style={{ marginTop: 3 }}>{entry.notes}</div>}<div style={{ marginTop: 4 }}>{entry.checklist?.filter((task) => task.done).length || 0}/{entry.checklist?.length || 0} mục checklist đã hoàn tất</div></div>)}</div></div>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5, background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Kỹ sư phụ trách:</span><strong>{detailItem.responsibleEngineer}</strong></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Đối tác kỹ thuật:</span><strong>{detailItem.vendorPartner || 'Chưa khai báo'}</strong></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Dự toán / Chi phí gần nhất:</span><span>{Number(detailItem.estimatedBudget || 0).toLocaleString('vi-VN')} ₫ / <strong>{detailItem.lastCompletedAt ? `${Number(detailItem.actualCost || 0).toLocaleString('vi-VN')} ₫` : 'Chưa ghi nhận'}</strong></span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Bảo dưỡng gần nhất:</span><span>{detailItem.lastDate || 'Chưa ghi nhận'}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Hạn kỳ kế tiếp:</span><strong style={{ color: '#2563EB' }}>{detailItem.nextDate}</strong></div>
+            {detailItem.lastCompletedAt && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#64748B' }}>Người nghiệm thu:</span><strong>{detailItem.maintenanceHistory?.[detailItem.maintenanceHistory.length - 1]?.completedBy || 'Đã ghi nhận'}</strong></div>}
+            {detailItem.notes && <div><span style={{ color: '#64748B' }}>Ghi chú:</span> {detailItem.notes}</div>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}><Button icon={<PrinterOutlined />} onClick={() => printReport(detailItem)} style={{ flex: 1 }}>In báo cáo (PDF)</Button><Button type="primary" icon={<ToolOutlined />} disabled={saving} onClick={() => void handleOpenPerformModal(detailItem)} style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}>{statusFor(detailItem) === 'Đang tiến hành bảo dưỡng' ? 'Tiếp tục nghiệm thu' : 'Bắt đầu bảo dưỡng'}</Button></div>
+        </div>}
       </Drawer>
 
-      {/* MODAL: Thực hiện & Nghiệm thu bảo dưỡng */}
-      <Modal
-        title="Biên Bản Thực Hiện &amp; Nghiệm Thu Bảo Dưỡng Kỹ Thuật"
-        open={performModalOpen}
-        onCancel={() => setPerformModalOpen(false)}
-        footer={null}
-        width={540}
-      >
-        {performTarget && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
-            <Alert
-              message={`Bảo dưỡng: ${performTarget.systemName}`}
-              description={`Địa điểm: ${performTarget.location} | Tần suất: ${performTarget.frequency}`}
-              type="info"
-              showIcon
-            />
-
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', display: 'block', marginBottom: 8 }}>
-                Checklist kiểm tra kỹ thuật:
-              </label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-                {checklistState.map((task, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Checkbox checked={task.done} onChange={() => handleToggleChecklist(idx)}>
-                      <span style={{ fontSize: 12.5, fontWeight: task.done ? 600 : 400 }}>{task.item}</span>
-                    </Checkbox>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
-                  Điểm sức khỏe sau bảo dưỡng:
-                </label>
-                <Input
-                  type="number"
-                  min={50}
-                  max={100}
-                  value={healthScoreInput}
-                  onChange={(e) => setHealthScoreInput(Number(e.target.value))}
-                  suffix="/ 100"
-                  style={{ fontWeight: 700, color: '#16A34A' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
-                  Chi phí thực tế phát sinh (VNĐ):
-                </label>
-                <Input
-                  type="number"
-                  min={0}
-                  step={500000}
-                  value={actualCostInput}
-                  onChange={(e) => setActualCostInput(Number(e.target.value))}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
-                Ghi chú nghiệm thu kỹ thuật &amp; Khuyến nghị:
-              </label>
-              <Input.TextArea
-                rows={2}
-                value={performNotes}
-                onChange={(e) => setPerformNotes(e.target.value)}
-              />
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
-              <Button onClick={() => setPerformModalOpen(false)}>Hủy</Button>
-              <Button
-                type="primary"
-                icon={<CheckCircleOutlined />}
-                onClick={handleConfirmPerform}
-                style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-              >
-                Xác nhận hoàn tất bảo dưỡng
-              </Button>
-            </div>
+      <Modal title="Thực hiện và nghiệm thu bảo dưỡng" open={performModalOpen} onCancel={() => setPerformModalOpen(false)} footer={null} width={560}>
+        {performTarget && <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
+          <Alert message={`Bảo dưỡng: ${performTarget.systemName}`} description={`Tài sản ${performTarget.assetCodes} · ${performTarget.location || 'Chưa ghi nhận vị trí'} · ${performTarget.frequency}`} type="info" showIcon />
+          <div><label style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', display: 'block', marginBottom: 8 }}>Checklist kiểm tra kỹ thuật:</label><div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0' }}>{checklistState.map((entry, index) => <Checkbox key={entry.item} checked={entry.done} disabled={saving} onChange={() => void handleToggleChecklist(index)}><span style={{ fontSize: 12.5, fontWeight: entry.done ? 600 : 400 }}>{entry.item}</span></Checkbox>)}</div></div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>Ngày thực hiện:</label><Input type="date" value={performedDate} max={localIsoDate()} onChange={(event) => setPerformedDate(event.target.value)} /></div>
+            <div><label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>Điểm sức khỏe sau bảo dưỡng:</label><Input type="number" min={0} max={100} step={1} value={healthScoreInput} onChange={(event) => setHealthScoreInput(event.target.value === '' ? '' : Number(event.target.value))} suffix="/ 100" /></div>
           </div>
-        )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>Chi phí thực tế (VNĐ):</label><Input type="number" min={0} step={1000} value={actualCostInput} onChange={(event) => setActualCostInput(event.target.value === '' ? '' : Number(event.target.value))} /></div>
+            <div><label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>Mã chứng từ (nếu có):</label><Input maxLength={160} value={certificateInput} onChange={(event) => setCertificateInput(event.target.value)} /></div>
+          </div>
+          <div><label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>Ghi chú nghiệm thu:</label><Input.TextArea rows={2} maxLength={2000} value={performNotes} onChange={(event) => setPerformNotes(event.target.value)} /></div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}><Button onClick={() => setPerformModalOpen(false)}>Đóng</Button><Button type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={() => void handleConfirmPerform()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu biên bản nghiệm thu</Button></div>
+        </div>}
       </Modal>
     </div>
   );
 };
-

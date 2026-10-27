@@ -1,6 +1,6 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -10,7 +10,10 @@ import {
   FilePdfOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Button, message, Card, Tag } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Card, Tag } from '../../custom-ui';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { buildQuarterClosingLines, calculateQuarterLedger, summarizeLedgerAccounts } from './ledgerCalculations';
 
 interface LedgerEntry {
   key: string;
@@ -22,12 +25,15 @@ interface LedgerEntry {
   amount: number;
   author: string;
   status: 'Đã ghi sổ cái' | 'Chờ duyệt kế toán trưởng';
+  sourceReference?: string;
+  sourceModule?: string;
 }
 
 const INITIAL_ENTRIES: LedgerEntry[] = [];
 
 export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
   const isStatements = currentPath === '/finance/general/statements';
@@ -35,13 +41,22 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const isAdvance = currentPath === '/finance/general/advance';
 
   const [data, setData] = useState<LedgerEntry[]>(INITIAL_ENTRIES);
+  const [advanceData, setAdvanceData] = useState<any[]>([]);
+  const [selectedQuarter, setSelectedQuarter] = useState(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-Q${Math.floor(today.getMonth() / 3) + 1}`;
+  });
 
   useEffect(() => {
     const list = dataService.getGenericData('finance_general_ledger');
     setData(Array.isArray(list) ? list : []);
+    const advances = dataService.getGenericData('finance_advances');
+    setAdvanceData(Array.isArray(advances) ? advances : []);
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('finance_general_ledger');
       setData(Array.isArray(updated) ? updated : []);
+      const nextAdvances = dataService.getGenericData('finance_advances');
+      setAdvanceData(Array.isArray(nextAdvances) ? nextAdvances : []);
     });
     return unsub;
   }, []);
@@ -51,19 +66,153 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [form] = Form.useForm();
 
   const totalAmount = data.reduce((sum, item) => sum + item.amount, 0);
+  const totalDebits = data.filter((item) => item.debitAccount).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const totalCredits = data.filter((item) => item.creditAccount).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const balancedLedger = data.every((item) => Boolean(item.debitAccount && item.creditAccount) && Number.isFinite(Number(item.amount)) && Number(item.amount) > 0)
+    && Math.abs(totalDebits - totalCredits) < 0.5;
+  const accountSummary = summarizeLedgerAccounts(data);
+  const quarterSummary = calculateQuarterLedger(data, selectedQuarter);
+  const { year: yearText, quarter: quarterText, startMonth: quarterStartMonth, records: quarterLedgerData, revenue, expenses, netResult } = quarterSummary;
+  const quarterDebits = quarterSummary.debits;
+  const quarterCredits = quarterSummary.credits;
+  const quarterClosed = data.some((item) => item.sourceReference === `period-close:${selectedQuarter}`);
 
-  const handleCreate = (values: any) => {
+  const quarterOptions = Array.from({ length: 8 }, (_, index) => {
+    const year = new Date().getFullYear() - Math.floor((7 - index) / 4);
+    const quarter = ((7 - index) % 4) + 1;
+    return { label: `Quý ${quarter}/${year}`, value: `${year}-Q${quarter}` };
+  });
+
+  const handleCreate = async (values: any) => {
+    const amount = Number(values.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      message.error('Số tiền hạch toán phải lớn hơn 0.');
+      return;
+    }
+    if (data.some((record) => record.voucherCode === String(values.voucherCode).trim())) {
+      message.error('Số chứng từ này đã tồn tại trong Sổ Cái.');
+      return;
+    }
+    let author = 'Người dùng hiện tại';
+    try {
+      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
+      author = user?.name || user?.fullName || user?.email || author;
+    } catch { /* Keep a non-identifying fallback if the local identity cache is invalid. */ }
     const newItem: LedgerEntry = {
       ...values,
-      key: String(Date.now()),
-      amount: Number(values.amount) || 10000000,
-      author: 'Nguyễn Thị Mai',
+      key: crypto.randomUUID(),
+      amount,
+      author,
       status: 'Đã ghi sổ cái',
     };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_general_ledger', nextItems);
-    message.success(`Đã hạch toán chứng từ: ${values.voucherCode}`);
-    setModalOpen(false);
-    form.resetFields();
+    try {
+      await collectionsApi.create('finance_general_ledger', newItem);
+      await dataService.refreshGenericData('finance_general_ledger');
+      message.success(`Đã hạch toán chứng từ: ${values.voucherCode}`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu chứng từ vào Sổ Cái.');
+    }
+  };
+
+  const exportLedger = () => {
+    const rows = [
+      ['Số chứng từ', 'Ngày hạch toán', 'Diễn giải', 'Tài khoản Nợ', 'Tài khoản Có', 'Số tiền', 'Người ghi sổ', 'Trạng thái'],
+      ...filteredData.map((item) => [item.voucherCode, item.entryDate, item.description, item.debitAccount, item.creditAccount, item.amount, item.author, item.status]),
+    ];
+    downloadFile('so_cai.xlsx', generateValidXlsxBlob(rows));
+    message.success(`Đã xuất ${filteredData.length} chứng từ Sổ Cái.`);
+  };
+
+  const exportStatement = () => {
+    const rows = [
+      ['Tài khoản', 'Phát sinh Nợ', 'Phát sinh Có', 'Chênh lệch Nợ - Có'],
+      ...accountSummary.map((item) => [item.account, item.debit, item.credit, item.debit - item.credit]),
+    ];
+    downloadFile('bao_cao_phat_sinh_so_cai.xlsx', generateValidXlsxBlob(rows));
+    message.success(`Đã xuất báo cáo từ ${data.length} bút toán hiện có.`);
+  };
+
+  const exportAccountReport = (account: string) => {
+    const entries = data.filter((item) => item.debitAccount === account || item.creditAccount === account);
+    const lines = entries.map((item) => `${item.entryDate} | ${item.voucherCode} | ${item.description} | No ${item.debitAccount} | Co ${item.creditAccount} | ${Number(item.amount).toLocaleString('vi-VN')} VND`);
+    downloadFile(`bao_cao_${account.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(`BAO CAO ${account}`, 'Phat sinh tu cac but toan da luu trong So Cai', lines));
+  };
+
+  const exportFinancialReport = (code: string) => {
+    const cashMovements = accountSummary.filter((item) => /(?:TK\s*)?11[12]/i.test(item.account));
+    const reportLines = code === 'B01 - DN'
+      ? [`Tổng tài khoản có phát sinh: ${accountSummary.length}`, `Tổng phát sinh Nợ: ${totalDebits.toLocaleString('vi-VN')} VND`, `Tổng phát sinh Có: ${totalCredits.toLocaleString('vi-VN')} VND`, ...accountSummary.map((item) => `${item.account}: No ${item.debit.toLocaleString('vi-VN')} VND / Co ${item.credit.toLocaleString('vi-VN')} VND`)]
+      : code === 'B02 - DN'
+      ? [`Kỳ: Quý ${quarterText}/${yearText}`, `Doanh thu tài khoản đầu 5, 7: ${revenue.toLocaleString('vi-VN')} VND`, `Chi phí tài khoản đầu 6, 8: ${expenses.toLocaleString('vi-VN')} VND`, `Kết quả sơ bộ: ${netResult.toLocaleString('vi-VN')} VND`, `Số bút toán: ${quarterLedgerData.length}`]
+      : code === 'B03 - DN'
+      ? cashMovements.map((item) => `${item.account}: No ${item.debit.toLocaleString('vi-VN')} VND / Co ${item.credit.toLocaleString('vi-VN')} VND`)
+      : data.map((item) => `${item.entryDate} | ${item.voucherCode} | ${item.description} | No ${item.debitAccount} | Co ${item.creditAccount} | ${Number(item.amount).toLocaleString('vi-VN')} VND`);
+    downloadFile(`bao_cao_${code.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(code, `Du lieu Sổ Cai ${code === 'B02 - DN' ? `quy ${quarterText}/${yearText}` : 'hien co'}`, reportLines.length ? reportLines : ['Chua co but toan phat sinh.']));
+  };
+
+  const closeQuarter = () => {
+    if (quarterClosed) {
+      message.warning(`Quý ${quarterText}/${yearText} đã có bút toán kết chuyển.`);
+      return;
+    }
+    if (quarterLedgerData.length === 0) {
+      message.warning(`Quý ${quarterText}/${yearText} chưa có bút toán đã ghi sổ để kết chuyển.`);
+      return;
+    }
+    const sourceReference = `period-close:${selectedQuarter}`;
+    const quarterEnd = new Date(Number(yearText), quarterStartMonth + 2, 0);
+    const closingDate = `${yearText}-${String(quarterEnd.getMonth() + 1).padStart(2, '0')}-${String(quarterEnd.getDate()).padStart(2, '0')}`;
+    const lines = buildQuarterClosingLines(quarterSummary);
+    if (lines.length === 0) {
+      message.warning('Không có phát sinh doanh thu hoặc chi phí đủ điều kiện kết chuyển trong quý này.');
+      return;
+    }
+    Modal.confirm({
+      title: `Ghi bút toán kết chuyển quý ${quarterText}/${yearText}?`,
+      content: `Sẽ tạo ${lines.length} bút toán dựa trên Sổ Cái đang lưu. Hãy đối chiếu báo cáo trước khi xác nhận.`,
+      okText: 'Ghi kết chuyển',
+      cancelText: 'Hủy',
+      onOk: async () => {
+        const createdKeys: string[] = [];
+        try {
+          const current = await dataService.refreshGenericData('finance_general_ledger');
+          if (current.some((entry: any) => entry.sourceReference === sourceReference)) {
+            message.warning(`Quý ${quarterText}/${yearText} đã có bút toán kết chuyển.`);
+            return;
+          }
+          let author = 'Người dùng hiện tại';
+          try {
+            const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
+            author = user?.name || user?.fullName || user?.email || author;
+          } catch { /* Use the generic signed-in label when cached identity data is malformed. */ }
+          for (const [index, line] of lines.entries()) {
+            const key = `closing:${selectedQuarter}:${index + 1}`;
+            await collectionsApi.create('finance_general_ledger', {
+              key,
+              voucherCode: `KC-${selectedQuarter.replace('-', '')}-${index + 1}`,
+              entryDate: closingDate,
+              ...line,
+              author,
+              status: 'Đã ghi sổ cái',
+              sourceModule: 'general_ledger_close',
+              sourceReference,
+            });
+            createdKeys.push(key);
+          }
+          await dataService.refreshGenericData('finance_general_ledger');
+          message.success(`Đã ghi ${createdKeys.length} bút toán kết chuyển quý ${quarterText}/${yearText}.`);
+        } catch (error: any) {
+          const rollback = await Promise.allSettled(createdKeys.map((key) => collectionsApi.remove('finance_general_ledger', key)));
+          const rollbackFailed = rollback.some((result) => result.status === 'rejected');
+          if (!rollbackFailed && createdKeys.length > 0) await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
+          message.error(rollbackFailed
+            ? 'Kết chuyển gặp lỗi và chưa thể hoàn tác toàn bộ. Cần đối chiếu Sổ Cái trước khi chạy lại.'
+            : error?.response?.data?.message || 'Không thể ghi bút toán kết chuyển.');
+        }
+      },
+    });
   };
 
   const filteredData = data.filter(
@@ -79,7 +228,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng giá trị phát sinh bút toán trong tháng</div>
+        <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng giá trị phát sinh trong Sổ Cái</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalAmount.toLocaleString('vi-VN')} ₫
           </div>
@@ -91,9 +240,12 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
           </div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cân đối Nợ - Có</div>
+        <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đối chiếu phát sinh Nợ - Có</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            Khớp 100%
+            {balancedLedger ? 'Đang khớp' : 'Cần kiểm tra'}
+          </div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
+            Nợ {totalDebits.toLocaleString('vi-VN')} ₫ · Có {totalCredits.toLocaleString('vi-VN')} ₫
           </div>
         </div>
       </div>
@@ -103,28 +255,37 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Bộ Báo Cáo Tài Chính Tổng Hợp</h3>
-            <Button type="primary" icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất toàn bộ BCTC!')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" icon={<DownloadOutlined />} onClick={exportStatement} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Xuất Bộ BCTC
             </Button>
           </div>
+          <div style={{ fontSize: 12, color: '#64748B' }}>Các số liệu được tổng hợp từ bút toán Sổ Cái hiện có; cần đối chiếu số dư đầu kỳ trước khi phát hành.</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             {[
-              { code: 'B01 - DN', name: 'Bảng Cân Đối Kế Toán', period: 'Tại ngày 30/06/2026', totalAssets: '14.850.000.000 ₫', status: 'Cân đối' },
-              { code: 'B02 - DN', name: 'Báo Cáo Kết Quả Hoạt Động KD', period: 'Lũy kế 6 tháng đầu năm 2026', totalAssets: 'LNTT: +3.250.000.000 ₫', status: 'Có lãi' },
-              { code: 'B03 - DN', name: 'Báo Cáo Lưu Chuyển Tiền Tệ', period: 'Lũy kế 6 tháng đầu năm 2026', totalAssets: 'Dòng tiền thuần: +1.890.000.000 ₫', status: 'Dương' },
-              { code: 'B09 - DN', name: 'Bản Thuyết Minh BCTC', period: 'Kèm theo BCTC Quý 2/2026', totalAssets: '12 phụ lục chi tiết', status: 'Đầy đủ' },
-            ].map((st, idx) => (
-              <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+              { code: 'B01 - DN', name: 'Bảng Cân Đối Kế Toán', value: `${accountSummary.length} tài khoản · Nợ ${totalDebits.toLocaleString('vi-VN')} ₫ · Có ${totalCredits.toLocaleString('vi-VN')} ₫`, status: data.length ? 'Có dữ liệu Sổ Cái' : 'Chưa có dữ liệu' },
+              { code: 'B02 - DN', name: 'Báo Cáo Kết Quả Hoạt Động KD', value: `Quý ${quarterText}/${yearText} · Kết quả sơ bộ ${netResult.toLocaleString('vi-VN')} ₫`, status: quarterLedgerData.length ? 'Từ bút toán đã ghi sổ' : 'Chưa có dữ liệu kỳ này' },
+              { code: 'B03 - DN', name: 'Báo Cáo Lưu Chuyển Tiền Tệ', value: `Có ${accountSummary.filter((item) => /(?:TK\s*)?11[12]/i.test(item.account)).length} tài khoản tiền có phát sinh`, status: 'Tài khoản 111/112' },
+              { code: 'B09 - DN', name: 'Bản Thuyết Minh BCTC', value: `${data.length} bút toán · ${accountSummary.length} tài khoản`, status: data.length ? 'Từ dữ liệu hiện có' : 'Chưa có dữ liệu' },
+            ].map((st) => (
+              <Card key={st.code} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                   <strong style={{ color: '#009688', fontSize: 14 }}>{st.code}</strong>
-                  <Tag color="success">{st.status}</Tag>
+                  <Tag color={data.length ? 'processing' : 'warning'}>{st.status}</Tag>
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A', marginBottom: 4 }}>{st.name}</div>
-                <div style={{ fontSize: 12, color: '#64748B', marginBottom: 8 }}>{st.period}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#2563EB', marginBottom: 12 }}>{st.totalAssets}</div>
-                <Button size="small" icon={<FilePdfOutlined />} onClick={() => message.info(`Mở bản in ${st.name}`)}>Xem báo cáo</Button>
+                <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A', marginBottom: 8 }}>{st.name}</div>
+                <div style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>{st.value}</div>
+                <Button size="small" icon={<FilePdfOutlined />} onClick={() => exportFinancialReport(st.code)}>Tải PDF báo cáo</Button>
               </Card>
             ))}
+          </div>
+          <div className="transparent-table-card">
+            <KTable dataSource={accountSummary} columns={[
+              { title: 'Tài khoản', dataIndex: 'account', key: 'account' },
+              { title: 'Phát sinh Nợ', dataIndex: 'debit', key: 'debit', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+              { title: 'Phát sinh Có', dataIndex: 'credit', key: 'credit', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+              { title: 'Chênh lệch Nợ - Có', key: 'balance', render: (_: any, record: { debit: number; credit: number }) => `${(record.debit - record.credit).toLocaleString('vi-VN')} ₫` },
+              { title: 'Thao tác', key: 'action', render: (_: any, record: { account: string }) => <Button size="small" onClick={() => exportAccountReport(record.account)}>Tải sổ tài khoản</Button> },
+            ]} />
           </div>
         </div>
       )}
@@ -132,28 +293,28 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       {/* VIEW: PROFIT-LOSS */}
       {isProfitLoss && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 840 }}>
-          <Card title="Quy Trình Tự Động Kết Chuyển Xác Định Kết Quả Kinh Doanh (TK 911)" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+          <Card title="Kết quả kinh doanh từ Sổ Cái" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 13, color: '#64748B' }}>Kỳ kết chuyển:</span>
+              <Select value={selectedQuarter} onChange={setSelectedQuarter} options={quarterOptions} style={{ width: 170 }} />
+            </div>
+            <div style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>Chỉ tính bút toán đã ghi sổ trong quý đã chọn.</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
               {[
-                { step: '1. Kết chuyển Doanh thu bán hàng & dịch vụ', from: 'Nợ TK 511', to: 'Có TK 911', amount: '1.850.000.000 ₫' },
-                { step: '2. Kết chuyển Giá vốn dịch vụ cung cấp', from: 'Nợ TK 911', to: 'Có TK 632', amount: '620.000.000 ₫' },
-                { step: '3. Kết chuyển Chi phí quản lý doanh nghiệp', from: 'Nợ TK 911', to: 'Có TK 642', amount: '380.000.000 ₫' },
-                { step: '4. Kết chuyển Chi phí tài chính & Thuế TNDN', from: 'Nợ TK 911', to: 'Có TK 8211', amount: '170.000.000 ₫' },
-                { step: '5. Kết chuyển Lợi nhuận sau thuế chưa phân phối', from: 'Nợ TK 911', to: 'Có TK 4212', amount: '680.000.000 ₫' },
+                { step: `Doanh thu tài khoản đầu 5 và 7`, amount: revenue },
+                { step: `Chi phí tài khoản đầu 6 và 8`, amount: expenses },
+                { step: `Kết quả sơ bộ quý ${quarterText}/${yearText}`, amount: netResult },
               ].map((item, idx) => (
                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-                  <div>
-                    <strong style={{ fontSize: 13, color: '#0F172A' }}>{item.step}</strong>
-                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{item.from} ➔ {item.to}</div>
-                  </div>
-                  <strong style={{ color: '#009688', fontSize: 13.5 }}>{item.amount}</strong>
+                  <strong style={{ fontSize: 13, color: '#0F172A' }}>{item.step}</strong>
+                  <strong style={{ color: '#009688', fontSize: 13.5 }}>{item.amount.toLocaleString('vi-VN')} ₫</strong>
                 </div>
               ))}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Button onClick={() => message.info('Kiểm tra số dư các tài khoản đầu 5, 6, 7, 8...')}>Kiểm tra số dư</Button>
-              <Button type="primary" icon={<FileSyncOutlined />} onClick={() => message.success('Đã thực hiện kết chuyển tự động Quý 3/2026!')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-                Chạy Kết Chuyển Tự Động
+              <Button onClick={() => message.info(`${quarterLedgerData.length} bút toán · Phát sinh Nợ ${quarterDebits.toLocaleString('vi-VN')} ₫ · Phát sinh Có ${quarterCredits.toLocaleString('vi-VN')} ₫`)}>Kiểm tra số dư</Button>
+              <Button type="primary" icon={<FileSyncOutlined />} onClick={closeQuarter} disabled={quarterLedgerData.length === 0 || quarterClosed} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+                {quarterClosed ? 'Đã kết chuyển' : 'Chạy Kết Chuyển Tự Động'}
               </Button>
             </div>
           </Card>
@@ -164,26 +325,22 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       {isAdvance && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Theo Dõi &amp; Quyết Toán Tạm Ứng Cán Bộ Nhân Viên (TK 141)</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => message.info('Mở giấy đề nghị tạm ứng')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lập phiếu tạm ứng
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tạm ứng nhân viên</h3>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/admin/finance/advances')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Quản lý tạm ứng
             </Button>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                { id: '1', emp: 'Trần Tuấn Anh (CTO)', reason: 'Công tác triển khai dự án ACB TP.HCM', advance: 15000000, settled: 14200000, refund: 800000, date: '2026-08-20', status: 'Đã hoàn ứng thừa' },
-                { id: '2', emp: 'Lê Hoàng Yến (HRM)', reason: 'Mua vật tư team building công ty', advance: 20000000, settled: 21500000, refund: -1500000, date: '2026-08-15', status: 'Đã chi bù thêm' },
-                { id: '3', emp: 'Vũ Minh Trí', reason: 'Chi phí tiếp khách và gặp đối tác F-Global', advance: 10000000, settled: 0, refund: 0, date: '2026-08-25', status: 'Chưa thanh toán tạm ứng' },
-              ]}
+              dataSource={advanceData}
               columns={[
-                { title: 'Cán bộ tạm ứng', dataIndex: 'emp', key: 'emp', render: (e: string) => <strong>{e}</strong> },
-                { title: 'Mục đích tạm ứng', dataIndex: 'reason', key: 'reason' },
-                { title: 'Số tiền tạm ứng', dataIndex: 'advance', key: 'advance', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Số thực chi', dataIndex: 'settled', key: 'settled', render: (v: number) => <strong style={{ color: '#0F172A' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Chênh lệch', key: 'ref', render: (_: any, r: any) => <span style={{ color: r.refund >= 0 ? '#16A34A' : '#DC2626', fontWeight: 600 }}>{r.refund >= 0 ? `+${r.refund.toLocaleString('vi-VN')} ₫` : `${r.refund.toLocaleString('vi-VN')} ₫`}</span> },
+                { title: 'Mã phiếu', dataIndex: 'code', key: 'code' },
+                { title: 'Nhân viên', dataIndex: 'employeeName', key: 'employeeName', render: (name: string) => <strong>{name || 'Chưa có dữ liệu'}</strong> },
+                { title: 'Mục đích', dataIndex: 'purpose', key: 'purpose' },
+                { title: 'Số tiền tạm ứng', dataIndex: 'advancedAmount', key: 'advancedAmount', render: (v: number) => `${Number(v || 0).toLocaleString('vi-VN')} ₫` },
+                { title: 'Số thực chi', dataIndex: 'spentAmount', key: 'spentAmount', render: (v: number) => <strong style={{ color: '#0F172A' }}>{Number(v || 0).toLocaleString('vi-VN')} ₫</strong> },
+                { title: 'Chênh lệch', dataIndex: 'balance', key: 'balance', render: (v: number) => <span style={{ color: Number(v) >= 0 ? '#16A34A' : '#DC2626', fontWeight: 600 }}>{Number(v || 0).toLocaleString('vi-VN')} ₫</span> },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s.includes('Đã') ? 'success' : 'warning'}>{s}</Tag> },
-                { title: 'Thao tác', key: 'act', render: () => <Button size="small">Quyết toán</Button> },
               ]}
             />
           </div>
@@ -203,7 +360,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
               allowClear
             />
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Sổ Cái ra Excel')}>
+              <Button icon={<DownloadOutlined />} onClick={exportLedger}>
                 Xuất Sổ Cái
               </Button>
               <Button
@@ -284,7 +441,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="voucherCode" label="Số chứng từ" initialValue={`PKT-2026-00${data.length + 1}`} rules={[{ required: true }]}>
+            <Form.Item name="voucherCode" label="Số chứng từ" initialValue={`PKT-${new Date().getFullYear()}-${String(data.length + 1).padStart(4, '0')}`} rules={[{ required: true }]}>
               <Input />
             </Form.Item>
             <Form.Item name="entryDate" label="Ngày hạch toán" initialValue={new Date().toISOString().substring(0, 10)} rules={[{ required: true }]}>
@@ -295,15 +452,15 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             <Input.TextArea rows={2} placeholder="Ví dụ: Phân bổ chi phí thuê văn phòng tháng 8" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="debitAccount" label="Tài khoản Nợ" initialValue="TK 6422 - Chi phí quản lý" rules={[{ required: true }]}>
-              <Input />
+            <Form.Item name="debitAccount" label="Tài khoản Nợ" rules={[{ required: true }]}>
+              <Input placeholder="Ví dụ: TK 642" />
             </Form.Item>
-            <Form.Item name="creditAccount" label="Tài khoản Có" initialValue="TK 242 - Chi phí trả trước" rules={[{ required: true }]}>
-              <Input />
+            <Form.Item name="creditAccount" label="Tài khoản Có" rules={[{ required: true }]}>
+              <Input placeholder="Ví dụ: TK 242" />
             </Form.Item>
           </div>
-          <Form.Item name="amount" label="Số tiền hạch toán (VNĐ)" initialValue={10000000} rules={[{ required: true }]}>
-            <Input type="number" min={0} step={1000000} />
+          <Form.Item name="amount" label="Số tiền hạch toán (VNĐ)" rules={[{ required: true }]}>
+            <Input type="number" min={1} step={1} />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>

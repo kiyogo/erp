@@ -16,6 +16,8 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Button, message, Tag, Drawer } from '../../custom-ui';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { daysUntilDueDate, planProgressExportRows, planProgressMetrics, planProgressStatus, updatePlanProgress } from './planProgressRules';
 
 interface TaskProgress {
   key: string;
@@ -34,15 +36,19 @@ const INITIAL_PROGRESS: TaskProgress[] = [];
 
 export const PlanProgressModule: React.FC = () => {
   const [data, setData] = useState<TaskProgress[]>(INITIAL_PROGRESS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const list = dataService.getGenericData('plan_progress');
-    setData(Array.isArray(list) ? list : []);
+    let active = true;
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('plan_progress');
-      setData(Array.isArray(updated) ? updated : []);
+      if (active) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    void dataService.refreshGenericData('plan_progress')
+      .catch((error: any) => message.error(error?.response?.data?.message || 'Không tải được tiến độ kế hoạch.'))
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -54,27 +60,30 @@ export const PlanProgressModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [form] = Form.useForm();
 
-  const avgProgress = Math.round(data.reduce((sum, item) => sum + item.progressPercent, 0) / data.length);
-  const completedCount = data.filter((d) => d.progressPercent === 100).length;
-  const runningCount = data.filter((d) => d.progressPercent < 100).length;
+  const metrics = planProgressMetrics(data);
 
-  const handleUpdateProgress = (values: any) => {
-    const newPercent = Number(values.progressPercent) || 0;
-    const updated = data.map((item) =>
-      item.key === editingItem?.key
-        ? {
-            ...item,
-            progressPercent: newPercent,
-            status: newPercent === 100 ? ('Hoàn thành' as const) : ('Đúng tiến độ' as const),
-          }
-        : item
-    );
-    setData(updated);
-    dataService.saveGenericData('plan_progress', updated);
-    message.success(`Đã cập nhật tiến độ hạng mục: ${editingItem?.taskTitle} -> ${newPercent}%`);
-    setModalOpen(false);
-    setEditingItem(null);
+  const handleUpdateProgress = async (values: any) => {
+    if (!editingItem || saving) return;
+    setSaving(true);
+    try {
+      const updated = updatePlanProgress(editingItem, values.progressPercent);
+      const saved = await dataService.updateGenericRecord('plan_progress', updated) as TaskProgress;
+      setSelectedTask((current) => current?.key === saved.key ? saved : current);
+      message.success(`Đã cập nhật tiến độ hạng mục: ${saved.taskTitle} -> ${saved.progressPercent}%`);
+      setModalOpen(false);
+      setEditingItem(null);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể cập nhật tiến độ.');
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const exportPdf = (records: TaskProgress[], filename: string) => downloadFile(filename, generateValidPdfBlob(
+    'BÁO CÁO TIẾN ĐỘ KẾ HOẠCH', `${records.length} hạng mục`, records.map((record) =>
+      `${record.code} | ${record.planName} | ${record.taskTitle} | ${record.progressPercent}% | Hạn ${record.dueDate} | ${planProgressStatus(record.progressPercent, record.dueDate)}`,
+    ),
+  ));
 
   const filteredData = data.filter((item) => {
     let matchTab = true;
@@ -152,21 +161,25 @@ export const PlanProgressModule: React.FC = () => {
       title: 'Hạn chót & Thời gian',
       key: 'dueDate',
       width: 150,
-      render: (_: any, record: TaskProgress) => (
-        <div style={{ fontSize: 12.5 }}>
-          <div style={{ color: '#0F172A', fontWeight: 500 }}>{record.dueDate}</div>
-          <div style={{ color: record.daysRemaining <= 3 ? '#DC2626' : '#64748B', fontWeight: record.daysRemaining <= 3 ? 700 : 400 }}>
-            {record.progressPercent === 100 ? 'Đã hoàn tất' : `Còn ${record.daysRemaining} ngày`}
+      render: (_: any, record: TaskProgress) => {
+        const daysRemaining = daysUntilDueDate(record.dueDate);
+        return (
+          <div style={{ fontSize: 12.5 }}>
+            <div style={{ color: '#0F172A', fontWeight: 500 }}>{record.dueDate || 'Chưa đặt hạn'}</div>
+            <div style={{ color: daysRemaining !== null && daysRemaining <= 3 ? '#DC2626' : '#64748B', fontWeight: daysRemaining !== null && daysRemaining <= 3 ? 700 : 400 }}>
+              {record.progressPercent === 100 ? 'Đã hoàn tất' : daysRemaining === null ? 'Chưa có hạn hợp lệ' : daysRemaining < 0 ? `Quá ${Math.abs(daysRemaining)} ngày` : `Còn ${daysRemaining} ngày`}
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
       width: 130,
-      render: (status: string) => {
+      render: (_: string, record: TaskProgress) => {
+        const status = planProgressStatus(record.progressPercent, record.dueDate);
         let color: any = 'processing';
         if (status === 'Hoàn thành') color = 'success';
         if (status === 'Chậm tiến độ') color = 'error';
@@ -212,15 +225,15 @@ export const PlanProgressModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tiến độ tổng thể toàn doanh nghiệp</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {avgProgress}% Hoàn thành
+            {metrics.averageProgress === null ? 'Chưa có dữ liệu' : `${metrics.averageProgress}% Hoàn thành`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tính trên tổng tỷ trọng kế hoạch trọng điểm</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tính theo tỷ trọng đã ghi nhận</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hạng mục đã hoàn thành 100%</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {completedCount} / {data.length} nhiệm vụ
+            {metrics.completedCount} / {data.length} nhiệm vụ
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã nghiệm thu và bàn giao thành công</div>
         </div>
@@ -228,17 +241,17 @@ export const PlanProgressModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hạng mục đang trong tiến trình</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            {runningCount} nhiệm vụ
+            {metrics.runningCount} nhiệm vụ
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Theo sát các mốc sprint kỹ thuật 2 tuần</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Chưa hoàn thành</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ hoàn thành đúng thời hạn SLA</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            100% Đúng hạn
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhiệm vụ quá hạn</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: metrics.overdueCount ? '#DC2626' : '#16A34A', marginTop: 4 }}>
+            {metrics.overdueCount} nhiệm vụ
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Không phát sinh trễ hạn nhiệm vụ ưu tiên</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Tính từ hạn chót và tiến độ đã lưu</div>
         </div>
       </div>
 
@@ -279,15 +292,17 @@ export const PlanProgressModule: React.FC = () => {
 
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => message.success('Đã in bảng tổng hợp tiến độ kế hoạch nhiệm vụ (A4)')}
+            disabled={!filteredData.length}
+            onClick={() => exportPdf(filteredData, 'Bao_cao_tien_do_ke_hoach.pdf')}
           >
-            In Báo Cáo (A4)
+            Tải PDF A4
           </Button>
 
           <Button
             type="primary"
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất báo cáo tiến độ ra Excel')}
+            disabled={!filteredData.length}
+            onClick={() => downloadFile('Bao_cao_tien_do_ke_hoach.xlsx', generateValidXlsxBlob(planProgressExportRows(filteredData)))}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Xuất Excel
@@ -298,6 +313,7 @@ export const PlanProgressModule: React.FC = () => {
       {/* Main Table */}
       <div className="transparent-table-card">
         <KTable
+          loading={loading}
           dataSource={filteredData}
           columns={columns}
           rowKey="key"
@@ -323,7 +339,7 @@ export const PlanProgressModule: React.FC = () => {
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu tiến độ
             </Button>
           </div>
@@ -372,8 +388,8 @@ export const PlanProgressModule: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Trạng thái hiện thời:</span>
-                  <Tag color={selectedTask.progressPercent === 100 ? 'success' : 'processing'}>
-                    {selectedTask.status}
+                  <Tag color={planProgressStatus(selectedTask.progressPercent, selectedTask.dueDate) === 'Hoàn thành' ? 'success' : planProgressStatus(selectedTask.progressPercent, selectedTask.dueDate) === 'Chậm tiến độ' ? 'error' : 'processing'}>
+                    {planProgressStatus(selectedTask.progressPercent, selectedTask.dueDate)}
                   </Tag>
                 </div>
               </div>
@@ -394,7 +410,7 @@ export const PlanProgressModule: React.FC = () => {
               <Button
                 icon={<PrinterOutlined />}
                 style={{ flex: 1 }}
-                onClick={() => message.success(`Đang in báo cáo tiến độ hạng mục ${selectedTask.code} ra bản giấy A4...`)}
+                onClick={() => exportPdf([selectedTask], `${selectedTask.code}_tien_do.pdf`)}
               >
                 In Phiếu (A4)
               </Button>

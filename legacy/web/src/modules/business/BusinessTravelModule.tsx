@@ -21,7 +21,11 @@ import {
   HomeOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { employeesApi, filesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { travelDateRangeDays, travelEmployeeSnapshot, travelExportRows, travelLocalDate, travelMoney, travelSettlementStatus } from './businessTravelRules';
 
 export interface EnterpriseTravelRequest {
   key: string;
@@ -44,21 +48,58 @@ export interface EnterpriseTravelRequest {
   settlementStatus: 'Đã quyết toán xong' | 'Chờ nộp hóa đơn đỏ' | 'Chưa quyết toán';
   approver: string;
   status: 'Đã duyệt công tác' | 'Đang diễn ra' | 'Chờ lãnh đạo duyệt' | 'Từ chối';
+  employeeId?: string;
+  requester?: string;
+  requesterId?: string;
+  approvedBy?: string;
+  approvedById?: string;
+  approvedAt?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+  invoiceReference?: string;
+  invoiceFileId?: string;
+  invoiceFileName?: string;
+  settlementNote?: string;
+  settlementRecordedBy?: string;
+  settlementRecordedAt?: string;
+  settledBy?: string;
+  settledAt?: string;
 }
 
 const INITIAL_TRAVELS: EnterpriseTravelRequest[] = [];
 
 export const BusinessTravelModule: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<EnterpriseTravelRequest[]>(INITIAL_TRAVELS);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [actingKey, setActingKey] = useState('');
+  const [employeesUnavailable, setEmployeesUnavailable] = useState(false);
 
   useEffect(() => {
     const list = dataService.getGenericData('business_travels');
     setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    void Promise.all([dataService.refreshGenericData('business_travels'), employeesApi.getAll()])
+      .then(([travels, employeeResponse]) => {
+        if (!mounted) return;
+        setData(Array.isArray(travels) ? travels : []);
+        setEmployees(employeeResponse.data.data.filter((employee) => employee.isActive !== false && employee.status !== 'Đã nghỉ việc'));
+        setEmployeesUnavailable(false);
+      })
+      .catch((error: any) => {
+        if (!mounted) return;
+        setEmployeesUnavailable(true);
+        message.error(error?.response?.data?.message || 'Không tải được danh sách công tác hoặc nhân viên.');
+      })
+      .finally(() => { if (mounted) setLoading(false); });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('business_travels');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -66,51 +107,146 @@ export const BusinessTravelModule: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [settlementForm] = Form.useForm();
+  const [settlementOpen, setSettlementOpen] = useState(false);
+  const [settlingTravel, setSettlingTravel] = useState<EnterpriseTravelRequest | null>(null);
+  const [settlementSaving, setSettlementSaving] = useState(false);
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [rejectingTravel, setRejectingTravel] = useState<EnterpriseTravelRequest | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedTravel, setSelectedTravel] = useState<EnterpriseTravelRequest | null>(null);
 
   const totalBudget = data
     .filter((d) => d.status === 'Đã duyệt công tác' || d.status === 'Đang diễn ra')
-    .reduce((sum, item) => sum + item.budgetEstimated, 0);
+    .reduce((sum, item) => sum + (Number(item.budgetEstimated) || 0), 0);
 
+  const travelStatus = (travel: EnterpriseTravelRequest) => {
+    if (travel.status !== 'Đã duyệt công tác') return travel.status;
+    const today = travelLocalDate();
+    return travel.startDate <= today && today <= travel.endDate ? 'Đang diễn ra' : travel.status;
+  };
   const pendingCount = data.filter((d) => d.status === 'Chờ lãnh đạo duyệt').length;
-  const ongoingCount = data.filter((d) => d.status === 'Đang diễn ra').length;
+  const ongoingCount = data.filter((d) => travelStatus(d) === 'Đang diễn ra').length;
 
-  const handleCreate = (values: any) => {
-    const newTravel: EnterpriseTravelRequest = {
-      ...values,
-      key: String(Date.now()),
-      budgetEstimated: Number(values.budgetEstimated) || 10000000,
-      advanceAmount: Number(values.advanceAmount) || 8000000,
-      actualExpense: 0,
-      daysCount: Number(values.daysCount) || 3,
-      settlementStatus: 'Chưa quyết toán',
-      approver: values.approver || 'Ban Lãnh Đạo',
-      status: 'Chờ lãnh đạo duyệt',
-    };
-    const nextItems = [newTravel, ...data]; setData(nextItems); dataService.saveGenericData('business_travels', nextItems);
-    message.success(`Đã tạo đề xuất công tác: ${values.destination} (${values.travelCode})`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    if (!user) { message.error('Không xác định được tài khoản đang đăng nhập.'); return; }
+    setSaving(true);
+    try {
+      const employee = travelEmployeeSnapshot(employees, String(values.employeeId || ''));
+      const daysCount = travelDateRangeDays(String(values.startDate || ''), String(values.endDate || ''));
+      const budgetEstimated = travelMoney(values.budgetEstimated, 'Dự toán');
+      const advanceAmount = travelMoney(values.advanceAmount ?? '0', 'Số tiền tạm ứng');
+      if (advanceAmount > budgetEstimated) throw new Error('Số tiền tạm ứng không được vượt dự toán.');
+      const travelCode = String(values.travelCode || '').trim();
+      if (!travelCode) throw new Error('Mã đề xuất không hợp lệ.');
+      if (data.some((item) => String(item.travelCode).toLowerCase() === travelCode.toLowerCase())) throw new Error('Mã đề xuất đã tồn tại.');
+      const newTravel = await dataService.createGenericRecord('business_travels', {
+        ...employee,
+        key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        travelCode,
+        tripType: values.tripType,
+        destination: String(values.destination || '').trim(),
+        startDate: values.startDate,
+        endDate: values.endDate,
+        daysCount,
+        purpose: String(values.purpose || '').trim(),
+        flightTicket: String(values.flightTicket || '').trim(),
+        hotelName: String(values.hotelName || '').trim(),
+        budgetEstimated,
+        advanceAmount,
+        actualExpense: 0,
+        settlementStatus: 'Chưa quyết toán',
+        approver: '',
+        requester: user.name || user.email,
+        requesterId: user.id,
+        requestedAt: new Date().toISOString(),
+        status: 'Chờ lãnh đạo duyệt',
+      }) as EnterpriseTravelRequest;
+      setSelectedTravel(newTravel);
+      message.success(`Đã lưu đề xuất công tác ${travelCode} lên máy chủ.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không lưu được đề xuất công tác.');
+    } finally { setSaving(false); }
   };
 
-  const handleAction = (record: EnterpriseTravelRequest, newStatus: 'Đã duyệt công tác' | 'Từ chối') => {
-    const updated = data.map((d) => (d.key === record.key ? { ...d, status: newStatus } : d));
-    setData(updated);
-    dataService.saveGenericData('business_travels', updated);
-    if (newStatus === 'Đã duyệt công tác') {
-      message.success(`Đã duyệt chuyến công tác ${record.destination} của ${record.employeeName}`);
-    } else {
-      message.error(`Đã từ chối chuyến công tác của ${record.employeeName}`);
-    }
-    if (selectedTravel && selectedTravel.key === record.key) {
-      setSelectedTravel({ ...selectedTravel, status: newStatus });
-    }
+  const handleAction = async (record: EnterpriseTravelRequest, newStatus: 'Đã duyệt công tác' | 'Từ chối', reason = '') => {
+    if (!user || record.status !== 'Chờ lãnh đạo duyệt' || actingKey) return;
+    if (newStatus === 'Từ chối' && !reason.trim()) { message.error('Vui lòng ghi lý do từ chối.'); return; }
+    setActingKey(record.key);
+    try {
+      const saved = await dataService.updateGenericRecord('business_travels', {
+        key: record.key,
+        status: newStatus,
+        rejectionReason: newStatus === 'Từ chối' ? reason.trim() : '',
+      }) as EnterpriseTravelRequest;
+      setSelectedTravel((current) => current?.key === record.key ? saved : current);
+      message.success(newStatus === 'Đã duyệt công tác' ? `Đã lưu quyết định duyệt ${record.travelCode} của ${user.name || user.email}.` : `Đã lưu quyết định từ chối ${record.travelCode}.`);
+      setRejectingTravel(null);
+      setRejectionReason('');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được quyết định duyệt lên máy chủ.');
+    } finally { setActingKey(''); }
+  };
+
+  const openSettlement = (record: EnterpriseTravelRequest) => {
+    setSettlingTravel(record);
+    setInvoiceFile(null);
+    settlementForm.setFieldsValue({ actualExpense: Number(record.actualExpense) || undefined, invoiceReference: record.invoiceReference || '', settlementNote: record.settlementNote || '' });
+    setSettlementOpen(true);
+  };
+
+  const handleSettlement = async (values: any) => {
+    if (!settlingTravel || !user || settlementSaving) return;
+    setSettlementSaving(true);
+    try {
+      const actualExpense = travelMoney(values.actualExpense, 'Chi phí thực tế');
+      if (actualExpense <= 0) throw new Error('Chi phí thực tế phải lớn hơn 0.');
+      const invoiceReference = String(values.invoiceReference || '').trim();
+      let uploadedFileId = '';
+      let uploadedFileName = '';
+      if (invoiceFile) {
+        const rootResponse = await filesApi.list(null);
+        const rootId = rootResponse.data.context.parentId || undefined;
+        const directory = (await filesApi.list(rootId)).data.data.find((entry) => entry.type === 'dir' && entry.name === 'Chứng từ công tác');
+        const folderId = directory?.id || directory?.key || (await filesApi.createFolder('Chứng từ công tác', rootId, 'business_travel')).data.file.id;
+        const uploaded = (await filesApi.upload(invoiceFile, invoiceFile.name, folderId, 'business_travel')).data.file;
+        uploadedFileId = uploaded.id || uploaded.key;
+        uploadedFileName = uploaded.name;
+      }
+      const hasInvoiceFile = Boolean(uploadedFileId || settlingTravel.invoiceFileId);
+      const settlementStatus = travelSettlementStatus(actualExpense, invoiceReference, hasInvoiceFile);
+      let saved: EnterpriseTravelRequest;
+      try {
+        saved = await dataService.updateGenericRecord('business_travels', {
+          key: settlingTravel.key,
+          actualExpense,
+          invoiceReference,
+          invoiceFileId: uploadedFileId || settlingTravel.invoiceFileId || '',
+          invoiceFileName: uploadedFileName || settlingTravel.invoiceFileName || '',
+          settlementNote: String(values.settlementNote || '').trim(),
+        }) as EnterpriseTravelRequest;
+      } catch (error) {
+        if (uploadedFileId) await filesApi.remove(uploadedFileId).catch(() => {});
+        throw error;
+      }
+      setSelectedTravel(saved);
+      message.success(settlementStatus === 'Đã quyết toán xong' ? 'Đã lưu quyết toán nội bộ và mã tham chiếu chứng từ.' : 'Đã lưu chi phí thực tế; hồ sơ đang chờ tham chiếu hóa đơn.');
+      setSettlementOpen(false);
+      setSettlingTravel(null);
+      setInvoiceFile(null);
+      settlementForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không lưu được quyết toán.');
+    } finally { setSettlementSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
-    const matchStatus = statusFilter === 'all' || item.status === statusFilter;
+    const matchStatus = statusFilter === 'all' || travelStatus(item) === statusFilter;
     const matchSearch =
       (item.travelCode || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.employeeName || '').toLowerCase().includes(searchText.toLowerCase()) ||
@@ -120,6 +256,23 @@ export const BusinessTravelModule: React.FC = () => {
 
     return matchStatus && matchSearch;
   });
+
+  const exportRegister = () => {
+    if (!filteredData.length) { message.warning('Không có chuyến công tác phù hợp để xuất.'); return; }
+    downloadFile('Danh_sach_cong_tac.xlsx', generateValidXlsxBlob(travelExportRows(filteredData.map((item) => ({ ...item, status: travelStatus(item) })) as Array<Record<string, any>>)));
+  };
+
+  const printTravelOrder = (record: EnterpriseTravelRequest) => downloadFile(
+    `${String(record.travelCode || 'lenh_cong_tac').replace(/[^a-z0-9_-]/gi, '_')}.pdf`,
+    generateValidPdfBlob(record.status === 'Đã duyệt công tác' ? 'LENH DIEU DONG CONG TAC' : 'PHIEU DE XUAT CONG TAC', `${record.travelCode} | ${record.employeeName}`, [
+      `Nhan vien: ${record.employeeName} (${record.empCode})`, `Phong ban / chuc danh: ${record.department} | ${record.position}`,
+      `Dia diem: ${record.destination}`, `Thoi gian: ${record.startDate} den ${record.endDate} (${record.daysCount} ngay)`,
+      `Muc dich: ${record.purpose}`, `Phuong tien: ${record.flightTicket || 'Chua ghi nhan'}`, `Khach san: ${record.hotelName || 'Chua ghi nhan'}`,
+      `Du toan: ${Number(record.budgetEstimated || 0).toLocaleString('vi-VN')} VND`, `Tam ung de xuat: ${Number(record.advanceAmount || 0).toLocaleString('vi-VN')} VND`,
+      `Trang thai: ${travelStatus(record)}`, `Nguoi tao: ${record.requester || 'Chua ghi nhan'}`, `Nguoi duyet: ${record.approver || 'Chua duyet'}`,
+      'Lenh cong tac noi bo. Phieu nay khong xac nhan dat ve, chuyen tien hoac chu ky so CA.',
+    ]),
+  );
 
   const columns = [
     {
@@ -187,7 +340,8 @@ export const BusinessTravelModule: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 150,
-      render: (status: string) => {
+      render: (_: string, record: EnterpriseTravelRequest) => {
+        const status = travelStatus(record);
         let color = 'default';
         if (status === 'Đã duyệt công tác') color = 'success';
         if (status === 'Đang diễn ra') color = 'processing';
@@ -202,13 +356,15 @@ export const BusinessTravelModule: React.FC = () => {
       width: 190,
       render: (_: any, record: EnterpriseTravelRequest) => (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {record.status === 'Chờ lãnh đạo duyệt' && (
+          {user?.role === 'ADMIN' && record.status === 'Chờ lãnh đạo duyệt' && (
             <>
               <Button
                 size="small"
                 type="primary"
                 icon={<CheckCircleOutlined />}
-                onClick={() => handleAction(record, 'Đã duyệt công tác')}
+                loading={actingKey === record.key}
+                disabled={Boolean(actingKey)}
+                onClick={() => void handleAction(record, 'Đã duyệt công tác')}
                 style={{ backgroundColor: '#16A34A', borderColor: '#16A34A', fontSize: 11.5, padding: '0 6px' }}
               >
                 Duyệt
@@ -217,7 +373,9 @@ export const BusinessTravelModule: React.FC = () => {
                 size="small"
                 danger
                 icon={<CloseCircleOutlined />}
-                onClick={() => handleAction(record, 'Từ chối')}
+                loading={actingKey === record.key}
+                disabled={Boolean(actingKey)}
+                onClick={() => { setRejectingTravel(record); setRejectionReason(''); }}
                 style={{ fontSize: 11.5, padding: '0 6px' }}
               >
                 Từ chối
@@ -248,15 +406,15 @@ export const BusinessTravelModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalBudget.toLocaleString('vi-VN')} ₫
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Thanh toán qua chuyển khoản ngân hàng</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tổng dự toán của các chuyến đã duyệt</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chuyến công tác đang diễn ra</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            {ongoingCount} nhân sự tại thực địa
+            {ongoingCount} chuyến trong thời gian công tác
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Theo dõi định vị và công tác phí</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Theo lịch trình đã được duyệt</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -264,14 +422,13 @@ export const BusinessTravelModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {pendingCount} đề xuất mới
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Cần CEO/CTO phê duyệt ngân sách</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Chờ tài khoản có quyền duyệt xử lý</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chế độ công tác chuẩn KIYOVN</div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#7C3AED', marginTop: 6 }}>
-            Vé máy bay + Khách sạn 4★ + Phụ cấp 600k/ngày
-          </div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đề xuất trong danh sách</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>{data.length}</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Dữ liệu hồ sơ công tác đã lưu</div>
         </div>
       </div>
 
@@ -283,6 +440,7 @@ export const BusinessTravelModule: React.FC = () => {
             { key: 'Đang diễn ra', label: 'Đang diễn ra', icon: <RocketOutlined style={{ color: '#6366F1' }} /> },
             { key: 'Đã duyệt công tác', label: 'Đã duyệt' },
             { key: 'Chờ lãnh đạo duyệt', label: 'Chờ duyệt' },
+            { key: 'Từ chối', label: 'Từ chối' },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -310,7 +468,7 @@ export const BusinessTravelModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất lịch trình công tác toàn công ty')}>
+          <Button icon={<DownloadOutlined />} onClick={exportRegister} disabled={!filteredData.length}>
             Xuất Lịch Trình
           </Button>
 
@@ -320,13 +478,13 @@ export const BusinessTravelModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                travelCode: `CT-2026/0${data.length + 1}`,
+                travelCode: `CT-${new Date().getFullYear()}-${globalThis.crypto?.randomUUID?.().slice(0, 8).toUpperCase() || Math.random().toString(36).slice(2, 10).toUpperCase()}`,
                 tripType: 'Nội địa',
-                daysCount: 3,
-                startDate: new Date().toISOString().substring(0, 10),
-                endDate: new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10),
-                budgetEstimated: 12000000,
-                advanceAmount: 10000000,
+                employeeId: user?.role === 'ADMIN' ? '' : user?.id,
+                startDate: travelLocalDate(),
+                endDate: travelLocalDate(),
+                budgetEstimated: '',
+                advanceAmount: 0,
               });
               setModalOpen(true);
             }}
@@ -339,19 +497,19 @@ export const BusinessTravelModule: React.FC = () => {
 
       {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+            <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} />
       </div>
 
       {/* MODAL: Lập đề xuất công tác mới */}
       <Modal
-        title="Lập Đề Xuất Công Tác &amp; Đặt Vé / Tạm Ứng Kinh Phí"
+        title="Lập đề xuất công tác và dự trù chi phí"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
         width={680}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="travelCode" label="Mã đề xuất" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
@@ -363,21 +521,15 @@ export const BusinessTravelModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="daysCount" label="Số ngày công tác" rules={[{ required: true }]}>
-              <Input type="number" min={1} />
-            </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeName" label="Cán bộ công tác" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Lê Hoàng Yến" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="employeeId" label="Cán bộ công tác" rules={[{ required: true }]}>
+              <Select showSearch disabled={employeesUnavailable || employees.length === 0} placeholder="Chọn nhân viên đang làm việc" options={employees.filter((employee) => user?.role === 'ADMIN' || String(employee.key || employee.id) === user?.id).map((employee) => ({ value: employee.key || employee.id, label: `${employee.fullName || employee.name} · ${employee.employeeCode || employee.code} · ${employee.department}` }))} />
             </Form.Item>
-            <Form.Item name="empCode" label="Mã nhân viên" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: KY-012" />
-            </Form.Item>
-            <Form.Item name="department" label="Phòng ban" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Khối Kinh Doanh" />
-            </Form.Item>
+            <div style={{ alignSelf: 'center', fontSize: 12, color: employeesUnavailable ? '#B91C1C' : '#64748B' }}>
+              {employeesUnavailable ? 'Không tải được dữ liệu nhân viên.' : 'Tên, mã, phòng ban và chức danh lấy từ hồ sơ nhân sự.'}
+            </div>
           </div>
 
           <Form.Item name="destination" label="Địa điểm đến & Đối tác làm việc" rules={[{ required: true }]}>
@@ -412,9 +564,13 @@ export const BusinessTravelModule: React.FC = () => {
             </Form.Item>
           </div>
 
+          <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+            Số ngày tự tính theo ngày bắt đầu/kết thúc. Dự toán và tạm ứng là thông tin đề xuất, chưa tạo lệnh chi hoặc giao dịch ngân hàng.
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving || employeesUnavailable || employees.length === 0} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Gửi đề xuất duyệt
             </Button>
           </div>
@@ -439,8 +595,8 @@ export const BusinessTravelModule: React.FC = () => {
                     {selectedTravel.destination}
                   </div>
                 </div>
-                <Tag color={selectedTravel.status === 'Đã duyệt công tác' ? 'success' : 'processing'}>
-                  {selectedTravel.status}
+                <Tag color={travelStatus(selectedTravel) === 'Đã duyệt công tác' ? 'success' : travelStatus(selectedTravel) === 'Từ chối' ? 'error' : travelStatus(selectedTravel) === 'Chờ lãnh đạo duyệt' ? 'warning' : 'processing'}>
+                  {travelStatus(selectedTravel)}
                 </Tag>
               </div>
 
@@ -474,16 +630,25 @@ export const BusinessTravelModule: React.FC = () => {
                   </div>
                 </div>
                 <div>
-                  <span style={{ color: '#64748B' }}>Người phê duyệt:</span>
+                  <span style={{ color: '#64748B' }}>Người xử lý:</span>
                   <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedTravel.approver}</div>
                 </div>
+                <div>
+                  <span style={{ color: '#64748B' }}>Người lập:</span>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedTravel.requester || 'Chưa ghi nhận'}</div>
+                </div>
+                <div>
+                  <span style={{ color: '#64748B' }}>Thời điểm xử lý:</span>
+                    <div style={{ fontWeight: 700, color: '#0F172A' }}>{(selectedTravel.approvedAt || selectedTravel.rejectedAt) ? new Date(selectedTravel.approvedAt || selectedTravel.rejectedAt!).toLocaleString('vi-VN') : 'Chưa xử lý'}</div>
+                </div>
               </div>
+              {selectedTravel.rejectionReason && <div style={{ color: '#B91C1C', fontSize: 12.5, marginTop: 10 }}>Lý do từ chối: {selectedTravel.rejectionReason}</div>}
             </div>
 
             {/* Logistics & Bookings */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <CompassOutlined style={{ color: '#2563EB' }} /> Vé Máy Bay &amp; Khách Sạn Đã Đặt:
+                <CompassOutlined style={{ color: '#2563EB' }} /> Thông Tin Phương Tiện &amp; Lưu Trú:
               </div>
               <div style={{ fontSize: 12.5, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div><SendOutlined style={{ color: '#0284C7', marginRight: 6 }} />Vé máy bay: <strong>{selectedTravel.flightTicket}</strong></div>
@@ -498,49 +663,98 @@ export const BusinessTravelModule: React.FC = () => {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, fontSize: 12.5 }}>
                 <div>
-                  <span style={{ color: '#15803D' }}>Dự toán phê duyệt:</span>
+                    <span style={{ color: '#15803D' }}>Dự toán:</span>
                   <div style={{ fontWeight: 800, color: '#166534', fontSize: 13.5 }}>
-                    {selectedTravel.budgetEstimated.toLocaleString('vi-VN')} ₫
+                    {(Number(selectedTravel.budgetEstimated) || 0).toLocaleString('vi-VN')} ₫
                   </div>
                 </div>
                 <div>
-                  <span style={{ color: '#15803D' }}>Đã chi tạm ứng:</span>
+                    <span style={{ color: '#15803D' }}>Tạm ứng đề xuất:</span>
                   <div style={{ fontWeight: 800, color: '#2563EB', fontSize: 13.5 }}>
-                    {selectedTravel.advanceAmount.toLocaleString('vi-VN')} ₫
+                    {(Number(selectedTravel.advanceAmount) || 0).toLocaleString('vi-VN')} ₫
                   </div>
                 </div>
                 <div>
                   <span style={{ color: '#15803D' }}>Chi phí thực tế:</span>
                   <div style={{ fontWeight: 800, color: '#DC2626', fontSize: 13.5 }}>
-                    {selectedTravel.actualExpense > 0
-                      ? `${selectedTravel.actualExpense.toLocaleString('vi-VN')} ₫`
-                      : 'Đang gom hóa đơn'}
+                    {Number(selectedTravel.actualExpense) > 0 ? `${Number(selectedTravel.actualExpense).toLocaleString('vi-VN')} ₫` : 'Chưa ghi nhận'}
                   </div>
                 </div>
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                <Tag color={selectedTravel.settlementStatus === 'Đã quyết toán xong' ? 'success' : selectedTravel.settlementStatus === 'Chờ nộp hóa đơn đỏ' ? 'warning' : 'default'}>{selectedTravel.settlementStatus || 'Chưa quyết toán'}</Tag>
+                {selectedTravel.invoiceReference && <span style={{ fontSize: 12 }}>Mã chứng từ: <strong>{selectedTravel.invoiceReference}</strong></span>}
+                {user?.role === 'ADMIN' && selectedTravel.invoiceFileId && <Button size="small" onClick={async () => {
+                  try { const file = await filesApi.download(selectedTravel.invoiceFileId!); downloadFile(selectedTravel.invoiceFileName || 'chung_tu_cong_tac', file.data); }
+                  catch (error: any) { message.error(error?.response?.data?.message || 'Không tải được tệp chứng từ.'); }
+                }}>Tải {selectedTravel.invoiceFileName || 'chứng từ'}</Button>}
+              </div>
+              {selectedTravel.settlementRecordedAt && <div style={{ color: '#64748B', fontSize: 12, marginTop: 6 }}>Cập nhật bởi {selectedTravel.settlementRecordedBy || '—'} lúc {new Date(selectedTravel.settlementRecordedAt).toLocaleString('vi-VN')}{selectedTravel.settlementNote ? ` · ${selectedTravel.settlementNote}` : ''}</div>}
             </div>
 
             {/* Action Buttons */}
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất giấy đi đường & quyết định cử công tác ${selectedTravel.travelCode} (PDF)`)}
+                onClick={() => printTravelOrder(selectedTravel)}
                 style={{ flex: 1 }}
               >
                 In Lệnh Điều Động (PDF)
               </Button>
-              <Button
+              {user?.role === 'ADMIN' && <Button
                 type="primary"
                 icon={<CreditCardOutlined />}
-                onClick={() => message.success(`Đã mở giao diện quyết toán hoàn ứng cho chuyến ${selectedTravel.travelCode}`)}
+                disabled={selectedTravel.status !== 'Đã duyệt công tác' || selectedTravel.settlementStatus === 'Đã quyết toán xong'}
+                onClick={() => openSettlement(selectedTravel)}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
-                Lập Quyết Toán Hoàn Ứng
-              </Button>
+                Ghi quyết toán nội bộ
+              </Button>}
             </div>
+            <div style={{ color: '#64748B', fontSize: 11.5 }}>Quyết toán này lưu chi phí và chứng từ nội bộ; chưa ghi Sổ Cái, thu/hoàn tiền hoặc xác nhận giao dịch ngân hàng.</div>
           </div>
         )}
       </Drawer>
+
+      <Modal title={`Ghi quyết toán ${settlingTravel?.travelCode || ''}`} open={settlementOpen} onCancel={() => { if (!settlementSaving) { setSettlementOpen(false); setInvoiceFile(null); } }} footer={null} width={560}>
+        <Form form={settlementForm} layout="vertical" onFinish={handleSettlement} style={{ marginTop: 14 }}>
+          <Form.Item name="actualExpense" label="Chi phí thực tế (VNĐ)" rules={[{ required: true }]}>
+            <Input type="number" min={1} step={1} />
+          </Form.Item>
+          <Form.Item name="invoiceReference" label="Mã tham chiếu hóa đơn/chứng từ">
+            <Input maxLength={120} placeholder="Nhập số hóa đơn hoặc mã chứng từ" />
+          </Form.Item>
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Tệp chứng từ (PDF/JPG/PNG, tối đa 20 MB)</label>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" disabled={settlementSaving} onChange={(event) => {
+              const file = event.target.files?.[0] || null;
+              if (!file) { setInvoiceFile(null); return; }
+              if (file.size > 20 * 1024 * 1024) { message.error('Tệp chứng từ phải nhỏ hơn 20 MB.'); event.target.value = ''; setInvoiceFile(null); return; }
+              if (!/\.(pdf|jpe?g|png|webp)$/i.test(file.name)) { message.error('Chỉ nhận tệp PDF, JPG, PNG hoặc WEBP.'); event.target.value = ''; setInvoiceFile(null); return; }
+              setInvoiceFile(file);
+            }} />
+            {invoiceFile && <div style={{ fontSize: 12, color: '#475569', marginTop: 5 }}>Tệp mới: {invoiceFile.name}</div>}
+            {!invoiceFile && settlingTravel?.invoiceFileName && <div style={{ fontSize: 12, color: '#475569', marginTop: 5 }}>Đã lưu: {settlingTravel.invoiceFileName} (để trống nếu giữ tệp hiện tại)</div>}
+          </div>
+          <Form.Item name="settlementNote" label="Ghi chú quyết toán"><Input.TextArea rows={3} maxLength={1000} /></Form.Item>
+          <div style={{ fontSize: 12, color: '#64748B' }}>Có thể lưu chi phí trước, hồ sơ sẽ chờ hóa đơn cho đến khi thêm mã tham chiếu hoặc tệp chứng từ. Thao tác không tạo bút toán hay lệnh chuyển tiền.</div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+            <Button onClick={() => setSettlementOpen(false)} disabled={settlementSaving}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={settlementSaving} disabled={settlementSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu quyết toán</Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal title={`Từ chối đề xuất ${rejectingTravel?.travelCode || ''}`} open={Boolean(rejectingTravel)} onCancel={() => { if (!actingKey) { setRejectingTravel(null); setRejectionReason(''); } }} footer={null} width={500}>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>Ghi lý do để lưu cùng quyết định từ chối.</div>
+          <Input.TextArea rows={4} maxLength={1000} value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+            <Button onClick={() => setRejectingTravel(null)} disabled={Boolean(actingKey)}>Hủy</Button>
+            <Button danger loading={Boolean(actingKey)} disabled={!rejectionReason.trim() || Boolean(actingKey)} onClick={() => rejectingTravel && void handleAction(rejectingTravel, 'Từ chối', rejectionReason)}>Lưu quyết định từ chối</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

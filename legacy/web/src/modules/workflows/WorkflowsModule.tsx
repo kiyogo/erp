@@ -1,4 +1,5 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi, usersApi } from '../../api/endpoints';
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -28,11 +29,13 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Tooltip } from '../../custom-ui';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export interface ApprovalStepDef {
   level: number;
   roleName: string;
   defaultApprover: string;
+  approverId?: string;
   slaHours: number;
   canReject: boolean;
   requireTokenPKI: boolean;
@@ -66,10 +69,19 @@ export interface WorkflowBlueprintItem {
 }
 
 const INITIAL_BLUEPRINTS: WorkflowBlueprintItem[] = [];
+const DEFAULT_WORKFLOW_FORM_FIELDS: WorkflowFieldDef[] = [
+  { fieldName: 'title', label: 'Tiêu đề đề xuất', type: 'Văn bản', required: true },
+  { fieldName: 'content', label: 'Nội dung chi tiết', type: 'Văn bản dài', required: true },
+  { fieldName: 'attachments', label: 'Tài liệu đính kèm', type: 'Tệp PDF', required: false },
+];
 
 export const WorkflowsModule: React.FC = () => {
   const navigate = useNavigate();
   const [data, setData] = useState<WorkflowBlueprintItem[]>(INITIAL_BLUEPRINTS);
+  const [saving, setSaving] = useState(false);
+  const [approvers, setApprovers] = useState<Array<{ id: string; name: string; role: string }>>([]);
+  const [assignedApproverIds, setAssignedApproverIds] = useState<string[]>(['', '', '']);
+  const [canRejectLevels, setCanRejectLevels] = useState<boolean[]>([true, true, true]);
 
   useEffect(() => {
     const list = dataService.getGenericData('workflow_blueprints');
@@ -81,11 +93,37 @@ export const WorkflowsModule: React.FC = () => {
     return unsub;
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const loadApprovers = async () => {
+      try {
+        const firstPage = await usersApi.getAll({ page: 1, limit: 100 });
+        const users = [...(firstPage.data.data || [])];
+        const total = Number(firstPage.data.pagination?.total || users.length);
+        const pageCount = Math.ceil(total / Number(firstPage.data.pagination?.limit || 100));
+        for (let page = 2; page <= pageCount; page++) {
+          const next = await usersApi.getAll({ page, limit: 100 });
+          users.push(...(next.data.data || []));
+        }
+        if (active) setApprovers(users.filter((person: any) => person.isActive).map((person: any) => ({
+          id: person.id,
+          name: person.name || person.fullName || person.email,
+          role: person.role,
+        })));
+      } catch {
+        if (active) message.error('Không tải được danh sách tài khoản để gán người phê duyệt.');
+      }
+    };
+    void loadApprovers();
+    return () => { active = false; };
+  }, []);
+
   const [searchText, setSearchText] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [workflowFormFields, setWorkflowFormFields] = useState<WorkflowFieldDef[]>(DEFAULT_WORKFLOW_FORM_FIELDS);
   const [detailItem, setDetailItem] = useState<WorkflowBlueprintItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -96,39 +134,66 @@ export const WorkflowsModule: React.FC = () => {
   const activeCount = data.filter((d) => d.status === 'Đang áp dụng').length;
   const totalRuns = data.reduce((sum, d) => sum + d.totalCompletedCount + d.activeInstancesCount, 0);
   const avgSLA = (data.reduce((sum, d) => sum + d.slaTargetHours, 0) / (totalWorkflows || 1)).toFixed(1);
+  const avgPassRate = (data.reduce((sum, d) => sum + d.passRate, 0) / (totalWorkflows || 1)).toFixed(1);
 
   const handleOpenCreate = () => {
     form.resetFields();
+    setWorkflowFormFields(DEFAULT_WORKFLOW_FORM_FIELDS.map((field) => ({ ...field })));
+    setAssignedApproverIds(['', '', '']);
+    setCanRejectLevels([true, true, true]);
     form.setFieldsValue({
-      workflowCode: `WF-CUSTOM-0${data.length + 1}`,
+      workflowCode: `WF-CUSTOM-${String(Date.now()).slice(-6)}`,
       category: 'Mua sắm & Tài sản',
       scope: 'Toàn công ty',
       totalSteps: 3,
       slaTargetHours: 4,
       applicableBudgetLimit: 100000000,
-      createdBy: 'Trần Tuấn Anh (CTO)',
       version: 'v1.0',
     });
     setModalOpen(true);
   };
 
-  const handleCreate = (values: any) => {
+  const handleCreate = async (values: any) => {
+    const fieldNames = workflowFormFields.map((field) => field.fieldName.trim());
+    const reservedNames = new Set(['key', 'code', 'workflowcode', 'workflowname', 'category', 'department', 'priority', 'budgetamount', 'summarydetails', 'supplementalresponse', 'constructor', 'prototype', 'tostring', 'hasownproperty']);
+    const builtInNames = new Set(['title', 'content', 'attachments']);
+    if (fieldNames.some((name) => !/^[a-z][a-zA-Z0-9_]{0,79}$/.test(name)
+      || (reservedNames.has(name.toLowerCase()) && !builtInNames.has(name))
+      || (builtInNames.has(name.toLowerCase()) && !builtInNames.has(name)))
+      || new Set(fieldNames.map((name) => name.toLowerCase())).size !== fieldNames.length) {
+      message.error('Mã trường phải duy nhất, viết thường ở đầu và không trùng trường hệ thống.');
+      return;
+    }
+    if (workflowFormFields.some((field) => !field.label.trim())) {
+      message.error('Mỗi trường biểu mẫu cần có tên hiển thị.');
+      return;
+    }
     const stepsCount = Number(values.totalSteps) || 3;
+    if (assignedApproverIds.length !== stepsCount || assignedApproverIds.some((id) => !id) || canRejectLevels.length !== stepsCount) {
+      message.error('Hãy gán một tài khoản đang hoạt động cho từng cấp phê duyệt.');
+      return;
+    }
     const flow: ApprovalStepDef[] = [];
     for (let i = 1; i <= stepsCount; i++) {
+      const approver = approvers.find((person) => person.id === assignedApproverIds[i - 1]);
+      if (!approver) {
+        message.error(`Không tìm thấy người phê duyệt đang hoạt động ở cấp ${i}.`);
+        return;
+      }
       flow.push({
         level: i,
         roleName: i === 1 ? 'Trưởng bộ phận phê duyệt' : i === stepsCount ? 'Tổng Giám Đốc ký số' : 'Kế toán trưởng / Giám đốc khối',
-        defaultApprover: i === stepsCount ? 'Ban Lãnh Đạo' : 'Cán bộ phụ trách',
+        defaultApprover: approver.name,
+        approverId: approver.id,
         slaHours: Math.max(1, Math.round((Number(values.slaTargetHours) || 4) / stepsCount)),
-        canReject: true,
+        canReject: canRejectLevels[i - 1],
         requireTokenPKI: i >= 2,
       });
     }
 
     const newItem: WorkflowBlueprintItem = {
       ...values,
-      key: String(Date.now()),
+      key: values.workflowCode,
       totalSteps: stepsCount,
       slaTargetHours: Number(values.slaTargetHours) || 4,
       applicableBudgetLimit: Number(values.applicableBudgetLimit) || 0,
@@ -137,29 +202,33 @@ export const WorkflowsModule: React.FC = () => {
       passRate: 100,
       status: 'Đang áp dụng',
       approvalFlow: flow,
-      formFields: [
-        { fieldName: 'title', label: 'Tiêu đề đề xuất', type: 'Văn bản', required: true },
-        { fieldName: 'content', label: 'Nội dung chi tiết', type: 'Văn bản dài', required: true },
-        { fieldName: 'attachments', label: 'Tài liệu đính kèm', type: 'Tệp PDF', required: false },
-      ],
+      formFields: workflowFormFields.map((field) => ({ ...field, fieldName: field.fieldName.trim(), label: field.label.trim() })),
     };
 
-    const nextItems = [newItem, ...data];
-    setData(nextItems);
-    dataService.saveGenericData('workflow_blueprints', nextItems);
-    message.success(`Đã thiết kế và kích hoạt quy trình mới: ${values.workflowCode} - ${values.workflowName}`);
-    setModalOpen(false);
-    form.resetFields();
+    setSaving(true);
+    try {
+      await collectionsApi.create<WorkflowBlueprintItem>('workflow_blueprints', newItem);
+      setData(await dataService.refreshGenericData('workflow_blueprints'));
+      message.success(`Đã lưu quy trình ${values.workflowCode} - ${values.workflowName}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể lưu cấu hình quy trình.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleToggleStatus = (record: WorkflowBlueprintItem) => {
+  const handleToggleStatus = async (record: WorkflowBlueprintItem) => {
     const nextSt = record.status === 'Đang áp dụng' ? 'Tạm ngưng' : 'Đang áp dụng';
-    const updated = data.map((d) => (d.key === record.key ? { ...d, status: nextSt as any } : d));
-    setData(updated);
-    dataService.saveGenericData('workflow_blueprints', updated);
-    message.info(`Đã đổi trạng thái ${record.workflowCode} sang "${nextSt}"`);
-    if (detailItem && detailItem.key === record.key) {
-      setDetailItem({ ...detailItem, status: nextSt as any });
+    try {
+      await collectionsApi.patch<WorkflowBlueprintItem>('workflow_blueprints', record.key, { status: nextSt });
+      const refreshed = await dataService.refreshGenericData('workflow_blueprints');
+      setData(refreshed);
+      if (detailItem?.key === record.key) setDetailItem(refreshed.find((item) => item.key === record.key) || null);
+      message.success(`Đã đổi trạng thái ${record.workflowCode} sang "${nextSt}"`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể cập nhật trạng thái quy trình.');
     }
   };
 
@@ -186,7 +255,7 @@ export const WorkflowsModule: React.FC = () => {
           <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalWorkflows} quy trình chuẩn
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Đã chuẩn hóa sơ đồ BPMN đa cấp</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Cấu hình các cấp phê duyệt</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
@@ -194,15 +263,15 @@ export const WorkflowsModule: React.FC = () => {
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {activeCount}/{totalWorkflows} luồng hoạt động
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>100% tự động chuyển tiếp hồ sơ</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Trạng thái được lưu trên máy chủ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng lượt xử lý hoàn tất</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng hồ sơ đang xử lý và đã duyệt</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            {totalRuns} hồ sơ đã duyệt
+            {totalRuns} lượt xử lý
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tỷ lệ duyệt thành công: 97.2%</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tỷ lệ duyệt: {avgPassRate}%</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
@@ -210,7 +279,7 @@ export const WorkflowsModule: React.FC = () => {
           <div style={{ fontSize: 22, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             ~{avgSLA} Giờ / Quy trình
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Bảo đảm tốc độ giải quyết công việc</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Theo SLA đã cấu hình</div>
         </div>
       </div>
 
@@ -252,7 +321,10 @@ export const WorkflowsModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục ma trận quy trình')}>
+          <Button icon={<DownloadOutlined />} disabled={!filteredData.length} onClick={() => downloadFile('Danh_muc_quy_trinh.xlsx', generateValidXlsxBlob([
+            ['Mã quy trình', 'Tên quy trình', 'Phân loại', 'Số cấp', 'SLA giờ', 'Hạn mức', 'Đang xử lý', 'Đã duyệt', 'Tỷ lệ duyệt', 'Trạng thái', 'Người tạo'],
+            ...filteredData.map((item) => [item.workflowCode, item.workflowName, item.category, item.totalSteps, item.slaTargetHours, item.applicableBudgetLimit, item.activeInstancesCount, item.totalCompletedCount, item.passRate, item.status, item.createdBy]),
+          ]))}>
             Xuất Excel
           </Button>
           <Button
@@ -409,6 +481,11 @@ export const WorkflowsModule: React.FC = () => {
             </Form.Item>
             <Form.Item name="totalSteps" label="Số cấp phê duyệt" rules={[{ required: true }]}>
               <Select
+                onChange={(count: number) => {
+                  const nextCount = Number(count);
+                  setAssignedApproverIds((ids) => Array.from({ length: nextCount }, (_, index) => ids[index] || ''));
+                  setCanRejectLevels((levels) => Array.from({ length: nextCount }, (_, index) => levels[index] ?? true));
+                }}
                 options={[
                   { label: '1 Cấp', value: 1 },
                   { label: '2 Cấp', value: 2 },
@@ -417,6 +494,32 @@ export const WorkflowsModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
+          </div>
+
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, marginTop: 4 }}>
+            <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Người chịu trách nhiệm ở từng cấp</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {assignedApproverIds.map((approverId, index) => (
+                <div key={`approver-level-${index + 1}`}>
+                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 4 }}>Cấp {index + 1}</div>
+                  <Select
+                    aria-label={`Người phê duyệt cấp ${index + 1}`}
+                    value={approverId || undefined}
+                    onChange={(value: string) => setAssignedApproverIds((ids) => ids.map((id, itemIndex) => itemIndex === index ? value : id))}
+                    placeholder="Chọn tài khoản phê duyệt"
+                    options={approvers.map((person) => ({ value: person.id, label: `${person.name} · ${person.role}` }))}
+                    disabled={!approvers.length}
+                  />
+                  <Select
+                    aria-label={`Quyền từ chối cấp ${index + 1}`}
+                    value={canRejectLevels[index] ? 'can_reject' : 'approve_only'}
+                    onChange={(value: string) => setCanRejectLevels((levels) => levels.map((enabled, itemIndex) => itemIndex === index ? value === 'can_reject' : enabled))}
+                    style={{ marginTop: 6 }}
+                    options={[{ value: 'can_reject', label: 'Được từ chối / yêu cầu bổ sung' }, { value: 'approve_only', label: 'Chỉ được phê duyệt' }]}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
 
           <Form.Item name="workflowName" label="Tên quy trình nghiệp vụ" rules={[{ required: true, message: 'Nhập tên quy trình' }]}>
@@ -439,18 +542,80 @@ export const WorkflowsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="createdBy" label="Người phụ trách thiết kế quy trình" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
-            </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
             <Form.Item name="version" label="Phiên bản quy trình" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: v1.0" />
             </Form.Item>
           </div>
 
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, marginTop: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, color: '#0F172A' }}>Trường biểu mẫu gửi hồ sơ</div>
+              <Button
+                icon={<PlusOutlined />}
+                disabled={workflowFormFields.length >= 40}
+                onClick={() => setWorkflowFormFields((fields) => {
+                  let suffix = 1;
+                  while (fields.some((field) => field.fieldName === `custom_field_${suffix}`)) suffix++;
+                  return [...fields, { fieldName: `custom_field_${suffix}`, label: 'Trường mới', type: 'Văn bản', required: false }];
+                })}
+              >
+                Thêm trường
+              </Button>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {workflowFormFields.map((field, index) => (
+                <div key={`${index}-${field.fieldName}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'center' }}>
+                  <Input
+                    aria-label={`Mã trường ${index + 1}`}
+                    value={field.fieldName}
+                    disabled={['title', 'content', 'attachments'].includes(field.fieldName)}
+                    onChange={(event) => setWorkflowFormFields((fields) => fields.map((item, itemIndex) => itemIndex === index ? { ...item, fieldName: event.target.value } : item))}
+                    placeholder="ma_truong"
+                  />
+                  <Input
+                    aria-label={`Tên trường ${index + 1}`}
+                    value={field.label}
+                    onChange={(event) => setWorkflowFormFields((fields) => fields.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
+                    placeholder="Tên hiển thị"
+                  />
+                  <Select
+                    aria-label={`Kiểu trường ${index + 1}`}
+                    value={field.type}
+                    disabled={['title', 'content', 'attachments'].includes(field.fieldName)}
+                    onChange={(value) => setWorkflowFormFields((fields) => fields.map((item, itemIndex) => itemIndex === index ? { ...item, type: value } : item))}
+                    options={[
+                      { label: 'Văn bản', value: 'Văn bản' },
+                      { label: 'Văn bản dài', value: 'Văn bản dài' },
+                      { label: 'Số', value: 'Số' },
+                      { label: 'Ngày', value: 'Ngày' },
+                      ...(field.fieldName === 'attachments' ? [{ label: 'Tệp PDF', value: 'Tệp PDF' }] : []),
+                    ]}
+                  />
+                  <Select
+                    aria-label={`Bắt buộc ${index + 1}`}
+                    value={field.required ? 'required' : 'optional'}
+                    disabled={['title', 'content'].includes(field.fieldName)}
+                    onChange={(value) => setWorkflowFormFields((fields) => fields.map((item, itemIndex) => itemIndex === index ? { ...item, required: value === 'required' } : item))}
+                    options={[{ label: 'Bắt buộc', value: 'required' }, { label: 'Tùy chọn', value: 'optional' }]}
+                  />
+                  <Button
+                    aria-label={`Xóa trường ${field.label}`}
+                    icon={<DeleteOutlined />}
+                    disabled={['title', 'content', 'attachments'].includes(field.fieldName)}
+                    onClick={() => setWorkflowFormFields((fields) => fields.filter((_, itemIndex) => itemIndex !== index))}
+                  />
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 8 }}>
+              Các trường này sẽ xuất hiện trong biểu mẫu gửi và được kiểm tra khi lưu hồ sơ.
+            </div>
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Kích hoạt quy trình
             </Button>
           </div>
@@ -552,6 +717,7 @@ export const WorkflowsModule: React.FC = () => {
                         <div style={{ fontSize: 11.5, color: '#64748B' }}>
                           Thẩm định mặc định: <strong>{step.defaultApprover}</strong>
                         </div>
+                        <div style={{ fontSize: 11, color: '#64748B' }}>{step.canReject ? 'Được từ chối hoặc yêu cầu bổ sung' : 'Chỉ được phê duyệt'}</div>
                       </div>
                     </div>
 
@@ -599,17 +765,16 @@ export const WorkflowsModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất sơ đồ quy trình ${detailItem.workflowCode} (BPMN PDF)`)}
+                onClick={() => downloadFile(`${detailItem.workflowCode}_So_do_quy_trinh.pdf`, generateValidPdfBlob('SƠ ĐỒ QUY TRÌNH', detailItem.workflowName, detailItem.approvalFlow.map((step) => `Cấp ${step.level}: ${step.roleName} - ${step.defaultApprover}; SLA ${step.slaHours} giờ`)))}
                 style={{ flex: 1 }}
               >
-                In Sơ Đồ BPMN (PDF)
+                Tải sơ đồ quy trình (PDF)
               </Button>
               <Button
                 type="primary"
                 icon={<SendOutlined />}
                 onClick={() => {
-                  message.success(`Đang mở form khởi tạo theo mẫu: ${detailItem.workflowName}`);
-                  navigate('/admin/workflows/requests');
+                  navigate('/admin/workflows/requests', { state: { workflowCode: detailItem.workflowCode } });
                 }}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >

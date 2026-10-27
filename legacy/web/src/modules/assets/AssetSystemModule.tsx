@@ -27,6 +27,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Tooltip } from '../../custom-ui';
 import { useLocation } from 'react-router-dom';
+import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export interface SystemConfigItem {
   key: string;
@@ -41,6 +43,7 @@ export interface SystemConfigItem {
   prefixPattern: string; // Pattern sinh mã: TS-SRV-{YYYY}-{####}
   depreciationMonthsDefault: number;
   responsiblePerson: string;
+  responsiblePersonId?: string;
   status: 'Đang áp dụng' | 'Tạm ngưng';
   notes: string;
 }
@@ -59,15 +62,28 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
   else if (currentPath.includes('/suppliers')) initialTab = 'Nhà cung cấp';
 
   const [data, setData] = useState<SystemConfigItem[]>(INITIAL_CONFIGS);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const list = dataService.getGenericData('asset_systems');
     setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    void Promise.all([dataService.refreshGenericData('asset_systems'), employeesApi.getAll()])
+      .then(([records, employeeResponse]) => {
+        if (!mounted) return;
+        setData(Array.isArray(records) ? records : []);
+        setEmployees((employeeResponse.data.data || []).filter((employee) => employee.isActive && employee.status !== 'Đã nghỉ việc'));
+      })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được cấu hình tài sản hoặc nhân viên.'); })
+      .finally(() => { if (mounted) setLoading(false); });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('asset_systems');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -84,51 +100,73 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
   const activeCount = data.filter((d) => d.status === 'Đang áp dụng').length;
   const quotaCount = data.filter((d) => d.category === 'Định mức cấp phát chức danh').length;
   const locationCount = data.filter((d) => d.category === 'Vị trí & Tủ Rack').length;
+  const codeRuleCount = data.filter((d) => d.category === 'Quy tắc sinh mã tự động').length;
 
   const handleOpenCreate = () => {
     form.resetFields();
     form.setFieldsValue({
-      code: `SYS-CFG-0${data.length + 1}`,
+      code: `AS-CFG-${globalThis.crypto?.randomUUID?.().slice(0, 8).toUpperCase() || Math.random().toString(36).slice(2, 10).toUpperCase()}`,
       category: 'Vị trí & Tủ Rack',
-      scope: 'Trụ sở chính Keangnam',
-      allocatedRole: 'Toàn bộ CBNV',
-      budgetLimit: 50000000,
-      depreciationMonthsDefault: 36,
-      prefixPattern: 'TS-EQUIP-{YYYY}-{####}',
-      responsiblePerson: 'Trần Tuấn Anh (CTO)',
     });
     setModalOpen(true);
   };
 
-  const handleCreate = (values: any) => {
-    const newItem: SystemConfigItem = {
-      ...values,
-      key: String(Date.now()),
-      budgetLimit: Number(values.budgetLimit) || 0,
-      depreciationMonthsDefault: Number(values.depreciationMonthsDefault) || 36,
-      status: 'Đang áp dụng',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('asset_systems', nextItems);
-    message.success(`Đã thêm thiết lập cấu hình mới: ${values.code} (${values.name})`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    if (data.some((item) => item.code.trim().toLocaleLowerCase() === String(values.code || '').trim().toLocaleLowerCase())) {
+      message.error('Mã cấu hình đã tồn tại.');
+      return;
+    }
+    const budgetLimit = Number(values.budgetLimit ?? 0);
+    const depreciationMonthsDefault = Number(values.depreciationMonthsDefault ?? 0);
+    if (!Number.isSafeInteger(budgetLimit) || budgetLimit < 0 || !Number.isSafeInteger(depreciationMonthsDefault) || depreciationMonthsDefault < 0 || depreciationMonthsDefault > 1200) {
+      message.error('Hạn mức phải là số nguyên không âm và thời gian khấu hao từ 0 đến 1.200 tháng.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const newItem = await dataService.createGenericRecord('asset_systems', {
+        ...values,
+        key: `asset-config-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+        code: String(values.code || '').trim(),
+        name: String(values.name || '').trim(),
+        details: String(values.details || '').trim(),
+        budgetLimit,
+        depreciationMonthsDefault,
+      }) as SystemConfigItem;
+      setData((previous) => [newItem, ...previous]);
+      message.success(`Đã lưu thiết lập ${newItem.code} lên máy chủ.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được thiết lập cấu hình.');
+    } finally { setSaving(false); }
   };
 
-  const handleToggleStatus = (record: SystemConfigItem) => {
+  const handleToggleStatus = async (record: SystemConfigItem) => {
+    if (saving) return;
     const nextSt = record.status === 'Đang áp dụng' ? 'Tạm ngưng' : 'Đang áp dụng';
-    setData((prev) => prev.map((d) => (d.key === record.key ? { ...d, status: nextSt } : d)));
-    message.info(`Đã đổi trạng thái ${record.code} sang "${nextSt}"`);
-    if (detailItem && detailItem.key === record.key) {
-      setDetailItem({ ...detailItem, status: nextSt });
-    }
+    setSaving(true);
+    try {
+      const saved = await dataService.updateGenericRecord('asset_systems', { key: record.key, status: nextSt }) as SystemConfigItem;
+      setData((previous) => previous.map((item) => item.key === saved.key ? saved : item));
+      setDetailItem((previous) => previous?.key === saved.key ? saved : previous);
+      message.success(`Đã lưu trạng thái ${saved.code}: ${saved.status}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu trạng thái cấu hình.');
+    } finally { setSaving(false); }
   };
 
   const handleTestGenerateCode = (pattern: string) => {
     const year = new Date().getFullYear();
-    const randomSeq = String(Date.now()).slice(-4);
+    if (!pattern.includes('{YYYY}') || !pattern.includes('{####}')) {
+      message.error('Quy tắc phải có {YYYY} và {####}.');
+      return;
+    }
+    const randomSeq = String(Math.floor(Math.random() * 10_000)).padStart(4, '0');
     const result = pattern.replace('{YYYY}', String(year)).replace('{####}', randomSeq);
     setTestGeneratedCode(result);
-    message.success(`Đã sinh mã thử nghiệm: ${result}`);
+    message.info(`Mã xem trước: ${result}. Mã này chưa được đặt cho tài sản.`);
   };
 
   const filteredData = data.filter((item) => {
@@ -145,16 +183,36 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
     return matchSearch && matchTab;
   });
 
+  const exportConfigs = () => downloadFile('Danh_muc_cau_hinh_tai_san.xlsx', generateValidXlsxBlob([
+    ['Mã cấu hình', 'Tên', 'Phân loại', 'Nội dung', 'Phạm vi', 'Đối tượng', 'Gói tiêu chuẩn', 'Hạn mức', 'Khấu hao mặc định (tháng)', 'Quy tắc sinh mã', 'Người phụ trách', 'Trạng thái'],
+    ...filteredData.map((item) => [item.code, item.name, item.category, item.details, item.scope, item.allocatedRole, item.standardPackage, item.budgetLimit, item.depreciationMonthsDefault, item.prefixPattern, item.responsiblePerson, item.status]),
+  ]));
+
+  const printConfig = (item: SystemConfigItem) => downloadFile(`${item.code.replace(/[^a-z0-9_-]/gi, '_')}_Quy_chuan_tai_san.pdf`, generateValidPdfBlob('QUY CHUẨN CẤU HÌNH TÀI SẢN', `${item.code} | ${item.name}`, [
+    `Phân loại: ${item.category}`,
+    `Phạm vi: ${item.scope}`,
+    `Đối tượng: ${item.allocatedRole}`,
+    `Trạng thái: ${item.status}`,
+    `Gói tiêu chuẩn: ${item.standardPackage || 'Chưa ghi nhận'}`,
+    `Hạn mức: ${Number(item.budgetLimit || 0).toLocaleString('vi-VN')} VNĐ`,
+    `Khấu hao mặc định: ${Number(item.depreciationMonthsDefault || 0)} tháng`,
+    `Quy tắc sinh mã: ${item.prefixPattern || 'Chưa cấu hình'}`,
+    `Người phụ trách: ${item.responsiblePerson}`,
+    `Nội dung: ${item.details}`,
+    ...(item.notes ? [`Ghi chú: ${item.notes}`] : []),
+    'Quy tắc mã và khấu hao áp dụng khi khớp cấu hình đang hoạt động. Định mức, vị trí và nhà cung cấp chưa được nối vào quy trình tạo tài sản.',
+  ]));
+
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       {/* KPI Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Vị trí lưu kho &amp; Tủ Rack IDC</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy chuẩn vị trí và tủ rack</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-            {locationCount} địa điểm &amp; tủ
+            {locationCount} thiết lập
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Keangnam, IDC Duy Tân &amp; Chi nhánh</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Theo bản ghi đã lưu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
@@ -162,15 +220,13 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {quotaCount} gói tiêu chuẩn
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Senior Dev, C-Level, PM, Helpdesk...</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Theo danh mục thiết lập</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy tắc sinh mã &amp; Mẫu biểu TT200</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            100% tự động hóa
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Mẫu 01-VT đến 06-VT &amp; Mẫu 01-05 TSCĐ</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy tắc sinh mã đã lưu</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>{codeRuleCount} quy tắc</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Có thể tạo mã xem trước trong hồ sơ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
@@ -178,7 +234,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
           <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {activeCount}/{totalConfigs} quy chuẩn
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Áp dụng đồng bộ toàn bộ các module</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Trạng thái theo bản ghi cấu hình</div>
         </div>
       </div>
 
@@ -228,7 +284,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục quy chuẩn cấu hình hệ thống')}>
+          <Button icon={<DownloadOutlined />} disabled={!filteredData.length} onClick={exportConfigs}>
             Xuất Excel
           </Button>
           <Button
@@ -245,6 +301,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
       {/* Main Table */}
       <div className="transparent-table-card">
         <KTable
+          loading={loading}
           dataSource={filteredData}
           columns={[
             {
@@ -335,8 +392,9 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
                   <Tooltip title={r.status === 'Đang áp dụng' ? 'Tạm ngưng áp dụng' : 'Kích hoạt áp dụng'}>
                     <Button
                       size="small"
+                      disabled={saving}
                       icon={r.status === 'Đang áp dụng' ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-                      onClick={() => handleToggleStatus(r)}
+                      onClick={() => void handleToggleStatus(r)}
                       style={{ color: r.status === 'Đang áp dụng' ? '#D97706' : '#009688' }}
                     />
                   </Tooltip>
@@ -408,13 +466,13 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
             </Form.Item>
           </div>
 
-          <Form.Item name="responsiblePerson" label="Người phụ trách kiểm soát / Ban hành" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Lê Hoàng Yến" />
+          <Form.Item name="responsiblePersonId" label="Người phụ trách kiểm soát / Ban hành" rules={[{ required: true, message: 'Chọn nhân viên đang hoạt động.' }]}>
+            <Select showSearch placeholder="Chọn nhân viên" options={employees.map((employee) => ({ value: employee.id, label: `${employee.name} · ${employee.employeeCode || employee.code || employee.id}` }))} />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu thiết lập quy chuẩn
             </Button>
           </div>
@@ -494,7 +552,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
                       <span style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', background: '#FFFFFF', padding: '4px 10px', borderRadius: 4, border: '1px solid #CBD5E1' }}>
                         {testGeneratedCode}
                       </span>
-                      <Tag color="success">Hợp lệ 100%</Tag>
+                      <Tag color="blue">Mã xem trước</Tag>
                     </div>
                   )}
                 </div>
@@ -505,7 +563,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất văn bản quy chuẩn ${detailItem.code} (PDF)`)}
+                onClick={() => printConfig(detailItem)}
                 style={{ flex: 1 }}
               >
                 In quy chuẩn (PDF)
@@ -513,7 +571,9 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
               <Button
                 type="primary"
                 icon={detailItem.status === 'Đang áp dụng' ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-                onClick={() => handleToggleStatus(detailItem)}
+                disabled={saving}
+                loading={saving}
+                onClick={() => void handleToggleStatus(detailItem)}
                 style={{ backgroundColor: detailItem.status === 'Đang áp dụng' ? '#D97706' : '#009688', borderColor: detailItem.status === 'Đang áp dụng' ? '#D97706' : '#009688', flex: 1 }}
               >
                 {detailItem.status === 'Đang áp dụng' ? 'Tạm ngưng quy chuẩn' : 'Kích hoạt quy chuẩn'}

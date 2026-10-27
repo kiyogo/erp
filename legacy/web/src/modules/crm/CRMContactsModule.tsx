@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ApartmentOutlined,
   BuildOutlined,
+  EditOutlined,
   EyeOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -12,6 +13,9 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
 import { CrmContact, CrmContactType, crmContactsApi } from '../../api/endpoints';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { useNavigate } from 'react-router-dom';
+import { crmContactExportRows } from './crmContactExports';
 
 type ContactFilter = CrmContactType | 'all';
 
@@ -30,13 +34,16 @@ const statusOptions = [
 ];
 
 export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = 'all' }) => {
+  const navigate = useNavigate();
   const [data, setData] = useState<CrmContact[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<ContactFilter>(type);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState<CrmContact | null>(null);
+  const [editingContact, setEditingContact] = useState<CrmContact | null>(null);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -81,12 +88,12 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
   const activeCount = visibleData.filter((item) => !item.status.includes('Tạm')).length;
   const pageTitle = type === 'all' ? 'Khách hàng & đối tác' : typeMeta[type].title;
 
-  const handleCreate = async (values: any) => {
+  const handleSave = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
     try {
-      await crmContactsApi.create({
-        code: values.code,
+      const fields = {
         name: values.name,
-        type: values.type,
         taxCode: values.taxCode || '',
         industry: values.industry || '',
         contactPerson: values.contactPerson || '',
@@ -100,16 +107,35 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
         tier: values.tier || 'Tiêu chuẩn',
         accountManager: values.accountManager || '',
         status: values.status || 'Đang hoạt động',
-      });
-      const createdTypeLabel = typeMeta[values.type as CrmContactType]?.label.toLowerCase() || 'đối tác';
-      message.success(`Đã lưu ${createdTypeLabel} vào dữ liệu hệ thống.`);
+      };
+      if (editingContact) {
+        const response = await crmContactsApi.update(editingContact.key, fields);
+        setSelectedContact(response.data.contact);
+        message.success('Đã cập nhật hồ sơ đối tác.');
+      } else {
+        await crmContactsApi.create({ ...fields, type: values.type });
+        const createdTypeLabel = typeMeta[values.type as CrmContactType]?.label.toLowerCase() || 'đối tác';
+        message.success(`Đã lưu ${createdTypeLabel} vào dữ liệu hệ thống.`);
+      }
       setModalOpen(false);
+      setEditingContact(null);
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể lưu dữ liệu đối tác.');
+      message.error(error?.response?.data?.message || 'Không thể lưu hồ sơ đối tác.');
+    } finally {
+      setSaving(false);
     }
   };
+
+  const openEdit = (contact: CrmContact) => {
+    setEditingContact(contact);
+    form.setFieldsValue({ ...contact });
+    setDrawerOpen(false);
+    setModalOpen(true);
+  };
+
+  const exportContacts = () => downloadFile('Danh_ba_khach_hang_doi_tac.xlsx', generateValidXlsxBlob(crmContactExportRows(visibleData)));
 
   const columns = [
     {
@@ -212,11 +238,12 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
           />
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button onClick={() => message.warning('Chưa có dịch vụ xuất Excel thật cho danh sách đối tác.')}>Xuất Excel</Button>
+          <Button disabled={!visibleData.length} onClick={exportContacts}>Xuất Excel</Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              setEditingContact(null);
               form.resetFields();
               form.setFieldsValue({ type: type === 'all' ? 'customer' : type, status: 'Đang hoạt động', debtBalance: 0, totalValue: 0, creditLimit: 0 });
               setModalOpen(true);
@@ -232,14 +259,12 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
         <KTable dataSource={visibleData} columns={columns} loading={loading} pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có dữ liệu đối tác.' }} />
       </div>
 
-      <Modal title="Thêm đối tác" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={640}>
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
+      <Modal title={editingContact ? 'Cập nhật đối tác' : 'Thêm đối tác'} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingContact(null); }} footer={null} width={640}>
+        <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã đối tác" rules={[{ required: true, whitespace: true }]}>
-              <Input placeholder="Ví dụ: KH-001, NCC-001, DL-001" />
-            </Form.Item>
+            {editingContact && <Form.Item label="Mã đối tác"><Input value={editingContact.code} disabled /></Form.Item>}
             <Form.Item name="type" label="Loại đối tác" rules={[{ required: true }]}>
-              <Select disabled={type !== 'all'} options={[{ label: 'Khách hàng', value: 'customer' }, { label: 'Nhà cung cấp', value: 'supplier' }, { label: 'Đối tác phân phối', value: 'partner' }]} />
+              <Select disabled={type !== 'all' || !!editingContact} options={[{ label: 'Khách hàng', value: 'customer' }, { label: 'Nhà cung cấp', value: 'supplier' }, { label: 'Đối tác phân phối', value: 'partner' }]} />
             </Form.Item>
           </div>
           <Form.Item name="name" label="Tên tổ chức" rules={[{ required: true, whitespace: true }]}>
@@ -293,9 +318,9 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
             <Input />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lưu đối tác
+            <Button onClick={() => { setModalOpen(false); setEditingContact(null); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingContact ? 'Lưu thay đổi' : 'Lưu đối tác'}
             </Button>
           </div>
         </Form>
@@ -322,8 +347,11 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
               <div><strong>Hạn mức:</strong> {formatMoney(selectedContact.creditLimit)}</div>
               <div><strong>Ngân hàng:</strong> {selectedContact.bankAccount || 'Chưa nhập'}</div>
             </div>
-            <Button icon={<BuildOutlined />} onClick={() => message.warning('Chưa có luồng tạo hợp đồng/tài liệu thật từ hồ sơ đối tác.')}>
-              Tạo nghiệp vụ liên quan
+            <Button icon={<EditOutlined />} onClick={() => openEdit(selectedContact)}>
+              Chỉnh sửa hồ sơ
+            </Button>
+            <Button icon={<BuildOutlined />} onClick={() => navigate('/admin/documents/contracts', { state: { crmContactDraft: selectedContact } })}>
+              Tạo hợp đồng đối tác
             </Button>
           </div>
         )}

@@ -1,5 +1,8 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
+import { crmContactsApi, type CrmContact } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { deriveSupplierScore, supplierEvaluationExportRows, supplierEvaluationMetrics } from './supplierEvaluationRules';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -8,7 +11,6 @@ import {
   ShopOutlined,
   CheckCircleOutlined,
   PrinterOutlined,
-  AuditOutlined,
   EyeOutlined,
   SafetyCertificateOutlined,
   WarningOutlined,
@@ -17,11 +19,12 @@ import {
   CloseCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Progress, Alert } from '../../custom-ui';
 
 export interface EnterpriseSupplierEval {
   key: string;
   evalCode: string;
+  supplierId: string;
   supplierName: string;
   category: string;
   qualityScore: number; // Max 40
@@ -32,6 +35,8 @@ export interface EnterpriseSupplierEval {
   tier: 'Hạng A' | 'Hạng B' | 'Hạng C';
   evalPeriod: string;
   evaluator: string;
+  evaluatorId: string;
+  evalDate?: string;
   strengths?: string;
   weaknesses?: string;
   decision?: 'Duy trì đối tác chiến lược' | 'Gia hạn hợp đồng & đàm phán giá' | 'Yêu cầu khắc phục SLA trong 30 ngày' | 'Chấm dứt hợp tác';
@@ -41,15 +46,28 @@ const INITIAL_SUPPLIER_EVALS: EnterpriseSupplierEval[] = [];
 
 export const SupplierEvaluationModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseSupplierEval[]>(INITIAL_SUPPLIER_EVALS);
+  const [suppliers, setSuppliers] = useState<CrmContact[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const list = dataService.getGenericData('crm_supplier_evaluations');
     setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    void Promise.all([dataService.refreshGenericData('crm_supplier_evaluations'), crmContactsApi.getAll('supplier')])
+      .then(([records, response]) => {
+        if (!mounted) return;
+        setData(Array.isArray(records) ? records : []);
+        setSuppliers((response.data.data || []).filter((supplier) => !String(supplier.status).toLocaleLowerCase().includes('tạm')));
+      })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được đánh giá hoặc danh sách nhà cung cấp.'); })
+      .finally(() => { if (mounted) setLoading(false); });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('crm_supplier_evaluations');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -61,37 +79,49 @@ export const SupplierEvaluationModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedEval, setSelectedEval] = useState<EnterpriseSupplierEval | null>(null);
 
-  const tierACount = data.filter((d) => d.tier.startsWith('Hạng A')).length;
-  const tierBCount = data.filter((d) => d.tier.startsWith('Hạng B')).length;
-  const tierCCount = data.filter((d) => d.tier.startsWith('Hạng C')).length;
-  const avgScore = Math.round((data.reduce((sum, item) => sum + item.totalScore, 0) / (data.length || 1)) * 10) / 10;
+  const metrics = supplierEvaluationMetrics(data);
 
-  const handleCreate = (values: any) => {
-    const q = Number(values.qualityScore) || 35;
-    const d = Number(values.deliveryScore) || 25;
-    const p = Number(values.priceScore) || 18;
-    const s = Number(values.serviceScore) || 8;
-    const total = q + d + p + s;
-    let tr: EnterpriseSupplierEval['tier'] = 'Hạng B';
-    if (total >= 90) tr = 'Hạng A';
-    else if (total < 75) tr = 'Hạng C';
-
-    const newEval: EnterpriseSupplierEval = {
-      ...values,
-      key: String(Date.now()),
-      qualityScore: q,
-      deliveryScore: d,
-      priceScore: p,
-      serviceScore: s,
-      totalScore: total,
-      tier: tr,
-      decision: values.decision || (total >= 90 ? 'Duy trì đối tác chiến lược' : 'Gia hạn hợp đồng & đàm phán giá'),
-    };
-    const nextItems = [newEval, ...data]; setData(nextItems); dataService.saveGenericData('crm_supplier_evaluations', nextItems);
-    message.success(`Đã lưu bảng đánh giá nhà cung cấp: ${values.supplierName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    setSaving(true);
+    try {
+      const scores = {
+        qualityScore: Number(values.qualityScore),
+        deliveryScore: Number(values.deliveryScore),
+        priceScore: Number(values.priceScore),
+        serviceScore: Number(values.serviceScore),
+      };
+      const derived = deriveSupplierScore(scores);
+      const saved = await dataService.createGenericRecord('crm_supplier_evaluations', {
+        key: crypto.randomUUID(),
+        evalCode: values.evalCode,
+        supplierId: values.supplierId,
+        evalPeriod: values.evalPeriod,
+        ...scores,
+        ...derived,
+        strengths: values.strengths || '',
+        weaknesses: values.weaknesses || '',
+        decision: values.decision || '',
+      }) as EnterpriseSupplierEval;
+      await dataService.refreshGenericData('crm_supplier_evaluations');
+      message.success(`Đã lưu bảng đánh giá nhà cung cấp: ${saved.supplierName}`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu bảng đánh giá nhà cung cấp.');
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const exportEvaluations = () => downloadFile('Bao_cao_danh_gia_nha_cung_cap.xlsx', generateValidXlsxBlob(supplierEvaluationExportRows(filteredData)));
+  const printEvaluation = (record: EnterpriseSupplierEval) => downloadFile(`${record.evalCode.replace(/[^a-z0-9_-]/gi, '_')}_danh_gia_nha_cung_cap.pdf`, generateValidPdfBlob(
+    'BIEN BAN DANH GIA NANG LUC NHA CUNG CAP', `${record.evalCode} | ${record.supplierName}`,
+    [`Linh vuc: ${record.category}`, `Ky danh gia: ${record.evalPeriod}`, `Ngay danh gia: ${record.evalDate || ''}`,
+      `Chat luong: ${record.qualityScore}/40`, `Tien do: ${record.deliveryScore}/30`, `Gia: ${record.priceScore}/20`, `Dich vu: ${record.serviceScore}/10`,
+      `Tong diem: ${record.totalScore}/100`, `Phan hang: ${record.tier}`, `Nguoi danh gia: ${record.evaluator}`,
+      `Uu diem: ${record.strengths || 'Chua ghi nhan'}`, `Diem can cai thien: ${record.weaknesses || 'Chua ghi nhan'}`,
+      `Ket luan: ${record.decision || 'Chua co ket luan'}`],
+  ));
 
   const filteredData = data.filter((item) => {
     const matchTier =
@@ -202,7 +232,7 @@ export const SupplierEvaluationModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhà cung cấp Hạng A</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {tierACount} đối tác
+            {metrics.tierACount} đối tác
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đạt từ 90 đến 100 điểm đánh giá</div>
         </div>
@@ -210,15 +240,15 @@ export const SupplierEvaluationModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhà cung cấp Hạng B</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            {tierBCount} đối tác
+            {metrics.tierBCount} đối tác
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Đạt từ 75 đến 89 điểm đánh giá</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cần cải thiện / Giám sát SLA</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: tierCCount > 0 ? '#DC2626' : '#64748B', marginTop: 4 }}>
-            {tierCCount} đối tác
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đánh giá hạng C</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: metrics.tierCCount > 0 ? '#DC2626' : '#64748B', marginTop: 4 }}>
+            {metrics.tierCCount} đánh giá
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Dưới 75 điểm</div>
         </div>
@@ -226,9 +256,9 @@ export const SupplierEvaluationModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Điểm bình quân hệ thống NCC</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {avgScore} / 100
+            {metrics.averageScore == null ? '—' : `${Math.round(metrics.averageScore * 10) / 10}`} / 100
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Khung điểm chuẩn ISO 9001:2015</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Điểm trung bình trên {metrics.count} đánh giá</div>
         </div>
       </div>
 
@@ -267,7 +297,7 @@ export const SupplierEvaluationModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo đánh giá NCC ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={exportEvaluations} disabled={loading}>
             Xuất Báo Cáo
           </Button>
 
@@ -276,23 +306,24 @@ export const SupplierEvaluationModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              const today = new Date();
+              const dateCode = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
               form.setFieldsValue({
-                evalCode: `NCC-DG-0${data.length + 1}`,
-                evalPeriod: 'Quý III / 2026',
-                qualityScore: 36,
-                deliveryScore: 28,
-                priceScore: 18,
-                serviceScore: 9,
-                evaluator: 'Trần Tuấn Anh (CTO)',
+                evalCode: `NCC-DG-${dateCode}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
               });
               setModalOpen(true);
             }}
+            disabled={loading || suppliers.length === 0}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Lập bảng đánh giá NCC
           </Button>
         </div>
       </div>
+
+      {!loading && suppliers.length === 0 && (
+        <Alert type="info" showIcon message="Chưa có nhà cung cấp đang hợp tác. Hãy thêm nhà cung cấp trong Danh bạ trước khi lập đánh giá." style={{ marginBottom: 12 }} />
+      )}
 
       {/* Main Table */}
       <div className="transparent-table-card">
@@ -310,19 +341,23 @@ export const SupplierEvaluationModule: React.FC = () => {
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="evalCode" label="Mã đánh giá" rules={[{ required: true }]}>
-              <Input />
+              <Input readOnly />
             </Form.Item>
             <Form.Item name="evalPeriod" label="Kỳ đánh giá" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Quý III / 2026" />
             </Form.Item>
           </div>
 
-          <Form.Item name="supplierName" label="Tên Nhà cung cấp" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Công Ty Cổ Phần FPT Telecom" />
+          <Form.Item name="supplierId" label="Nhà cung cấp" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              placeholder="Chọn nhà cung cấp"
+              options={suppliers.map((supplier) => ({ value: supplier.key, label: `${supplier.code} · ${supplier.name}${supplier.industry ? ` · ${supplier.industry}` : ''}` }))}
+            />
           </Form.Item>
 
-          <Form.Item name="category" label="Lĩnh vực cung ứng" initialValue="Đường truyền &amp; Hạ tầng Cloud">
-            <Input />
+          <Form.Item name="evalPeriod" label="Kỳ đánh giá" rules={[{ required: true }]}>
+            <Input placeholder="Ví dụ: Quý IV / 2026" />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
@@ -340,8 +375,12 @@ export const SupplierEvaluationModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="evaluator" label="Cán bộ đánh giá" rules={[{ required: true }]}>
-            <Input />
+          <Form.Item name="strengths" label="Ưu điểm">
+            <Input.TextArea rows={2} maxLength={2000} showCount />
+          </Form.Item>
+
+          <Form.Item name="weaknesses" label="Điểm cần cải thiện">
+            <Input.TextArea rows={2} maxLength={2000} showCount />
           </Form.Item>
 
           <Form.Item name="decision" label="Kết luận đề xuất của Hội đồng">
@@ -357,7 +396,7 @@ export const SupplierEvaluationModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu đánh giá NCC
             </Button>
           </div>
@@ -436,21 +475,21 @@ export const SupplierEvaluationModule: React.FC = () => {
                 Nhận Xét Của Hội Đồng Đánh Giá:
               </div>
               <div style={{ fontSize: 12.5, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><CheckCircleOutlined style={{ color: '#16A34A' }} /> <span><strong>Ưu điểm nổi bật:</strong> {selectedEval.strengths || 'Tuân thủ hợp đồng và phản hồi nhanh.'}</span></div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><WarningOutlined style={{ color: '#D97706' }} /> <span><strong>Tồn tại cần khắc phục:</strong> {selectedEval.weaknesses || 'Cần rút ngắn thời gian chuẩn bị đơn hàng.'}</span></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><CheckCircleOutlined style={{ color: '#16A34A' }} /> <span><strong>Ưu điểm:</strong> {selectedEval.strengths || 'Chưa ghi nhận'}</span></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><WarningOutlined style={{ color: '#D97706' }} /> <span><strong>Điểm cần cải thiện:</strong> {selectedEval.weaknesses || 'Chưa ghi nhận'}</span></div>
               </div>
             </div>
 
             {/* Final Decision */}
             <div style={{ border: '1px solid #BBF7D0', borderRadius: 8, padding: 14, background: '#F0FDF4' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <SafetyCertificateOutlined /> Kết Luận &amp; Quyết Định Hội Đồng:
+                <SafetyCertificateOutlined /> Kết luận đề xuất:
               </div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#14532D' }}>
-                {selectedEval.decision || 'Duy trì đối tác chiến lược'}
+                {selectedEval.decision || 'Chưa có kết luận'}
               </div>
               <div style={{ fontSize: 12, color: '#166534', marginTop: 4 }}>
-                Cán bộ lập đánh giá: <strong>{selectedEval.evaluator}</strong>
+                Người đánh giá: <strong>{selectedEval.evaluator}</strong>
               </div>
             </div>
 
@@ -458,9 +497,9 @@ export const SupplierEvaluationModule: React.FC = () => {
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               icon={<PrinterOutlined />}
-              onClick={() => message.success(`Đã in biên bản đánh giá nhà cung cấp ${selectedEval.supplierName}`)}
+              onClick={() => printEvaluation(selectedEval)}
             >
-              In Biên Bản Đánh Giá NCC (PDF)
+              Tải biên bản PDF
             </Button>
           </div>
         )}

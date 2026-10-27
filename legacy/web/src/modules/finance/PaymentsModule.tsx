@@ -1,4 +1,3 @@
-import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
 import {
   useLocation } from 'react-router-dom';
@@ -22,48 +21,61 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { financePaymentsApi, type FinancePaymentAccount, type FinancePaymentRecord } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
-export interface EnterprisePaymentItem {
-  key: string;
-  code: string;
-  beneficiary: string;
-  taxCode?: string;
-  bankAccountInfo?: string;
-  category: string;
-  amount: number;
-  paymentMethod: 'Chuyển khoản VCB' | 'Chuyển khoản TCB' | 'Tiền mặt' | 'Thẻ tín dụng DN';
-  creator: string;
-  empCode: string;
-  approver?: string;
-  createdDate: string;
-  status: 'Chờ duyệt' | 'Đã phê duyệt' | 'Đã thanh toán' | 'Từ chối';
-  notes?: string;
-}
+export type EnterprisePaymentItem = FinancePaymentRecord;
 
 const INITIAL_PAYMENTS: EnterprisePaymentItem[] = [];
 
 export const PaymentsModule: React.FC = () => {
+  const { user } = useAuth();
   const location = useLocation();
   const rawPath = location.pathname;
   const p = rawPath.replace(/^\/admin/, '');
 
   const [data, setData] = useState<EnterprisePaymentItem[]>(INITIAL_PAYMENTS);
+  const [sourceAccounts, setSourceAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [actingKey, setActingKey] = useState('');
+  const [rejectingPayment, setRejectingPayment] = useState<EnterprisePaymentItem | null>(null);
+  const [executingPayment, setExecutingPayment] = useState<EnterprisePaymentItem | null>(null);
 
   useEffect(() => {
-    const list = dataService.getGenericData('finance_payments');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('finance_payments');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
-  }, []);
+    let mounted = true;
+    if (!user) {
+      setLoading(false);
+      return () => { mounted = false; };
+    }
+    setLoading(true);
+    Promise.all([
+      financePaymentsApi.getAll(),
+      user?.role === 'ADMIN' ? financePaymentsApi.getAccounts() : Promise.resolve(null),
+    ])
+      .then(([paymentsResponse, accountsResponse]) => {
+        if (!mounted) return;
+        setData(Array.isArray(paymentsResponse.data?.data) ? paymentsResponse.data.data : []);
+        setSourceAccounts(Array.isArray(accountsResponse?.data?.accounts) ? accountsResponse.data.accounts : []);
+      })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được đề nghị thanh toán từ máy chủ.'); })
+      .finally(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
+  }, [user?.id, user?.role]);
 
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<EnterprisePaymentItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [form] = Form.useForm();
+  const [rejectForm] = Form.useForm();
+  const [executeForm] = Form.useForm();
+
+  const refreshPayments = async () => {
+    const response = await financePaymentsApi.getAll();
+    setData(Array.isArray(response.data?.data) ? response.data.data : []);
+  };
 
   let defaultStatusFilter = 'all';
   let pageTitle = 'Quản Lý & Duyệt Chi Thanh Toán Doanh Nghiệp';
@@ -85,61 +97,111 @@ export const PaymentsModule: React.FC = () => {
   const totalApproved = data.filter((d) => d.status === 'Đã phê duyệt' || d.status === 'Đã thanh toán').reduce((sum, item) => sum + item.amount, 0);
   const totalRejected = data.filter((d) => d.status === 'Từ chối').reduce((sum, item) => sum + item.amount, 0);
 
-  const handleCreate = (values: any) => {
-    const newItem: EnterprisePaymentItem = {
-      ...values,
-      key: String(Date.now()),
-      code: `PAY-2026-${String(Date.now()).slice(-4)}`,
-      amount: Number(values.amount) || 0,
-      empCode: values.empCode || 'KY-015',
-      createdDate: new Date().toISOString().substring(0, 10),
-      creator: 'Nguyễn Huy Tùng',
-      status: 'Chờ duyệt',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_payments', nextItems);
-    message.success(`Đã lập thành công phiếu đề nghị thanh toán: ${newItem.code}`);
-    setModalOpen(false);
-    form.resetFields();
-  };
-
-  const handleApprove = (item: EnterprisePaymentItem) => {
-    setData((prev) =>
-      prev.map((d) =>
-        d.key === item.key
-          ? { ...d, status: 'Đã phê duyệt', approver: 'Phạm Thu Hương (CFO)' }
-          : d
-      )
-    );
-    message.success(`Đã phê duyệt thanh toán phiếu ${item.code}`);
-    if (selectedPayment && selectedPayment.key === item.key) {
-      setSelectedPayment({ ...selectedPayment, status: 'Đã phê duyệt', approver: 'Phạm Thu Hương (CFO)' });
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const response = await financePaymentsApi.create({
+        beneficiary: String(values.beneficiary || '').trim(),
+        taxCode: String(values.taxCode || '').trim(),
+        bankAccountInfo: String(values.bankAccountInfo || '').trim(),
+        category: String(values.category || '').trim(),
+        amount: Number(values.amount),
+        paymentMethod: values.paymentMethod,
+        notes: String(values.notes || '').trim(),
+      });
+      const newItem = response.data.payment;
+      setData((previous) => [newItem, ...previous]);
+      message.success(`Đã lưu đề nghị thanh toán ${newItem.code} trên máy chủ.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được đề nghị thanh toán.');
+    } finally {
+      setSaving(false);
     }
   };
+
+  const applyDecision = async (item: EnterprisePaymentItem, operation: () => Promise<{ data: { payment: EnterprisePaymentItem } }>, successText: string) => {
+    if (actingKey) return false;
+    setActingKey(item.key);
+    try {
+      const response = await operation();
+      const saved = response.data.payment;
+      setData((previous) => previous.map((record) => record.key === item.key ? saved : record));
+      setSelectedPayment((previous) => previous?.key === item.key ? saved : previous);
+      message.success(successText);
+      return true;
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được quyết định thanh toán.');
+      void refreshPayments().catch(() => {});
+      return false;
+    } finally {
+      setActingKey('');
+    }
+  };
+
+  const handleApprove = (item: EnterprisePaymentItem) => Modal.confirm({
+    title: `Phê duyệt đề nghị ${item.code}?`,
+    content: 'Quyết định được lưu cùng tài khoản và thời điểm thực hiện.',
+    okText: 'Phê duyệt', cancelText: 'Hủy',
+    onOk: () => applyDecision(item, () => financePaymentsApi.approve(item.key), `Đã lưu phê duyệt ${item.code}.`),
+  });
 
   const handleReject = (item: EnterprisePaymentItem) => {
-    setData((prev) =>
-      prev.map((d) =>
-        d.key === item.key
-          ? { ...d, status: 'Từ chối', notes: 'Từ chối duyệt chi do chưa đủ chứng từ hợp lệ' }
-          : d
-      )
-    );
-    message.warning(`Đã từ chối phiếu thanh toán ${item.code}`);
-    if (selectedPayment && selectedPayment.key === item.key) {
-      setSelectedPayment({ ...selectedPayment, status: 'Từ chối', notes: 'Từ chối duyệt chi do chưa đủ chứng từ hợp lệ' });
-    }
+    rejectForm.resetFields();
+    setRejectingPayment(item);
   };
 
   const handleExecutePayment = (item: EnterprisePaymentItem) => {
-    setData((prev) =>
-      prev.map((d) =>
-        d.key === item.key ? { ...d, status: 'Đã thanh toán' } : d
-      )
-    );
-    message.success(`Đã ghi nhận thanh toán thành công cho phiếu ${item.code}`);
-    if (selectedPayment && selectedPayment.key === item.key) {
-      setSelectedPayment({ ...selectedPayment, status: 'Đã thanh toán' });
-    }
+    executeForm.resetFields();
+    setExecutingPayment(item);
+  };
+
+  const submitRejection = async (values: any) => {
+    if (!rejectingPayment) return;
+    const succeeded = await applyDecision(rejectingPayment, () => financePaymentsApi.reject(rejectingPayment.key, String(values.reason || '').trim()), `Đã lưu quyết định từ chối ${rejectingPayment.code}.`);
+    if (succeeded) { setRejectingPayment(null); rejectForm.resetFields(); }
+  };
+
+  const submitPaymentRecord = async (values: any) => {
+    if (!executingPayment) return;
+    const succeeded = await applyDecision(executingPayment, () => financePaymentsApi.recordPayment(executingPayment.key, String(values.sourceAccountId || ''), String(values.settlementReference || '').trim()), `Đã ghi sổ chi và lưu chứng từ cho ${executingPayment.code}.`);
+    if (succeeded) { setExecutingPayment(null); executeForm.resetFields(); }
+  };
+
+  const executionAccounts = executingPayment
+    ? sourceAccounts.filter((account) => {
+      if (executingPayment.paymentMethod === 'Tiền mặt') return account.source === 'petty';
+      if (account.source !== 'bank') return false;
+      if (executingPayment.paymentMethod === 'Chuyển khoản VCB') return /vietcombank|\bvcb\b/i.test(account.name);
+      if (executingPayment.paymentMethod === 'Chuyển khoản TCB') return /techcombank|\btcb\b/i.test(account.name);
+      return true;
+    })
+    : [];
+
+  const exportPayments = () => {
+    const rows = [
+      ['Mã phiếu', 'Ngày lập', 'Người lập', 'Mã nhân viên', 'Thụ hưởng', 'Mã số thuế', 'Thông tin nhận tiền', 'Nội dung', 'Số tiền', 'Phương thức', 'Trạng thái', 'Người duyệt', 'Lý do từ chối', 'Người ghi nhận chi', 'Ngày ghi nhận chi', 'Tài khoản nguồn', 'Mã giao dịch/chứng từ', 'Mã phiếu chi nội bộ'],
+      ...filteredData.map((item) => [item.code, item.createdDate, item.creator, item.empCode, item.beneficiary, item.taxCode || '', item.bankAccountInfo, item.category, item.amount, item.paymentMethod, item.status, item.approver || '', item.rejectionReason || '', item.paidBy || '', item.paidAt || '', item.sourceAccount || '', item.settlementReference || '', item.financeTransactionId || '']),
+    ];
+    downloadFile('de_nghi_thanh_toan.xlsx', generateValidXlsxBlob(rows));
+    message.success(`Đã xuất ${filteredData.length} đề nghị thanh toán đang hiển thị.`);
+  };
+
+  const printPayment = (item: EnterprisePaymentItem) => {
+    const lines = [
+      `Ma phieu: ${item.code}`, `Ngay lap: ${item.createdDate}`, `Nguoi lap: ${item.creator} - ${item.empCode}`,
+      `Don vi thu huong: ${item.beneficiary}`, `Ma so thue: ${item.taxCode || 'Chua cap nhat'}`,
+      `Thong tin nhan tien: ${item.bankAccountInfo}`, `Noi dung chi: ${item.category}`,
+      `So tien: ${Number(item.amount).toLocaleString('vi-VN')} VND`, `Phuong thuc: ${item.paymentMethod}`,
+      `Trang thai: ${item.status}`, `Nguoi duyet: ${item.approver || 'Chua duyet'}`,
+      `Ly do tu choi: ${item.rejectionReason || ''}`, `Nguoi ghi nhan chi: ${item.paidBy || ''}`,
+      `Tai khoan nguon: ${item.sourceAccount || ''}`, `Ma giao dich/chung tu: ${item.settlementReference || ''}`,
+      `So thu chi noi bo: ${item.financeTransactionId || ''}`,
+      ...(item.history || []).map((event) => `${event.at} | ${event.action} | ${event.actor}${event.reason ? ` | ${event.reason}` : ''}${event.reference ? ` | ${event.reference}` : ''}`),
+    ];
+    downloadFile(`de_nghi_thanh_toan_${item.code}.pdf`, generateValidPdfBlob(`DE NGHI THANH TOAN ${item.code}`, 'Ho so va lich su xu ly noi bo', lines));
   };
 
   const filteredData = data.filter((item) => {
@@ -244,17 +306,17 @@ export const PaymentsModule: React.FC = () => {
           </Button>
           {r.status === 'Chờ duyệt' && (
             <>
-              <Button size="small" type="primary" onClick={() => handleApprove(r)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {user?.role === 'ADMIN' && <Button size="small" type="primary" loading={actingKey === r.key} disabled={Boolean(actingKey)} onClick={() => handleApprove(r)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 Duyệt
-              </Button>
-              <Button size="small" danger onClick={() => handleReject(r)}>
+              </Button>}
+              {user?.role === 'ADMIN' && <Button size="small" danger disabled={Boolean(actingKey)} onClick={() => handleReject(r)}>
                 Từ chối
-              </Button>
+              </Button>}
             </>
           )}
-          {r.status === 'Đã phê duyệt' && (
-            <Button size="small" type="primary" onClick={() => handleExecutePayment(r)} style={{ backgroundColor: '#10B981', borderColor: '#10B981' }}>
-              Chi tiền
+          {r.status === 'Đã phê duyệt' && user?.role === 'ADMIN' && (
+            <Button size="small" type="primary" disabled={Boolean(actingKey)} onClick={() => handleExecutePayment(r)} style={{ backgroundColor: '#10B981', borderColor: '#10B981' }}>
+              Ghi nhận chi
             </Button>
           )}
         </div>
@@ -275,7 +337,7 @@ export const PaymentsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hàng chờ phê duyệt cấp CFO / TGĐ</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hàng chờ phê duyệt quản trị</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {totalPending.toLocaleString('vi-VN')} ₫
           </div>
@@ -285,11 +347,11 @@ export const PaymentsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã duyệt &amp; Giải ngân hoàn tất</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã duyệt hoặc đã ghi nhận chi</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalApproved.toLocaleString('vi-VN')} ₫
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã chuyển khoản / xuất quỹ tiền mặt</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Theo hồ sơ đề nghị hiện có</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -306,9 +368,9 @@ export const PaymentsModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả phiếu chi' },
-            { key: 'Chờ duyệt', label: 'Chờ CFO duyệt', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'Chờ duyệt', label: 'Chờ phê duyệt', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Đã phê duyệt', label: 'Đã duyệt', icon: <InfoCircleOutlined style={{ color: '#3B82F6' }} /> },
-            { key: 'Đã thanh toán', label: 'Đã chi tiền', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
+            { key: 'Đã thanh toán', label: 'Đã ghi nhận chi', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
             { key: 'Từ chối', label: 'Từ chối', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
           ].map((tab) => (
             <Button
@@ -337,7 +399,7 @@ export const PaymentsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách đề nghị thanh toán')}>
+          <Button icon={<DownloadOutlined />} onClick={exportPayments}>
             Xuất Excel
           </Button>
 
@@ -348,7 +410,6 @@ export const PaymentsModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 paymentMethod: 'Chuyển khoản VCB',
-                amount: 25000000,
               });
               setModalOpen(true);
             }}
@@ -361,7 +422,7 @@ export const PaymentsModule: React.FC = () => {
 
       {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+          <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} />
       </div>
 
       {/* Create Modal */}
@@ -412,9 +473,39 @@ export const PaymentsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Trình duyệt thanh toán
             </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal title={`Từ chối đề nghị ${rejectingPayment?.code || ''}`} open={Boolean(rejectingPayment)} onCancel={() => setRejectingPayment(null)} footer={null} width={520}>
+        <Form form={rejectForm} layout="vertical" onFinish={submitRejection}>
+          <Form.Item name="reason" label="Lý do từ chối" rules={[{ required: true, message: 'Nhập lý do từ chối.' }]}>
+            <Input.TextArea rows={4} maxLength={1000} showCount placeholder="Nêu rõ lý do để người đề nghị biết nội dung cần xử lý." />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => setRejectingPayment(null)}>Hủy</Button>
+            <Button danger htmlType="submit" loading={actingKey === rejectingPayment?.key}>Lưu quyết định từ chối</Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal title={`Ghi nhận chi cho đề nghị ${executingPayment?.code || ''}`} open={Boolean(executingPayment)} onCancel={() => setExecutingPayment(null)} footer={null} width={520}>
+        <div style={{ color: '#475569', marginBottom: 14 }}>
+          Chọn tài khoản nguồn, nhập mã giao dịch hoặc phiếu chi sau khi giao dịch hoàn tất. Máy chủ sẽ kiểm tra số dư và ghi phiếu chi vào sổ quỹ nội bộ.
+        </div>
+        <Form form={executeForm} layout="vertical" onFinish={submitPaymentRecord}>
+          <Form.Item name="sourceAccountId" label="Tài khoản nguồn" rules={[{ required: true, message: 'Chọn tài khoản nguồn.' }]}>
+            <Select showSearch placeholder={executionAccounts.length ? 'Chọn tài khoản có đủ số dư' : 'Chưa có tài khoản phù hợp'} options={executionAccounts.map((account) => ({ value: account.key, label: `${account.name} · ${account.balance.toLocaleString('vi-VN')} ₫` }))} />
+          </Form.Item>
+          <Form.Item name="settlementReference" label="Mã giao dịch hoặc chứng từ chi" rules={[{ required: true, message: 'Nhập mã giao dịch hoặc chứng từ chi.' }]}>
+            <Input maxLength={120} placeholder="Mã giao dịch ngân hàng hoặc số phiếu chi" />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => setExecutingPayment(null)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={actingKey === executingPayment?.key} disabled={!executionAccounts.length} style={{ backgroundColor: '#10B981', borderColor: '#10B981' }}>Ghi sổ và xác nhận chi</Button>
           </div>
         </Form>
       </Modal>
@@ -474,29 +565,34 @@ export const PaymentsModule: React.FC = () => {
               </div>
             </div>
 
-            {/* 3-Level Approval */}
+            {/* Approval status and server-recorded history */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AuditOutlined /> Tiến Trình Phê Duyệt 3 Cấp:
+                <AuditOutlined /> Tiến trình xử lý:
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 12 }}>
                 <div style={{ background: '#FFFFFF', padding: 10, borderRadius: 6, border: '1px solid #E2E8F0' }}>
                   <span style={{ color: '#64748B' }}>Người Đề Nghị:</span>
                   <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{selectedPayment.creator}</div>
-                  <div style={{ fontSize: 11, color: '#16A34A', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}><CheckOutlined /> Đã ký điện tử</div>
+                  <div style={{ fontSize: 11, color: '#16A34A', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}><CheckOutlined /> Đã gửi đề nghị lên máy chủ</div>
                 </div>
                 <div style={{ background: '#FFFFFF', padding: 10, borderRadius: 6, border: '1px solid #E2E8F0' }}>
                   <span style={{ color: '#64748B' }}>Thẩm Quyền Phê Duyệt:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{selectedPayment.approver || 'Chờ CFO / TGĐ duyệt'}</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{selectedPayment.approver || 'Chờ quản trị phê duyệt'}</div>
                   <div style={{ fontSize: 11, color: selectedPayment.approver ? '#16A34A' : '#D97706', marginTop: 2 }}>
-                    {selectedPayment.approver ? 'Đã phê duyệt chi' : 'Đang chờ duyệt'}
+                    {selectedPayment.approver ? `Đã xử lý ${selectedPayment.approvedAt || selectedPayment.rejectedAt || ''}` : 'Đang chờ duyệt'}
                   </div>
                 </div>
+              </div>
+              {selectedPayment.rejectionReason && <div style={{ marginTop: 10, color: '#B91C1C' }}>Lý do từ chối: {selectedPayment.rejectionReason}</div>}
+              {selectedPayment.paidAt && <div style={{ marginTop: 10, color: '#334155' }}>Ghi nhận chi bởi {selectedPayment.paidBy} lúc {selectedPayment.paidAt}. Tài khoản nguồn: <strong>{selectedPayment.sourceAccount}</strong>. Mã giao dịch/chứng từ: <strong>{selectedPayment.settlementReference}</strong>. {selectedPayment.ledgerRecorded ? `Phiếu chi nội bộ ${selectedPayment.financeTransactionId} đã ghi sổ.` : ''}</div>}
+              <div style={{ display: 'grid', gap: 5, marginTop: 10, fontSize: 11.5, color: '#475569' }}>
+                {(selectedPayment.history || []).map((event, index) => <div key={`${event.at}-${index}`}>{event.at} · {event.action} · {event.actor}{event.reason ? ` · ${event.reason}` : ''}{event.reference ? ` · ${event.reference}` : ''}</div>)}
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: 10 }}>
-              {selectedPayment.status === 'Chờ duyệt' && (
+              {selectedPayment.status === 'Chờ duyệt' && user?.role === 'ADMIN' && (
                 <>
                   <Button
                     type="primary"
@@ -510,18 +606,18 @@ export const PaymentsModule: React.FC = () => {
                   </Button>
                 </>
               )}
-              {selectedPayment.status === 'Đã phê duyệt' && (
+              {selectedPayment.status === 'Đã phê duyệt' && user?.role === 'ADMIN' && (
                 <Button
                   type="primary"
                   style={{ flex: 1, backgroundColor: '#10B981', borderColor: '#10B981' }}
                   onClick={() => handleExecutePayment(selectedPayment)}
                 >
-                  Xác Nhận Đã Chi Tiền
+                  Ghi nhận chứng từ chi
                 </Button>
               )}
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in Giấy đề nghị thanh toán ${selectedPayment.code}`)}
+                onClick={() => printPayment(selectedPayment)}
               >
                 In Giấy Đề Nghị (A4)
               </Button>

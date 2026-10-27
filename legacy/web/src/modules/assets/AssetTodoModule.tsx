@@ -1,5 +1,8 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
+import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { deriveTaskSlaStatus, todoChecklistComplete, validateTodoCompletion } from './assetTodoRules';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -36,10 +39,11 @@ export interface AssetTodoItem {
   taskCode: string;
   taskTitle: string;
   taskCategory: 'Cấp phát / Bàn giao' | 'Thu hồi tài sản' | 'Bảo dưỡng / Kiểm định' | 'Sửa chữa & Thay thế' | 'Kiểm kê đối soát' | 'Thanh lý & Tiêu hủy' | 'Đề xuất mua sắm';
-  priority: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Trung bình (P3)' | 'Thấp';
+  priority: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Trung bình (P3)' | 'Thấp (P4)' | 'Thấp';
   slaStatus: 'Trong hạn SLA' | 'Sắp chạm hạn SLA' | 'Trễ hạn SLA';
   deadline: string;
   assignedStaff: string;
+  assignedStaffId?: string;
   requester: string;
   relatedAssetCode: string;
   location: string;
@@ -52,18 +56,35 @@ export interface AssetTodoItem {
 }
 
 const INITIAL_TODOS: AssetTodoItem[] = [];
+const checklistComplete = (item: AssetTodoItem) => todoChecklistComplete(item.checklist);
 
 export const AssetTodoModule: React.FC = () => {
   const [data, setData] = useState<AssetTodoItem[]>(INITIAL_TODOS);
+  const [loading, setLoading] = useState(false);
+  const [staffOptions, setStaffOptions] = useState<EnterpriseEmployee[]>([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [actingKey, setActingKey] = useState('');
 
   useEffect(() => {
     const list = dataService.getGenericData('asset_todos');
     setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    setStaffLoading(true);
+    void Promise.all([dataService.refreshGenericData('asset_todos'), employeesApi.getAll()])
+      .then(([records, employees]) => {
+        if (!mounted) return;
+        setData(Array.isArray(records) ? records : []);
+        setStaffOptions((employees.data.data || []).filter((employee) => employee.isActive && employee.status !== 'Đã nghỉ việc'));
+      })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được danh sách nhiệm vụ hoặc nhân viên.'); })
+      .finally(() => { if (mounted) { setLoading(false); setStaffLoading(false); } });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('asset_todos');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -78,116 +99,115 @@ export const AssetTodoModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [completeModalOpen, setCompleteModalOpen] = useState(false);
   const [completeTarget, setCompleteTarget] = useState<AssetTodoItem | null>(null);
-  const [actualHoursInput, setActualHoursInput] = useState<number>(2);
-  const [resolutionInput, setResolutionInput] = useState<string>('Đã hoàn thành nhiệm vụ theo đúng quy trình và tiêu chuẩn SLA.');
+  const [actualHoursInput, setActualHoursInput] = useState<number>(0);
+  const [resolutionInput, setResolutionInput] = useState<string>('');
 
   const [form] = Form.useForm();
 
+  const currentData = data.map((item) => item.status === 'Đã hoàn thành' ? item : { ...item, slaStatus: deriveTaskSlaStatus(item.deadline) });
+
   // Metrics
-  const pendingCount = data.filter((d) => d.status === 'Chờ xử lý').length;
-  const inProgressCount = data.filter((d) => d.status === 'Đang thực hiện').length;
-  const urgentCount = data.filter((d) => d.priority.includes('P1') && d.status !== 'Đã hoàn thành').length;
-  const completedCount = data.filter((d) => d.status === 'Đã hoàn thành').length;
+  const pendingCount = currentData.filter((d) => d.status === 'Chờ xử lý').length;
+  const inProgressCount = currentData.filter((d) => d.status === 'Đang thực hiện').length;
+  const urgentCount = currentData.filter((d) => d.status !== 'Đã hoàn thành' && (d.priority.includes('P1') || d.slaStatus !== 'Trong hạn SLA')).length;
+  const completedTasks = currentData.filter((d) => d.status === 'Đã hoàn thành');
+  const completedCount = completedTasks.length;
+  const onTimeCount = completedTasks.filter((item) => item.slaStatus !== 'Trễ hạn SLA').length;
+  const slaCompliance = completedCount ? Math.round((onTimeCount / completedCount) * 100) : null;
+  const averageResolutionHours = completedCount ? completedTasks.reduce((sum, item) => sum + (Number(item.actualHours) || 0), 0) / completedCount : null;
 
   const handleOpenCreate = () => {
     form.resetFields();
     form.setFieldsValue({
-      taskCode: `CV-TS-0${data.length + 1}`,
-      taskCategory: 'Cấp phát / Bàn giao',
-      priority: 'Cao (P2)',
-      deadline: new Date(Date.now() + 86400000).toISOString().substring(0, 16).replace('T', ' '),
-      assignedStaff: 'Cán bộ phụ trách',
-      requester: 'Phòng Hành Chính Nhân Sự',
-      location: 'Keangnam Landmark 72 - Tầng 14',
-      estimatedHours: 2,
+      taskCode: `CV-TS-${globalThis.crypto?.randomUUID?.().slice(0, 8).toUpperCase() || Math.random().toString(36).slice(2, 10).toUpperCase()}`,
     });
     setModalOpen(true);
   };
 
-  const handleCreate = (values: any) => {
-    const newItem: AssetTodoItem = {
-      ...values,
-      key: String(Date.now()),
-      estimatedHours: Number(values.estimatedHours) || 2,
-      actualHours: 0,
-      slaStatus: values.priority.includes('P1') ? 'Sắp chạm hạn SLA' : 'Trong hạn SLA',
-      status: 'Chờ xử lý',
-      checklist: [
-        { item: 'Tiếp nhận thông tin và kiểm tra hiện trạng thiết bị', done: false },
-        { item: 'Thực hiện thao tác kỹ thuật theo quy trình chuẩn', done: false },
-        { item: 'Lập biên bản / Hồ sơ bàn giao xác nhận', done: false },
-      ],
-    };
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const estimatedHours = Number(values.estimatedHours);
+      if (!Number.isFinite(estimatedHours) || estimatedHours < 0.5 || estimatedHours > 1000) throw new Error('Thời gian dự kiến phải từ 0,5 đến 1.000 giờ.');
+      const newItem: AssetTodoItem = {
+        ...values,
+        key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        estimatedHours,
+        actualHours: 0,
+        assignedStaff: staffOptions.find((employee) => employee.id === values.assignedStaffId)?.name || '',
+        slaStatus: 'Trong hạn SLA',
+        status: 'Chờ xử lý',
+        checklist: [
+          { item: 'Tiếp nhận thông tin và kiểm tra hiện trạng thiết bị', done: false },
+          { item: 'Thực hiện thao tác theo nội dung nhiệm vụ', done: false },
+          { item: 'Ghi nhận kết quả và hồ sơ nghiệm thu', done: false },
+        ],
+      };
+      const saved = await dataService.createGenericRecord('asset_todos', newItem) as AssetTodoItem;
+      setData((previous) => [saved, ...previous]);
+      message.success(`Đã lưu nhiệm vụ ${saved.taskCode} lên máy chủ.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không lưu được nhiệm vụ.');
+    } finally { setSaving(false); }
+  };
 
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('asset_todos', nextItems);
-    message.success(`Đã tạo nhiệm vụ mới: ${values.taskCode} - ${values.taskTitle}`);
-    setModalOpen(false);
-    form.resetFields();
+  const saveTaskPatch = async (item: AssetTodoItem, patch: Record<string, unknown>, successText: string) => {
+    if (actingKey) return null;
+    setActingKey(item.key);
+    try {
+      const saved = await dataService.updateGenericRecord('asset_todos', { key: item.key, ...patch }) as AssetTodoItem;
+      setData((previous) => previous.map((task) => task.key === saved.key ? saved : task));
+      setDetailItem((previous) => previous?.key === saved.key ? saved : previous);
+      message.success(successText);
+      return saved;
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được thay đổi nhiệm vụ.');
+      return null;
+    } finally { setActingKey(''); }
   };
 
   const handleOpenCompleteModal = (item: AssetTodoItem) => {
+    if (item.status !== 'Chờ phê duyệt cấp trên' || !item.checklist?.length || item.checklist.some((entry) => !entry.done)) {
+      message.warning('Checklist phải hoàn thành và nhiệm vụ được gửi duyệt trước khi nghiệm thu.');
+      return;
+    }
     setCompleteTarget(item);
-    setActualHoursInput(item.estimatedHours || 2);
-    setResolutionInput(`Đã xử lý và nghiệm thu xong nhiệm vụ "${item.taskTitle}".`);
+    setActualHoursInput(0);
+    setResolutionInput('');
     setCompleteModalOpen(true);
   };
 
-  const handleConfirmComplete = () => {
-    if (completeTarget) {
-      setData((prev) =>
-        prev.map((d) =>
-          d.key === completeTarget.key
-            ? {
-                ...d,
-                status: 'Đã hoàn thành' as const,
-                actualHours: actualHoursInput,
-                resolutionResult: resolutionInput,
-                checklist: d.checklist?.map((c) => ({ ...c, done: true })) || [],
-              }
-            : d
-        )
-      );
-      message.success(`Đã đánh dấu hoàn thành nhiệm vụ ${completeTarget.taskCode}!`);
-      setCompleteModalOpen(false);
-      if (detailItem && detailItem.key === completeTarget.key) {
-        setDetailItem({
-          ...detailItem,
-          status: 'Đã hoàn thành',
-          actualHours: actualHoursInput,
-          resolutionResult: resolutionInput,
-          checklist: detailItem.checklist?.map((c) => ({ ...c, done: true })) || [],
-        });
-      }
+  const handleConfirmComplete = async () => {
+    if (!completeTarget) return;
+    let completion: { actualHours: number; resolution: string };
+    try {
+      completion = validateTodoCompletion({ status: completeTarget.status, checklist: completeTarget.checklist, actualHours: actualHoursInput, resolution: resolutionInput });
+    } catch (error: any) {
+      message.error(error?.message || 'Thông tin nghiệm thu chưa hợp lệ.');
+      return;
     }
+    const saved = await saveTaskPatch(completeTarget, { status: 'Đã hoàn thành', actualHours: completion.actualHours, resolutionResult: completion.resolution }, `Đã lưu nghiệm thu ${completeTarget.taskCode}.`);
+    if (saved) setCompleteModalOpen(false);
   };
 
-  const handleToggleChecklist = (taskIndex: number) => {
-    if (!detailItem) return;
-    const updatedChecklist = [...detailItem.checklist];
-    updatedChecklist[taskIndex].done = !updatedChecklist[taskIndex].done;
-
-    const allDone = updatedChecklist.every((c) => c.done);
-    const newStatus = allDone ? 'Đã hoàn thành' : 'Đang thực hiện';
-
-    const updatedItem = {
-      ...detailItem,
-      checklist: updatedChecklist,
-      status: newStatus as any,
-    };
-
-    setDetailItem(updatedItem);
-    setData((prev) => prev.map((d) => (d.key === detailItem.key ? updatedItem : d)));
+  const handleToggleChecklist = async (taskIndex: number) => {
+    if (!detailItem || detailItem.status !== 'Đang thực hiện') return;
+    const checklist = detailItem.checklist.map((entry, index) => index === taskIndex ? { ...entry, done: !entry.done } : entry);
+    await saveTaskPatch(detailItem, { checklist }, 'Đã lưu checklist nhiệm vụ.');
   };
 
-  const handleChangeStatusDirect = (record: AssetTodoItem, newStatus: AssetTodoItem['status']) => {
-    setData((prev) => prev.map((d) => (d.key === record.key ? { ...d, status: newStatus } : d)));
-    message.info(`Đã chuyển trạng thái ${record.taskCode} sang "${newStatus}"`);
-    if (detailItem && detailItem.key === record.key) {
-      setDetailItem({ ...detailItem, status: newStatus });
+  const handleChangeStatusDirect = async (record: AssetTodoItem, newStatus: AssetTodoItem['status']) => {
+    if (newStatus === 'Chờ phê duyệt cấp trên' && (!record.checklist.length || record.checklist.some((entry) => !entry.done))) {
+      message.warning('Hoàn thành tất cả mục checklist trước khi gửi duyệt.');
+      return;
     }
+    await saveTaskPatch(record, { status: newStatus }, `Đã lưu trạng thái ${newStatus} cho ${record.taskCode}.`);
   };
 
-  const filteredData = data.filter((item) => {
+  const filteredData = currentData.filter((item) => {
     const matchSearch =
       (item.taskCode || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.taskTitle || '').toLowerCase().includes(searchText.toLowerCase()) ||
@@ -202,6 +222,24 @@ export const AssetTodoModule: React.FC = () => {
 
     return matchSearch && matchStatus && matchPriority && matchCategory;
   });
+
+  const exportTasks = () => {
+    if (!filteredData.length) { message.warning('Không có nhiệm vụ phù hợp để xuất.'); return; }
+    downloadFile('Nhiem_vu_tai_san.xlsx', generateValidXlsxBlob([
+      ['Mã việc', 'Tiêu đề', 'Nhóm', 'Ưu tiên', 'Người yêu cầu', 'Người phụ trách', 'Mã tài sản', 'Địa điểm', 'Hạn', 'Giờ dự kiến', 'Giờ thực tế', 'Checklist', 'Trạng thái', 'Kết quả'],
+      ...filteredData.map((item) => [item.taskCode, item.taskTitle, item.taskCategory, item.priority, item.requester, item.assignedStaff, item.relatedAssetCode, item.location, item.deadline, item.estimatedHours, item.actualHours, `${(item.checklist || []).filter((entry) => entry.done).length}/${(item.checklist || []).length}`, item.status, item.resolutionResult || '']),
+    ]));
+  };
+
+  const printTask = (item: AssetTodoItem) => downloadFile(`${item.taskCode}_phieu_cong_viec.pdf`, generateValidPdfBlob('PHIEU NHIEM VU QUAN TRI TAI SAN', `${item.taskCode} | ${item.taskTitle}`, [
+    `Nhom: ${item.taskCategory} | Uu tien: ${item.priority} | Trang thai: ${item.status}`,
+    `Nguoi yeu cau: ${item.requester} | Nguoi phu trach: ${item.assignedStaff}`,
+    `Ma tai san: ${item.relatedAssetCode || 'Khong co'} | Dia diem: ${item.location} | Han: ${item.deadline}`,
+    `Thoi gian du kien: ${item.estimatedHours} gio | Thuc te: ${item.actualHours || 'Chua ghi nhan'} gio`,
+    'Checklist:', ...(item.checklist || []).map((entry) => `${entry.done ? '[x]' : '[ ]'} ${entry.item}`),
+    `Ghi chu: ${item.notes || 'Khong co'}`, `Ket qua nghiem thu: ${item.resolutionResult || 'Chua ghi nhan'}`,
+  ]));
+  const sendForApproval = (item: AssetTodoItem) => handleChangeStatusDirect(item, 'Chờ phê duyệt cấp trên');
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
@@ -221,14 +259,14 @@ export const AssetTodoModule: React.FC = () => {
             {urgentCount} đầu việc
           </div>
           <div style={{ fontSize: 11.5, color: urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 2 }}>
-            {urgentCount > 0 ? 'Cần ưu tiên xử lý trong 2-4h' : 'Không có sự cố khẩn cấp'}
+            {urgentCount > 0 ? 'Ưu tiên P1 hoặc đã gần/quá hạn' : 'Không có việc khẩn cấp hoặc gần hạn'}
           </div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ hoàn thành đúng hạn SLA</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            99.2% đúng cam kết
+            {slaCompliance === null ? 'Chưa có dữ liệu' : `${slaCompliance}% đúng hạn`}
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{completedCount} việc đã giải quyết thành công</div>
         </div>
@@ -236,7 +274,7 @@ export const AssetTodoModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian xử lý trung bình (MTTR)</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            1.8 giờ / Ticket
+            {averageResolutionHours === null ? 'Chưa có dữ liệu' : `${averageResolutionHours.toFixed(1)} giờ / việc`}
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tốc độ xử lý yêu cầu đạt chuẩn ITSM</div>
         </div>
@@ -285,7 +323,7 @@ export const AssetTodoModule: React.FC = () => {
             <Radio.Button value="kanban"><AppstoreOutlined /> Kanban</Radio.Button>
           </Radio.Group>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo nhiệm vụ quản trị tài sản')}>
+          <Button icon={<DownloadOutlined />} onClick={exportTasks} disabled={!filteredData.length}>
             Xuất Excel
           </Button>
           <Button
@@ -304,6 +342,7 @@ export const AssetTodoModule: React.FC = () => {
         <div className="transparent-table-card">
           <KTable
             dataSource={filteredData}
+            loading={loading}
             columns={[
               {
                 title: 'Mã việc & Ưu tiên',
@@ -412,17 +451,22 @@ export const AssetTodoModule: React.FC = () => {
                     >
                       Chi tiết
                     </Button>
-                    {r.status !== 'Đã hoàn thành' ? (
+                    {r.status === 'Chờ xử lý' ? (
                       <Button
                         size="small"
                         type="primary"
                         icon={<CheckOutlined />}
-                        onClick={() => handleOpenCompleteModal(r)}
+                        onClick={() => handleChangeStatusDirect(r, 'Đang thực hiện')}
+                        loading={actingKey === r.key}
                         style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-                        title="Nghiệm thu hoàn tất việc"
+                        title="Bắt đầu thực hiện"
                       >
-                        Xong
+                        Bắt đầu
                       </Button>
+                    ) : r.status === 'Đang thực hiện' ? (
+                      <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!checklistComplete(r)} onClick={() => sendForApproval(r)} loading={actingKey === r.key}>Gửi duyệt</Button>
+                    ) : r.status === 'Chờ phê duyệt cấp trên' ? (
+                      <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => handleOpenCompleteModal(r)} loading={actingKey === r.key}>Nghiệm thu</Button>
                     ) : (
                       <Tag color="success" style={{ margin: 0, height: 24, lineHeight: '22px' }}>
                         Hoàn tất
@@ -516,7 +560,7 @@ export const AssetTodoModule: React.FC = () => {
 
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, borderTop: '1px solid #F1F5F9', paddingTop: 6 }}>
                         <span style={{ fontSize: 11, color: '#475569', display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <UserOutlined /> {item.assignedStaff.split(' ')[0]}
+                          <UserOutlined /> {(item.assignedStaff || 'Chưa phân công').split(' ')[0]}
                         </span>
                         <span style={{ fontSize: 11, color: '#009688', fontWeight: 600 }}>
                           {item.checklist?.filter((c) => c.done).length || 0}/{item.checklist?.length || 0} mục
@@ -539,6 +583,7 @@ export const AssetTodoModule: React.FC = () => {
         footer={null}
         width={760}
       >
+        {!staffLoading && !staffOptions.length && <Alert type="warning" showIcon message="Chưa có nhân viên đang hoạt động để giao nhiệm vụ." style={{ marginTop: 14 }} />}
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
             <Form.Item name="taskCode" label="Mã công việc" rules={[{ required: true }]}>
@@ -577,11 +622,15 @@ export const AssetTodoModule: React.FC = () => {
             <Form.Item name="relatedAssetCode" label="Mã tài sản liên quan">
               <Input placeholder="Ví dụ: TS-PAC-01, TS-SRV-002" />
             </Form.Item>
-            <Form.Item name="requester" label="Người yêu cầu / Bộ phận" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
+            <Form.Item name="requester" label="Bộ phận yêu cầu" rules={[{ required: true }]}>
+              <Input placeholder="Nhập bộ phận gửi yêu cầu" />
             </Form.Item>
-            <Form.Item name="assignedStaff" label="Cán bộ phụ trách thực hiện" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Văn Hải" />
+            <Form.Item name="assignedStaffId" label="Cán bộ phụ trách thực hiện" rules={[{ required: true, message: 'Chọn nhân viên đang hoạt động.' }]}>
+              <Select
+                placeholder={staffLoading ? 'Đang tải danh sách nhân viên' : 'Chọn nhân viên phụ trách'}
+                disabled={staffLoading || !staffOptions.length}
+                options={staffOptions.map((employee) => ({ value: employee.id, label: `${employee.name} · ${employee.employeeCode || employee.code}${employee.department ? ` · ${employee.department}` : ''}` }))}
+              />
             </Form.Item>
           </div>
 
@@ -590,9 +639,9 @@ export const AssetTodoModule: React.FC = () => {
               <Input placeholder="Ví dụ: Keangnam Landmark 72 Tầng 14" />
             </Form.Item>
             <Form.Item name="deadline" label="Hạn hoàn thành" rules={[{ required: true }]}>
-              <Input placeholder="2026-08-28 17:00" />
+              <Input type="date" />
             </Form.Item>
-            <Form.Item name="estimatedHours" label="Dự kiến">
+            <Form.Item name="estimatedHours" label="Dự kiến (giờ)" rules={[{ required: true, message: 'Nhập thời gian dự kiến.' }]}>
               <Input type="number" min={0.5} step={0.5} />
             </Form.Item>
           </div>
@@ -603,7 +652,7 @@ export const AssetTodoModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={staffLoading || !staffOptions.length} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tạo nhiệm vụ
             </Button>
           </div>
@@ -662,7 +711,7 @@ export const AssetTodoModule: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {detailItem.checklist?.map((task, idx) => (
                   <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#F8FAFC', padding: 8, borderRadius: 6 }}>
-                    <Checkbox checked={task.done} onChange={() => handleToggleChecklist(idx)}>
+                    <Checkbox checked={task.done} disabled={detailItem.status !== 'Đang thực hiện' || actingKey === detailItem.key} onChange={() => void handleToggleChecklist(idx)}>
                       <span style={{ color: task.done ? '#64748B' : '#0F172A', textDecoration: task.done ? 'line-through' : 'none', fontWeight: task.done ? 400 : 600 }}>
                         {task.item}
                       </span>
@@ -688,16 +737,23 @@ export const AssetTodoModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất phiếu công việc ${detailItem.taskCode} (PDF)`)}
+                onClick={() => printTask(detailItem)}
                 style={{ flex: 1 }}
               >
                 In phiếu việc (PDF)
               </Button>
-              {detailItem.status !== 'Đã hoàn thành' && (
+              {detailItem.status === 'Chờ xử lý' && (
+                <Button type="primary" onClick={() => handleChangeStatusDirect(detailItem, 'Đang thực hiện')} loading={actingKey === detailItem.key} style={{ flex: 1 }}>Bắt đầu thực hiện</Button>
+              )}
+              {detailItem.status === 'Đang thực hiện' && (
+                <Button type="primary" disabled={!checklistComplete(detailItem)} onClick={() => sendForApproval(detailItem)} loading={actingKey === detailItem.key} style={{ flex: 1 }}>Gửi duyệt nghiệm thu</Button>
+              )}
+              {detailItem.status === 'Chờ phê duyệt cấp trên' && (
                 <Button
                   type="primary"
                   icon={<CheckOutlined />}
                   onClick={() => handleOpenCompleteModal(detailItem)}
+                  loading={actingKey === detailItem.key}
                   style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
                 >
                   Nghiệm thu hoàn tất
@@ -756,6 +812,7 @@ export const AssetTodoModule: React.FC = () => {
                 type="primary"
                 icon={<CheckCircleOutlined />}
                 onClick={handleConfirmComplete}
+                loading={actingKey === completeTarget.key}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               >
                 Xác nhận hoàn tất

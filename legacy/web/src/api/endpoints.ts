@@ -383,10 +383,56 @@ export type FinanceCashTransaction = {
 
 export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };
 
+export type FinancePaymentRecord = {
+  key: string;
+  code: string;
+  beneficiary: string;
+  taxCode?: string;
+  bankAccountInfo: string;
+  category: string;
+  amount: number;
+  paymentMethod: 'Chuyển khoản VCB' | 'Chuyển khoản TCB' | 'Tiền mặt' | 'Thẻ tín dụng DN';
+  creator: string;
+  creatorId: string;
+  empCode: string;
+  approver?: string;
+  approverId?: string;
+  createdDate: string;
+  createdAt: string;
+  status: 'Chờ duyệt' | 'Đã phê duyệt' | 'Đã thanh toán' | 'Từ chối';
+  notes?: string;
+  approvedAt?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+  paidBy?: string;
+  paidAt?: string;
+  settlementReference?: string;
+  sourceAccountId?: string;
+  sourceAccount?: string;
+  sourceType?: 'bank' | 'petty';
+  financeTransactionId?: string;
+  ledgerRecorded?: boolean;
+  settlementRecordedInternally?: boolean;
+  history?: Array<{ action: string; status: string; actor: string; actorId: string; at: string; reason?: string; reference?: string; sourceAccount?: string; financeTransactionId?: string }>;
+};
+
+export type CreateFinancePayment = Pick<FinancePaymentRecord, 'beneficiary' | 'bankAccountInfo' | 'category' | 'amount' | 'paymentMethod'> & Pick<FinancePaymentRecord, 'taxCode' | 'notes'>;
+
+export type FinancePaymentAccount = { key: string; name: string; source: 'bank' | 'petty'; balance: number; status: string };
+
 export const financeCashApi = {
   getAll: (source?: FinanceCashTransaction['source']) => api.get<{ data: FinanceCashTransaction[] }>('/finance/cash-transactions', { params: source ? { source } : undefined }),
   create: (data: CreateFinanceCashTransaction) => api.post<{ transaction: FinanceCashTransaction }>('/finance/cash-transactions', data),
   cancel: (id: string) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${id}`, { status: 'Đã hủy' }),
+};
+
+export const financePaymentsApi = {
+  getAll: () => api.get<{ data: FinancePaymentRecord[] }>('/finance/payments'),
+  getAccounts: () => api.get<{ accounts: FinancePaymentAccount[] }>('/finance/payment-accounts'),
+  create: (data: CreateFinancePayment) => api.post<{ payment: FinancePaymentRecord }>('/finance/payments', data),
+  approve: (key: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/approve`, {}),
+  reject: (key: string, reason: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/reject`, { reason }),
+  recordPayment: (key: string, sourceAccountId: string, settlementReference: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/execute`, { sourceAccountId, settlementReference }),
 };
 
 export type FinanceDocument = {
@@ -523,11 +569,88 @@ export type CrmContact = {
   updatedAt: string;
 };
 
-export type CreateCrmContact = Omit<CrmContact, 'key' | 'createdAt' | 'updatedAt'>;
+export type CreateCrmContact = Pick<CrmContact, 'name' | 'type'> & Partial<Omit<CrmContact, 'key' | 'createdAt' | 'updatedAt' | 'name' | 'type'>>;
+export type UpdateCrmContact = Partial<Omit<CreateCrmContact, 'type'>>;
 
 export const crmContactsApi = {
   getAll: (type?: CrmContactType) => api.get<{ data: CrmContact[] }>('/crm/contacts', { params: type ? { type } : undefined }),
   create: (data: CreateCrmContact) => api.post<{ contact: CrmContact }>('/crm/contacts', data),
+  update: (key: string, patch: UpdateCrmContact) => api.patch<{ contact: CrmContact }>(`/crm/contacts/${encodeURIComponent(key)}`, { patch }),
+};
+
+export type CrmPromotion = {
+  key: string;
+  code: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  promotionType: 'Chiết khấu' | 'Tặng quà' | 'Tích điểm';
+  target: string;
+  enabled: boolean;
+  allowConcurrent: boolean;
+  eligibleItemCodes: string[];
+  amountBasis: 'Thành tiền trước thuế' | 'Thành tiền sau thuế';
+  orgUnitKeys: string[];
+  employeeIds: string[];
+  applyOnce: boolean;
+  owner: string;
+  ownerId: string;
+  combinablePromotionKeys: string[];
+  taxCondition: 'Bất kỳ' | 'Có thuế' | 'Không thuế';
+  minimumSubtotal: number;
+  unitPrice: number;
+  unit: string;
+  customerKeys: string[];
+  discountKind: 'Phần trăm' | 'Số tiền';
+  discountValue: number;
+  status: 'Nháp' | 'Đang hoạt động' | 'Tạm dừng' | 'Đã kết thúc';
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const crmPromotionsApi = {
+  getAll: () => api.get<{ data: CrmPromotion[] }>('/collections/crm_promotions', { params: { limit: 500, sort: 'updatedAt', order: 'desc' } }),
+  create: (record: Partial<CrmPromotion>) => api.post<{ record: CrmPromotion }>('/collections/crm_promotions', { record }),
+  update: (key: string, patch: Partial<CrmPromotion>) => api.patch<{ record: CrmPromotion }>(`/collections/crm_promotions/${encodeURIComponent(key)}`, { patch }),
+};
+
+export type CrmLoyaltyCustomer = { key: string; code: string; name: string; status: string; balance: number };
+export type CrmLoyaltyEntry = {
+  key: string;
+  type: 'earn' | 'redeem' | 'reversal' | 'refund';
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  points: number;
+  delta: number;
+  balanceAfter: number;
+  reference: string;
+  rewardName: string;
+  note: string;
+  status: 'Đã ghi nhận' | 'Chờ trao' | 'Đã trao' | 'Đã hủy';
+  createdAt: string;
+  createdBy: string;
+  createdById: string;
+  sourceKey?: string;
+  fulfillmentReference?: string;
+  cancelReason?: string;
+  handledAt?: string;
+  handledBy?: string;
+};
+export type CreateCrmLoyaltyEntry = {
+  requestId: string;
+  type: 'earn' | 'redeem';
+  customerId: string;
+  points: number;
+  reference: string;
+  rewardName?: string;
+  note?: string;
+};
+export const crmLoyaltyApi = {
+  getAll: () => api.get<{ customers: CrmLoyaltyCustomer[]; entries: CrmLoyaltyEntry[] }>('/crm/loyalty'),
+  create: (entry: CreateCrmLoyaltyEntry) => api.post<{ entry: CrmLoyaltyEntry; balance: number; replayed: boolean }>('/crm/loyalty/entries', entry),
+  fulfill: (key: string, reference: string) => api.post<{ entry: CrmLoyaltyEntry; balance: number }>(`/crm/loyalty/entries/${encodeURIComponent(key)}/fulfill`, { reference }),
+  cancel: (key: string, reason: string) => api.post<{ entry: CrmLoyaltyEntry; balance: number }>(`/crm/loyalty/entries/${encodeURIComponent(key)}/cancel`, { reason }),
 };
 
 export type ContractPayload = {
@@ -694,6 +817,11 @@ export const collectionsApi = {
     api.patch<{ record: T }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`, { patch }),
   remove: (scope: string, recordKey: string) =>
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
+};
+
+export const assetsApi = {
+  runDepreciation: (period: string, entries: Array<{ depreciationKey: string; amount: number; productionUnits?: number }>) =>
+    api.post<{ period: string; count: number; totalAmount: number; records: Record<string, unknown>[] }>('/assets/depreciation-runs', { period, entries }),
 };
 
 export const ekycApi = {

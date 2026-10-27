@@ -1,4 +1,5 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi, usersApi } from '../../api/endpoints';
 import React, { useEffect, useState } from 'react';
 import {
   SettingOutlined,
@@ -36,6 +37,8 @@ export interface BudgetMatrixTier {
 
 export interface DelegationRule {
   key: string;
+  delegatorId: string;
+  delegateeId: string;
   delegator: string;
   delegatorRole: string;
   delegatee: string;
@@ -58,16 +61,6 @@ export const WorkflowSettingsModule: React.FC = () => {
   // Budget Matrix state
   const [tiers, setTiers] = useState<BudgetMatrixTier[]>(INITIAL_TIERS);
 
-  useEffect(() => {
-    const list = dataService.getGenericData('workflow_settings');
-    setTiers(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('workflow_settings');
-      setTiers(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
-  }, []);
-
   const [tierModalOpen, setTierModalOpen] = useState(false);
   const [tierForm] = Form.useForm();
   const [editingTierKey, setEditingTierKey] = useState<string | null>(null);
@@ -76,17 +69,60 @@ export const WorkflowSettingsModule: React.FC = () => {
   const [delegations, setDelegations] = useState<DelegationRule[]>(INITIAL_DELEGATIONS);
   const [delegationModalOpen, setDelegationModalOpen] = useState(false);
   const [delegationForm] = Form.useForm();
+  const [employees, setEmployees] = useState<Array<{ id: string; name: string; department?: string; position?: string; isActive?: boolean }>>([]);
+  const [workflowScopes, setWorkflowScopes] = useState<Array<{ value: string; label: string }>>([]);
 
   // Security policies form
   const [securityForm] = Form.useForm();
+  const [securitySettings, setSecuritySettings] = useState<Record<string, any> | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const refresh = () => {
+      const tiersList = dataService.getGenericData('workflow_settings');
+      const delegationsList = dataService.getGenericData('workflow_delegations');
+      const securityList = dataService.getGenericData('workflow_security_settings');
+      setTiers(Array.isArray(tiersList) ? tiersList : []);
+      setDelegations(Array.isArray(delegationsList) ? delegationsList : []);
+      setSecuritySettings(Array.isArray(securityList) ? securityList.find((item) => item.key === 'security') || null : null);
+    };
+    refresh();
+    const unsubscribe = dataService.subscribe(refresh);
+    const workflows = dataService.getGenericData('workflow_blueprints');
+    setWorkflowScopes((Array.isArray(workflows) ? workflows : [])
+      .filter((workflow) => workflow.status === 'Đang áp dụng')
+      .map((workflow) => ({ value: workflow.workflowCode, label: `${workflow.workflowCode}: ${workflow.workflowName}` })));
+    usersApi.getAll({ page: 1, limit: 100 }).then(async (response) => {
+      const users = [...(response.data.data || [])];
+      const total = Number(response.data.pagination?.total || users.length);
+      const limit = Number(response.data.pagination?.limit || 100);
+      for (let page = 2; page <= Math.ceil(total / limit); page++) {
+        const next = await usersApi.getAll({ page, limit });
+        users.push(...(next.data.data || []));
+      }
+      setEmployees(users.filter((person: any) => person.isActive).map((person: any) => ({
+        id: person.id,
+        name: person.name || person.fullName || person.email,
+        department: person.department,
+        position: person.position,
+        isActive: person.isActive,
+      })));
+    }).catch(() => message.error('Không tải được danh sách tài khoản để thiết lập ủy quyền.'));
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (securitySettings) securityForm.setFieldsValue(securitySettings);
+  }, [securitySettings]);
 
   const handleOpenAddTier = () => {
     setEditingTierKey(null);
     tierForm.resetFields();
+    const minimum = tiers.reduce((max, tier) => Math.max(max, tier.maxAmount), 0) + 1;
     tierForm.setFieldsValue({
       tierName: `Cấp ${tiers.length + 1}: Hạn mức mới`,
-      minAmount: 100000000,
-      maxAmount: 300000000,
+      minAmount: minimum,
+      maxAmount: minimum + 100000000,
       requiredLevels: '2 Cấp: Trưởng phòng ➔ Giám đốc',
       slaHours: 4,
       autoEscalateHours: 8,
@@ -96,67 +132,71 @@ export const WorkflowSettingsModule: React.FC = () => {
     setTierModalOpen(true);
   };
 
-  const handleSaveTier = (values: any) => {
-    if (editingTierKey) {
-      setTiers((prev) =>
-        prev.map((t) =>
-          t.key === editingTierKey
-            ? {
-                ...t,
-                ...values,
-                minAmount: Number(values.minAmount) || 0,
-                maxAmount: Number(values.maxAmount) || 0,
-                slaHours: Number(values.slaHours) || 4,
-                autoEscalateHours: Number(values.autoEscalateHours) || 8,
-              }
-            : t
-        )
-      );
-      message.success('Đã cập nhật tầng hạn mức ngân sách!');
-    } else {
-      const newTier: BudgetMatrixTier = {
-        ...values,
-        key: String(Date.now()),
-        minAmount: Number(values.minAmount) || 0,
-        maxAmount: Number(values.maxAmount) || 0,
-        slaHours: Number(values.slaHours) || 4,
-        autoEscalateHours: Number(values.autoEscalateHours) || 8,
-      };
-      setTiers([...tiers, newTier]);
-      message.success('Đã thêm tầng hạn mức ngân sách mới!');
+  const handleSaveTier = async (values: any) => {
+    const tier = {
+      ...values,
+      key: editingTierKey || String(Date.now()),
+      minAmount: Number(values.minAmount),
+      maxAmount: Number(values.maxAmount),
+      slaHours: Number(values.slaHours),
+      autoEscalateHours: Number(values.autoEscalateHours),
+    };
+    setSaving(true);
+    try {
+      if (editingTierKey) await collectionsApi.patch<BudgetMatrixTier>('workflow_settings', editingTierKey, tier);
+      else await collectionsApi.create<BudgetMatrixTier>('workflow_settings', tier);
+      setTiers(await dataService.refreshGenericData('workflow_settings'));
+      message.success(editingTierKey ? 'Đã cập nhật tầng hạn mức ngân sách.' : 'Đã thêm tầng hạn mức ngân sách.');
+      setTierModalOpen(false);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể lưu tầng hạn mức ngân sách.');
+    } finally {
+      setSaving(false);
     }
-    setTierModalOpen(false);
   };
 
   const handleOpenAddDelegation = () => {
     delegationForm.resetFields();
     delegationForm.setFieldsValue({
-      delegator: 'Trần Tuấn Anh',
-      delegatorRole: 'Giám đốc Khối Kỹ Thuật (CTO)',
-      delegatee: 'Vũ Minh Trí',
-      delegateeRole: 'DevOps Lead / Trưởng nhóm Hạ tầng',
-      fromDate: '2026-09-01',
-      toDate: '2026-09-07',
-      scope: 'Duyệt thay đổi cấu hình RFC máy chủ và đề xuất vật tư < 50 triệu',
-      reason: 'Nghỉ phép thường niên cùng gia đình',
-      notifySlack: true,
+      fromDate: new Date().toISOString().slice(0, 10),
+      toDate: new Date().toISOString().slice(0, 10),
+      scope: '*',
+      notifySlack: false,
     });
     setDelegationModalOpen(true);
   };
 
-  const handleSaveDelegation = (values: any) => {
-    const newDelegation: DelegationRule = {
-      ...values,
-      key: String(Date.now()),
-      status: 'Sắp tới',
-    };
-    setDelegations([...delegations, newDelegation]);
-    message.success(`Đã thiết lập ủy quyền phê duyệt từ ${values.delegator} sang ${values.delegatee}!`);
-    setDelegationModalOpen(false);
+  const handleSaveDelegation = async (values: any) => {
+    const newDelegation = { ...values, key: String(Date.now()), notifySlack: false };
+    setSaving(true);
+    try {
+      const result = await collectionsApi.create<DelegationRule>('workflow_delegations', newDelegation);
+      setDelegations(await dataService.refreshGenericData('workflow_delegations'));
+      message.success(`Đã lưu ủy quyền từ ${result.data.record.delegator} sang ${result.data.record.delegatee}.`);
+      setDelegationModalOpen(false);
+      delegationForm.resetFields();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể lưu quy tắc ủy quyền.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleSaveSecuritySettings = () => {
-    message.success('Đã lưu toàn bộ thiết lập bảo mật chữ ký số PKI & cấu hình thông báo hệ thống!');
+  const handleSaveSecuritySettings = async () => {
+    const values = securityForm.getFieldsValue();
+    const current = securitySettings;
+    setSaving(true);
+    try {
+      if (current) await collectionsApi.patch('workflow_security_settings', 'security', values);
+      else await collectionsApi.create('workflow_security_settings', { ...values, key: 'security' });
+      const refreshed = await dataService.refreshGenericData('workflow_security_settings');
+      setSecuritySettings(refreshed.find((item) => item.key === 'security') || null);
+      message.success('Đã lưu cấu hình quy trình. Nhà cung cấp CA và Slack vẫn cần tích hợp riêng.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể lưu cấu hình bảo mật quy trình.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -176,23 +216,21 @@ export const WorkflowSettingsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {delegations.filter((d) => d.status === 'Đang hiệu lực').length} lãnh đạo vắng mặt
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tự động chuyển tiếp hồ sơ thông minh</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Hiệu lực xác định theo khoảng ngày</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chứng thư số tích hợp</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            Viettel-CA HSM
-          </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Khóa chuẩn RSA-2048 / SHA-256</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>Chưa kết nối</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Cấu hình CA được lưu riêng</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cơ chế leo thang tự động</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            Active
+            Chưa kích hoạt
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tự nhắc nhở Slack &amp; leo cấp khi trễ hạn</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tác vụ nền chưa được nối</div>
         </div>
       </div>
 
@@ -408,8 +446,8 @@ export const WorkflowSettingsModule: React.FC = () => {
                 key: 'notify',
                 width: 140,
                 render: (_: any, r: DelegationRule) => (
-                  <Tag color="cyan" icon={<BellOutlined />}>
-                    {r.notifySlack ? 'Slack Alert Bật' : 'Tắt'}
+                  <Tag color={r.notifySlack ? 'cyan' : 'default'} icon={<BellOutlined />}>
+                    {r.notifySlack ? 'Slack Alert Bật' : 'Chưa tích hợp Slack'}
                   </Tag>
                 ),
               },
@@ -430,25 +468,14 @@ export const WorkflowSettingsModule: React.FC = () => {
               type="primary"
               icon={<SaveOutlined />}
               onClick={handleSaveSecuritySettings}
+              disabled={saving}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
               Lưu cấu hình hệ thống
             </Button>
           </div>
 
-          <Form
-            form={securityForm}
-            layout="vertical"
-            initialValues={{
-              caProvider: 'viettel_ca',
-              encryptionStandard: 'rsa_2048',
-              sessionTimeout: 15,
-              autoEscalate: 'yes',
-              slackWebhook: 'https://hooks.slack.com/services/T00/B00/kiyovn-approvals-alert',
-              dailyDigestTime: '08:00',
-              requireOtpForLargeBudget: 'yes',
-            }}
-          >
+          <Form form={securityForm} layout="vertical" initialValues={{ caProvider: 'not_configured', encryptionStandard: 'rsa_2048', sessionTimeout: 15, autoEscalate: 'no', slackWebhook: '', dailyDigestTime: '08:00', requireOtpForLargeBudget: 'no' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>
                 <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -458,6 +485,7 @@ export const WorkflowSettingsModule: React.FC = () => {
                 <Form.Item name="caProvider" label="Nhà cung cấp dịch vụ chứng thực chữ ký số (CA)">
                   <Select
                     options={[
+                      { label: 'Chưa cấu hình', value: 'not_configured' },
                       { label: 'Viettel-CA', value: 'viettel_ca' },
                       { label: 'VNPT-CA', value: 'vnpt_ca' },
                       { label: 'FPT-CA', value: 'fpt_ca' },
@@ -485,8 +513,8 @@ export const WorkflowSettingsModule: React.FC = () => {
                   <BellOutlined style={{ color: '#D97706' }} /> Kênh Cảnh Báo &amp; Tự Động Hóa SLA:
                 </div>
 
-                <Form.Item name="slackWebhook" label="Slack Webhook Channel thông báo tờ trình P1">
-                  <Input placeholder="https://hooks.slack.com/services/..." />
+                <Form.Item name="slackWebhook" label="Webhook Slack">
+                  <Input placeholder={securitySettings?.slackWebhookConfigured ? 'Đã lưu; nhập URL mới để thay thế' : 'https://hooks.slack.com/services/...'} />
                 </Form.Item>
 
                 <Form.Item name="autoEscalate" label="Tự động leo thang cấp duyệt khi quá hạn SLA">
@@ -557,7 +585,7 @@ export const WorkflowSettingsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setTierModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu thiết lập
             </Button>
           </div>
@@ -573,21 +601,15 @@ export const WorkflowSettingsModule: React.FC = () => {
         width={650}
       >
         <Form form={delegationForm} layout="vertical" onFinish={handleSaveDelegation} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="delegator" label="Lãnh đạo ủy quyền" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Văn Minh" />
-            </Form.Item>
-            <Form.Item name="delegatorRole" label="Chức danh người ủy quyền" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Tổng Giám Đốc (CEO)" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+            <Form.Item name="delegatorId" label="Người ủy quyền" rules={[{ required: true }]}>
+              <Select options={employees.map((employee) => ({ value: employee.id, label: `${employee.name}${employee.department ? ` · ${employee.department}` : ''}` }))} />
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="delegatee" label="Cán bộ nhận ủy quyền thay mặt duyệt" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh" />
-            </Form.Item>
-            <Form.Item name="delegateeRole" label="Chức danh người nhận" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Phó Tổng Giám Đốc (CTO)" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+            <Form.Item name="delegateeId" label="Người nhận ủy quyền" rules={[{ required: true }]}>
+              <Select options={employees.map((employee) => ({ value: employee.id, label: `${employee.name}${employee.department ? ` · ${employee.department}` : ''}` }))} />
             </Form.Item>
           </div>
 
@@ -600,9 +622,14 @@ export const WorkflowSettingsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="scope" label="Phạm vi & Hạn mức được ủy quyền duyệt" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Mua sắm thiết bị & Hợp đồng dưới 200 Triệu VNĐ" />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="scope" label="Quy trình được ủy quyền" rules={[{ required: true }]}>
+              <Select options={[{ value: '*', label: 'Tất cả quy trình' }, ...workflowScopes]} />
+            </Form.Item>
+            <Form.Item name="maxBudgetAmount" label="Hạn mức mỗi hồ sơ (VNĐ)">
+              <Input type="number" min={0} step={1000000} placeholder="Để trống nếu không giới hạn" />
+            </Form.Item>
+          </div>
 
           <Form.Item name="reason" label="Lý do ủy quyền" rules={[{ required: true }]}>
             <Input.TextArea rows={2} placeholder="Nhập lý do chi tiết..." />
@@ -610,7 +637,7 @@ export const WorkflowSettingsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setDelegationModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" disabled={saving || employees.length < 2} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Kích hoạt ủy quyền
             </Button>
           </div>

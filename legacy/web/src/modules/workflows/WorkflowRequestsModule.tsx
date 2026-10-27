@@ -1,8 +1,11 @@
 import { dataService } from '../../services/dataService';
+import { collectionsApi, filesApi } from '../../api/endpoints';
 import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   SearchOutlined,
   DownloadOutlined,
+  EditOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
   EyeOutlined,
@@ -25,10 +28,14 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Card, Alert, Tooltip, Progress, Radio } from '../../custom-ui';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { useAuth } from '../../context/AuthContext';
 
 export interface RequestAttachment {
+  fileNodeId?: string;
   fileName: string;
   fileSize: string;
+  fileSizeBytes?: number;
   fileType: string;
   uploadTime: string;
 }
@@ -38,8 +45,13 @@ export interface ApprovalRequestItem {
   code: string;
   workflowName: string;
   workflowCode: string;
-  category: 'Mua sắm & Tài sản' | 'Tài chính & Thanh toán' | 'Hợp đồng & Pháp chế' | 'Nhân sự & Phúc lợi' | 'Vận hành Kỹ thuật & IDC';
+  category: 'Mua sắm & Tài sản' | 'Tài chính & Thanh toán' | 'Hợp đồng & Pháp chế' | 'Nhân sự & Phúc lợi' | 'Văn phòng & Hành chính' | 'Vận hành Kỹ thuật & IDC';
   requester: string;
+  requesterId?: string;
+  currentApproverId?: string;
+  currentApprover?: string;
+  canDecide?: boolean;
+  delegatedFor?: string;
   department: string;
   currentLevel: number;
   totalLevels: number;
@@ -49,32 +61,76 @@ export interface ApprovalRequestItem {
   slaDeadline: string;
   slaHoursLeft: number;
   priority: 'Khẩn cấp (P1)' | 'Cao (P2)' | 'Bình thường (P3)';
-  status: 'Chờ bạn ký duyệt' | 'Đã ký số phê duyệt' | 'Đã từ chối' | 'Yêu cầu bổ sung';
+  status: 'Chờ bạn ký duyệt' | 'Đã phê duyệt' | 'Đã ký số phê duyệt' | 'Đã từ chối' | 'Yêu cầu bổ sung';
   summaryDetails: string;
   tokenRequired: boolean;
   attachments: RequestAttachment[];
+  formData?: Record<string, unknown>;
+  approvalFormFields?: Array<{ fieldName: string; label: string; type: string; required: boolean }>;
   approvalNotes?: string;
-  digitalSignatureInfo?: {
-    signerName: string;
-    certificateId: string;
+  decision?: string;
+  approvalNote?: string;
+  slaDeadlineAt?: string;
+  approvalHistory?: Array<{
+    txCode: string;
+    requestCode: string;
+    workflowName: string;
+    category: ApprovalRequestItem['category'];
+    approver: string;
+    approverRole: string;
+    level: number;
+    decision: string;
     timestamp: string;
-    hash: string;
-  };
+    comments: string;
+    sha256Hash: string;
+  }>;
+}
+
+type ApprovalRequestPatch = Partial<ApprovalRequestItem> & {
+  resubmission?: { summaryDetails: string; budgetAmount: number; response: string; formData?: Record<string, unknown>; attachments?: Array<{ fileNodeId: string }> };
+};
+
+type WorkflowFormField = { fieldName: string; label: string; type: string; required: boolean };
+
+async function uploadWorkflowFiles(files: File[], onUploaded: (file: { fileNodeId: string }) => void) {
+  if (files.length === 0) return;
+  const workspace = await filesApi.list(undefined, false, true);
+  const parentId = workspace.data.context?.parentId;
+  if (!parentId) throw new Error('Không tìm thấy thư mục được phép lưu tệp.');
+  for (const file of files) {
+    const uploaded = await filesApi.upload(file, file.name, parentId, 'workflow-requests');
+    onUploaded({ fileNodeId: uploaded.data.file.id });
+  }
 }
 
 const INITIAL_PENDING_REQUESTS: ApprovalRequestItem[] = [];
 
 export const WorkflowRequestsModule: React.FC = () => {
   const [data, setData] = useState<ApprovalRequestItem[]>(INITIAL_PENDING_REQUESTS);
+  const [saving, setSaving] = useState(false);
+  const [resubmittingItem, setResubmittingItem] = useState<ApprovalRequestItem | null>(null);
+  const [clockMs, setClockMs] = useState(() => Date.now());
+  const [blueprints, setBlueprints] = useState<Array<{ workflowCode: string; workflowName: string; category: ApprovalRequestItem['category']; status: string; approvalFlow?: unknown[]; formFields?: WorkflowFormField[] }>>([]);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
 
   useEffect(() => {
-    const list = dataService.getGenericData('workflow_requests');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('workflow_requests');
-      setData(Array.isArray(updated) ? updated : []);
-    });
+    const refresh = () => {
+      const list = dataService.getGenericData('workflow_requests');
+      const configured = dataService.getGenericData('workflow_blueprints');
+      setData(Array.isArray(list) ? list : []);
+      setBlueprints(Array.isArray(configured) ? configured : []);
+    };
+    refresh();
+    const unsub = dataService.subscribe(refresh);
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -83,13 +139,17 @@ export const WorkflowRequestsModule: React.FC = () => {
   // Modal Create Request
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createForm] = Form.useForm();
+  const [selectedWorkflowCode, setSelectedWorkflowCode] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [downloadingFileId, setDownloadingFileId] = useState('');
 
   // Modal E-Signature Token PKI
   const [signModalOpen, setSignModalOpen] = useState(false);
   const [signingItem, setSigningItem] = useState<ApprovalRequestItem | null>(null);
-  const [signMethod, setSignMethod] = useState<'token_pki' | 'cloud_ca' | 'internal_esign'>('token_pki');
-  const [tokenPin, setTokenPin] = useState('123456');
-  const [approvalNote, setApprovalNote] = useState('Đồng ý phê duyệt theo đúng quy định và định mức ngân sách của Công ty.');
+  const [signMethod, setSignMethod] = useState<'token_pki' | 'cloud_ca' | 'internal_esign'>('internal_esign');
+  const [tokenPin, setTokenPin] = useState('');
+  const [approvalNote, setApprovalNote] = useState('');
 
   // Modal Reject / Request Modification
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
@@ -102,121 +162,252 @@ export const WorkflowRequestsModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Metrics
-  const pendingMyCount = data.filter((d) => d.status === 'Chờ bạn ký duyệt').length;
-  const urgentCount = data.filter((d) => d.status === 'Chờ bạn ký duyệt' && d.priority === 'Khẩn cấp (P1)').length;
+  const pendingMyCount = data.filter((d) => d.status === 'Chờ bạn ký duyệt' && (isAdmin || d.canDecide)).length;
+  const remainingHours = (item: ApprovalRequestItem) => {
+    if (item.status !== 'Chờ bạn ký duyệt') return 0;
+    const deadline = Date.parse(item.slaDeadlineAt || item.slaDeadline || '');
+    return Number.isFinite(deadline) ? Math.max(0, (deadline - clockMs) / 3_600_000) : Math.max(0, Number(item.slaHoursLeft) || 0);
+  };
+  const slaText = (item: ApprovalRequestItem) => item.status !== 'Chờ bạn ký duyệt'
+    ? 'Đã kết thúc'
+    : remainingHours(item) > 0 ? `Còn ${remainingHours(item).toFixed(1)} giờ` : 'Quá hạn';
+  const urgentCount = data.filter((d) => d.status === 'Chờ bạn ký duyệt' && (isAdmin || d.canDecide) && d.priority === 'Khẩn cấp (P1)' && remainingHours(d) <= 2).length;
   const totalPendingBudget = data
-    .filter((d) => d.status === 'Chờ bạn ký duyệt')
-    .reduce((sum, d) => sum + d.budgetAmount, 0);
-  const approvedTodayCount = data.filter((d) => d.status === 'Đã ký số phê duyệt').length;
+    .filter((d) => d.status === 'Chờ bạn ký duyệt' && (isAdmin || d.canDecide))
+    .reduce((sum, d) => sum + (Number(d.budgetAmount) || 0), 0);
+  const approvedTodayCount = data.filter((d) => d.status === 'Đã phê duyệt' || d.status === 'Đã ký số phê duyệt').length;
+  const activeBlueprints = blueprints.filter((blueprint) => blueprint.status === 'Đang áp dụng');
+  const workflowOptions = activeBlueprints.length
+    ? activeBlueprints.map((blueprint) => ({ label: `${blueprint.workflowCode}: ${blueprint.workflowName}`, value: blueprint.workflowCode }))
+    : [
+        { label: 'WF-PURCHASE-01: Mua sắm thiết bị IT & Server IDC', value: 'WF-PURCHASE-01' },
+        { label: 'WF-PAYMENT-02: Tạm ứng & Thanh toán chi phí', value: 'WF-PAYMENT-02' },
+        { label: 'WF-CONTRACT-03: Thẩm định hợp đồng kinh tế', value: 'WF-CONTRACT-03' },
+        { label: 'WF-LEAVE-04: Nghỉ phép năm & Công tác ngoại tỉnh', value: 'WF-LEAVE-04' },
+      ];
+  const selectedBlueprint = activeBlueprints.find((blueprint) => blueprint.workflowCode === (resubmittingItem?.workflowCode || selectedWorkflowCode));
+  const currentFormFields = resubmittingItem?.approvalFormFields || selectedBlueprint?.formFields || [];
+  const customFormFields = currentFormFields.filter((field) => !['title', 'content', 'attachments'].includes(field.fieldName));
+  const attachmentField = currentFormFields.find((field) => field.fieldName === 'attachments');
+
+  const resetSelectedFiles = () => {
+    setSelectedFiles([]);
+    setFileInputKey((key) => key + 1);
+  };
+
+  const closeCreateModal = () => {
+    setCreateModalOpen(false);
+    setResubmittingItem(null);
+    createForm.resetFields();
+    resetSelectedFiles();
+  };
 
   const handleOpenCreateModal = () => {
+    setResubmittingItem(null);
     createForm.resetFields();
+    const firstActive = blueprints.find((blueprint) => blueprint.status === 'Đang áp dụng');
+    const initialWorkflowCode = firstActive?.workflowCode || 'WF-PURCHASE-01';
+    setSelectedWorkflowCode(initialWorkflowCode);
+    resetSelectedFiles();
     createForm.setFieldsValue({
-      code: `REQ-2026-0${data.length + 90}`,
-      workflowCode: 'WF-PURCHASE-01',
-      category: 'Mua sắm & Tài sản',
-      requester: 'Trần Tuấn Anh (CTO)',
-      department: 'Khối Kỹ Thuật & R&D',
+      code: `REQ-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`,
+      workflowCode: initialWorkflowCode,
+      category: firstActive?.category || 'Mua sắm & Tài sản',
       priority: 'Cao (P2)',
-      budgetAmount: 45000000,
+      budgetAmount: 0,
     });
     setCreateModalOpen(true);
   };
 
-  const handleCreateRequest = (values: any) => {
-    const newItem: ApprovalRequestItem = {
-      ...values,
-      key: String(Date.now()),
-      currentLevel: 1,
-      totalLevels: 3,
-      roleRequirement: 'Trưởng bộ phận duyệt',
-      submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      slaDeadline: 'Còn 4.0 giờ',
-      slaHoursLeft: 4.0,
-      status: 'Chờ bạn ký duyệt',
-      tokenRequired: true,
-      budgetAmount: Number(values.budgetAmount) || 0,
-      attachments: [
-        { fileName: 'ToTrinhDauTu_ChungTuDinhKem.pdf', fileSize: '1.5 MB', fileType: 'PDF', uploadTime: new Date().toISOString().substring(0, 10) },
-      ],
-    };
+  useEffect(() => {
+    const workflowCode = (location.state as { workflowCode?: string } | null)?.workflowCode;
+    if (!workflowCode) return;
+    handleOpenCreateModal();
+    createForm.setFieldsValue({ workflowCode });
+    setSelectedWorkflowCode(workflowCode);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, blueprints]);
 
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('workflow_requests', nextItems);
-    message.success(`Đã khởi tạo tờ trình ${values.code} và chuyển đến người ký cấp 1!`);
-    setCreateModalOpen(false);
+  const handleCreateRequest = async (values: any) => {
+    const schema = resubmittingItem?.approvalFormFields || selectedBlueprint?.formFields || [];
+    const formData = Object.fromEntries(schema
+      .filter((field) => !['title', 'content', 'attachments'].includes(field.fieldName))
+      .map((field) => [field.fieldName, values[field.fieldName] ?? '']));
+    const existingAttachmentCount = resubmittingItem?.attachments?.length || 0;
+    if (existingAttachmentCount + selectedFiles.length > 20) {
+      message.error('Tổng số tệp đính kèm không được vượt quá 20.');
+      return;
+    }
+    if (attachmentField?.required && existingAttachmentCount + selectedFiles.length === 0) {
+      message.error(`${attachmentField.label} là bắt buộc.`);
+      return;
+    }
+    if (attachmentField?.type.toLowerCase().includes('pdf') && selectedFiles.some((file) => !file.name.toLowerCase().endsWith('.pdf'))) {
+      message.error('Trường này chỉ nhận tệp PDF.');
+      return;
+    }
+    if (selectedFiles.some((file) => file.size <= 0 || file.size > 50 * 1024 * 1024)) {
+      message.error('Mỗi tệp phải có dung lượng lớn hơn 0 và không vượt quá 50 MB.');
+      return;
+    }
+    const uploadedFiles: Array<{ fileNodeId: string }> = [];
+    if (resubmittingItem) {
+      setSaving(true);
+      try {
+        await uploadWorkflowFiles(selectedFiles, (file) => uploadedFiles.push(file));
+        await collectionsApi.patch<ApprovalRequestPatch>('workflow_requests', resubmittingItem.key, {
+          resubmission: {
+            summaryDetails: values.summaryDetails,
+            budgetAmount: Number(values.budgetAmount) || 0,
+            response: values.supplementalResponse,
+            formData,
+            attachments: uploadedFiles,
+          },
+        });
+        const refreshed = await dataService.refreshGenericData('workflow_requests');
+        setData(refreshed);
+        const updated = refreshed.find((item) => item.key === resubmittingItem.key) || null;
+        if (updated) setDetailItem(updated);
+        message.success(`Đã nộp bổ sung hồ sơ ${resubmittingItem.code}; hồ sơ quay lại cấp ${updated?.currentLevel || resubmittingItem.currentLevel}.`);
+        setCreateModalOpen(false);
+        setResubmittingItem(null);
+        createForm.resetFields();
+        resetSelectedFiles();
+      } catch (error) {
+        if (Number((error as { response?: { status?: number } })?.response?.status) >= 400) {
+          await Promise.allSettled(uploadedFiles.map((file) => filesApi.remove(file.fileNodeId)));
+        }
+        message.error(error instanceof Error ? error.message : 'Không thể nộp bổ sung hồ sơ.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    const requestBlueprint = blueprints.find((blueprint) => blueprint.workflowCode === values.workflowCode && blueprint.status === 'Đang áp dụng');
+    setSaving(true);
+    try {
+      await uploadWorkflowFiles(selectedFiles, (file) => uploadedFiles.push(file));
+      await collectionsApi.create<ApprovalRequestItem>('workflow_requests', {
+        ...values,
+        key: values.code,
+        totalLevels: requestBlueprint?.approvalFlow?.length || 3,
+        category: requestBlueprint?.category || values.category || ({
+          'WF-PAYMENT-02': 'Tài chính & Thanh toán',
+          'WF-CONTRACT-03': 'Hợp đồng & Pháp chế',
+          'WF-LEAVE-04': 'Nhân sự & Phúc lợi',
+        }[values.workflowCode] || 'Mua sắm & Tài sản'),
+        budgetAmount: Number(values.budgetAmount) || 0,
+        attachments: uploadedFiles,
+        formData,
+      });
+      setData(await dataService.refreshGenericData('workflow_requests'));
+      message.success(`Đã gửi hồ sơ ${values.code} vào hàng chờ phê duyệt.`);
+      setCreateModalOpen(false);
+      createForm.resetFields();
+      resetSelectedFiles();
+    } catch (error) {
+      if (Number((error as { response?: { status?: number } })?.response?.status) >= 400) {
+        await Promise.allSettled(uploadedFiles.map((file) => filesApi.remove(file.fileNodeId)));
+      }
+      message.error(error instanceof Error ? error.message : 'Không thể tạo hồ sơ quy trình.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleOpenResubmission = (item: ApprovalRequestItem) => {
+    setResubmittingItem(item);
+    setSelectedWorkflowCode(item.workflowCode);
+    resetSelectedFiles();
     createForm.resetFields();
+    createForm.setFieldsValue({
+      code: item.code,
+      workflowCode: item.workflowCode,
+      workflowName: item.workflowName,
+      category: item.category,
+      priority: item.priority,
+      department: item.department,
+      budgetAmount: item.budgetAmount,
+      summaryDetails: item.summaryDetails,
+      supplementalResponse: '',
+      ...(item.formData || {}),
+    });
+    setCreateModalOpen(true);
+  };
+
+  const handleDownloadAttachment = async (attachment: RequestAttachment) => {
+    if (!attachment.fileNodeId) {
+      message.error('Tệp này chưa được liên kết với kho lưu trữ.');
+      return;
+    }
+    setDownloadingFileId(attachment.fileNodeId);
+    try {
+      const response = await filesApi.download(attachment.fileNodeId);
+      downloadFile(attachment.fileName, response.data);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : `Không thể tải tệp ${attachment.fileName}.`);
+    } finally {
+      setDownloadingFileId('');
+    }
   };
 
   const handleOpenSignModal = (record: ApprovalRequestItem) => {
     setSigningItem(record);
-    setApprovalNote('Đồng ý phê duyệt theo đúng quy định và định mức ngân sách của Công ty.');
+    setApprovalNote('');
     setSignModalOpen(true);
   };
 
-  const handleExecuteSign = () => {
+  const handleExecuteSign = async () => {
     if (!signingItem) return;
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-
-    const updated = data.map((d) =>
-      d.key === signingItem.key
-        ? {
-            ...d,
-            status: 'Đã ký số phê duyệt' as const,
-            slaDeadline: 'Đã hoàn thành',
-            slaHoursLeft: 0,
-            approvalNotes: approvalNote,
-            digitalSignatureInfo: {
-              signerName: 'Trần Tuấn Anh (CTO)',
-              certificateId: 'VIETTEL-CA-88992-PKI',
-              timestamp: nowStr,
-              hash: 'fa89d44e598fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b11',
-            },
-          }
-        : d
-    );
-
-    setData(updated);
-    dataService.saveGenericData('workflow_requests', updated);
-    message.success(`Đã ký số điện tử thành công tờ trình ${signingItem.code}! Hồ sơ đã được đóng dấu mộc số hóa.`);
-    setSignModalOpen(false);
-    if (detailItem && detailItem.key === signingItem.key) {
-      setDetailItem({
-        ...detailItem,
-        status: 'Đã ký số phê duyệt',
-        slaDeadline: 'Đã hoàn thành',
-        slaHoursLeft: 0,
-        approvalNotes: approvalNote,
-      });
+    if (signingItem.tokenRequired) {
+      message.error('Quy trình yêu cầu ký CA; nhà cung cấp ký số chưa được cấu hình.');
+      return;
+    }
+    if (signMethod !== 'internal_esign') {
+      message.error('Nhà cung cấp ký số chưa được cấu hình; chưa ghi nhận phê duyệt.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await collectionsApi.patch<ApprovalRequestItem>('workflow_requests', signingItem.key, { decision: 'Đã phê duyệt', approvalNote });
+      const refreshed = await dataService.refreshGenericData('workflow_requests');
+      setData(refreshed);
+      const updated = refreshed.find((item) => item.key === signingItem.key) || null;
+      if (updated) setDetailItem(updated);
+      message.success(updated?.status === 'Đã phê duyệt'
+        ? `Đã hoàn tất phê duyệt nội bộ hồ sơ ${signingItem.code}.`
+        : `Đã phê duyệt cấp ${signingItem.currentLevel}; hồ sơ chuyển sang cấp tiếp theo.`);
+      setSignModalOpen(false);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể ghi nhận quyết định phê duyệt.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleOpenRejectModal = (record: ApprovalRequestItem, type: 'reject' | 'modify') => {
     setRejectItem(record);
     setRejectType(type);
-    setRejectReason(type === 'modify' ? 'Cần bổ sung thêm báo giá đối ứng thứ 3 từ nhà cung cấp ủy quyền.' : 'Chi phí vượt định mức dự toán năm 2026.');
+    setRejectReason('');
     setRejectModalOpen(true);
   };
 
-  const handleExecuteReject = () => {
+  const handleExecuteReject = async () => {
     if (!rejectItem) return;
-    const nextSt = rejectType === 'modify' ? 'Yêu cầu bổ sung' : 'Đã từ chối';
-
-    const updated = data.map((d) =>
-      d.key === rejectItem.key
-        ? {
-            ...d,
-            status: nextSt as any,
-            approvalNotes: rejectReason,
-          }
-        : d
-    );
-
-    setData(updated);
-    dataService.saveGenericData('workflow_requests', updated);
-    message.warning(`Đã chuyển trạng thái hồ sơ ${rejectItem.code} thành "${nextSt}".`);
-    setRejectModalOpen(false);
-    if (detailItem && detailItem.key === rejectItem.key) {
-      setDetailItem({ ...detailItem, status: nextSt as any, approvalNotes: rejectReason });
+    setSaving(true);
+    try {
+      const decision = rejectType === 'modify' ? 'Yêu cầu bổ sung' : 'Từ chối';
+      await collectionsApi.patch<ApprovalRequestItem>('workflow_requests', rejectItem.key, { decision, approvalNote: rejectReason });
+      const refreshed = await dataService.refreshGenericData('workflow_requests');
+      setData(refreshed);
+      const updated = refreshed.find((item) => item.key === rejectItem.key) || null;
+      if (updated) setDetailItem(updated);
+      message.success(`Đã ghi nhận quyết định “${decision}” cho hồ sơ ${rejectItem.code}.`);
+      setRejectModalOpen(false);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể ghi nhận quyết định xử lý.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -229,20 +420,41 @@ export const WorkflowRequestsModule: React.FC = () => {
       (item.category || '').toLowerCase().includes(searchText.toLowerCase());
 
     let matchTab = true;
-    if (tabFilter === 'pending_my') matchTab = item.status === 'Chờ bạn ký duyệt';
+    if (tabFilter === 'pending_my') matchTab = item.status === 'Chờ bạn ký duyệt' && (isAdmin || item.canDecide === true);
     if (tabFilter === 'urgent_p1') matchTab = item.priority === 'Khẩn cấp (P1)';
-    if (tabFilter === 'approved') matchTab = item.status === 'Đã ký số phê duyệt';
+    if (tabFilter === 'approved') matchTab = item.status === 'Đã phê duyệt' || item.status === 'Đã ký số phê duyệt';
     if (tabFilter === 'rejected') matchTab = item.status === 'Đã từ chối' || item.status === 'Yêu cầu bổ sung';
 
     return matchSearch && matchTab;
   });
+
+  const exportRequests = () => downloadFile(`Ho_so_quy_trinh_${new Date().toISOString().slice(0, 10)}.xlsx`, generateValidXlsxBlob([
+    ['Mã hồ sơ', 'Mã quy trình', 'Tiêu đề', 'Phân loại', 'Người gửi', 'Phòng ban', 'Cấp hiện tại', 'Tổng cấp', 'Dự toán', 'Ưu tiên', 'Trạng thái', 'Ngày gửi'],
+    ...filteredData.map((item) => [item.code, item.workflowCode, item.workflowName, item.category, item.requester, item.department, item.currentLevel, item.totalLevels, item.budgetAmount, item.priority, item.status === 'Đã ký số phê duyệt' ? 'Đã phê duyệt' : item.status, item.submittedAt]),
+  ]));
+
+  const exportRequest = (item: ApprovalRequestItem) => downloadFile(
+    `${item.code}_Phieu_trinh_duyet.pdf`,
+    generateValidPdfBlob('PHIẾU TRÌNH DUYỆT', item.code, [
+      `Quy trình: ${item.workflowCode}`,
+      `Tiêu đề: ${item.workflowName}`,
+      `Người gửi: ${item.requester}`,
+      `Phòng ban: ${item.department}`,
+      `Dự toán: ${item.budgetAmount.toLocaleString('vi-VN')} VND`,
+      `Ưu tiên: ${item.priority}`,
+      `Trạng thái: ${item.status === 'Đã ký số phê duyệt' ? 'Đã phê duyệt' : item.status}`,
+      `Nội dung: ${item.summaryDetails}`,
+      ...(item.approvalHistory || []).map((event) => `Cấp ${event.level}: ${event.approver} - ${event.decision} - ${event.timestamp}`),
+      'Phiếu được tạo từ dữ liệu hồ sơ; không thay thế chữ ký số CA.',
+    ])
+  );
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       {/* 4 KPI Metrics Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hồ sơ chờ bạn ký duyệt</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>{isAdmin ? 'Hồ sơ chờ bạn ký duyệt' : 'Hồ sơ đang chờ xử lý'}</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: pendingMyCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>
             {pendingMyCount} hồ sơ
           </div>
@@ -252,11 +464,11 @@ export const WorkflowRequestsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Khẩn cấp P1 sắp chạm SLA</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hồ sơ ưu tiên P1</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: urgentCount > 0 ? '#D97706' : '#009688', marginTop: 4 }}>
             {urgentCount} tờ trình P1
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Cần xử lý gấp trong vòng 2 giờ</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Đang chờ xử lý</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
@@ -268,11 +480,11 @@ export const WorkflowRequestsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã ký số phê duyệt thành công</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã phê duyệt</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {approvedTodayCount} hồ sơ
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã đóng dấu mộc số hóa CA</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Phê duyệt nội bộ được lưu lịch sử</div>
         </div>
       </div>
 
@@ -281,7 +493,7 @@ export const WorkflowRequestsModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả hồ sơ' },
-            { key: 'pending_my', label: `Chờ bạn ký duyệt (${pendingMyCount})` },
+            { key: 'pending_my', label: `${isAdmin ? 'Chờ bạn ký duyệt' : 'Đang chờ xử lý'} (${pendingMyCount})` },
             { key: 'urgent_p1', label: `Khẩn cấp P1 (${urgentCount})` },
             { key: 'approved', label: 'Đã phê duyệt' },
             { key: 'rejected', label: 'Từ chối / Bổ sung' },
@@ -310,16 +522,16 @@ export const WorkflowRequestsModule: React.FC = () => {
             style={{ width: 280, borderRadius: 6 }}
             allowClear
           />
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách hàng chờ trình ký')}>
+          <Button icon={<DownloadOutlined />} disabled={!filteredData.length} onClick={exportRequests}>
             Xuất Excel
           </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleOpenCreateModal}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-          >
-            Tạo yêu cầu trình ký
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleOpenCreateModal}
+              style={{ backgroundColor: '#009688', borderColor: '#009688' }}
+            >
+              {isAdmin ? 'Tạo yêu cầu trình ký' : 'Tạo hồ sơ xin phê duyệt'}
           </Button>
         </div>
       </div>
@@ -344,11 +556,7 @@ export const WorkflowRequestsModule: React.FC = () => {
                   >
                     {r.priority}
                   </Tag>
-                  {r.tokenRequired && (
-                    <span style={{ fontSize: 10.5, color: '#9333EA', display: 'flex', alignItems: 'center', gap: 2, marginTop: 2 }}>
-                      <KeyOutlined /> Token PKI
-                    </span>
-                  )}
+                  {r.tokenRequired && <Tag color="purple" style={{ marginTop: 3, fontSize: 10 }}>Cần ký CA</Tag>}
                 </div>
               ),
             },
@@ -377,13 +585,15 @@ export const WorkflowRequestsModule: React.FC = () => {
               render: (_: any, r: ApprovalRequestItem) => (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
-                    Cấp {r.currentLevel}/{r.totalLevels}: {r.roleRequirement.split(' ')[0]}...
+                    Cấp {r.currentLevel}/{r.totalLevels}: {r.roleRequirement}
                   </div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: r.slaHoursLeft <= 2 && r.status === 'Chờ bạn ký duyệt' ? '#DC2626' : '#009688', marginTop: 3 }}>
-                    <ClockCircleOutlined /> {r.slaDeadline}
+                  {r.delegatedFor && <div style={{ fontSize: 11, color: '#7C3AED', marginTop: 2 }}>Ủy quyền từ {r.delegatedFor}</div>}
+                  {!r.delegatedFor && r.currentApprover && <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Phụ trách: {r.currentApprover}</div>}
+                  <div style={{ fontSize: 12, fontWeight: 700, color: remainingHours(r) <= 2 && r.status === 'Chờ bạn ký duyệt' ? '#DC2626' : '#009688', marginTop: 3 }}>
+                    <ClockCircleOutlined /> {slaText(r)}
                   </div>
                   <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
-                    <PaperClipOutlined style={{ marginRight: 4 }} />{r.attachments.length} tệp đính kèm
+                    <PaperClipOutlined style={{ marginRight: 4 }} />{(r.attachments || []).length} tệp đính kèm
                   </div>
                 </div>
               ),
@@ -396,10 +606,11 @@ export const WorkflowRequestsModule: React.FC = () => {
               render: (s: string) => {
                 let col = 'default';
                 if (s === 'Chờ bạn ký duyệt') col = 'error';
-                if (s === 'Đã ký số phê duyệt') col = 'success';
+                if (s === 'Đã phê duyệt' || s === 'Đã ký số phê duyệt') col = 'success';
                 if (s === 'Đã từ chối') col = 'default';
                 if (s === 'Yêu cầu bổ sung') col = 'warning';
-                return <Tag color={col} style={{ fontWeight: s === 'Chờ bạn ký duyệt' ? 700 : 500 }}>{s}</Tag>;
+                const label = s === 'Đã ký số phê duyệt' ? 'Đã phê duyệt' : s;
+                return <Tag color={col} style={{ fontWeight: s === 'Chờ bạn ký duyệt' ? 700 : 500 }}>{label}</Tag>;
               },
             },
             {
@@ -420,7 +631,7 @@ export const WorkflowRequestsModule: React.FC = () => {
                     Xem
                   </Button>
 
-                  {r.status === 'Chờ bạn ký duyệt' ? (
+                  {r.status === 'Chờ bạn ký duyệt' && (isAdmin || r.canDecide) ? (
                     <>
                       <Button
                         size="small"
@@ -429,7 +640,7 @@ export const WorkflowRequestsModule: React.FC = () => {
                         onClick={() => handleOpenSignModal(r)}
                         style={{ backgroundColor: '#16A34A', borderColor: '#16A34A' }}
                       >
-                        Ký số
+                        Phê duyệt
                       </Button>
                       <Button
                         size="small"
@@ -440,8 +651,16 @@ export const WorkflowRequestsModule: React.FC = () => {
                         Từ chối
                       </Button>
                     </>
+                  ) : r.status === 'Chờ bạn ký duyệt' ? (
+                    <span style={{ fontSize: 11.5, color: '#64748B', fontStyle: 'italic' }}>Đang chờ phê duyệt</span>
+                  ) : r.status === 'Yêu cầu bổ sung' && r.requesterId === user?.id ? (
+                    <Button size="small" type="primary" icon={<EditOutlined />} onClick={() => handleOpenResubmission(r)} style={{ backgroundColor: '#D97706', borderColor: '#D97706' }}>
+                      Nộp bổ sung
+                    </Button>
                   ) : (
-                    <span style={{ fontSize: 11.5, color: '#64748B', fontStyle: 'italic' }}>Đã hoàn tất</span>
+                    <span style={{ fontSize: 11.5, color: '#64748B', fontStyle: 'italic' }}>
+                      {r.status === 'Yêu cầu bổ sung' ? 'Chờ người gửi bổ sung' : 'Đã hoàn tất'}
+                    </span>
                   )}
                 </div>
               ),
@@ -451,9 +670,8 @@ export const WorkflowRequestsModule: React.FC = () => {
         />
       </div>
 
-      {/* MODAL: Ký Số Điện Tử Phê Duyệt (Digital E-Signature / Token PKI) */}
       <Modal
-        title="Xác Thực Ký Số Điện Tử Hồ Sơ"
+        title="Ghi nhận quyết định phê duyệt"
         open={signModalOpen}
         onCancel={() => setSignModalOpen(false)}
         footer={null}
@@ -527,6 +745,12 @@ export const WorkflowRequestsModule: React.FC = () => {
                   <div style={{ fontSize: 10.5, color: '#64748B' }}>Session Token</div>
                 </div>
               </div>
+              {signMethod !== 'internal_esign' && (
+                <Alert style={{ marginTop: 8 }} type="warning" showIcon message="Nhà cung cấp ký số chưa được cấu hình. Phê duyệt sẽ không được ghi nhận qua CA." />
+              )}
+              {signingItem.tokenRequired && (
+                <Alert style={{ marginTop: 8 }} type="error" showIcon message="Tầng ngân sách yêu cầu ký CA. Nhà cung cấp chưa kết nối nên chưa thể phê duyệt hồ sơ này." />
+              )}
             </div>
 
             {signMethod === 'token_pki' && (
@@ -560,9 +784,10 @@ export const WorkflowRequestsModule: React.FC = () => {
                 type="primary"
                 icon={<CheckCircleOutlined />}
                 onClick={handleExecuteSign}
+                disabled={saving || signMethod !== 'internal_esign' || signingItem.tokenRequired}
                 style={{ backgroundColor: '#16A34A', borderColor: '#16A34A' }}
               >
-                Xác nhận Ký số &amp; Đóng mộc
+                Ghi nhận phê duyệt nội bộ
               </Button>
             </div>
           </div>
@@ -607,6 +832,7 @@ export const WorkflowRequestsModule: React.FC = () => {
                 type="primary"
                 danger={rejectType === 'reject'}
                 onClick={handleExecuteReject}
+                disabled={saving}
                 style={{ backgroundColor: rejectType === 'modify' ? '#D97706' : undefined, borderColor: rejectType === 'modify' ? '#D97706' : undefined }}
               >
                 {rejectType === 'modify' ? 'Gửi yêu cầu bổ sung' : 'Xác nhận từ chối'}
@@ -618,29 +844,33 @@ export const WorkflowRequestsModule: React.FC = () => {
 
       {/* MODAL: Tạo Yêu Cầu Trình Ký Mới 100% trường nhập */}
       <Modal
-        title="Khởi Tạo Hồ Sơ Trình Ký Số Điện Tử"
+        title={resubmittingItem ? `Nộp bổ sung hồ sơ ${resubmittingItem.code}` : 'Khởi tạo hồ sơ trình duyệt'}
         open={createModalOpen}
-        onCancel={() => setCreateModalOpen(false)}
+        onCancel={closeCreateModal}
         footer={null}
         width={760}
       >
         <Form form={createForm} layout="vertical" onFinish={handleCreateRequest} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
             <Form.Item name="code" label="Mã hồ sơ trình ký" rules={[{ required: true }]}>
-              <Input />
+              <Input disabled={Boolean(resubmittingItem)} />
             </Form.Item>
             <Form.Item name="workflowCode" label="Chọn luồng quy trình áp dụng" rules={[{ required: true }]}>
               <Select
-                options={[
-                  { label: 'WF-PURCHASE-01: Mua sắm thiết bị IT & Server IDC', value: 'WF-PURCHASE-01' },
-                  { label: 'WF-PAYMENT-02: Tạm ứng & Thanh toán chi phí', value: 'WF-PAYMENT-02' },
-                  { label: 'WF-CONTRACT-03: Thẩm định hợp đồng kinh tế', value: 'WF-CONTRACT-03' },
-                  { label: 'WF-LEAVE-04: Nghỉ phép năm & Công tác ngoại tỉnh', value: 'WF-LEAVE-04' },
-                ]}
+                options={workflowOptions}
+                disabled={Boolean(resubmittingItem)}
+                onChange={(value) => {
+                  customFormFields.forEach((field) => createForm.setFieldsValue({ [field.fieldName]: undefined }));
+                  setSelectedWorkflowCode(value);
+                  resetSelectedFiles();
+                  const blueprint = activeBlueprints.find((item) => item.workflowCode === value);
+                  if (blueprint) createForm.setFieldsValue({ category: blueprint.category });
+                }}
               />
             </Form.Item>
             <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true }]}>
               <Select
+                disabled={Boolean(resubmittingItem)}
                 options={[
                   { label: 'Khẩn cấp (P1) - SLA 2h', value: 'Khẩn cấp (P1)' },
                   { label: 'Cao (P2) - SLA 4h', value: 'Cao (P2)' },
@@ -650,20 +880,81 @@ export const WorkflowRequestsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="workflowName" label="Tiêu đề văn bản / Tờ trình" rules={[{ required: true, message: 'Nhập tiêu đề' }]}>
-            <Input placeholder="Ví dụ: Tờ trình đề xuất mua sắm 05 màn hình đồ họa Dell UltraSharp 4K" />
+          <Form.Item name="workflowName" label={currentFormFields.find((field) => field.fieldName === 'title')?.label || 'Tiêu đề văn bản / Tờ trình'} rules={[{ required: true, message: 'Nhập tiêu đề' }]}>
+            <Input disabled={Boolean(resubmittingItem)} placeholder="Ví dụ: Tờ trình đề xuất mua sắm 05 màn hình đồ họa Dell UltraSharp 4K" />
           </Form.Item>
 
-          <Form.Item name="summaryDetails" label="Nội dung tóm tắt & Sự cần thiết đầu tư" rules={[{ required: true }]}>
+          {resubmittingItem ? (
+            <Alert type="warning" showIcon message={resubmittingItem.approvalHistory?.[resubmittingItem.approvalHistory.length - 1]?.comments || 'Cập nhật hồ sơ theo ý kiến người duyệt, sau đó gửi lại ở cấp hiện tại.'} />
+          ) : null}
+
+          <Form.Item name="summaryDetails" label={resubmittingItem ? 'Nội dung hồ sơ đã cập nhật' : currentFormFields.find((field) => field.fieldName === 'content')?.label || 'Nội dung tóm tắt & Sự cần thiết đầu tư'} rules={[{ required: true }]}>
             <Input.TextArea rows={2} placeholder="Trình bày lý do, hiệu quả mang lại và căn cứ pháp lý..." />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="requester" label="Người lập tờ trình" rules={[{ required: true }]}>
-              <Input />
+          {customFormFields.map((field) => {
+            const fieldType = field.type.toLowerCase();
+            const control = fieldType.includes('dài') || fieldType.includes('long')
+              ? <Input.TextArea rows={3} />
+              : <Input type={fieldType.includes('số') || fieldType.includes('number') ? 'number' : fieldType.includes('ngày') || fieldType.includes('date') ? 'date' : 'text'} />;
+            return (
+              <Form.Item key={field.fieldName} name={field.fieldName} label={field.label} rules={[{ required: field.required, message: `Nhập ${field.label.toLowerCase()}` }]}>
+                {control}
+              </Form.Item>
+            );
+          })}
+
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="workflow-request-attachments" style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {attachmentField?.label || 'Tài liệu đính kèm'}{attachmentField?.required ? ' *' : ''}
+            </label>
+            <input
+              key={fileInputKey}
+              id="workflow-request-attachments"
+              type="file"
+              multiple
+              accept={attachmentField?.type.toLowerCase().includes('pdf') ? '.pdf,application/pdf' : undefined}
+              onChange={(event) => {
+                const files = Array.from(event.target.files || []);
+                const existingCount = resubmittingItem?.attachments?.length || 0;
+                if (existingCount + files.length > 20) {
+                  message.error('Tổng số tệp đính kèm không được vượt quá 20.');
+                  resetSelectedFiles();
+                  return;
+                }
+                if (files.some((file) => file.size <= 0 || file.size > 50 * 1024 * 1024)) {
+                  message.error('Mỗi tệp phải có dung lượng lớn hơn 0 và không vượt quá 50 MB.');
+                  resetSelectedFiles();
+                  return;
+                }
+                if (attachmentField?.type.toLowerCase().includes('pdf') && files.some((file) => !file.name.toLowerCase().endsWith('.pdf'))) {
+                  message.error('Trường này chỉ nhận tệp PDF.');
+                  resetSelectedFiles();
+                  return;
+                }
+                setSelectedFiles(files);
+              }}
+              style={{ display: 'block', width: '100%', padding: 10, border: '1px solid #D0D5DD', borderRadius: 6, background: '#FFFFFF' }}
+            />
+            <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 5 }}>
+              Tối đa 20 tệp, mỗi tệp không quá 50 MB. Tệp hiện có: {resubmittingItem?.attachments?.length || 0}.
+            </div>
+            {selectedFiles.length > 0 && (
+              <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+                {selectedFiles.map((file, index) => <div key={`${file.name}-${index}`} style={{ fontSize: 12, color: '#334155' }}>{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</div>)}
+              </div>
+            )}
+          </div>
+
+          {resubmittingItem ? (
+            <Form.Item name="supplementalResponse" label="Phản hồi yêu cầu bổ sung" rules={[{ required: true, message: 'Nêu rõ nội dung đã bổ sung' }]}>
+              <Input.TextArea rows={2} placeholder="Mô tả thông tin đã cập nhật hoặc tài liệu đã bổ sung..." />
             </Form.Item>
+          ) : null}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="department" label="Đơn vị / Phòng ban" rules={[{ required: true }]}>
-              <Input />
+              <Input disabled={Boolean(resubmittingItem)} />
             </Form.Item>
             <Form.Item name="budgetAmount" label="Dự toán kinh phí (VNĐ)">
               <Input type="number" min={0} step={10000000} />
@@ -671,9 +962,9 @@ export const WorkflowRequestsModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-            <Button onClick={() => setCreateModalOpen(false)}>Hủy bỏ</Button>
+            <Button onClick={closeCreateModal}>Hủy bỏ</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Trình duyệt hồ sơ
+              {resubmittingItem ? 'Nộp bổ sung và gửi lại' : 'Trình duyệt hồ sơ'}
             </Button>
           </div>
         </Form>
@@ -695,13 +986,14 @@ export const WorkflowRequestsModule: React.FC = () => {
                   <div style={{ fontSize: 12, color: '#009688', fontWeight: 700 }}>{detailItem.code} · {detailItem.workflowCode}</div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginTop: 2 }}>{detailItem.workflowName}</div>
                 </div>
-                <Tag color={detailItem.status === 'Chờ bạn ký duyệt' ? 'error' : 'success'}>
+                <Tag color={detailItem.status === 'Chờ bạn ký duyệt' ? 'error' : detailItem.status === 'Yêu cầu bổ sung' ? 'warning' : detailItem.status === 'Đã từ chối' ? 'default' : 'success'}>
                   {detailItem.status}
                 </Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 Người gửi: <strong>{detailItem.requester}</strong> ({detailItem.department}) · {detailItem.submittedAt}
               </div>
+              {detailItem.delegatedFor && <div style={{ fontSize: 12, color: '#7C3AED', marginTop: 4 }}>Bạn đang xử lý theo ủy quyền của {detailItem.delegatedFor}.</div>}
               {detailItem.budgetAmount > 0 && (
                 <div style={{ fontSize: 14, color: '#16A34A', fontWeight: 800, marginTop: 4 }}>
                   Tổng ngân sách đề xuất: {detailItem.budgetAmount.toLocaleString('vi-VN')} ₫
@@ -715,14 +1007,27 @@ export const WorkflowRequestsModule: React.FC = () => {
               <div style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.6 }}>{detailItem.summaryDetails}</div>
             </div>
 
+            {detailItem.approvalFormFields?.some((field) => !['title', 'content', 'attachments'].includes(field.fieldName)) && (
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+                <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Thông tin biểu mẫu quy trình</div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {detailItem.approvalFormFields.filter((field) => !['title', 'content', 'attachments'].includes(field.fieldName)).map((field) => (
+                    <div key={field.fieldName} style={{ fontSize: 12.5, color: '#334155' }}>
+                      <strong>{field.label}:</strong> {String(detailItem.formData?.[field.fieldName] ?? '—') || '—'}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Attachments Section */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <PaperClipOutlined style={{ color: '#2563EB' }} /> Danh Sách Chứng Từ &amp; Tệp Đính Kèm ({detailItem.attachments.length}):
+                <PaperClipOutlined style={{ color: '#2563EB' }} /> Danh Sách Chứng Từ &amp; Tệp Đính Kèm ({(detailItem.attachments || []).length}):
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {detailItem.attachments.map((att, idx) => (
+                {(detailItem.attachments || []).map((att, idx) => (
                   <div
                     key={idx}
                     style={{
@@ -747,42 +1052,44 @@ export const WorkflowRequestsModule: React.FC = () => {
                     <Button
                       size="small"
                       icon={<DownloadOutlined />}
-                      onClick={() => message.success(`Đang tải file ${att.fileName}...`)}
+                      loading={downloadingFileId === att.fileNodeId}
+                      onClick={() => void handleDownloadAttachment(att)}
                     >
                       Tải xuống
                     </Button>
                   </div>
                 ))}
+                {!detailItem.attachments?.length && <div style={{ fontSize: 12, color: '#64748B' }}>Hồ sơ chưa có tệp đính kèm.</div>}
               </div>
             </div>
 
-            {/* Digital Signature Audit Stamp */}
-            {detailItem.digitalSignatureInfo && (
-              <div style={{ border: '2px solid #16A34A', background: '#F0FDF4', borderRadius: 8, padding: 14 }}>
+            {detailItem.approvalHistory?.length ? (
+              <div style={{ border: '1px solid #D1FAE5', background: '#ECFDF5', borderRadius: 8, padding: 14 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#166534', fontWeight: 800, fontSize: 13 }}>
-                  <SafetyCertificateOutlined style={{ fontSize: 20 }} /> CHỨNG THƯ KÝ SỐ ĐIỆN TỬ HỢP LỆ
+                  <SafetyCertificateOutlined style={{ fontSize: 20 }} /> LỊCH SỬ PHÊ DUYỆT NỘI BỘ
                 </div>
-                <div style={{ fontSize: 12, color: '#166534', marginTop: 6 }}>
-                  <div>Người ký: <strong>{detailItem.digitalSignatureInfo.signerName}</strong></div>
-                  <div>Chứng thư: <strong>{detailItem.digitalSignatureInfo.certificateId}</strong></div>
-                  <div>Thời gian ký: {detailItem.digitalSignatureInfo.timestamp}</div>
-                  <div style={{ fontSize: 10.5, color: '#64748B', marginTop: 2, wordBreak: 'break-all' }}>
-                    SHA-256 Hash: {detailItem.digitalSignatureInfo.hash}
-                  </div>
+                <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                  {detailItem.approvalHistory.map((event) => (
+                    <div key={event.txCode} style={{ fontSize: 12, color: '#166534', lineHeight: 1.6 }}>
+                      Cấp {event.level}: <strong>{event.approver}</strong> · {event.decision} · {new Date(event.timestamp).toLocaleString('vi-VN')}
+                      {event.comments ? <div>Ý kiến: {event.comments}</div> : null}
+                      <div style={{ fontSize: 10.5, color: '#64748B', wordBreak: 'break-all' }}>SHA-256: {event.sha256Hash}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* Action Buttons */}
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất phiếu trình ký số ${detailItem.code} (PDF)`)}
+                onClick={() => exportRequest(detailItem)}
                 style={{ flex: 1 }}
               >
                 In Phiếu Trình Ký (PDF)
               </Button>
-              {detailItem.status === 'Chờ bạn ký duyệt' && (
+              {detailItem.status === 'Chờ bạn ký duyệt' && (isAdmin || detailItem.canDecide) && (
                 <Button
                   type="primary"
                   icon={<CheckCircleOutlined />}
@@ -792,7 +1099,12 @@ export const WorkflowRequestsModule: React.FC = () => {
                   }}
                   style={{ backgroundColor: '#16A34A', borderColor: '#16A34A', flex: 1 }}
                 >
-                  Ký số duyệt ngay
+                  Phê duyệt ngay
+                </Button>
+              )}
+              {detailItem.status === 'Yêu cầu bổ sung' && detailItem.requesterId === user?.id && (
+                <Button type="primary" icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); handleOpenResubmission(detailItem); }} style={{ backgroundColor: '#D97706', borderColor: '#D97706', flex: 1 }}>
+                  Nộp bổ sung
                 </Button>
               )}
             </div>

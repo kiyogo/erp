@@ -2,28 +2,31 @@ import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   PlusOutlined,
-  CalendarOutlined,
   DesktopOutlined,
   ReloadOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
   UserOutlined,
-  SettingOutlined,
   DownloadOutlined,
   ClockCircleOutlined,
-  TeamOutlined,
-  VideoCameraOutlined,
   SearchOutlined,
   CheckOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  InfoCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Switch } from '../../custom-ui';
-import { dataService, MeetingRoom, RoomBooking } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
+import { MeetingRoom, RoomBooking } from '../../services/dataService';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { getMeetingRoomMetrics, meetingTimesOverlap } from './meetingRoomRules';
+
+const currentBusinessDate = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+
+const requestErrorMessage = (error: any) => error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Không thể hoàn tất thao tác.';
 
 export const MeetingRoomsModule: React.FC = () => {
+  const { user } = useAuth();
+  const canManageRooms = user?.role?.toUpperCase() === 'ADMIN';
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
@@ -32,58 +35,130 @@ export const MeetingRoomsModule: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [roomModalOpen, setRoomModalOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [settings, setSettings] = useState({ key: '', maxDuration: 120, maxAdvanceDays: 14 });
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [roomForm] = Form.useForm();
   const [settingsForm] = Form.useForm();
 
   // Selected date for calendar view
-  const [calendarDate, setCalendarDate] = useState(new Date().toISOString().substring(0, 10));
+  const [calendarDate, setCalendarDate] = useState(currentBusinessDate());
 
-  const loadData = () => {
-    setRooms(dataService.getMeetingRooms());
-    setBookings(dataService.getRoomBookings());
+  const loadData = async () => {
+    try {
+      const [roomResponse, bookingResponse, settingsResponse] = await Promise.all([
+        collectionsApi.get<MeetingRoom>('meeting_rooms', { limit: 500 }),
+        collectionsApi.get<RoomBooking>('room_bookings', { limit: 500 }),
+        canManageRooms ? collectionsApi.get<any>('meeting_room_settings', { limit: 1 }) : Promise.resolve({ data: { data: [] } } as any),
+      ]);
+      setRooms(roomResponse.data.data);
+      setBookings(bookingResponse.data.data);
+      if (settingsResponse.data.data[0]) {
+        setSettings(settingsResponse.data.data[0]);
+        settingsForm.setFieldsValue(settingsResponse.data.data[0]);
+      } else if (canManageRooms) {
+        settingsForm.setFieldsValue({ maxDuration: 120, maxAdvanceDays: 14 });
+      }
+    } catch (error) {
+      message.error(requestErrorMessage(error));
+    }
   };
 
   useEffect(() => {
-    loadData();
-    const unsub = dataService.subscribe(loadData);
-    return unsub;
-  }, []);
+    void loadData();
+  }, [canManageRooms]);
 
-  const handleCreateBooking = (values: any) => {
-    dataService.addRoomBooking({
-      ...values,
-      participantsCount: Number(values.participantsCount) || 4,
-      status: 'Đã xác nhận',
-    });
-    message.success(`Đã đặt phòng ${values.roomName} thành công!`);
-    setModalOpen(false);
+  const openBooking = (roomKey?: string, date = calendarDate, timeSlot = '09:00 - 10:00') => {
     form.resetFields();
-    loadData();
+    form.setFieldsValue({ roomKey: roomKey || rooms[0]?.key, date, timeSlot });
+    setModalOpen(true);
   };
 
-  const handleCreateRoom = (values: any) => {
-    const newRoom: MeetingRoom = {
-      key: String(Date.now()),
-      name: values.name,
-      capacity: Number(values.capacity) || 10,
-      location: values.location || 'Trụ sở Tầng 4',
-      equipment: (values.equipment || 'Máy chiếu 4K, Loa Polycom').split(',').map((s: string) => s.trim()),
-      status: 'Trống',
-    };
-    const updated = [newRoom, ...rooms];
-    setRooms(updated);
-    dataService.saveGenericData('meeting_rooms', updated);
-    message.success(`Đã thêm phòng họp mới: ${values.name}`);
-    setRoomModalOpen(false);
-    roomForm.resetFields();
+  const handleCreateBooking = async (values: any) => {
+    setSaving(true);
+    try {
+      const created = await collectionsApi.create<Partial<RoomBooking>>('room_bookings', {
+        key: crypto.randomUUID(), roomKey: values.roomKey, meetingTitle: values.meetingTitle,
+        participantsCount: Number(values.participantsCount), date: values.date, timeSlot: values.timeSlot,
+      });
+      const booking = created.data.record as RoomBooking;
+      setBookings((previous) => [booking, ...previous]);
+      message.success(`Đã đặt phòng ${booking.roomName} thành công.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error) {
+      message.error(requestErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleCancelBooking = (key: string) => {
-    dataService.cancelRoomBooking(key);
-    message.info('Đã hủy lịch đặt phòng thành công');
-    loadData();
+  const handleCreateRoom = async (values: any) => {
+    setSaving(true);
+    try {
+      const created = await collectionsApi.create<Partial<MeetingRoom>>('meeting_rooms', {
+        key: crypto.randomUUID(), name: values.name, capacity: Number(values.capacity),
+        location: values.location, equipment: String(values.equipment || '').split(',').map((item) => item.trim()).filter(Boolean),
+      });
+      setRooms((previous) => [created.data.record as MeetingRoom, ...previous]);
+      message.success(`Đã thêm phòng họp ${values.name}.`);
+      setRoomModalOpen(false);
+      roomForm.resetFields();
+    } catch (error) {
+      message.error(requestErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const handleCancelBooking = async (record: RoomBooking) => {
+    setSaving(true);
+    try {
+      const updated = await collectionsApi.patch<RoomBooking>('room_bookings', record.key, { status: 'Đã hủy' });
+      setBookings((previous) => previous.map((booking) => booking.key === record.key ? updated.data.record : booking));
+      message.success('Đã hủy lịch đặt phòng.');
+    } catch (error) {
+      message.error(requestErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRoomStatusChange = async (room: MeetingRoom, status: MeetingRoom['status']) => {
+    setSaving(true);
+    try {
+      const updated = await collectionsApi.patch<MeetingRoom>('meeting_rooms', room.key, { status });
+      setRooms((previous) => previous.map((item) => item.key === room.key ? updated.data.record : item));
+      message.success(`Đã cập nhật trạng thái phòng ${room.name}.`);
+    } catch (error) {
+      message.error(requestErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    if (!canManageRooms) return;
+    setSaving(true);
+    try {
+      const values = await settingsForm.validateFields();
+      const payload = { maxDuration: Number(values.maxDuration), maxAdvanceDays: Number(values.maxAdvanceDays) };
+      const saved = settings.key
+        ? await collectionsApi.patch<any>('meeting_room_settings', 'default', payload)
+        : await collectionsApi.create<any>('meeting_room_settings', { key: 'default', ...payload });
+      setSettings(saved.data.record);
+      message.success('Đã lưu giới hạn đặt phòng.');
+    } catch (error) {
+      message.error(requestErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const metrics = getMeetingRoomMetrics(rooms, bookings, currentBusinessDate());
+  const maxBookingDate = new Date(Date.parse(`${currentBusinessDate()}T00:00:00.000Z`) + Number(settings.maxAdvanceDays || 14) * 86_400_000).toISOString().slice(0, 10);
+  const filteredHistory = bookings.filter((booking) => !searchText
+    || [booking.meetingTitle, booking.booker, booking.roomName].some((value) => String(value || '').toLowerCase().includes(searchText.toLowerCase())));
 
   const isOverview = currentPath === '/meeting-rooms' || currentPath === '/meeting-rooms/overview';
   const isList = currentPath === '/meeting-rooms/list';
@@ -160,8 +235,8 @@ export const MeetingRoomsModule: React.FC = () => {
       width: 100,
       render: (_: any, record: RoomBooking) => (
         <div style={{ whiteSpace: 'nowrap' }}>
-          {record.status === 'Đã xác nhận' && (
-            <Button size="small" danger onClick={() => handleCancelBooking(record.key)}>
+          {record.status === 'Đã xác nhận' && (canManageRooms || record.bookerId === user?.id) && (
+            <Button size="small" danger loading={saving} onClick={() => void handleCancelBooking(record)}>
               Hủy lịch
             </Button>
           )}
@@ -199,7 +274,7 @@ export const MeetingRoomsModule: React.FC = () => {
       key: 'equipment',
       render: (eqs: string[]) => (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {eqs.map((eq, i) => (
+          {(eqs || []).map((eq, i) => (
             <Tag key={i} color="blue" style={{ fontSize: 11.5 }}>
               {eq}
             </Tag>
@@ -211,11 +286,15 @@ export const MeetingRoomsModule: React.FC = () => {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
-      render: (st: string) => (
-        <Tag color={st === 'Trống' ? 'success' : st === 'Đang họp' ? 'processing' : 'warning'}>
-          {st}
-        </Tag>
-      ),
+      render: (status: string, record: MeetingRoom) => canManageRooms ? (
+        <Select
+          value={status}
+          disabled={saving}
+          onChange={(value: MeetingRoom['status']) => void handleRoomStatusChange(record, value)}
+          options={['Trống', 'Đang sử dụng', 'Bảo trì', 'Tạm ngưng'].map((value) => ({ label: value, value }))}
+          style={{ minWidth: 150 }}
+        />
+      ) : <Tag color={status === 'Trống' ? 'success' : status === 'Đang sử dụng' ? 'processing' : 'warning'}>{status}</Tag>,
     },
     {
       title: 'Thao tác',
@@ -225,10 +304,8 @@ export const MeetingRoomsModule: React.FC = () => {
           <Button
             size="small"
             type="primary"
-            onClick={() => {
-              form.setFieldsValue({ roomName: record.name });
-              setModalOpen(true);
-            }}
+            disabled={saving || ['Bảo trì', 'Tạm ngưng'].includes(record.status)}
+            onClick={() => openBooking(record.key)}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Đặt lịch
@@ -248,31 +325,31 @@ export const MeetingRoomsModule: React.FC = () => {
             <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
               {rooms.length} phòng họp
             </div>
-            <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phòng họp VIP, Hội nghị &amp; Brainstorm</div>
+            <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Danh mục phòng đang được quản lý</div>
           </div>
 
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
             <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lịch họp đã xác nhận hôm nay</div>
             <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-              {bookings.filter((b) => b.status === 'Đã xác nhận').length} cuộc họp
+              {metrics.todayBookings} cuộc họp
             </div>
-            <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Không phát sinh trùng lịch hoặc xung đột</div>
+            <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Chỉ lịch đã xác nhận trong ngày hiện tại</div>
           </div>
 
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-            <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hạ tầng thiết bị hội nghị trực tuyến</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-              100% Sẵn sàng
+            <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phòng bảo trì hoặc tạm ngưng</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
+              {metrics.unavailableRooms} phòng
             </div>
-            <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Polycom 4K, Smart Screen &amp; Zoom Room</div>
+            <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Theo trạng thái hiện tại trong danh mục</div>
           </div>
 
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
             <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Công suất khai thác phòng họp</div>
             <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-              78.5% Tối ưu
+              {metrics.utilizationPercent}%
             </div>
-            <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Đỉnh điểm lúc 09:30 - 11:00 &amp; 14:00 - 16:30</div>
+            <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>{metrics.bookedHours} giờ đã đặt hôm nay</div>
           </div>
         </div>
       )}
@@ -283,16 +360,15 @@ export const MeetingRoomsModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Trạng thái phòng họp trực tiếp</h3>
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<DesktopOutlined />} onClick={() => { roomForm.resetFields(); setRoomModalOpen(true); }}>
+              {canManageRooms && <Button icon={<DesktopOutlined />} onClick={() => { roomForm.resetFields(); setRoomModalOpen(true); }}>
                 Thêm phòng họp
-              </Button>
+              </Button>}
+              <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>Tải lại</Button>
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
-                onClick={() => {
-                  form.resetFields();
-                  setModalOpen(true);
-                }}
+                onClick={() => openBooking()}
+                disabled={!rooms.some((room) => !['Bảo trì', 'Tạm ngưng'].includes(room.status))}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               >
                 Đặt phòng ngay
@@ -303,7 +379,7 @@ export const MeetingRoomsModule: React.FC = () => {
           {/* Meeting Rooms Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 20 }}>
             {rooms.map((room) => {
-              const isAvailable = room.status === 'Trống';
+              const isAvailable = !['Bảo trì', 'Tạm ngưng'].includes(room.status);
               return (
                 <div
                   key={room.key}
@@ -332,7 +408,7 @@ export const MeetingRoomsModule: React.FC = () => {
                     <div style={{ marginTop: 12 }}>
                       <div style={{ fontSize: 11.5, color: '#64748B', fontWeight: 600, marginBottom: 6 }}>Trang thiết bị:</div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {room.equipment.map((eq, eIdx) => (
+                        {(room.equipment || []).map((eq, eIdx) => (
                           <span
                             key={eIdx}
                             style={{
@@ -353,10 +429,8 @@ export const MeetingRoomsModule: React.FC = () => {
 
                   <Button
                     style={{ width: '100%', borderColor: '#009688', color: '#009688' }}
-                    onClick={() => {
-                      form.setFieldsValue({ roomName: room.name });
-                      setModalOpen(true);
-                    }}
+                    disabled={!isAvailable || !rooms.length}
+                    onClick={() => openBooking(room.key)}
                   >
                     Đặt phòng này ngay
                   </Button>
@@ -384,7 +458,7 @@ export const MeetingRoomsModule: React.FC = () => {
               style={{ width: 340, borderRadius: 6 }}
               allowClear
             />
-            <Button
+            {canManageRooms && <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => {
@@ -394,11 +468,12 @@ export const MeetingRoomsModule: React.FC = () => {
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
               Thêm phòng họp mới
-            </Button>
+            </Button>}
+            <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>Tải lại</Button>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={rooms.filter((r) => !searchText || (r.name || '').toLowerCase().includes(searchText.toLowerCase()) || (r.location || '').toLowerCase().includes(searchText.toLowerCase()))}
+              dataSource={rooms.filter((r) => !searchText || [r.name, r.location, ...(r.equipment || [])].some((value) => String(value || '').toLowerCase().includes(searchText.toLowerCase())))}
               columns={roomColumns}
             />
           </div>
@@ -421,17 +496,10 @@ export const MeetingRoomsModule: React.FC = () => {
                 Hôm nay: {calendarDate}
               </Tag>
             </div>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                form.setFieldsValue({ date: calendarDate });
-                setModalOpen(true);
-              }}
-              style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-            >
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openBooking(undefined, calendarDate)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Đặt lịch theo giờ
             </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>Tải lại</Button>
           </div>
 
           {/* Time Slot Grid Matrix */}
@@ -457,9 +525,8 @@ export const MeetingRoomsModule: React.FC = () => {
                       <ClockCircleOutlined style={{ marginRight: 6, color: '#2563EB' }} /> {slot}
                     </td>
                     {rooms.map((r) => {
-                      const matchBooking = bookings.find(
-                        (b) => b.roomName === r.name && b.date === calendarDate && b.timeSlot === slot && b.status === 'Đã xác nhận'
-                      );
+                      const matchBooking = bookings.find((b) => (b.roomKey === r.key || b.roomName === r.name)
+                        && b.date === calendarDate && b.status === 'Đã xác nhận' && meetingTimesOverlap(b.timeSlot, slot));
 
                       return (
                         <td key={r.key} style={{ padding: '8px 12px' }}>
@@ -482,10 +549,8 @@ export const MeetingRoomsModule: React.FC = () => {
                             </div>
                           ) : (
                             <button
-                              onClick={() => {
-                                form.setFieldsValue({ roomName: r.name, date: calendarDate, timeSlot: slot });
-                                setModalOpen(true);
-                              }}
+                              disabled={['Bảo trì', 'Tạm ngưng'].includes(r.status)}
+                              onClick={() => openBooking(r.key, calendarDate, slot)}
                               style={{
                                 width: '100%',
                                 padding: '8px 10px',
@@ -535,24 +600,17 @@ export const MeetingRoomsModule: React.FC = () => {
               style={{ width: 340, borderRadius: 6 }}
               allowClear
             />
-            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo lịch sử đặt phòng họp!')}>
+            <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Lich_su_dat_phong_hop.xlsx', generateValidXlsxBlob([
+              ['Phòng họp', 'Tiêu đề cuộc họp', 'Người đặt', 'Ngày', 'Khung giờ', 'Số người', 'Trạng thái'],
+              ...filteredHistory.map((booking) => [booking.roomName, booking.meetingTitle, booking.booker, booking.date, booking.timeSlot, booking.participantsCount, booking.status]),
+            ]))}>
               Xuất báo cáo Excel
             </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>Tải lại</Button>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                ...bookings,
-                { key: 'h-1', roomName: 'Phòng Họp Diamond', meetingTitle: 'Đại hội đồng Cổ đông Thường niên 2026', booker: 'Nguyễn Văn Minh (CEO)', participantsCount: 20, date: '2026-08-20', timeSlot: '08:30 - 11:30', status: 'Đã hoàn tất' },
-                { key: 'h-2', roomName: 'Phòng Họp Ruby', meetingTitle: 'Phỏng vấn ứng viên Senior DevOps', booker: 'Lê Hoàng Yến (HR)', participantsCount: 3, date: '2026-08-22', timeSlot: '14:00 - 15:00', status: 'Đã hoàn tất' },
-                { key: 'h-3', roomName: 'Phòng Họp VIP Sapphire', meetingTitle: 'Ký kết hợp đồng đối tác AWS Cloud', booker: 'Trần Tuấn Anh (CTO)', participantsCount: 6, date: '2026-08-24', timeSlot: '10:00 - 11:30', status: 'Đã hoàn tất' },
-              ].filter(
-                (b) =>
-                  !searchText ||
-                  (b.meetingTitle || '').toLowerCase().includes(searchText.toLowerCase()) ||
-                  (b.booker || '').toLowerCase().includes(searchText.toLowerCase()) ||
-                  (b.roomName || '').toLowerCase().includes(searchText.toLowerCase())
-              )}
+              dataSource={filteredHistory}
               columns={[
                 { title: 'Phòng họp', dataIndex: 'roomName', key: 'roomName', render: (n: string) => <strong style={{ color: '#009688' }}>{n}</strong> },
                 { title: 'Tiêu đề cuộc họp', dataIndex: 'meetingTitle', key: 'meetingTitle' },
@@ -568,25 +626,20 @@ export const MeetingRoomsModule: React.FC = () => {
       )}
 
       {/* VIEW 5: SETTINGS (Thiết lập quy định đặt phòng & Hội nghị) */}
-      {isSettings && (
+      {isSettings && canManageRooms && (
         <div style={{ maxWidth: 840, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <Card title="Quy định & Chính sách Đặt phòng họp" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
-            <Form form={settingsForm} layout="vertical" initialValues={{ maxDuration: 120, maxAdvanceDays: 14, autoCancelMinutes: 15, autoMeetingLink: true, reminderMinutes: 15 }}>
+            <Form form={settingsForm} layout="vertical" initialValues={{ maxDuration: 120, maxAdvanceDays: 14 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <Form.Item label="Thời lượng họp tối đa một lượt" name="maxDuration">
-                  <Input type="number" suffix="phút" />
+                <Form.Item label="Thời lượng họp tối đa một lượt" name="maxDuration" rules={[{ required: true }]}>
+                  <Input type="number" min={15} max={240} suffix="phút" />
                 </Form.Item>
-                <Form.Item label="Số ngày được phép đặt trước tối đa" name="maxAdvanceDays">
-                  <Input type="number" suffix="ngày" />
+                <Form.Item label="Số ngày được phép đặt trước tối đa" name="maxAdvanceDays" rules={[{ required: true }]}>
+                  <Input type="number" min={1} max={365} suffix="ngày" />
                 </Form.Item>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <Form.Item label="Tự động hủy lịch nếu không check-in sau" name="autoCancelMinutes">
-                  <Input type="number" suffix="phút" />
-                </Form.Item>
-                <Form.Item label="Gửi thông báo nhắc lịch trước" name="reminderMinutes">
-                  <Input type="number" suffix="phút" />
-                </Form.Item>
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 6, padding: 12, color: '#64748B', fontSize: 13 }}>
+                Tự động hủy sau check-in và thông báo nhắc lịch chưa được kết nối với dịch vụ check-in hoặc gửi thông báo.
               </div>
 
               <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16, marginTop: 8 }}>
@@ -599,27 +652,27 @@ export const MeetingRoomsModule: React.FC = () => {
                       <strong>Google Meet API</strong>
                       <div style={{ fontSize: 12, color: '#64748B' }}>Tự động tạo link phòng họp ảo Google Meet khi đặt phòng</div>
                     </div>
-                    <Switch defaultChecked />
+                    <Switch disabled checked={false} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6 }}>
                     <div>
                       <strong>Microsoft Teams Integration</strong>
                       <div style={{ fontSize: 12, color: '#64748B' }}>Đồng bộ lịch phòng họp với Microsoft Outlook 365</div>
                     </div>
-                    <Switch defaultChecked />
+                    <Switch disabled checked={false} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6 }}>
                     <div>
                       <strong>Thông báo qua Kênh Chat Nội bộ</strong>
                       <div style={{ fontSize: 12, color: '#64748B' }}>Gửi bot thông báo lịch họp đến kênh #thông-báo-chung</div>
                     </div>
-                    <Switch defaultChecked />
+                    <Switch disabled checked={false} />
                   </div>
                 </div>
               </div>
 
               <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-                <Button type="primary" onClick={() => message.success('Đã lưu cấu hình quy chế phòng họp thành công!')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+                <Button type="primary" loading={saving} onClick={() => void handleSaveSettings()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                   Lưu thiết lập
                 </Button>
               </div>
@@ -627,6 +680,7 @@ export const MeetingRoomsModule: React.FC = () => {
           </Card>
         </div>
       )}
+      {isSettings && !canManageRooms && <Card>Chỉ quản trị viên được xem và thay đổi quy định đặt phòng họp.</Card>}
 
       {/* Modal Add Booking */}
       <Modal
@@ -637,27 +691,25 @@ export const MeetingRoomsModule: React.FC = () => {
         width={480}
       >
         <Form form={form} layout="vertical" onFinish={handleCreateBooking} style={{ marginTop: 16 }}>
-          <Form.Item name="roomName" label="Chọn phòng họp" initialValue={rooms[0]?.name || 'Phòng Họp Diamond'}>
+          <Form.Item name="roomKey" label="Chọn phòng họp" rules={[{ required: true, message: 'Chọn phòng họp' }]}>
             <Select
-              options={rooms.map((r) => ({ label: `${r.name} (${r.capacity} chỗ - ${r.location})`, value: r.name }))}
+              options={rooms.filter((room) => !['Bảo trì', 'Tạm ngưng'].includes(room.status)).map((room) => ({ label: `${room.name} · ${room.capacity} chỗ · ${room.location}`, value: room.key }))}
             />
           </Form.Item>
           <Form.Item name="meetingTitle" label="Tiêu đề cuộc họp" rules={[{ required: true, message: 'Nhập tiêu đề' }]}>
             <Input placeholder="Ví dụ: Họp bàn chiến lược kinh doanh Q3" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="booker" label="Người đặt phòng" initialValue="Administrator" rules={[{ required: true }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item name="participantsCount" label="Số người tham gia" initialValue={6}>
+            <div style={{ paddingTop: 5, color: '#64748B', fontSize: 13 }}>Người đặt: {user?.name || 'Tài khoản hiện tại'}</div>
+            <Form.Item name="participantsCount" label="Số người tham gia" rules={[{ required: true, message: 'Nhập số người tham gia' }]}>
               <Input type="number" min={1} />
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="date" label="Ngày họp" initialValue={calendarDate}>
-              <Input type="date" />
+            <Form.Item name="date" label="Ngày họp" rules={[{ required: true, message: 'Chọn ngày họp' }]}>
+              <Input type="date" min={currentBusinessDate()} max={maxBookingDate} />
             </Form.Item>
-            <Form.Item name="timeSlot" label="Khung giờ" initialValue="09:00 - 10:00">
+            <Form.Item name="timeSlot" label="Khung giờ" rules={[{ required: true, message: 'Chọn khung giờ' }]}>
               <Select
                 options={timeSlots.map((s) => ({ label: s, value: s }))}
               />
@@ -665,7 +717,7 @@ export const MeetingRoomsModule: React.FC = () => {
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={!rooms.some((room) => !['Bảo trì', 'Tạm ngưng'].includes(room.status))} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Xác nhận đặt phòng
             </Button>
           </div>
@@ -685,19 +737,19 @@ export const MeetingRoomsModule: React.FC = () => {
             <Input placeholder="Ví dụ: Phòng Họp VIP Sapphire" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="capacity" label="Sức chứa" initialValue={12} rules={[{ required: true }]}>
-              <Input type="number" min={2} />
+            <Form.Item name="capacity" label="Sức chứa" rules={[{ required: true }]}>
+              <Input type="number" min={1} />
             </Form.Item>
-            <Form.Item name="location" label="Vị trí lắp đặt" initialValue="Trụ sở Tầng 4" rules={[{ required: true }]}>
+            <Form.Item name="location" label="Vị trí lắp đặt" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
           </div>
-          <Form.Item name="equipment" label="Thiết bị hội nghị" initialValue="Màn hình TV 75 inch 4K, Micro Polycom, Bảng viết kính">
-            <Input />
+          <Form.Item name="equipment" label="Thiết bị hội nghị">
+            <Input placeholder="Nhập danh sách thiết bị, cách nhau bằng dấu phẩy" />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setRoomModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu phòng họp
             </Button>
           </div>

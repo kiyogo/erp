@@ -21,6 +21,8 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Steps } from '../../custom-ui';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export interface TransferItem {
   key: string;
@@ -58,13 +60,7 @@ export const AssetTransferModule: React.FC = () => {
   const [data, setData] = useState<TransferItem[]>(INITIAL_TRANSFERS);
 
   useEffect(() => {
-    const list = dataService.getGenericData('asset_transfers');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('asset_transfers');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
+    void loadData();
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -77,9 +73,19 @@ export const AssetTransferModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [receiveModalOpen, setReceiveModalOpen] = useState(false);
   const [receiveTarget, setReceiveTarget] = useState<TransferItem | null>(null);
-  const [receiveConditionText, setReceiveConditionText] = useState('Đã tiếp nhận đầy đủ, thiết bị hoạt động tốt, không hư hỏng');
+  const [receiveConditionText, setReceiveConditionText] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const [form] = Form.useForm();
+
+  const loadData = async () => {
+    try {
+      const response = await collectionsApi.get<TransferItem>('asset_transfers', { limit: 500 });
+      setData((response.data?.data || []).map((item: any) => ({ ...item, key: item.id || item.key })));
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách điều chuyển tài sản.');
+    }
+  };
 
   // Metrics
   const totalTransfers = data.length;
@@ -90,99 +96,154 @@ export const AssetTransferModule: React.FC = () => {
   const handleOpenCreate = () => {
     form.resetFields();
     form.setFieldsValue({
-      transferCode: `DC-2026-00${data.length + 1}`,
-      transferDate: new Date().toISOString().substring(0, 10),
-      expectedDeliveryDate: new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10),
-      fromLocation: 'Trụ sở chính Hà Nội',
-      fromDepartment: 'Kho Thiết Bị Hà Nội',
-      fromCustodian: 'Vũ Minh Trí',
-      toLocation: 'Chi nhánh TP.HCM',
-      toDepartment: 'Khối Kinh Doanh & Tiếp Thị',
-      toCustodian: 'Phạm Hồng Nhung',
-      carrierName: 'Viettel Post Express',
-      trackingCode: `VTP-${String(Date.now()).slice(-6)}`,
-      shippingCost: 850000,
-      approver: 'Trần Tuấn Anh (CTO)',
-      condition: 'Mới 100%, nguyên vẹn, đóng gói chống sốc',
+      transferDate: new Date().toLocaleDateString('sv-SE'),
+      shippingCost: 0,
     });
     setModalOpen(true);
   };
 
-  const handleCreate = (values: any) => {
+  const handleCreate = async (values: any) => {
+    if (data.some((item) => item.transferCode.trim().toLowerCase() === String(values.transferCode).trim().toLowerCase())) {
+      message.error('Mã lệnh điều chuyển đã tồn tại.');
+      return;
+    }
+    const cost = Number(values.shippingCost || 0);
+    if (!Number.isFinite(cost) || cost < 0 || String(values.expectedDeliveryDate) < String(values.transferDate)) {
+      message.error('Cước vận chuyển phải không âm và ngày nhận dự kiến không sớm hơn ngày gửi.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const assets = await collectionsApi.get<any>('asset_items', { limit: 500 });
+      const asset = (assets.data?.data || []).find((item: any) => String(item.code || item.assetCode).trim().toLowerCase() === String(values.assetCode).trim().toLowerCase());
+      if (!asset) {
+        message.error('Mã tài sản không có trong danh mục tài sản đang lưu.');
+        return;
+      }
+      if (asset.status === 'Đã thanh lý') {
+        message.error('Không thể điều chuyển tài sản đã thanh lý.');
+        return;
+      }
     const newItem: TransferItem = {
       ...values,
-      key: String(Date.now()),
-      originalPrice: Number(values.originalPrice) || 30000000,
-      netBookValue: Number(values.netBookValue) || 25000000,
-      shippingCost: Number(values.shippingCost) || 0,
+      key: `transfer-${crypto.randomUUID()}`,
+      assetCode: asset.code || asset.assetCode,
+      assetName: asset.name || asset.assetName || values.assetName,
+      category: asset.category || '',
+      originalPrice: Number(asset.originalPrice) || 0,
+      netBookValue: Number(asset.netBookValue) || 0,
+      serialNo: String(values.serialNo || ''),
+      shippingCost: cost,
+      approver: '',
+      approvedAt: undefined,
+      receivedDate: undefined,
+      receiveCondition: undefined,
       status: 'Chờ phê duyệt',
     };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('asset_transfers', nextItems);
+      await collectionsApi.create('asset_transfers', newItem, newItem.key);
+      setData((current) => [newItem, ...current]);
+      await dataService.refreshGenericData('asset_transfers').catch(() => []);
     message.success(`Đã lập lệnh điều chuyển tài sản: ${values.transferCode}`);
     setModalOpen(false);
     form.resetFields();
-  };
-
-  const handleApprove = (record: TransferItem) => {
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-    const updated = data.map((d) =>
-      d.key === record.key
-        ? { ...d, status: 'Đang vận chuyển' as const, approvedAt: nowStr }
-        : d
-    );
-    setData(updated);
-    dataService.saveGenericData('asset_transfers', updated);
-    message.success(`Đã phê duyệt lệnh điều chuyển ${record.transferCode}! Tài sản đang chuyển đi.`);
-    if (detailItem && detailItem.key === record.key) {
-      setDetailItem({ ...detailItem, status: 'Đang vận chuyển', approvedAt: nowStr });
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu lệnh điều chuyển tài sản.');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleReject = (record: TransferItem) => {
-    const updated = data.map((d) =>
-      d.key === record.key
-        ? { ...d, status: 'Từ chối điều chuyển' as const }
-        : d
-    );
-    setData(updated);
-    dataService.saveGenericData('asset_transfers', updated);
-    message.warning(`Đã từ chối lệnh điều chuyển ${record.transferCode}!`);
-    if (detailItem && detailItem.key === record.key) {
-      setDetailItem({ ...detailItem, status: 'Từ chối điều chuyển' });
+  const currentActor = () => {
+    try {
+      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
+      return user?.name || user?.fullName || user?.email || 'Người dùng hiện tại';
+    } catch { return 'Người dùng hiện tại'; }
+  };
+
+  const handleTransition = async (record: TransferItem, status: TransferItem['status']) => {
+    if (saving || record.status === 'Đã điều chuyển hoàn tất' || record.status === 'Từ chối điều chuyển') return;
+    const updated: TransferItem = {
+      ...record,
+      status,
+      ...(status === 'Đang vận chuyển' ? { approver: currentActor(), approvedAt: new Date().toLocaleString('sv-SE') } : {}),
+    };
+    setSaving(true);
+    try {
+      await collectionsApi.update('asset_transfers', record.key, updated);
+      setData((current) => current.map((item) => item.key === record.key ? updated : item));
+      setDetailItem((current) => current?.key === record.key ? updated : current);
+      await dataService.refreshGenericData('asset_transfers').catch(() => []);
+      message.success(status === 'Đang vận chuyển' ? `Đã lưu phê duyệt lệnh ${record.transferCode}.` : `Đã lưu từ chối lệnh ${record.transferCode}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái điều chuyển.');
+    } finally {
+      setSaving(false);
     }
   };
+
+  const handleApprove = (record: TransferItem) => handleTransition(record, 'Đang vận chuyển');
+  const handleReject = (record: TransferItem) => handleTransition(record, 'Từ chối điều chuyển');
 
   const handleOpenReceiveModal = (record: TransferItem) => {
     setReceiveTarget(record);
-    setReceiveConditionText('Đã tiếp nhận đầy đủ thiết bị, linh kiện và phụ kiện hoạt động bình thường.');
+    setReceiveConditionText('');
     setReceiveModalOpen(true);
   };
 
-  const handleConfirmReceive = () => {
-    if (receiveTarget) {
-      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-      const updated = data.map((d) =>
-        d.key === receiveTarget.key
-          ? {
-              ...d,
-              status: 'Đã điều chuyển hoàn tất' as const,
-              receivedDate: nowStr,
-              receiveCondition: receiveConditionText,
-            }
-          : d
-      );
-      setData(updated);
-      dataService.saveGenericData('asset_transfers', updated);
-      message.success(`Đã xác nhận tiếp nhận tài sản ${receiveTarget.assetCode} tại ${receiveTarget.toLocation}!`);
+  const handleConfirmReceive = async () => {
+    if (!receiveTarget || saving) return;
+    if (receiveTarget.status !== 'Đang vận chuyển') {
+      message.error('Chỉ xác nhận nhận tài sản sau khi lệnh đã được duyệt gửi.');
+      return;
+    }
+    if (!receiveConditionText.trim()) {
+      message.error('Nhập tình trạng tài sản thực tế khi nhận.');
+      return;
+    }
+    setSaving(true);
+    let oldAsset: any = null;
+    let assetUpdated = false;
+    try {
+      const assets = await collectionsApi.get<any>('asset_items', { limit: 500 });
+      oldAsset = (assets.data?.data || []).find((item: any) => String(item.code || item.assetCode).trim().toLowerCase() === receiveTarget.assetCode.trim().toLowerCase());
+      if (!oldAsset) throw new Error('Không tìm thấy tài sản gốc để cập nhật vị trí và người quản lý.');
+      const receivedDate = new Date().toLocaleString('sv-SE');
+      const actor = currentActor();
+      const updatedAsset = {
+        ...oldAsset,
+        location: receiveTarget.toLocation,
+        department: receiveTarget.toDepartment,
+        assignedTo: receiveTarget.toCustodian,
+        history: [
+          ...(Array.isArray(oldAsset.history) ? oldAsset.history : []),
+          { key: `transfer-${crypto.randomUUID()}`, date: receivedDate, action: 'Điều chuyển tài sản', actor, note: `Phiếu ${receiveTarget.transferCode}; ${receiveTarget.fromLocation} → ${receiveTarget.toLocation}; tình trạng nhận: ${receiveConditionText.trim()}` },
+        ],
+      };
+      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
+      assetUpdated = true;
+      const updatedTransfer: TransferItem = {
+        ...receiveTarget,
+        status: 'Đã điều chuyển hoàn tất',
+        receivedDate,
+        receiveCondition: receiveConditionText.trim(),
+      };
+      await collectionsApi.update('asset_transfers', receiveTarget.key, updatedTransfer);
+      setData((current) => current.map((item) => item.key === receiveTarget.key ? updatedTransfer : item));
+      setDetailItem((current) => current?.key === receiveTarget.key ? updatedTransfer : current);
+      await Promise.allSettled([dataService.refreshGenericData('asset_transfers'), dataService.refreshGenericData('asset_items')]);
+      message.success(`Đã lưu nghiệm thu và cập nhật vị trí tài sản ${receiveTarget.assetCode}.`);
       setReceiveModalOpen(false);
-      if (detailItem && detailItem.key === receiveTarget.key) {
-        setDetailItem({
-          ...detailItem,
-          status: 'Đã điều chuyển hoàn tất',
-          receivedDate: nowStr,
-          receiveCondition: receiveConditionText,
-        });
+    } catch (error: any) {
+      let rollbackFailed = false;
+      if (assetUpdated && oldAsset) {
+        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
+        catch { rollbackFailed = true; }
       }
+      message.error(rollbackFailed
+        ? 'Nghiệm thu gặp lỗi và chưa thể hoàn tác vị trí tài sản. Hãy đối chiếu hồ sơ tài sản và phiếu điều chuyển.'
+        : error?.response?.data?.message || error?.message || 'Không thể lưu nghiệm thu điều chuyển.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -280,7 +341,14 @@ export const AssetTransferModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ lệnh điều chuyển tài sản')}>
+          <Button icon={<DownloadOutlined />} onClick={() => {
+            const rows = [
+              ['Mã lệnh', 'Mã tài sản', 'Tên tài sản', 'Số serial', 'Từ vị trí', 'Đến vị trí', 'Phòng ban gửi', 'Phòng ban nhận', 'Người bàn giao', 'Người nhận', 'Ngày gửi', 'Ngày dự kiến nhận', 'Ngày nhận', 'Cước vận chuyển', 'Trạng thái'],
+              ...filteredData.map((item) => [item.transferCode, item.assetCode, item.assetName, item.serialNo, item.fromLocation, item.toLocation, item.fromDepartment, item.toDepartment, item.fromCustodian, item.toCustodian, item.transferDate, item.expectedDeliveryDate, item.receivedDate || '', item.shippingCost, item.status]),
+            ];
+            downloadFile('so_lenh_dieu_chuyen.xlsx', generateValidXlsxBlob(rows));
+            message.success(`Đã xuất ${filteredData.length} lệnh điều chuyển.`);
+          }}>
             Xuất Excel
           </Button>
           <Button
@@ -462,7 +530,7 @@ export const AssetTransferModule: React.FC = () => {
                   ]}
                 />
               </Form.Item>
-              <Form.Item name="fromDepartment" label="Phòng ban gửi" initialValue="Kho Thiết Bị Hà Nội">
+            <Form.Item name="fromDepartment" label="Phòng ban gửi" rules={[{ required: true }]}>
                 <Input placeholder="Ví dụ: Khối Vận Hành & Hạ Tầng" />
               </Form.Item>
               <Form.Item name="fromCustodian" label="Người bàn giao gửi đi" rules={[{ required: true }]}>
@@ -483,7 +551,7 @@ export const AssetTransferModule: React.FC = () => {
                   ]}
                 />
               </Form.Item>
-              <Form.Item name="toDepartment" label="Phòng ban nhận" initialValue="Khối Vận Hành & Hạ Tầng Miền Nam">
+            <Form.Item name="toDepartment" label="Phòng ban nhận" rules={[{ required: true }]}>
                 <Input placeholder="Ví dụ: Khối Kinh Doanh TP.HCM" />
               </Form.Item>
               <Form.Item name="toCustodian" label="Người phụ trách tiếp nhận" rules={[{ required: true }]}>
@@ -504,15 +572,12 @@ export const AssetTransferModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="transferDate" label="Ngày bắt đầu gửi" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
             <Form.Item name="expectedDeliveryDate" label="Ngày dự kiến đến nơi" rules={[{ required: true }]}>
               <Input type="date" />
-            </Form.Item>
-            <Form.Item name="approver" label="Cán bộ phê duyệt" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
             </Form.Item>
           </div>
 
@@ -571,7 +636,7 @@ export const AssetTransferModule: React.FC = () => {
                     title: 'Lập lệnh & Duyệt xuất kho',
                     description: detailItem.approvedAt
                       ? `Đã duyệt bởi ${detailItem.approver} vào ${detailItem.approvedAt}`
-                      : `Chờ duyệt bởi ${detailItem.approver}`,
+                      : 'Chờ phê duyệt',
                   },
                   {
                     title: 'Đang vận chuyển liên tỉnh',
@@ -646,7 +711,18 @@ export const AssetTransferModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất lệnh điều chuyển ${detailItem.transferCode} (PDF)`)}
+                onClick={() => downloadFile(`lenh_dieu_chuyen_${detailItem.transferCode}.pdf`, generateValidPdfBlob(`LENH DIEU CHUYEN ${detailItem.transferCode}`, `${detailItem.assetCode} | ${detailItem.assetName}`, [
+                  `Tu: ${detailItem.fromLocation} / ${detailItem.fromDepartment} / ${detailItem.fromCustodian}`,
+                  `Den: ${detailItem.toLocation} / ${detailItem.toDepartment} / ${detailItem.toCustodian}`,
+                  `Don vi van chuyen: ${detailItem.carrierName} | Van don: ${detailItem.trackingCode}`,
+                  `Ngay gui: ${detailItem.transferDate} | Du kien: ${detailItem.expectedDeliveryDate} | Da nhan: ${detailItem.receivedDate || 'Chua nhan'}`,
+                  `Gia tri tai san: ${detailItem.originalPrice.toLocaleString('vi-VN')} VND | Gia tri con lai: ${detailItem.netBookValue.toLocaleString('vi-VN')} VND`,
+                  `Cuoc van chuyen: ${detailItem.shippingCost.toLocaleString('vi-VN')} VND`,
+                  `Ly do: ${detailItem.reason}`,
+                  `Tinh trang khi gui: ${detailItem.condition || 'Chua ghi nhan'}`,
+                  `Tinh trang khi nhan: ${detailItem.receiveCondition || 'Chua nhan'}`,
+                  `Trang thai: ${detailItem.status} | Nguoi duyet: ${detailItem.approver || 'Chua duyet'}`,
+                ]))}
                 style={{ flex: 1 }}
               >
                 In lệnh điều chuyển

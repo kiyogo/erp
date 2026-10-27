@@ -1,28 +1,38 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
 import {
-  BarChartOutlined,
   DownloadOutlined,
-  CalendarOutlined,
   FilePdfOutlined,
   FileExcelOutlined,
-  CheckCircleOutlined,
   PlusOutlined,
   SearchOutlined,
-  PieChartOutlined,
-  LineChartOutlined,
   AuditOutlined,
   PrinterOutlined,
   EyeOutlined,
-  SafetyCertificateOutlined,
   RiseOutlined,
   DollarOutlined,
   TeamOutlined,
   BankOutlined,
   AimOutlined,
 } from '@ant-design/icons';
-import { Button, Select, Input, Modal, Form, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { Button, Select, Input, Modal, Form, message, Tag, Drawer } from '../../custom-ui';
 import { KTable } from '../../components/KTable';
+import { crmContactsApi, employeesApi, filesApi } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import {
+  listReportPeriods,
+  normalizeReportPeriod,
+  reportPeriodLabel,
+  reportXlsxRows,
+  REPORT_SOURCE_CONFIG,
+  selectReportPeriodRows,
+  summarizeReportRows,
+  type ReportPeriod,
+  type ReportSourceType,
+} from './reportData';
+
+type ReportFile = { id: string; name: string; format: 'PDF' | 'Excel'; sizeBytes: number };
 
 export interface EnterpriseReportItem {
   key: string;
@@ -37,24 +47,46 @@ export interface EnterpriseReportItem {
   executiveSummary: string;
   keyMetrics: { label: string; value: string }[];
   status: 'Sẵn sàng' | 'Đang kết xuất';
+  periodKey?: string;
+  sourceScope?: string;
+  sourceLabel?: string;
+  rowCount?: number;
+  missingDateCount?: number;
+  files?: ReportFile[];
+  lastDownloadedAt?: string;
 }
 
 const INITIAL_REPORTS: EnterpriseReportItem[] = [];
 
 export const ReportsModule: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<EnterpriseReportItem[]>(INITIAL_REPORTS);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const list = dataService.getGenericData('reports_catalog');
-    setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    void dataService.refreshGenericData('reports_catalog')
+      .then((list) => { if (mounted) setData(list as EnterpriseReportItem[]); })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được danh mục báo cáo.'); })
+      .finally(() => { if (mounted) setLoading(false); });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('reports_catalog');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
   }, []);
 
-  const [selectedPeriod, setSelectedPeriod] = useState('2026-Q3');
+  const periodOptions = listReportPeriods();
+  const knownPeriods = new Set(periodOptions.map((period) => period.value));
+  for (const report of data) {
+    const period = normalizeReportPeriod(report.periodKey || report.period);
+    if (period && !knownPeriods.has(period)) {
+      periodOptions.push({ value: period, label: reportPeriodLabel(period) });
+      knownPeriods.add(period);
+    }
+  }
+  const [selectedPeriod, setSelectedPeriod] = useState<ReportPeriod>(() => periodOptions[0]?.value || `${new Date().getFullYear()}-ALL`);
   const [selectedType, setSelectedType] = useState('all');
   const [searchText, setSearchText] = useState('');
 
@@ -63,40 +95,151 @@ export const ReportsModule: React.FC = () => {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedReport, setSelectedReport] = useState<EnterpriseReportItem | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [downloadingKey, setDownloadingKey] = useState('');
 
-  const totalDownloads = data.reduce((sum, item) => sum + item.downloadsCount, 0);
+  const totalDownloads = data.reduce((sum, item) => sum + (Number(item.downloadsCount) || 0), 0);
+  const totalReportedRows = data.reduce((sum, item) => sum + (Number(item.rowCount) || 0), 0);
+  const reportTypesCount = new Set(data.map((item) => item.type)).size;
 
-  const handleGenerateReport = (values: any) => {
-    const newReport: EnterpriseReportItem = {
-      key: String(Date.now()),
-      code: `RP-GEN-0${data.length + 1}`,
-      title: values.title,
-      type: values.type || 'Tài chính',
-      author: values.author || 'Trần Tuấn Anh (CTO)',
-      date: new Date().toISOString().substring(0, 10),
-      period: 'Quý III / 2026',
-      fileSize: '2.1 MB',
-      downloadsCount: 1,
-      executiveSummary: 'Báo cáo được kết xuất tự động từ hệ cơ sở dữ liệu phân tán KIYOVN Enterprise, phục vụ công tác giám sát điều hành và báo cáo Đại Hội Đồng Cổ Đông.',
-      keyMetrics: [
-        { label: 'Độ khớp dữ liệu sổ cái', value: '100%' },
-        { label: 'Thời gian trích xuất log', value: '1.2s' },
-      ],
-      status: 'Sẵn sàng',
-    };
-    const nextItems = [newReport, ...data]; setData(nextItems); dataService.saveGenericData('reports_catalog', nextItems);
-    message.success(`Đã khởi tạo thành công báo cáo: ${values.title}`);
-    setModalOpen(false);
-    form.resetFields();
+  const loadSourceRows = async (type: ReportSourceType): Promise<Record<string, any>[]> => {
+    if (type === 'Nhân sự & Tiền lương') return (await employeesApi.getAll()).data.data as Record<string, any>[];
+    if (type === 'Kinh doanh & CRM') return (await crmContactsApi.getAll()).data.data as Record<string, any>[];
+    const config = REPORT_SOURCE_CONFIG[type];
+    return await dataService.refreshGenericData(config.scope);
+  };
+
+  const ensureReportFolder = async (): Promise<string> => {
+    const workspace = await filesApi.list(null);
+    const rootId = workspace.data.context.parentId || undefined;
+    const contents = await filesApi.list(rootId);
+    const existing = contents.data.data.find((item) => item.type === 'dir' && item.name === 'Báo cáo quản trị');
+    if (existing) return existing.id || existing.key;
+    const created = await filesApi.createFolder('Báo cáo quản trị', rootId, 'reports');
+    return created.data.file.id || created.data.file.key;
+  };
+
+  const handleDownload = async (record: EnterpriseReportItem, file: ReportFile) => {
+    setDownloadingKey(`${record.key}:${file.id}`);
+    try {
+      const response = await filesApi.download(file.id);
+      downloadFile(file.name, response.data);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được tệp báo cáo đã lưu.');
+      setDownloadingKey('');
+      return;
+    }
+    try {
+      const saved = await dataService.updateGenericRecord('reports_catalog', {
+        key: record.key,
+        downloadsCount: (Number(record.downloadsCount) || 0) + 1,
+        lastDownloadedAt: new Date().toISOString(),
+      });
+      if (selectedReport?.key === record.key) setSelectedReport(saved as EnterpriseReportItem);
+    } catch {
+      message.warning('Tệp đã tải xuống, nhưng số lượt tải chưa được cập nhật.');
+    } finally {
+      setDownloadingKey('');
+    }
+  };
+
+  const handleGenerateReport = async (values: any) => {
+    if (generating) return;
+    const title = String(values.title || '').trim();
+    const author = String(user?.name || user?.email || '').trim();
+    const type = values.type as ReportSourceType;
+    if (!title || !author || !REPORT_SOURCE_CONFIG[type]) {
+      message.error('Cần có tiêu đề, tài khoản người lập và phân hệ hợp lệ để kết xuất.');
+      return;
+    }
+    setGenerating(true);
+    const config = REPORT_SOURCE_CONFIG[type];
+    const uploaded: ReportFile[] = [];
+    try {
+      const allRows = await loadSourceRows(type);
+      const { rows, missingDateCount } = selectReportPeriodRows(allRows, selectedPeriod, config.dateField);
+      const summary = summarizeReportRows(rows, config.dateField, missingDateCount);
+      const period = reportPeriodLabel(selectedPeriod);
+      const timestamp = new Date();
+      const key = globalThis.crypto?.randomUUID?.() || `${timestamp.getTime()}-${Math.random().toString(36).slice(2, 10)}`;
+      const code = `RP-${selectedPeriod.replace(/[^0-9A-Z]/g, '')}-${key.slice(0, 6).toUpperCase()}`;
+      const workbookRows = [
+        ['Tên báo cáo', title], ['Phân hệ', type], ['Nguồn dữ liệu', config.label], ['Kỳ', period],
+        ['Số hồ sơ trong kỳ', rows.length], ['Hồ sơ thiếu ngày', missingDateCount], ['Tổng hợp', summary.summary], [],
+        ...reportXlsxRows(rows, config.fields),
+      ];
+      const workbook = generateValidXlsxBlob(workbookRows);
+      const previewLines = [
+        `Phan he: ${type}`,
+        `Nguon du lieu: ${config.label}`,
+        `Ky bao cao: ${period}`,
+        `Ngay trich xuat: ${timestamp.toISOString()}`,
+        `So ho so trong ky: ${rows.length}`,
+        `Ho so thieu ngay: ${missingDateCount}`,
+        ...summary.metrics.map((metric) => `${metric.label}: ${metric.value}`),
+        'PDF liet ke toi da 100 ho so dau tien; XLSX chua toan bo ho so trong ky.',
+        ...rows.slice(0, 100).flatMap((row, index) => [
+          `Ho so ${index + 1}`,
+          ...config.fields.filter((field) => Object.prototype.hasOwnProperty.call(row, field)).map((field) => `${field}: ${String(row[field] ?? '')}`),
+        ]),
+      ];
+      const pdf = generateValidPdfBlob(title, `${code} | ${period} | ${author}`, previewLines);
+      const format = String(values.format || 'PDF + Excel');
+      const outputs = format === 'PDF'
+        ? [{ name: `${code}.pdf`, format: 'PDF' as const, blob: pdf }]
+        : format === 'Excel'
+          ? [{ name: `${code}.xlsx`, format: 'Excel' as const, blob: workbook }]
+          : [{ name: `${code}.pdf`, format: 'PDF' as const, blob: pdf }, { name: `${code}.xlsx`, format: 'Excel' as const, blob: workbook }];
+      const folderId = await ensureReportFolder();
+      for (const output of outputs) {
+        const file = (await filesApi.upload(output.blob, output.name, folderId, 'reports')).data.file;
+        uploaded.push({ id: file.id || file.key, name: file.name, format: output.format, sizeBytes: file.sizeBytes });
+      }
+      const newReport: EnterpriseReportItem = {
+        key,
+        code,
+        title,
+        type,
+        author,
+        date: timestamp.toISOString().slice(0, 10),
+        period,
+        periodKey: selectedPeriod,
+        sourceScope: config.scope,
+        sourceLabel: config.label,
+        rowCount: rows.length,
+        missingDateCount,
+        fileSize: `${(uploaded.reduce((sum, file) => sum + (Number(file.sizeBytes) || 0), 0) / 1024).toFixed(1)} KB`,
+        downloadsCount: 0,
+        executiveSummary: summary.summary,
+        keyMetrics: summary.metrics,
+        files: uploaded,
+        status: 'Sẵn sàng',
+      };
+      const saved = await dataService.createGenericRecord('reports_catalog', newReport) as EnterpriseReportItem;
+      setSelectedReport(saved);
+      setDrawerOpen(true);
+      message.success(`Đã tạo và lưu báo cáo ${code} cùng ${uploaded.length} tệp.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      const cleanup = await Promise.allSettled(uploaded.map((file) => filesApi.remove(file.id)));
+      if (cleanup.some((result) => result.status === 'rejected')) {
+        message.warning('Có tệp báo cáo đã tải lên nhưng chưa dọn được sau lỗi lưu hồ sơ.');
+      }
+      message.error(error?.response?.data?.message || error?.message || 'Không thể kết xuất hoặc lưu báo cáo.');
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const filteredData = data.filter((item) => {
     const matchType = selectedType === 'all' || item.type === selectedType;
+    const matchPeriod = normalizeReportPeriod(item.periodKey || item.period) === selectedPeriod;
     const matchSearch =
       (item.title || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.code || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.author || '').toLowerCase().includes(searchText.toLowerCase());
-    return matchType && matchSearch;
+    return matchType && matchPeriod && matchSearch;
   });
 
   const columns = [
@@ -163,14 +306,24 @@ export const ReportsModule: React.FC = () => {
           <Button
             size="small"
             icon={<FilePdfOutlined />}
-            onClick={() => message.info(`Đang tải tệp PDF: ${record.title}`)}
+            disabled={!record.files?.some((file) => file.format === 'PDF')}
+            loading={downloadingKey.startsWith(`${record.key}:`)}
+            onClick={() => {
+              const file = record.files?.find((item) => item.format === 'PDF');
+              if (file) void handleDownload(record, file);
+            }}
           >
             PDF
           </Button>
           <Button
             size="small"
             icon={<FileExcelOutlined />}
-            onClick={() => message.success(`Đang xuất bảng tính Excel: ${record.title}`)}
+            disabled={!record.files?.some((file) => file.format === 'Excel')}
+            loading={downloadingKey.startsWith(`${record.key}:`)}
+            onClick={() => {
+              const file = record.files?.find((item) => item.format === 'Excel');
+              if (file) void handleDownload(record, file);
+            }}
           >
             Excel
           </Button>
@@ -192,11 +345,11 @@ export const ReportsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Độ tin cậy số liệu kiểm toán</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hồ sơ đã tổng hợp trong kỳ</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            100% Khớp ERP
+            {totalReportedRows.toLocaleString('vi-VN')} hồ sơ
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Khớp đúng sổ cái &amp; tài khoản ngân hàng</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tổng theo các báo cáo đã lưu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -204,15 +357,15 @@ export const ReportsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
             {totalDownloads} lượt tải
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Truy xuất phân quyền bảo mật cao</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Ghi nhận sau khi tải tệp thành công</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chu kỳ tự động hóa kết xuất</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phân hệ có báo cáo đã lưu</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
-            Tuần &amp; Tháng
+            {reportTypesCount} / {Object.keys(REPORT_SOURCE_CONFIG).length}
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Tự động gửi email BOD vào 08:00 sáng Thứ 2</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Các nguồn dữ liệu đã dùng</div>
         </div>
       </div>
 
@@ -257,11 +410,7 @@ export const ReportsModule: React.FC = () => {
             value={selectedPeriod}
             onChange={setSelectedPeriod}
             style={{ width: 145 }}
-            options={[
-              { label: 'Quý III / 2026', value: '2026-Q3' },
-              { label: 'Quý II / 2026', value: '2026-Q2' },
-              { label: 'Cả năm 2026', value: '2026-ALL' },
-            ]}
+            options={periodOptions}
           />
 
           <Button
@@ -271,7 +420,6 @@ export const ReportsModule: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({
                 type: 'Tài chính',
-                author: 'Nguyễn Thị Mai',
                 format: 'PDF + Excel',
               });
               setModalOpen(true);
@@ -285,7 +433,7 @@ export const ReportsModule: React.FC = () => {
 
       {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} />
       </div>
 
       {/* MODAL: Thêm báo cáo */}
@@ -298,8 +446,12 @@ export const ReportsModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleGenerateReport} style={{ marginTop: 14 }}>
           <Form.Item name="title" label="Tiêu đề báo cáo quản trị" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Báo Cáo Phân Tích Chi Phí Máy Chủ IDC Tháng 08/2026" />
+            <Input maxLength={200} placeholder="Nhập tên báo cáo" />
           </Form.Item>
+
+          <div style={{ marginBottom: 14, color: '#475569', fontSize: 13 }}>
+            Kỳ dữ liệu: <strong>{reportPeriodLabel(selectedPeriod)}</strong>. Hệ thống chỉ đưa vào báo cáo hồ sơ có ngày hợp lệ trong kỳ.
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="type" label="Phân hệ nghiệp vụ" rules={[{ required: true }]}>
@@ -313,9 +465,7 @@ export const ReportsModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="author" label="Người phụ trách lập" rules={[{ required: true }]}>
-              <Input />
-            </Form.Item>
+            <div style={{ alignSelf: 'center', color: '#64748B', fontSize: 12 }}>Người lập: {user?.name || user?.email || 'Chưa xác định'}</div>
           </div>
 
           <Form.Item name="format" label="Định dạng trích xuất dữ liệu">
@@ -330,7 +480,7 @@ export const ReportsModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={generating} disabled={generating} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Bắt đầu kết xuất
             </Button>
           </div>
@@ -358,6 +508,9 @@ export const ReportsModule: React.FC = () => {
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 Kỳ báo cáo: <strong>{selectedReport.period}</strong> · Người lập: <strong>{selectedReport.author}</strong>
+              </div>
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>
+                Nguồn: <strong>{selectedReport.sourceLabel || 'Không lưu nguồn'}</strong> · Hồ sơ trong kỳ: <strong>{selectedReport.rowCount ?? '—'}</strong> · Tệp đã lưu: <strong>{selectedReport.files?.length ?? 0}</strong>
               </div>
             </div>
 
@@ -391,15 +544,36 @@ export const ReportsModule: React.FC = () => {
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
                 icon={<FilePdfOutlined />}
-                onClick={() => message.success(`Đang tải báo cáo PDF ${selectedReport.code}`)}
+                disabled={!selectedReport.files?.some((file) => file.format === 'PDF')}
+                loading={downloadingKey.startsWith(`${selectedReport.key}:`)}
+                onClick={() => {
+                  const file = selectedReport.files?.find((item) => item.format === 'PDF');
+                  if (file) void handleDownload(selectedReport, file);
+                }}
               >
                 Tải Báo Cáo PDF
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in báo cáo ${selectedReport.code}`)}
+                disabled={!selectedReport.files?.some((file) => file.format === 'PDF')}
+                loading={downloadingKey.startsWith(`${selectedReport.key}:`)}
+                onClick={() => {
+                  const file = selectedReport.files?.find((item) => item.format === 'PDF');
+                  if (file) void handleDownload(selectedReport, file);
+                }}
               >
-                In Báo Cáo (A4)
+                Tải PDF để in
+              </Button>
+              <Button
+                icon={<FileExcelOutlined />}
+                disabled={!selectedReport.files?.some((file) => file.format === 'Excel')}
+                loading={downloadingKey.startsWith(`${selectedReport.key}:`)}
+                onClick={() => {
+                  const file = selectedReport.files?.find((item) => item.format === 'Excel');
+                  if (file) void handleDownload(selectedReport, file);
+                }}
+              >
+                Tải Excel
               </Button>
             </div>
           </div>

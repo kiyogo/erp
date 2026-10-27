@@ -12,6 +12,8 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message } from '../../custom-ui';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { createStrategicPlan, strategicPlanCompletionRate, strategicPlanExportRows } from './planListRules';
 
 interface StrategicPlan {
   key: string;
@@ -30,35 +32,42 @@ const INITIAL_PLANS: StrategicPlan[] = [];
 
 export const PlanListModule: React.FC = () => {
   const [data, setData] = useState<StrategicPlan[]>(INITIAL_PLANS);
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
 
   useEffect(() => {
-    const list = dataService.getGenericData('plan_items');
-    setData(Array.isArray(list) ? list : []);
+    let active = true;
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('plan_items');
-      setData(Array.isArray(updated) ? updated : []);
+      if (active) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    void dataService.refreshGenericData('plan_items')
+      .catch((error: any) => message.error(error?.response?.data?.message || 'Không tải được kế hoạch chiến lược.'))
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
 
-  const totalBudget = data.reduce((sum, item) => sum + item.budget, 0);
+  const totalBudget = data.reduce((sum, item) => sum + (Number(item.budget) || 0), 0);
+  const completionRate = strategicPlanCompletionRate(data);
 
-  const handleCreate = (values: any) => {
-    const newPlan: StrategicPlan = {
-      ...values,
-      key: String(Date.now()),
-      budget: Number(values.budget) || 1000000000,
-      priority: values.priority || 'Trọng điểm cấp 2',
-      status: 'Đang triển khai',
-    };
-    const nextItems = [newPlan, ...data]; setData(nextItems); dataService.saveGenericData('plan_items', nextItems);
-    message.success(`Đã thêm kế hoạch chiến lược: ${values.name}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (savingKey) return;
+    setSavingKey('create');
+    try {
+      const newPlan = createStrategicPlan(values, data);
+      await dataService.createGenericRecord('plan_items', newPlan);
+      message.success(`Đã thêm kế hoạch chiến lược: ${newPlan.name}`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu kế hoạch chiến lược.');
+    } finally {
+      setSavingKey(null);
+    }
   };
 
   const filteredData = data.filter(
@@ -69,13 +78,28 @@ export const PlanListModule: React.FC = () => {
       (item.manager || '').toLowerCase().includes(searchText.toLowerCase())
   );
 
-  const handleCompletePlan = (record: StrategicPlan) => {
-    const updated = data.map((item) =>
-      item.key === record.key ? { ...item, status: 'Đã hoàn thành' as const } : item
-    );
-    setData(updated);
-    dataService.saveGenericData('plan_items', updated);
-    message.success(`Đã đánh dấu hoàn thành kế hoạch: ${record.name}`);
+  const handleCompletePlan = async (record: StrategicPlan) => {
+    if (record.status === 'Đã hoàn thành' || savingKey) return;
+    setSavingKey(record.key);
+    try {
+      await dataService.updateGenericRecord('plan_items', { ...record, status: 'Đã hoàn thành' });
+      message.success(`Đã đánh dấu hoàn thành kế hoạch: ${record.name}`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể cập nhật trạng thái kế hoạch.');
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const openCreate = () => {
+    let sequence = data.length + 1;
+    let code = '';
+    do {
+      code = `KH-${new Date().getFullYear()}-${String(sequence++).padStart(3, '0')}`;
+    } while (data.some((item) => item.code.toLowerCase() === code.toLowerCase()));
+    form.resetFields();
+    form.setFieldsValue({ code, priority: 'Trọng điểm cấp 2' });
+    setModalOpen(true);
   };
 
   const columns = [
@@ -155,6 +179,8 @@ export const PlanListModule: React.FC = () => {
               size="small"
               type="primary"
               icon={<CheckCircleOutlined />}
+              loading={savingKey === record.key}
+              disabled={!!savingKey}
               style={{ backgroundColor: '#16A34A', borderColor: '#16A34A', fontSize: 11 }}
               onClick={() => handleCompletePlan(record)}
             >
@@ -171,7 +197,7 @@ export const PlanListModule: React.FC = () => {
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 14 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E0E0E0', borderRadius: 6, padding: '12px 16px' }}>
-          <div style={{ fontSize: 12.5, color: '#757575', fontWeight: 500 }}>Tổng kế hoạch chiến lược đang thực hiện</div>
+          <div style={{ fontSize: 12.5, color: '#757575', fontWeight: 500 }}>Tổng kế hoạch chiến lược</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: '#009688', marginTop: 4 }}>
             {data.length} kế hoạch
           </div>
@@ -183,9 +209,9 @@ export const PlanListModule: React.FC = () => {
           </div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E0E0E0', borderRadius: 6, padding: '12px 16px' }}>
-          <div style={{ fontSize: 12.5, color: '#757575', fontWeight: 500 }}>Tỷ lệ bám sát tiến độ OKR</div>
+          <div style={{ fontSize: 12.5, color: '#757575', fontWeight: 500 }}>Tỷ lệ kế hoạch hoàn thành</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1565C0', marginTop: 4 }}>
-            94.5% Hoàn thành
+            {completionRate === null ? 'Chưa có dữ liệu' : `${completionRate}% Hoàn thành`}
           </div>
         </div>
       </div>
@@ -201,16 +227,13 @@ export const PlanListModule: React.FC = () => {
           allowClear
         />
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách kế hoạch ra Excel')}>
+          <Button disabled={!filteredData.length} icon={<DownloadOutlined />} onClick={() => downloadFile('Danh_sach_ke_hoach.xlsx', generateValidXlsxBlob(strategicPlanExportRows(filteredData)))}>
             Xuất Excel
           </Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => {
-              form.resetFields();
-              setModalOpen(true);
-            }}
+            onClick={openCreate}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Lập kế hoạch mới
@@ -220,6 +243,7 @@ export const PlanListModule: React.FC = () => {
 
       <div className="transparent-table-card" style={{ width: '100%' }}>
         <KTable
+          loading={loading}
           dataSource={filteredData}
           columns={columns}
           pagination={{
@@ -243,10 +267,10 @@ export const PlanListModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã kế hoạch" initialValue={`KH-2026-0${data.length + 1}`} rules={[{ required: true }]}>
+            <Form.Item name="code" label="Mã kế hoạch" rules={[{ required: true, whitespace: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="priority" label="Cấp độ ưu tiên" initialValue="Chiến lược cấp 1">
+            <Form.Item name="priority" label="Cấp độ ưu tiên" rules={[{ required: true }]}>
               <Select
                 options={[
                   { label: 'Chiến lược cấp 1', value: 'Chiến lược cấp 1' },
@@ -262,30 +286,30 @@ export const PlanListModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="department" label="Khối phụ trách" initialValue="Khối Kỹ Thuật & IDC">
+            <Form.Item name="department" label="Khối phụ trách" rules={[{ required: true, whitespace: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="manager" label="Chủ nhiệm kế hoạch" initialValue="Trần Tuấn Anh (CTO)" rules={[{ required: true }]}>
+            <Form.Item name="manager" label="Chủ nhiệm kế hoạch" rules={[{ required: true, whitespace: true }]}>
               <Input />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="startDate" label="Ngày bắt đầu" initialValue="2026-09-01" rules={[{ required: true }]}>
+            <Form.Item name="startDate" label="Ngày bắt đầu" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
-            <Form.Item name="endDate" label="Ngày kết thúc" initialValue="2026-12-31" rules={[{ required: true }]}>
+            <Form.Item name="endDate" label="Ngày kết thúc" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
           </div>
 
-          <Form.Item name="budget" label="Ngân sách dự kiến (VNĐ)" initialValue={1500000000} rules={[{ required: true }]}>
+          <Form.Item name="budget" label="Ngân sách dự kiến (VNĐ)" rules={[{ required: true }]}>
             <Input type="number" min={0} step={100000000} />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={savingKey === 'create'} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Xác nhận lập kế hoạch
             </Button>
           </div>

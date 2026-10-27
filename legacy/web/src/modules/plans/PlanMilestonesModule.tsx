@@ -15,11 +15,13 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { completePlanMilestone, createPlanMilestone, planMilestoneExportRows, planMilestoneMetrics } from './planMilestoneRules';
 
 interface Milestone {
   key: string;
   code: string;
-  quarter: 'Q1/2026' | 'Q2/2026' | 'Q3/2026' | 'Q4/2026';
+  quarter: string;
   name: string;
   acceptanceCriteria: string;
   owner: string;
@@ -32,49 +34,75 @@ const INITIAL_MILESTONES: Milestone[] = [];
 
 export const PlanMilestonesModule: React.FC = () => {
   const [data, setData] = useState<Milestone[]>(INITIAL_MILESTONES);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const list = dataService.getGenericData('plan_milestones');
-    setData(Array.isArray(list) ? list : []);
+    let active = true;
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('plan_milestones');
-      setData(Array.isArray(updated) ? updated : []);
+      if (active) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    void dataService.refreshGenericData('plan_milestones')
+      .catch((error: any) => message.error(error?.response?.data?.message || 'Không tải được danh sách mốc kế hoạch.'))
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
-  const [filterQuarter, setFilterQuarter] = useState<'all' | 'Q1/2026' | 'Q2/2026' | 'Q3/2026' | 'Q4/2026' | 'done'>('all');
+  const [filterQuarter, setFilterQuarter] = useState<string>('all');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedMilestone, setSelectedMilestone] = useState<Milestone | null>(null);
   const [form] = Form.useForm();
 
-  const handleMarkCompleted = (key: string) => {
-    const updated = data.map((item) =>
-      item.key === key ? { ...item, progress: 100, status: 'Đã đạt mốc' as const } : item
-    );
-    setData(updated);
-    dataService.saveGenericData('plan_milestones', updated);
-    message.success('Đã xác nhận nghiệm thu mốc quan trọng!');
+  const metrics = planMilestoneMetrics(data);
+  const handleMarkCompleted = async (key: string) => {
+    const record = data.find((item) => item.key === key);
+    if (!record || record.status === 'Đã đạt mốc' || saving) return;
+    setSaving(true);
+    try {
+      const saved = await dataService.updateGenericRecord('plan_milestones', completePlanMilestone(record)) as Milestone;
+      setSelectedMilestone((current) => current?.key === saved.key ? saved : current);
+      message.success('Đã lưu xác nhận nghiệm thu mốc quan trọng.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu nghiệm thu mốc.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleCreate = (values: any) => {
-    const newMls: Milestone = {
-      ...values,
-      key: String(Date.now()),
-      progress: 0,
-      status: 'Đang thực hiện',
-    };
-    const nextItems = [newMls, ...data]; setData(nextItems); dataService.saveGenericData('plan_milestones', nextItems);
-    message.success(`Đã thêm mốc quan trọng: ${values.name}`);
-    setModalOpen(false);
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const newMls = createPlanMilestone(values, data);
+      await dataService.createGenericRecord('plan_milestones', newMls);
+      message.success(`Đã thêm mốc quan trọng: ${newMls.name}`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu mốc kế hoạch.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const currentYear = new Date().getFullYear();
+  const milestoneYears = [...new Set([currentYear - 1, currentYear, currentYear + 1, ...data.map((item) => Number(item.quarter.split('/')[1])).filter(Number.isFinite)])];
+  const quarterOptions = [...new Set([...data.map((item) => item.quarter), ...milestoneYears.flatMap((year) => [1, 2, 3, 4].map((quarter) => `Q${quarter}/${year}`))])]
+    .sort((a, b) => Number(b.split('/')[1]) - Number(a.split('/')[1]) || Number(b.slice(1, b.indexOf('/'))) - Number(a.slice(1, a.indexOf('/'))));
+  const openCreate = () => {
+    let sequence = data.length + 1;
+    let code = '';
+    do { code = `MLS-${currentYear}-${String(sequence++).padStart(3, '0')}`; }
+    while (data.some((item) => item.code.toLowerCase() === code.toLowerCase()));
     form.resetFields();
+    const currentQuarter = Math.ceil((new Date().getMonth() + 1) / 3);
+    form.setFieldsValue({ code, quarter: `Q${currentQuarter}/${currentYear}` });
+    setModalOpen(true);
   };
-
-  const completedCount = data.filter((d) => d.status === 'Đã đạt mốc').length;
-  const inProgressCount = data.filter((d) => d.status === 'Đang thực hiện').length;
 
   const filteredData = data.filter((item) => {
     let matchFilter = true;
@@ -172,6 +200,8 @@ export const PlanMilestonesModule: React.FC = () => {
             <Button
               size="small"
               type="primary"
+              loading={saving}
+              disabled={saving}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => handleMarkCompleted(record.key)}
             >
@@ -188,35 +218,35 @@ export const PlanMilestonesModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Mốc chiến lược năm 2026</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng mốc chiến lược</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {data.length} mốc trọng điểm
+            {metrics.totalCount} mốc
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phủ sóng toàn bộ 4 quý kinh doanh</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo hồ sơ đang lưu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã nghiệm thu hoàn thành 100%</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {completedCount} mốc hoàn tất
+            {metrics.completedCount} mốc hoàn tất
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đạt chuẩn nghiệm thu hội đồng chuyên môn</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Có trạng thái nghiệm thu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đang trong lộ trình triển khai</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>
-            {inProgressCount} mốc chiến lược
+            {metrics.pendingCount} mốc chiến lược
           </div>
-          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Giám sát tiến độ định kỳ hàng tuần</div>
+          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Chưa nghiệm thu</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ đạt mục tiêu OKR quý</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            94.5% Đạt chuẩn
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Mốc quá hạn</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: metrics.overdueCount ? '#DC2626' : '#16A34A', marginTop: 4 }}>
+            {metrics.overdueCount} mốc
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Theo hệ quy chiếu hiệu suất ISO</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{metrics.completionRate === null ? 'Chưa có dữ liệu nghiệm thu' : `Tỷ lệ nghiệm thu ${metrics.completionRate}%`}</div>
         </div>
       </div>
 
@@ -225,10 +255,7 @@ export const PlanMilestonesModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả các mốc' },
-            { key: 'Q1/2026', label: 'Quý 1' },
-            { key: 'Q2/2026', label: 'Quý 2' },
-            { key: 'Q3/2026', label: 'Quý 3' },
-            { key: 'Q4/2026', label: 'Quý 4' },
+            ...quarterOptions.map((quarter) => ({ key: quarter, label: `Quý ${quarter.slice(1, quarter.indexOf('/'))} / ${quarter.split('/')[1]}` })),
             { key: 'done', label: 'Đã nghiệm thu', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
           ].map((tab) => (
             <Button
@@ -259,18 +286,23 @@ export const PlanMilestonesModule: React.FC = () => {
 
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => message.success('Đã in danh mục mốc chiến lược & biên bản nghiệm thu (A4)')}
+            disabled={!filteredData.length}
+            onClick={() => downloadFile('Danh_muc_moc_chien_luoc.pdf', generateValidPdfBlob('DANH MỤC MỐC CHIẾN LƯỢC', `${filteredData.length} mốc`, filteredData.map((item) => `${item.code} | ${item.quarter} | ${item.name} | ${item.status} | Hạn ${item.deadline}`)))}
           >
-            In Biên Bản (A4)
+            Tải PDF A4
+          </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            disabled={!filteredData.length}
+            onClick={() => downloadFile('Danh_muc_moc_chien_luoc.xlsx', generateValidXlsxBlob(planMilestoneExportRows(filteredData)))}
+          >
+            Xuất Excel
           </Button>
 
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => {
-              form.resetFields();
-              setModalOpen(true);
-            }}
+            onClick={openCreate}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Thêm mốc quan trọng
@@ -281,6 +313,7 @@ export const PlanMilestonesModule: React.FC = () => {
       {/* Main Table */}
       <div className="transparent-table-card">
         <KTable
+          loading={loading}
           dataSource={filteredData}
           columns={columns}
           rowKey="key"
@@ -298,17 +331,12 @@ export const PlanMilestonesModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã mốc" initialValue={`MLS-Q3-0${data.length + 1}`} rules={[{ required: true }]}>
+            <Form.Item name="code" label="Mã mốc" rules={[{ required: true, whitespace: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="quarter" label="Kỳ / Quý" initialValue="Q3/2026">
+            <Form.Item name="quarter" label="Kỳ / Quý" rules={[{ required: true }]}>
               <Select
-                options={[
-                  { label: 'Q1/2026', value: 'Q1/2026' },
-                  { label: 'Q2/2026', value: 'Q2/2026' },
-                  { label: 'Q3/2026', value: 'Q3/2026' },
-                  { label: 'Q4/2026', value: 'Q4/2026' },
-                ]}
+                options={quarterOptions.map((quarter) => ({ label: quarter, value: quarter }))}
               />
             </Form.Item>
           </div>
@@ -322,17 +350,17 @@ export const PlanMilestonesModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="owner" label="Người phụ trách" initialValue="Trần Tuấn Anh (CTO)" rules={[{ required: true }]}>
+            <Form.Item name="owner" label="Người phụ trách" rules={[{ required: true, whitespace: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="deadline" label="Hạn chót hoàn thành" initialValue="2026-09-30" rules={[{ required: true }]}>
+            <Form.Item name="deadline" label="Hạn chót hoàn thành" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tạo mốc quan trọng
             </Button>
           </div>
@@ -386,11 +414,10 @@ export const PlanMilestonesModule: React.FC = () => {
               {selectedMilestone.status !== 'Đã đạt mốc' && (
                 <Button
                   type="primary"
+                  loading={saving}
+                  disabled={saving}
                   style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                  onClick={() => {
-                    handleMarkCompleted(selectedMilestone.key);
-                    setSelectedMilestone({ ...selectedMilestone, status: 'Đã đạt mốc', progress: 100 });
-                  }}
+                  onClick={() => { void handleMarkCompleted(selectedMilestone.key); }}
                 >
                   Xác nhận đạt mốc
                 </Button>
@@ -398,9 +425,17 @@ export const PlanMilestonesModule: React.FC = () => {
               <Button
                 icon={<PrinterOutlined />}
                 style={{ flex: 1 }}
-                onClick={() => message.success(`Đang in biên bản nghiệm thu ${selectedMilestone.code} ra bản giấy A4...`)}
+                onClick={() => downloadFile(`${selectedMilestone.code}_bien_ban_nghiem_thu.pdf`, generateValidPdfBlob('BIÊN BẢN NGHIỆM THU MỐC', `${selectedMilestone.code} | ${selectedMilestone.name}`, [
+                  `Kỳ: ${selectedMilestone.quarter}`,
+                  `Hạn hoàn thành: ${selectedMilestone.deadline}`,
+                  `Người phụ trách: ${selectedMilestone.owner}`,
+                  `Tiến độ: ${selectedMilestone.progress}%`,
+                  `Trạng thái: ${selectedMilestone.status}`,
+                  `Tiêu chuẩn nghiệm thu: ${selectedMilestone.acceptanceCriteria}`,
+                  'Tài liệu được tạo từ hồ sơ lưu trong hệ thống.',
+                ]))}
               >
-                In Biên Bản (A4)
+                Tải biên bản PDF
               </Button>
             </div>
           </div>

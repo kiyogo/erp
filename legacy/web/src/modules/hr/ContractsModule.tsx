@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -155,6 +155,7 @@ const isLaborContract = (contract: EnterpriseContractItem) => {
 
 export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'documents' }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const laborOnly = scope === 'hr';
   const [contracts, setContracts] = useState<EnterpriseContractItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -351,6 +352,25 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
     });
     setModalOpen(true);
   };
+
+  useEffect(() => {
+    const contact = (location.state as any)?.crmContactDraft;
+    if (!contact || laborOnly) return;
+    handleOpenUploadModal();
+    form.setFieldsValue({
+      name: `Hợp đồng với ${contact.name || 'đối tác'}`,
+      contractCategory: 'partner',
+      partyBType: 'organization',
+      partyBName: contact.name || '',
+      partyBTaxCode: contact.taxCode || '',
+      partyBRepresentative: contact.contactPerson || '',
+      partyBPhone: contact.phone || '',
+      partyBEmail: contact.email || '',
+      partyBBank: contact.bankAccount || '',
+      partyBAddress: contact.address || '',
+    });
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.key]);
 
   const handleOpenCreateModal = () => {
     setEditingContract(null);

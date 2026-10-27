@@ -21,7 +21,11 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Table, Progress } from '../../custom-ui';
-import { dataService, AssetRecord } from '../../services/dataService';
+import { dataService } from '../../services/dataService';
+import { collectionsApi } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { buildQrMatrix, qrMatrixToSvg } from './qrCode';
+import { findCodePattern, findDepreciationDefault, generateAssetCode, getAssetSystemOptions, type AssetSystemRule } from './assetSystemRules';
 
 export interface ComprehensiveAsset {
   key: string;
@@ -43,6 +47,7 @@ export interface ComprehensiveAsset {
   warrantyExpiry: string;
   specs: string;
   notes: string;
+  history?: Array<{ key: string; date: string; action: string; actor: string; note: string }>;
 }
 
 const INITIAL_EXTENDED_ASSETS: ComprehensiveAsset[] = [];
@@ -55,6 +60,9 @@ export const AssetsModule: React.FC = () => {
   const isUsage = currentPath === '/assets/usage';
 
   const [data, setData] = useState<ComprehensiveAsset[]>(INITIAL_EXTENDED_ASSETS);
+  const [systemRules, setSystemRules] = useState<AssetSystemRule[]>([]);
+  const autoCodeRef = React.useRef('');
+  const autoDepreciationRef = React.useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const list = dataService.getGenericData('asset_items');
@@ -64,6 +72,20 @@ export const AssetsModule: React.FC = () => {
       setData(Array.isArray(updated) ? updated : []);
     });
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    const updateRules = () => {
+      const rules = dataService.getGenericData('asset_systems');
+      setSystemRules(Array.isArray(rules) ? rules : []);
+    };
+    updateRules();
+    let mounted = true;
+    void dataService.refreshGenericData('asset_systems')
+      .then((rules) => { if (mounted) setSystemRules(Array.isArray(rules) ? rules : []); })
+      .catch(() => { /* Keep any cached rules available when refresh is offline. */ });
+    const unsubscribe = dataService.subscribe(updateRules);
+    return () => { mounted = false; unsubscribe(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -90,76 +112,177 @@ export const AssetsModule: React.FC = () => {
 
   const totalOriginalPrice = data.reduce((sum, item) => sum + item.originalPrice, 0);
   const totalNetBookValue = data.reduce((sum, item) => sum + item.netBookValue, 0);
-  const totalAccumulated = totalOriginalPrice - totalNetBookValue;
+  const totalAccumulated = data.reduce((sum, item) => sum + (Number(item.accumulatedDepreciation) || 0), 0);
   const inUseCount = data.filter((d) => d.status === 'Đang sử dụng').length;
   const inStockCount = data.filter((d) => d.status === 'Trong kho').length;
   const inRepairCount = data.filter((d) => d.status === 'Đang sửa chữa').length;
+  const categoryStats = Array.from(data.reduce((groups, item) => {
+    const current = groups.get(item.category) || { name: item.category, count: 0, original: 0, net: 0 };
+    groups.set(item.category, { ...current, count: current.count + 1, original: current.original + (Number(item.originalPrice) || 0), net: current.net + (Number(item.netBookValue) || 0) });
+    return groups;
+  }, new Map<string, { name: string; count: number; original: number; net: number }>()).values());
+  const supplierOptions = getAssetSystemOptions(systemRules, 'Nhà cung cấp');
+  const locationOptions = getAssetSystemOptions(systemRules, 'Vị trí & Tủ Rack');
+  const departmentStats = Array.from(data.reduce((groups, item) => {
+    const department = item.department || 'Chưa phân phòng ban';
+    const current = groups.get(department) || { department, original: 0, net: 0 };
+    groups.set(department, { ...current, original: current.original + (Number(item.originalPrice) || 0), net: current.net + (Number(item.netBookValue) || 0) });
+    return groups;
+  }, new Map<string, { department: string; original: number; net: number }>()).values());
+  const usageHistory = data.flatMap((asset) => (Array.isArray(asset.history) ? asset.history : []).map((entry) => ({
+    id: `${asset.key}:${entry.key}`, date: entry.date, code: asset.code, name: asset.name,
+    action: entry.action, actor: entry.actor, recipient: asset.assignedTo, note: entry.note,
+  }))).sort((a, b) => b.date.localeCompare(a.date));
+  const assetColumns = [
+    { title: 'Mã tài sản', key: 'code' }, { title: 'Barcode', key: 'barcode' }, { title: 'Tên tài sản', key: 'name' },
+    { title: 'Nhóm', key: 'category' }, { title: 'Model / Seri', key: 'model' }, { title: 'Ngày mua', key: 'purchaseDate' },
+    { title: 'Nhà cung cấp', key: 'supplier' }, { title: 'Nguyên giá', key: 'originalPrice' },
+    { title: 'Hao mòn lũy kế', key: 'accumulatedDepreciation' }, { title: 'Giá trị còn lại', key: 'netBookValue' },
+    { title: 'Vị trí', key: 'location' }, { title: 'Người sử dụng', key: 'assignedTo' }, { title: 'Phòng ban', key: 'department' }, { title: 'Trạng thái', key: 'status' },
+  ];
+  const usageColumns = [
+    { title: 'Thời gian', key: 'date' }, { title: 'Mã tài sản', key: 'code' }, { title: 'Tên tài sản', key: 'name' },
+    { title: 'Hành động', key: 'action' }, { title: 'Người thực hiện', key: 'actor' }, { title: 'Người tiếp nhận', key: 'recipient' }, { title: 'Ghi chú', key: 'note' },
+  ];
+  const exportAssetRows = (records: unknown[], fileName: string, columns: Array<{ title: string; key: string }>) => {
+    const toCell = (value: unknown): string | number | boolean | null => {
+      if (value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value as string | number | boolean | null;
+      return JSON.stringify(value);
+    };
+    const rows = [columns.map((column) => column.title), ...records.map((record) => columns.map((column) => toCell((record as Record<string, unknown>)[column.key])))];
+    downloadFile(fileName, generateValidXlsxBlob(rows));
+    message.success(`Đã xuất ${records.length} dòng dữ liệu.`);
+  };
+  const qrSvg = (() => {
+    if (!qrTarget) return '';
+    try {
+      return qrMatrixToSvg(buildQrMatrix(qrTarget.code));
+    } catch {
+      return '';
+    }
+  })();
+  const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] || character));
+  const printAssetTag = () => {
+    if (!qrSvg || !qrTarget) {
+      message.error('Mã tài sản quá dài để tạo QR. Dùng mã có tối đa 32 byte.');
+      return;
+    }
+    const printWindow = window.open('', '_blank', 'width=520,height=420');
+    if (!printWindow) {
+      message.error('Trình duyệt đã chặn cửa sổ in. Cho phép cửa sổ bật lên rồi thử lại.');
+      return;
+    }
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Tem tài sản ${escapeHtml(qrTarget.code)}</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#0f172a}.label{width:320px;border:1px solid #334155;padding:16px;text-align:center}.qr{width:150px;height:150px;margin:14px auto}.qr svg{width:100%;height:100%}.code{font-size:20px;font-weight:bold;letter-spacing:1px}.meta{font-size:12px;margin-top:6px}</style></head><body><main class="label"><div style="font-size:12px;font-weight:bold">CÔNG TY CP CÔNG NGHỆ KIYOVN</div><div class="qr">${qrSvg}</div><div class="code">${escapeHtml(qrTarget.code)}</div><div class="meta">${escapeHtml(qrTarget.name)}</div><div class="meta">${escapeHtml(qrTarget.department)} · ${escapeHtml(qrTarget.location)}</div></main></body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.setTimeout(() => printWindow.print(), 250);
+  };
+  const currentActor = () => {
+    try {
+      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
+      return user?.name || user?.fullName || user?.email || 'Người dùng hiện tại';
+    } catch {
+      return 'Người dùng hiện tại';
+    }
+  };
 
   const handleOpenCreate = () => {
     setEditingItem(null);
     form.resetFields();
+    autoDepreciationRef.current = undefined;
     form.setFieldsValue({
-      code: `TS-IT-0${data.length + 20}`,
-      barcode: `89360010${data.length + 20}`,
-      purchaseDate: new Date().toISOString().substring(0, 10),
-      warrantyExpiry: '2027-12-31',
-      depreciationMonths: 36,
-      category: 'Thiết bị IT',
-      department: 'Phòng Ban Kỹ Thuật',
+      code: `TS-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+      barcode: '',
+      purchaseDate: '',
+      warrantyExpiry: '',
+      depreciationMonths: undefined,
+      category: undefined,
+      department: '',
       assignedTo: 'Chưa cấp phát',
-      location: 'Tầng 12 - Keangnam Landmark, Cầu Giấy, HN',
+      location: '',
       status: 'Trong kho',
-      originalPrice: 20000000,
+      originalPrice: undefined,
     });
+    autoCodeRef.current = form.getFieldValue('code');
     setModalOpen(true);
   };
 
   const handleOpenEdit = (item: ComprehensiveAsset) => {
     setEditingItem(item);
+    autoCodeRef.current = '';
+    autoDepreciationRef.current = undefined;
     form.setFieldsValue(item);
     setModalOpen(true);
   };
 
-  const handleSave = (values: any) => {
-    const origPrice = Number(values.originalPrice) || 0;
-    const depMonths = Number(values.depreciationMonths) || 36;
-    const accum = values.accumulatedDepreciation !== undefined ? Number(values.accumulatedDepreciation) : 0;
-    const netValue = Math.max(0, origPrice - accum);
-
-    if (editingItem) {
-      const updated = data.map((item) =>
-        item.key === editingItem.key
-          ? {
-              ...item,
-              ...values,
-              originalPrice: origPrice,
-              depreciationMonths: depMonths,
-              accumulatedDepreciation: accum,
-              netBookValue: netValue,
-            }
-          : item
-      );
-      setData(updated);
-      dataService.saveGenericData('asset_items', updated);
-      message.success(`Đã cập nhật thông tin tài sản: ${values.name}`);
-    } else {
-      const newItem: ComprehensiveAsset = {
-        ...values,
-        key: String(Date.now()),
-        originalPrice: origPrice,
-        depreciationMonths: depMonths,
-        accumulatedDepreciation: 0,
-        netBookValue: origPrice,
-        status: values.status || 'Trong kho',
-      };
-      const nextItems = [newItem, ...data];
-      setData(nextItems);
-      dataService.saveGenericData('asset_items', nextItems);
-      message.success(`Đã thêm mới tài sản thành công: ${values.name} (${values.code})`);
+  const handleCreateCategoryChange = (category: string) => {
+    if (editingItem) return;
+    const currentCode = String(form.getFieldValue('code') || '');
+    if (!currentCode || currentCode === autoCodeRef.current) {
+      const pattern = findCodePattern(systemRules, category);
+      const nextCode = generateAssetCode(pattern, new Date().getFullYear(), data.map((asset) => asset.code),
+        () => `TS-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`);
+      form.setFieldsValue({ code: nextCode });
+      autoCodeRef.current = nextCode;
     }
+    const currentMonths = Number(form.getFieldValue('depreciationMonths'));
+    const defaultMonths = findDepreciationDefault(systemRules, category);
+    if (defaultMonths !== undefined && (!currentMonths || currentMonths === autoDepreciationRef.current)) {
+      form.setFieldsValue({ depreciationMonths: defaultMonths });
+      autoDepreciationRef.current = defaultMonths;
+    } else if (defaultMonths === undefined && currentMonths === autoDepreciationRef.current) {
+      form.setFieldsValue({ depreciationMonths: undefined });
+      autoDepreciationRef.current = undefined;
+    }
+  };
 
-    setModalOpen(false);
-    form.resetFields();
+  const handleSave = async (values: any) => {
+    const origPrice = Number(values.originalPrice);
+    const depMonths = Number(values.depreciationMonths);
+    const accum = values.accumulatedDepreciation !== undefined ? Number(values.accumulatedDepreciation) : 0;
+    if (!Number.isFinite(origPrice) || origPrice < 0 || !Number.isFinite(depMonths) || depMonths <= 0 || !Number.isFinite(accum) || accum < 0 || accum > origPrice) {
+      message.error('Kiểm tra nguyên giá, thời hạn khấu hao và hao mòn lũy kế.');
+      return;
+    }
+    const normalizedCode = String(values.code || '').trim().toLocaleUpperCase();
+    const normalizedBarcode = String(values.barcode || '').trim().replace(/\s+/g, '').toLocaleUpperCase();
+    const duplicate = data.find((asset) => asset.key !== editingItem?.key && (asset.code?.trim().toLocaleUpperCase() === normalizedCode || (normalizedBarcode && asset.barcode?.replace(/\s+/g, '').toLocaleUpperCase() === normalizedBarcode)));
+    if (duplicate) {
+      message.error(`Mã tài sản hoặc mã barcode đã tồn tại trên ${duplicate.code}.`);
+      return;
+    }
+    const historyEntry = {
+      key: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      action: editingItem ? 'Cập nhật hồ sơ tài sản' : 'Thêm tài sản vào danh mục',
+      actor: currentActor(),
+      note: editingItem ? 'Cập nhật thông tin hồ sơ.' : 'Khởi tạo hồ sơ tài sản.',
+    };
+    const common = {
+      ...values,
+      code: normalizedCode,
+      barcode: normalizedBarcode,
+      originalPrice: origPrice,
+      depreciationMonths: depMonths,
+      accumulatedDepreciation: accum,
+      netBookValue: origPrice - accum,
+      history: [historyEntry, ...(editingItem?.history || [])],
+    };
+    try {
+      if (editingItem) {
+        await collectionsApi.update('asset_items', editingItem.key, common);
+        message.success(`Đã cập nhật thông tin tài sản: ${values.name}`);
+      } else {
+        const newItem: ComprehensiveAsset = { ...common, key: crypto.randomUUID(), status: values.status || 'Trong kho' };
+        await collectionsApi.create('asset_items', newItem);
+        message.success(`Đã thêm mới tài sản thành công: ${values.name}`);
+      }
+      await dataService.refreshGenericData('asset_items');
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu hồ sơ tài sản.');
+    }
   };
 
   const handleDelete = (asset: ComprehensiveAsset) => {
@@ -169,11 +292,15 @@ export const AssetsModule: React.FC = () => {
       okText: 'Xác nhận xóa',
       cancelText: 'Hủy bỏ',
       okButtonProps: { danger: true },
-      onOk: () => {
-        const updated = data.filter((a) => a.key !== asset.key);
-        setData(updated);
-        dataService.saveGenericData('asset_items', updated);
-        message.success(`Đã xóa tài sản ${asset.code}`);
+      onOk: async () => {
+        try {
+          await collectionsApi.remove('asset_items', asset.key);
+          await dataService.refreshGenericData('asset_items');
+          message.success(`Đã xóa tài sản ${asset.code}`);
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể xóa tài sản.');
+          throw error;
+        }
       },
     });
   };
@@ -230,41 +357,38 @@ export const AssetsModule: React.FC = () => {
       {/* VIEW: REPORTS */}
       {isReports && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Báo cáo danh mục tài sản hiện có</h3>
+            <Button icon={<DownloadOutlined />} onClick={() => exportAssetRows(data, 'bao_cao_tai_san.xlsx', assetColumns)}>Xuất báo cáo</Button>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
             <Card title="Cơ Cấu Giá Trị Tài Sản Theo Nhóm Chủng Loại" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {[
-                  { name: 'Phương tiện & Vận chuyển', count: 1, val: 1480000000, color: '#2563EB' },
-                  { name: 'Máy chủ & Hạ tầng IDC', count: 1, val: 240000000, color: '#009688' },
-                  { name: 'Thiết bị IT', count: 3, val: 173500000, color: '#F59E0B' },
-                  { name: 'Nội thất văn phòng', count: 1, val: 45000000, color: '#8B5CF6' },
-                ].map((cat, idx) => {
-                  const pct = Math.round((cat.val / totalOriginalPrice) * 100);
+                {categoryStats.map((cat, idx) => {
+                  const pct = totalOriginalPrice > 0 ? Math.round((cat.original / totalOriginalPrice) * 100) : 0;
+                  const colors = ['#2563EB', '#009688', '#F59E0B', '#8B5CF6', '#DC2626'];
+                  const color = colors[idx % colors.length];
                   return (
                     <div key={idx}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
                         <strong>{cat.name} ({cat.count} TS)</strong>
-                        <span style={{ fontWeight: 700, color: cat.color }}>{cat.val.toLocaleString('vi-VN')} ₫ ({pct}%)</span>
+                        <span style={{ fontWeight: 700, color }}>{cat.original.toLocaleString('vi-VN')} ₫ ({pct}%)</span>
                       </div>
-                      <Progress percent={pct} strokeColor={cat.color} showInfo={false} size="small" />
+                      <Progress percent={pct} strokeColor={color} showInfo={false} size="small" />
                     </div>
                   );
                 })}
+                {categoryStats.length === 0 && <div style={{ color: '#64748B' }}>Chưa có dữ liệu tài sản.</div>}
               </div>
             </Card>
 
             <Card title="Mức Độ Khấu Hao Theo Phòng Ban Trực Thuộc" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {[
-                  { dept: 'Ban Giám Đốc', total: 1480000000, net: 986666667 },
-                  { dept: 'Khối Vận Hành & Khách Hàng', total: 240000000, net: 156000000 },
-                  { dept: 'Phòng Ban Kỹ Thuật', total: 154000000, net: 104472223 },
-                  { dept: 'Phòng Nhân Sự & Hành Chính', total: 45000000, net: 26250000 },
-                ].map((d, idx) => (
+                {departmentStats.map((d, idx) => (
                   <div key={idx} style={{ background: '#F8FAFC', padding: '10px 14px', borderRadius: 6, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <strong>{d.dept}</strong>
-                      <div style={{ fontSize: 12, color: '#64748B' }}>Nguyên giá: {d.total.toLocaleString('vi-VN')} ₫</div>
+                      <strong>{d.department}</strong>
+                      <div style={{ fontSize: 12, color: '#64748B' }}>Nguyên giá: {d.original.toLocaleString('vi-VN')} ₫</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <strong style={{ color: '#009688', fontSize: 13.5 }}>{d.net.toLocaleString('vi-VN')} ₫</strong>
@@ -272,6 +396,7 @@ export const AssetsModule: React.FC = () => {
                     </div>
                   </div>
                 ))}
+                {departmentStats.length === 0 && <div style={{ color: '#64748B' }}>Chưa có dữ liệu phòng ban.</div>}
               </div>
             </Card>
           </div>
@@ -283,18 +408,13 @@ export const AssetsModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Nhật Ký &amp; Lịch Sử Luân Chuyển Khai Thác Tài Sản Toàn Công Ty</h3>
-            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất nhật ký sử dụng tài sản')}>
+            <Button icon={<DownloadOutlined />} onClick={() => exportAssetRows(usageHistory, 'nhat_ky_su_dung_tai_san.xlsx', usageColumns)}>
               Xuất Nhật Ký
             </Button>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                { id: '1', date: '2026-06-12 09:30', code: 'TS-IT-019', name: 'Màn hình Dell UltraSharp 32', action: 'Nhập kho mua mới', actor: 'Lê Hoàng Yến (HR)', recipient: 'Kho Thiết Bị', note: 'Mua mới theo PO-2026-003' },
-                { id: '2', date: '2026-03-20 14:00', code: 'TS-IT-002', name: 'Dell Precision 5680 Workstation', action: 'Bàn giao sử dụng', actor: 'Lê Hoàng Yến (HR)', recipient: 'Hoàng Quốc Dũng', note: 'Cấp phát cho Senior AI Engineer' },
-                { id: '3', date: '2026-02-15 10:15', code: 'TS-IT-001', name: 'MacBook Pro 16 inch M3 Max', action: 'Bàn giao sử dụng', actor: 'Lê Hoàng Yến (HR)', recipient: 'Trần Tuấn Anh', note: 'Bàn giao thiết bị CTO' },
-                { id: '4', date: '2023-11-10 16:45', code: 'TS-SRV-001', name: 'Máy Chủ Dell PowerEdge R760', action: 'Lắp đặt Data Center', actor: 'Đặng Đình Long', recipient: 'Viettel IDC Rack B12', note: 'Triển khai cụm Database' },
-              ]}
+              dataSource={usageHistory}
               columns={[
                 { title: 'Thời gian', dataIndex: 'date', key: 'date', width: 150 },
                 { title: 'Mã & Tên tài sản', key: 'asset', render: (_: any, r: any) => <div><strong style={{ color: '#009688' }}>{r.code}</strong><div style={{ fontSize: 12 }}>{r.name}</div></div> },
@@ -305,6 +425,7 @@ export const AssetsModule: React.FC = () => {
               ]}
             />
           </div>
+          {usageHistory.length === 0 && <div style={{ color: '#64748B' }}>Chưa có thao tác tạo hoặc sửa được ghi trong lịch sử tài sản.</div>}
         </div>
       )}
 
@@ -349,7 +470,7 @@ export const AssetsModule: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục tài sản cố định ra Excel')}>
+              <Button icon={<DownloadOutlined />} onClick={() => exportAssetRows(filteredData, 'danh_muc_tai_san.xlsx', assetColumns)}>
                 Xuất Excel
               </Button>
               <Button
@@ -513,6 +634,7 @@ export const AssetsModule: React.FC = () => {
             </Form.Item>
             <Form.Item name="category" label="Nhóm tài sản" rules={[{ required: true }]}>
               <Select
+                onChange={handleCreateCategoryChange}
                 options={[
                   { label: 'Thiết bị IT', value: 'Thiết bị IT' },
                   { label: 'Máy chủ & Hạ tầng IDC', value: 'Máy chủ & Hạ tầng IDC' },
@@ -534,9 +656,10 @@ export const AssetsModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="supplier" label="Nhà cung cấp / Đơn vị bán" initialValue="FPT Digital Retail JSC">
-              <Input placeholder="Tên đơn vị bán hàng" />
+            <Form.Item name="supplier" label="Nhà cung cấp / Đơn vị bán">
+              <Input placeholder="Tên đơn vị bán hàng" list="asset-supplier-options" />
             </Form.Item>
+            <datalist id="asset-supplier-options">{supplierOptions.map((name) => <option key={name} value={name} />)}</datalist>
             <Form.Item name="purchaseDate" label="Ngày mua / Bắt đầu dùng" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
@@ -579,9 +702,10 @@ export const AssetsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="location" label="Vị trí lắp đặt / Bàn làm việc" initialValue="Tầng 12 - Keangnam Landmark, Cầu Giấy, HN">
-            <Input placeholder="Địa điểm thực tế đặt tài sản" />
+          <Form.Item name="location" label="Vị trí lắp đặt / Bàn làm việc">
+            <Input placeholder="Địa điểm thực tế đặt tài sản" list="asset-location-options" />
           </Form.Item>
+          <datalist id="asset-location-options">{locationOptions.map((name) => <option key={name} value={name} />)}</datalist>
 
           <Form.Item name="specs" label="Cấu hình kỹ thuật / Phụ kiện đính kèm">
             <Input.TextArea rows={2} placeholder="Chi tiết CPU, RAM, Ổ cứng, Cáp sạc, Túi chống sốc..." />
@@ -683,7 +807,28 @@ export const AssetsModule: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất phiếu lý lịch tài sản ${detailItem.code} (PDF)`)}
+                onClick={() => {
+                  const record = detailItem;
+                  const lines = [
+                    `Ma tai san: ${record.code}`,
+                    `Barcode: ${record.barcode}`,
+                    `Ten: ${record.name}`,
+                    `Nhom: ${record.category}`,
+                    `Model / Seri: ${record.model}`,
+                    `Ngay mua: ${record.purchaseDate}`,
+                    `Nha cung cap: ${record.supplier}`,
+                    `Nguyen gia: ${record.originalPrice.toLocaleString('vi-VN')} VND`,
+                    `Hao mon luy ke: ${record.accumulatedDepreciation.toLocaleString('vi-VN')} VND`,
+                    `Gia tri con lai: ${record.netBookValue.toLocaleString('vi-VN')} VND`,
+                    `Nguoi su dung: ${record.assignedTo}`,
+                    `Phong ban: ${record.department}`,
+                    `Vi tri: ${record.location}`,
+                    `Trang thai: ${record.status}`,
+                    `Cau hinh: ${record.specs}`,
+                    `Ghi chu: ${record.notes}`,
+                  ];
+                  downloadFile(`ly_lich_tai_san_${record.code}.pdf`, generateValidPdfBlob('LY LICH TAI SAN', `Ho so ${record.code}`, lines));
+                }}
               >
                 In phiếu lý lịch tài sản
               </Button>
@@ -717,10 +862,8 @@ export const AssetsModule: React.FC = () => {
               <div style={{ fontSize: 12, fontWeight: 800, color: '#009688', letterSpacing: 0.5 }}>CÔNG TY CP CÔNG NGHỆ KIYOVN</div>
               <div style={{ fontSize: 10, color: '#64748B', marginBottom: 12 }}>ASSET MANAGEMENT TAG</div>
 
-              {/* QR Mockup Canvas */}
-              <div style={{ width: 130, height: 130, margin: '0 auto', background: '#FFFFFF', border: '1px solid #CBD5E1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 8 }}>
-                <QrcodeOutlined style={{ fontSize: 84, color: '#0F172A' }} />
-                <span style={{ fontSize: 9.5, fontWeight: 700, color: '#009688', marginTop: 2 }}>{qrTarget.barcode}</span>
+              <div style={{ width: 150, height: 150, margin: '0 auto', background: '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {qrSvg ? <div role="img" aria-label={`QR tài sản ${qrTarget.code}`} style={{ width: 140, height: 140 }} dangerouslySetInnerHTML={{ __html: qrSvg }} /> : <span style={{ color: '#DC2626', fontSize: 12 }}>Mã QR hỗ trợ tối đa 32 byte. Hãy rút gọn mã tài sản.</span>}
               </div>
 
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginTop: 10 }}>{qrTarget.name}</div>
@@ -730,7 +873,7 @@ export const AssetsModule: React.FC = () => {
 
             <div style={{ display: 'flex', gap: 8 }}>
               <Button onClick={() => setQrModalOpen(false)}>Đóng</Button>
-              <Button type="primary" icon={<PrinterOutlined />} onClick={() => message.success('Đã gửi lệnh in tem nhãn sang máy in Zebra/Brother!')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              <Button type="primary" icon={<PrinterOutlined />} onClick={printAssetTag} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 In tem nhãn dán
               </Button>
             </div>

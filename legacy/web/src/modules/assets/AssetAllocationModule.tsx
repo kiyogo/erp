@@ -41,16 +41,28 @@ export interface AllocationItem {
   compensationAmount: number;
   signedByReceiver: boolean;
   signedAt?: string;
+  signedByName?: string;
+  signedByAccount?: string;
+  receivedAt?: string;
+  receivedByAccount?: string;
   status: 'Đã bàn giao hoàn tất' | 'Chờ nhân viên ký xác nhận' | 'Đã thu hồi về kho' | 'Chờ thẩm định đền bù';
   notes: string;
 }
 
 import { useEffect } from 'react';
-import { collectionsApi } from '../../api/endpoints';
+import { collectionsApi, employeesApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { buildAllocationAssetUpdate, findAssetByCode } from './assetOperations';
+import { findAllocationQuotaRule, type AssetSystemRule } from './assetSystemRules';
 
 export const AssetAllocationModule: React.FC = () => {
   const [data, setData] = useState<AllocationItem[]>([]);
+  const [assets, setAssets] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [systemRules, setSystemRules] = useState<AssetSystemRule[]>([]);
+  const [quotaEmployee, setQuotaEmployee] = useState<any>(null);
+  const [quotaAssetCode, setQuotaAssetCode] = useState('');
   const [deptOptions, setDeptOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [posOptions, setPosOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [searchText, setSearchText] = useState('');
@@ -63,23 +75,30 @@ export const AssetAllocationModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [signModalOpen, setSignModalOpen] = useState(false);
   const [signTarget, setSignTarget] = useState<AllocationItem | null>(null);
-  const [pinInput, setPinInput] = useState('');
+  const [receiverNameInput, setReceiverNameInput] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const [form] = Form.useForm();
 
   const loadData = async () => {
     try {
-      const [res, orgUnits, positions] = await Promise.all([
+      const [res, orgUnits, positions, assetRes, employeeRes, systemConfigRes] = await Promise.all([
         collectionsApi.get<AllocationItem>('asset_allocations', { limit: 500 }),
         dataService.fetchOrgUnitsList(),
         dataService.fetchDropdownOptions('positions'),
+        collectionsApi.get<any>('asset_items', { limit: 500 }),
+        employeesApi.getAll(),
+        collectionsApi.get<AssetSystemRule>('asset_systems', { limit: 500 }),
       ]);
       const list = res.data?.data || [];
       setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setAssets(assetRes.data?.data || []);
+      setEmployees((employeeRes.data?.data || []).filter((employee: any) => employee.status !== 'Đã nghỉ việc'));
+      setSystemRules(systemConfigRes.data?.data || []);
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
       setPosOptions(positions.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));
-    } catch {
-      setData([]);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách cấp phát/thu hồi.');
     }
   };
 
@@ -92,73 +111,171 @@ export const AssetAllocationModule: React.FC = () => {
   const inUseAllocations = data.filter((d) => d.type === 'Cấp phát' && d.status === 'Đã bàn giao hoàn tất').length;
   const pendingSignCount = data.filter((d) => d.status === 'Chờ nhân viên ký xác nhận').length;
   const returnedCount = data.filter((d) => d.type === 'Thu hồi' && d.status === 'Đã thu hồi về kho').length;
+  const allocationQuota = findAllocationQuotaRule(systemRules, String(quotaEmployee?.position || ''), String(quotaEmployee?.department || ''));
+  const quotaAsset = assets.find((asset) => String(asset.code || asset.assetCode) === quotaAssetCode);
+  const quotaOverLimit = Boolean(allocationQuota?.budgetLimit && quotaAsset && Number(quotaAsset.originalPrice) > Number(allocationQuota.budgetLimit));
 
   const handleOpenCreate = () => {
     form.resetFields();
+    setQuotaEmployee(null);
+    setQuotaAssetCode('');
+    const today = new Date().toISOString().substring(0, 10);
     form.setFieldsValue({
-      ticketCode: `CP-2026-0${data.length + 85}`,
+      ticketCode: `CP-${today.replace(/-/g, '')}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
       type: 'Cấp phát',
-      allocatedDate: new Date().toISOString().substring(0, 10),
-      expectedReturnDate: 'Vô thời hạn',
+      allocatedDate: today,
+      expectedReturnDate: '',
       purpose: 'Cấp phát chính thức cho nhân viên mới',
-      condition: 'Mới 100%, hoạt động ổn định',
-      accessories: 'Củ sạc chính hãng, Dây nguồn, Cặp/Balo bảo vệ',
-      handoverPerson: 'Lê Hoàng Yến',
-      department: 'Phòng Ban Kỹ Thuật',
+      condition: '',
+      accessories: '',
+      handoverPerson: '',
+      department: undefined,
       compensationAmount: 0,
     });
     setModalOpen(true);
   };
 
-  const handleCreate = async (values: any) => {
-    const isAllocate = values.type === 'Cấp phát';
-    const id = `alloc-${Date.now()}`;
-    const newItem: AllocationItem = {
-      ...values,
-      key: id,
-      compensationAmount: Number(values.compensationAmount) || 0,
-      signedByReceiver: !isAllocate,
-      status: isAllocate ? 'Chờ nhân viên ký xác nhận' : 'Đã thu hồi về kho',
-    };
+  const currentActor = () => {
     try {
-      await collectionsApi.create('asset_allocations', newItem, id);
-      message.success(`Đã lập biên bản ${values.type}: ${values.ticketCode} cho ${values.employeeName}`);
+      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
+      return String(user?.name || user?.fullName || user?.email || 'Tài khoản hiện tại');
+    } catch { return 'Tài khoản hiện tại'; }
+  };
+
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    const isAllocate = values.type === 'Cấp phát';
+    if (data.some((item) => item.ticketCode.trim().toLocaleLowerCase() === String(values.ticketCode).trim().toLocaleLowerCase())) {
+      message.error('Mã biên bản đã tồn tại.');
+      return;
+    }
+    if (!String(values.condition || '').trim()) {
+      message.error('Nhập tình trạng tài sản thực tế trước khi lập biên bản.');
+      return;
+    }
+    const compensationAmount = Number(values.compensationAmount || 0);
+    if (!Number.isFinite(compensationAmount) || compensationAmount < 0) {
+      message.error('Số tiền bồi thường phải là số không âm.');
+      return;
+    }
+    setSaving(true);
+    let oldAsset: any = null;
+    let assetUpdated = false;
+    try {
+      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
+      oldAsset = findAssetByCode(assetsResponse.data?.data || [], String(values.assetCode || ''));
+      const employee = employees.find((item) => String(item.code || item.employeeCode) === String(values.employeeCode));
+      if (!employee) throw new Error('Chọn nhân viên còn đang làm việc trong danh sách nhân sự.');
+      if (isAllocate && oldAsset.status !== 'Trong kho') {
+        throw new Error('Chỉ cấp phát tài sản đang ở kho; hãy kiểm tra trạng thái hoặc hoàn tất thu hồi trước.');
+      }
+      const key = `allocation-${crypto.randomUUID()}`;
+      const newItem: AllocationItem = {
+        ...values,
+        key,
+        assetCode: String(oldAsset.code || oldAsset.assetCode),
+        assetName: String(oldAsset.name || oldAsset.assetName || ''),
+        category: String(oldAsset.category || ''),
+        serialNo: String(oldAsset.serialNo || oldAsset.serialNumber || values.serialNo || ''),
+        employeeCode: String(employee.code || employee.employeeCode),
+        employeeName: String(employee.name || employee.fullName || '').trim(),
+        department: String(employee.department || values.department || ''),
+        position: String(employee.position || values.position || ''),
+        compensationAmount,
+        signedByReceiver: false,
+        receivedAt: isAllocate ? undefined : new Date().toLocaleString('sv-SE'),
+        receivedByAccount: isAllocate ? undefined : currentActor(),
+        status: isAllocate ? 'Chờ nhân viên ký xác nhận' : 'Đã thu hồi về kho',
+      };
+      if (!isAllocate) {
+        const updatedAsset = buildAllocationAssetUpdate(oldAsset, 'Thu hồi', newItem.employeeName, newItem.department, currentActor(), newItem.allocatedDate, newItem.ticketCode, newItem.condition);
+        await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
+        assetUpdated = true;
+      }
+      await collectionsApi.create('asset_allocations', newItem, key);
+      await Promise.allSettled([dataService.refreshGenericData('asset_allocations'), ...(assetUpdated ? [dataService.refreshGenericData('asset_items')] : [])]);
+      message.success(isAllocate
+        ? `Đã lập biên bản ${newItem.ticketCode}; chờ người nhận xác nhận trước khi cập nhật tài sản.`
+        : `Đã lưu biên bản thu hồi ${newItem.ticketCode} và cập nhật danh mục tài sản.`);
       setModalOpen(false);
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể tạo biên bản cấp phát.');
+      let rollbackFailed = false;
+      if (assetUpdated && oldAsset) {
+        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
+        catch { rollbackFailed = true; }
+      }
+      message.error(rollbackFailed
+        ? 'Không lưu được biên bản và cũng chưa thể hoàn tác thay đổi tài sản; hãy đối chiếu danh mục tài sản.'
+        : error?.response?.data?.message || error?.message || 'Không thể tạo biên bản cấp phát/thu hồi.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleOpenSignModal = (record: AllocationItem) => {
     setSignTarget(record);
-    setPinInput('');
+    setReceiverNameInput('');
     setSignModalOpen(true);
   };
 
   const handleConfirmSign = async () => {
-    if (!pinInput || pinInput.length < 4) {
-      message.error('Vui lòng nhập mã PIN xác thực chữ ký số');
+    if (!signTarget || saving || signTarget.type !== 'Cấp phát' || signTarget.signedByReceiver) return;
+    if (receiverNameInput.trim().toLocaleLowerCase() !== signTarget.employeeName.trim().toLocaleLowerCase()) {
+      message.error('Tên xác nhận phải khớp với người nhận ghi trên biên bản.');
       return;
     }
-
-    if (signTarget) {
-      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-      try {
-        await collectionsApi.update('asset_allocations', signTarget.key, {
-          signedByReceiver: true,
-          signedAt: nowStr,
-          status: 'Đã bàn giao hoàn tất',
-        });
-        message.success(`Xác thực ký số thành công! Biên bản ${signTarget.ticketCode} đã có hiệu lực.`);
-        setSignModalOpen(false);
-        await loadData();
-      } catch {
-        message.error('Không thể xác nhận chữ ký số.');
+    setSaving(true);
+    const nowStr = new Date().toLocaleString('sv-SE');
+    let oldAsset: any = null;
+    let assetUpdated = false;
+    try {
+      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
+      oldAsset = findAssetByCode(assetsResponse.data?.data || [], signTarget.assetCode);
+      const updatedAsset = buildAllocationAssetUpdate(oldAsset, 'Cấp phát', signTarget.employeeName, signTarget.department, currentActor(), nowStr, signTarget.ticketCode, signTarget.condition);
+      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
+      assetUpdated = true;
+      await collectionsApi.update('asset_allocations', signTarget.key, {
+        signedByReceiver: true,
+        signedByName: receiverNameInput.trim(),
+        signedByAccount: currentActor(),
+        signedAt: nowStr,
+        status: 'Đã bàn giao hoàn tất',
+      });
+      await Promise.allSettled([dataService.refreshGenericData('asset_allocations'), dataService.refreshGenericData('asset_items')]);
+      message.success(`Đã lưu xác nhận bàn giao ${signTarget.ticketCode} và cập nhật người giữ tài sản.`);
+      setSignModalOpen(false);
+      setDrawerOpen(false);
+      await loadData();
+    } catch (error: any) {
+      let rollbackFailed = false;
+      if (assetUpdated && oldAsset) {
+        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
+        catch { rollbackFailed = true; }
       }
+      message.error(rollbackFailed
+        ? 'Không lưu được xác nhận và chưa thể hoàn tác danh mục tài sản; hãy đối chiếu hồ sơ tài sản và biên bản.'
+        : error?.response?.data?.message || error?.message || 'Không thể lưu xác nhận bàn giao.');
+    } finally {
+      setSaving(false);
     }
   };
+
+  const exportRegister = () => downloadFile('So_theo_doi_cap_phat_thu_hoi.xlsx', generateValidXlsxBlob([
+    ['Mã biên bản', 'Loại', 'Mã tài sản', 'Tài sản', 'Serial', 'Mã nhân viên', 'Nhân viên', 'Phòng ban', 'Chức vụ', 'Người bàn giao', 'Ngày', 'Hạn trả', 'Mục đích', 'Tình trạng', 'Phụ kiện', 'Bồi thường', 'Trạng thái', 'Đã xác nhận', 'Thời điểm xác nhận', 'Ghi chú'],
+    ...filteredData.map((item) => [item.ticketCode, item.type, item.assetCode, item.assetName, item.serialNo, item.employeeCode, item.employeeName, item.department, item.position, item.handoverPerson, item.allocatedDate, item.expectedReturnDate, item.purpose, item.condition, item.accessories, item.compensationAmount, item.status, item.type === 'Thu hồi' ? 'Đã nhập kho' : item.signedByName || (item.signedByReceiver ? 'Đã xác nhận' : 'Chưa xác nhận'), item.type === 'Thu hồi' ? item.receivedAt || '' : item.signedAt || '', item.notes]),
+  ]));
+
+  const printAllocation = (item: AllocationItem) => downloadFile(`${item.ticketCode.replace(/[^a-z0-9_-]/gi, '_')}_Bien_ban.pdf`, generateValidPdfBlob(`BIEN BAN ${item.type.toLocaleUpperCase()} TAI SAN`, `${item.ticketCode} | ${item.assetCode} - ${item.assetName}`, [
+    `Nhan vien: ${item.employeeName} (${item.employeeCode || 'Chua co ma'})`, `Phong ban / chuc vu: ${item.department} / ${item.position || ''}`,
+    `Nguoi ban giao: ${item.handoverPerson}`, `Ngay: ${item.allocatedDate} | Han tra: ${item.expectedReturnDate || 'Khong dat han'}`,
+    `Muc dich: ${item.purpose}`, `Serial: ${item.serialNo}`, `Tinh trang: ${item.condition}`, `Phu kien: ${item.accessories || 'Khong ghi nhan'}`,
+    `Boi thuong: ${item.compensationAmount || 0} VND`, `Trang thai: ${item.status}`,
+    `Xac nhan: ${item.type === 'Thu hồi' ? `Da nhap kho boi ${item.receivedByAccount || 'chua ghi nhan'} luc ${item.receivedAt || ''}` : item.signedByReceiver ? `${item.signedByName || item.employeeName} luc ${item.signedAt || ''}` : 'Chua xac nhan'}`,
+    `Tai khoan ghi nhan: ${item.type === 'Thu hồi' ? item.receivedByAccount || 'Chua ghi nhan' : item.signedByAccount || 'Chua ghi nhan'}`, `Ghi chu: ${item.notes || ''}`,
+    'Xac nhan noi bo; khong phai chu ky so duoc chung thu so xac thuc.',
+  ]));
 
   const filteredData = data.filter((item) => {
     const matchSearch =
@@ -196,12 +313,12 @@ export const AssetAllocationModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chờ ký nhận điện tử</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chờ người nhận xác nhận</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
-            {pendingSignCount} phiếu chờ ký
+            {pendingSignCount} phiếu chờ xác nhận
           </div>
           <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>
-            {pendingSignCount > 0 ? 'Cần nhắc nhân sự ký xác nhận' : 'Tất cả đã hoàn tất ký nhận'}
+            {pendingSignCount > 0 ? 'Cần người nhận xác nhận biên bản' : 'Không còn biên bản chờ xác nhận'}
           </div>
         </div>
 
@@ -242,14 +359,14 @@ export const AssetAllocationModule: React.FC = () => {
             options={[
               { label: 'Tất cả trạng thái', value: 'all' },
               { label: 'Đã bàn giao hoàn tất', value: 'Đã bàn giao hoàn tất' },
-              { label: 'Chờ nhân viên ký xác nhận', value: 'Chờ nhân viên ký xác nhận' },
+              { label: 'Chờ nhân viên xác nhận', value: 'Chờ nhân viên ký xác nhận' },
               { label: 'Đã thu hồi về kho', value: 'Đã thu hồi về kho' },
             ]}
           />
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ theo dõi cấp phát tài sản')}>
+          <Button icon={<DownloadOutlined />} onClick={exportRegister}>
             Xuất Excel
           </Button>
           <Button
@@ -321,7 +438,7 @@ export const AssetAllocationModule: React.FC = () => {
               render: (c: string) => <span style={{ fontSize: 12, color: '#475569' }}>{c}</span>,
             },
             {
-              title: 'Trạng thái & Chữ ký',
+              title: 'Trạng thái xác nhận',
               key: 'status',
               render: (_: any, r: AllocationItem) => {
                 let col = 'success';
@@ -331,8 +448,10 @@ export const AssetAllocationModule: React.FC = () => {
                   <div>
                     <Tag color={col}>{r.status}</Tag>
                     <div style={{ fontSize: 11, color: r.signedByReceiver ? '#16A34A' : '#D97706', marginTop: 2, display: 'flex', alignItems: 'center', gap: 3 }}>
-                      {r.signedByReceiver ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
-                      {r.signedByReceiver ? `Đã ký (${r.signedAt})` : 'Chưa ký số'}
+                    {r.type === 'Thu hồi' || r.signedByReceiver ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+                    {r.type === 'Thu hồi'
+                      ? `Đã nhập kho (${r.receivedAt || 'thời điểm chưa lưu'})`
+                      : r.signedByReceiver ? `Đã xác nhận (${r.signedAt})` : 'Chưa xác nhận'}
                     </div>
                   </div>
                 );
@@ -355,16 +474,16 @@ export const AssetAllocationModule: React.FC = () => {
                   >
                     Xem
                   </Button>
-                  {!r.signedByReceiver && (
+                  {r.type === 'Cấp phát' && !r.signedByReceiver && (
                     <Button
                       size="small"
                       type="primary"
                       icon={<SafetyCertificateOutlined />}
                       onClick={() => handleOpenSignModal(r)}
                       style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-                      title="Ký nhận bàn giao điện tử"
+                      title="Xác nhận bàn giao"
                     >
-                      Ký số
+                      Xác nhận
                     </Button>
                   )}
                 </div>
@@ -411,22 +530,40 @@ export const AssetAllocationModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
-            <Form.Item name="assetCode" label="Mã tài sản" rules={[{ required: true, message: 'Nhập mã TS' }]}>
-              <Input placeholder="Ví dụ: TS-IT-005" />
+            <Form.Item name="assetCode" label="Tài sản trong danh mục" rules={[{ required: true, message: 'Chọn tài sản trong danh mục' }]}>
+              <Select
+                showSearch
+                placeholder="Chọn mã tài sản..."
+                options={assets.map((asset) => ({ label: `${asset.code || asset.assetCode} — ${asset.name || asset.assetName} (${asset.status || 'Chưa rõ trạng thái'})`, value: asset.code || asset.assetCode }))}
+                onChange={(code: string) => {
+                  const asset = assets.find((item) => String(item.code || item.assetCode) === String(code));
+                  setQuotaAssetCode(String(code || ''));
+                  form.setFieldsValue({ assetName: asset?.name || asset?.assetName || '', serialNo: asset?.serialNo || asset?.serialNumber || '' });
+                }}
+              />
             </Form.Item>
-            <Form.Item name="assetName" label="Tên tài sản / Thiết bị" rules={[{ required: true, message: 'Nhập tên tài sản' }]}>
-              <Input placeholder="Ví dụ: Laptop Dell Precision 5680" />
+            <Form.Item name="assetName" label="Tên tài sản / Thiết bị">
+              <Input disabled placeholder="Tự lấy từ danh mục tài sản" />
             </Form.Item>
-            <Form.Item name="serialNo" label="Số Serial / Service Tag" rules={[{ required: true, message: 'Nhập số Serial' }]}>
-              <Input placeholder="Ví dụ: 8H7K2X3" />
+            <Form.Item name="serialNo" label="Số Serial / Service Tag">
+              <Input disabled placeholder="Tự lấy từ danh mục tài sản" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeName" label="Nhân viên nhận / bàn giao" rules={[{ required: true, message: 'Nhập tên nhân viên' }]}>
-              <Input placeholder="Ví dụ: Nguyễn Văn Minh" />
+            <Form.Item name="employeeCode" label="Nhân viên nhận / bàn giao" rules={[{ required: true, message: 'Chọn nhân viên' }]}>
+              <Select
+                showSearch
+                placeholder="Chọn nhân viên đang làm việc..."
+                options={employees.map((employee) => ({ label: `${employee.code || employee.employeeCode} — ${employee.name || employee.fullName}`, value: employee.code || employee.employeeCode }))}
+                onChange={(code: string) => {
+                  const employee = employees.find((item) => String(item.code || item.employeeCode) === String(code));
+                  setQuotaEmployee(employee || null);
+                  form.setFieldsValue({ employeeName: employee?.name || employee?.fullName || '', department: employee?.department || undefined, position: employee?.position || undefined });
+                }}
+              />
             </Form.Item>
-            <Form.Item name="position" label="Chức vụ" initialValue="Chuyên Viên">
+            <Form.Item name="position" label="Chức vụ">
               {posOptions.length > 0 ? (
                 <Select options={posOptions} placeholder="Chọn chức vụ..." />
               ) : (
@@ -435,13 +572,21 @@ export const AssetAllocationModule: React.FC = () => {
             </Form.Item>
             <Form.Item name="department" label="Phòng ban" rules={[{ required: true }]}>
               <Select
-                options={deptOptions.length > 0 ? deptOptions : [
-                  { label: 'Ban Giám Đốc', value: 'Ban Giám Đốc' },
-                ]}
+                options={deptOptions}
                 placeholder="Chọn phòng ban..."
               />
             </Form.Item>
           </div>
+
+          {allocationQuota && (
+            <Alert
+              type={quotaOverLimit ? 'warning' : 'info'}
+              showIcon
+              message={`Định mức áp dụng cho ${allocationQuota.allocatedRole}`}
+              description={`Gói tiêu chuẩn: ${allocationQuota.standardPackage || 'Chưa cấu hình'} · Hạn mức: ${Number(allocationQuota.budgetLimit || 0) > 0 ? `${Number(allocationQuota.budgetLimit).toLocaleString('vi-VN')} ₫` : 'Không giới hạn'}${quotaOverLimit ? ' · Giá gốc tài sản vượt hạn mức, cần đối chiếu ngoại lệ trước khi bàn giao.' : ''}`}
+              style={{ marginBottom: 12 }}
+            />
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="handoverPerson" label="Cán bộ bàn giao" rules={[{ required: true }]}>
@@ -559,24 +704,32 @@ export const AssetAllocationModule: React.FC = () => {
             {/* Signature Blocks */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 6 }}>
               <div style={{ border: '1px solid #CBD5E1', borderRadius: 8, padding: 12, textAlign: 'center', background: '#FAFAFA' }}>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: '#64748B' }}>ĐẠI DIỆN BÊN GIAO</div>
-                <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16A34A', fontWeight: 700, fontSize: 13 }}>
-                  <CheckCircleOutlined /> ĐÃ KÝ DUYỆT
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: '#64748B' }}>NGƯỜI BÀN GIAO</div>
+                <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748B', fontWeight: 600, fontSize: 12 }}>
+                  Chưa có chữ ký được xác thực
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 12 }}>{detailItem.handoverPerson}</div>
               </div>
 
               <div style={{ border: '1px solid #CBD5E1', borderRadius: 8, padding: 12, textAlign: 'center', background: '#FAFAFA' }}>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: '#64748B' }}>NGƯỜI NHẬN TÀI SẢN</div>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: '#64748B' }}>{detailItem.type === 'Thu hồi' ? 'NGƯỜI NHẬN TẠI KHO' : 'NGƯỜI NHẬN TÀI SẢN'}</div>
                 <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {detailItem.signedByReceiver ? (
+                  {detailItem.type === 'Thu hồi' ? (
+                    <div style={{ color: '#2563EB', fontWeight: 700, fontSize: 12 }}>
+                      <CheckCircleOutlined style={{ fontSize: 18 }} />
+                      <div>ĐÃ NHẬP KHO</div>
+                      <div style={{ fontSize: 9.5, color: '#64748B' }}>{detailItem.receivedByAccount || 'Chưa ghi nhận tài khoản'}</div>
+                      <div style={{ fontSize: 9.5, color: '#64748B' }}>{detailItem.receivedAt || ''}</div>
+                    </div>
+                  ) : detailItem.signedByReceiver ? (
                     <div style={{ color: '#009688', fontWeight: 700, fontSize: 12 }}>
                       <SafetyCertificateOutlined style={{ fontSize: 18 }} />
-                      <div>ĐÃ KÝ SỐ ĐIỆN TỬ</div>
+                      <div>ĐÃ XÁC NHẬN</div>
+                      <div style={{ fontSize: 9.5, color: '#64748B' }}>{detailItem.signedByName || detailItem.employeeName}</div>
                       <div style={{ fontSize: 9.5, color: '#64748B' }}>{detailItem.signedAt}</div>
                     </div>
                   ) : (
-                    <span style={{ color: '#D97706', fontSize: 12, fontWeight: 600 }}>Chờ ký xác nhận...</span>
+                    <span style={{ color: '#D97706', fontSize: 12, fontWeight: 600 }}>Chờ người nhận xác nhận...</span>
                   )}
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 12 }}>{detailItem.employeeName}</div>
@@ -587,19 +740,19 @@ export const AssetAllocationModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất biên bản ${detailItem.ticketCode} (PDF)`)}
+                onClick={() => printAllocation(detailItem)}
                 style={{ flex: 1 }}
               >
                 In biên bản (PDF)
               </Button>
-              {!detailItem.signedByReceiver && (
+              {detailItem.type === 'Cấp phát' && !detailItem.signedByReceiver && (
                 <Button
                   type="primary"
                   icon={<SafetyCertificateOutlined />}
                   onClick={() => handleOpenSignModal(detailItem)}
                   style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
                 >
-                  Ký nhận ngay
+                  Xác nhận nhận tài sản
                 </Button>
               )}
             </div>
@@ -607,9 +760,9 @@ export const AssetAllocationModule: React.FC = () => {
         )}
       </Drawer>
 
-      {/* MODAL: Ký nhận điện tử biên bản bàn giao */}
+      {/* MODAL: Xác nhận bàn giao biên bản */}
       <Modal
-        title="Xác Thực Ký Nhận Điện Tử Bàn Giao Thiết Bị"
+        title="Xác Nhận Nhận Bàn Giao Thiết Bị"
         open={signModalOpen}
         onCancel={() => setSignModalOpen(false)}
         footer={null}
@@ -619,24 +772,22 @@ export const AssetAllocationModule: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
             <Alert
               message="Xác nhận nhận tài sản"
-              description={`Bạn đang xác nhận đã tiếp nhận thiết bị "${signTarget.assetName}" (Mã: ${signTarget.assetCode}) với đầy đủ phụ kiện đi kèm theo biên bản ${signTarget.ticketCode}.`}
+              description={`Xác nhận đã tiếp nhận tài sản ${signTarget.assetCode} - ${signTarget.assetName} theo tình trạng ghi tại biên bản ${signTarget.ticketCode}: ${signTarget.condition}.`}
               type="info"
               showIcon
             />
 
             <div>
               <label style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 6 }}>
-                Nhập mã PIN cá nhân để ký số biên bản:
+                Nhập lại họ tên người nhận để xác nhận:
               </label>
-              <Input.Password
-                placeholder="Nhập mã PIN"
-                value={pinInput}
-                onChange={(e) => setPinInput(e.target.value)}
-                maxLength={6}
-                style={{ fontSize: 16, letterSpacing: 2 }}
+              <Input
+                placeholder={signTarget.employeeName}
+                value={receiverNameInput}
+                onChange={(e) => setReceiverNameInput(e.target.value)}
               />
               <span style={{ fontSize: 11.5, color: '#64748B', marginTop: 4, display: 'block' }}>
-                * Chữ ký điện tử có giá trị pháp lý tương đương chữ ký tay theo Luật Giao dịch điện tử.
+                Hệ thống ghi tên xác nhận, tài khoản đăng nhập và thời điểm; thao tác này không tạo chữ ký số CA.
               </span>
             </div>
 
@@ -648,7 +799,7 @@ export const AssetAllocationModule: React.FC = () => {
                 onClick={handleConfirmSign}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               >
-                Xác nhận ký số
+                Xác nhận bàn giao
               </Button>
             </div>
           </div>

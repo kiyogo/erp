@@ -21,6 +21,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Input, Button, message, Tag, Drawer, Select, Tooltip, Alert, Card } from '../../custom-ui';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export interface WorkflowAuditRecord {
   key: string;
@@ -30,24 +31,46 @@ export interface WorkflowAuditRecord {
   category: 'Mua sắm & Tài sản' | 'Tài chính & Thanh toán' | 'Hợp đồng & Pháp chế' | 'Nhân sự & Phúc lợi' | 'Vận hành Kỹ thuật & IDC';
   approver: string;
   approverRole: string;
+  level: number;
   stepName: string;
   decision: 'Đã phê duyệt' | 'Từ chối' | 'Yêu cầu bổ sung';
   timestamp: string;
   certificateProvider: 'Viettel-CA' | 'VNPT-CA' | 'FPT-CA' | 'Chữ ký nội bộ';
   certificateSerial: string;
   sha256Hash: string;
+  hashPayload?: { previousHash?: string };
   ipAddress: string;
   deviceInfo: string;
   comments: string;
   budgetAmount?: number;
   attachmentCount: number;
-  validityStatus: 'Hợp lệ & Toàn vẹn' | 'Đã thu hồi chứng thư' | 'Cảnh báo sai lệch';
+  validityStatus: 'Chưa kiểm tra' | 'Hợp lệ & Toàn vẹn' | 'Đã thu hồi chứng thư' | 'Cảnh báo sai lệch';
 }
 
-const INITIAL_AUDIT_HISTORY: WorkflowAuditRecord[] = [];
-
 export const WorkflowHistoryModule: React.FC = () => {
-  const [data] = useState<WorkflowAuditRecord[]>(INITIAL_AUDIT_HISTORY);
+  const [requests, setRequests] = useState<Array<Record<string, any>>>([]);
+  const [integrityResults, setIntegrityResults] = useState<Record<string, 'Hợp lệ & Toàn vẹn' | 'Cảnh báo sai lệch'>>({});
+
+  useEffect(() => {
+    setRequests(dataService.getGenericData('workflow_requests'));
+    return dataService.subscribe(() => setRequests(dataService.getGenericData('workflow_requests')));
+  }, []);
+
+  const data: WorkflowAuditRecord[] = requests.flatMap((request) =>
+    (Array.isArray(request.approvalHistory) ? request.approvalHistory : []).map((event: any) => ({
+      ...event,
+      key: event.txCode,
+      requestCode: request.code,
+      workflowName: request.workflowName,
+      category: request.category,
+      stepName: `Cấp ${event.level}`,
+      budgetAmount: request.budgetAmount,
+      attachmentCount: request.attachments?.length || 0,
+      ipAddress: '',
+      deviceInfo: '',
+      validityStatus: integrityResults[event.txCode] || 'Chưa kiểm tra',
+    }))
+  );
   const [searchText, setSearchText] = useState('');
   const [decisionFilter, setDecisionFilter] = useState<string>('all');
   const [providerFilter, setProviderFilter] = useState<string>('all');
@@ -56,13 +79,50 @@ export const WorkflowHistoryModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Metrics
-  const totalAuditLogs = 1420;
+  const totalAuditLogs = data.length;
   const approvedCount = data.filter((d) => d.decision === 'Đã phê duyệt').length;
   const rejectedCount = data.filter((d) => d.decision === 'Từ chối' || d.decision === 'Yêu cầu bổ sung').length;
 
-  const handleVerifyIntegrity = (record: WorkflowAuditRecord) => {
-    message.success(`Mã băm SHA-256 của giao dịch ${record.txCode} khớp 100% với chuỗi khối TSA. Chứng thư số ${record.certificateSerial} còn hiệu lực pháp lý!`);
+  const handleVerifyIntegrity = async (record: WorkflowAuditRecord) => {
+    if (!record.hashPayload || !record.sha256Hash || !globalThis.crypto?.subtle) {
+      message.warning('Không đủ dữ liệu để kiểm tra mã băm của giao dịch này.');
+      return;
+    }
+    try {
+      const bytes = new TextEncoder().encode(JSON.stringify(record.hashPayload));
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+      const actual = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+      if (actual === record.sha256Hash.toLowerCase()) {
+        setIntegrityResults((results) => ({ ...results, [record.txCode]: 'Hợp lệ & Toàn vẹn' }));
+        message.success('Nội dung khớp với mã SHA-256 đã lưu. Kiểm tra này không xác thực chứng thư CA.');
+      } else {
+        setIntegrityResults((results) => ({ ...results, [record.txCode]: 'Cảnh báo sai lệch' }));
+        message.error('Nội dung không khớp với mã SHA-256 đã lưu.');
+      }
+    } catch {
+      message.error('Không thể kiểm tra mã băm của giao dịch.');
+    }
   };
+
+  const exportHistory = () => downloadFile(`Lich_su_phe_duyet_${new Date().toISOString().slice(0, 10)}.xlsx`, generateValidXlsxBlob([
+    ['Mã giao dịch', 'Mã hồ sơ', 'Quy trình', 'Cấp', 'Người xử lý', 'Quyết định', 'Thời gian', 'Ý kiến', 'Phương thức', 'SHA-256'],
+    ...filteredData.map((record) => [record.txCode, record.requestCode, record.workflowName, record.level, record.approver, record.decision, record.timestamp, record.comments, record.certificateProvider, record.sha256Hash]),
+  ]));
+
+  const exportDecision = (record: WorkflowAuditRecord) => downloadFile(
+    `Phieu_xu_ly_${record.requestCode}_${record.txCode}.pdf`,
+    generateValidPdfBlob('PHIẾU GHI NHẬN XỬ LÝ QUY TRÌNH', record.requestCode, [
+      `Quy trình: ${record.workflowName}`,
+      `Cấp xử lý: ${record.stepName}`,
+      `Người xử lý: ${record.approver} (${record.approverRole})`,
+      `Quyết định: ${record.decision}`,
+      `Thời gian: ${record.timestamp}`,
+      `Ý kiến: ${record.comments || 'Không có'}`,
+      `Phương thức: ${record.certificateProvider}`,
+      `SHA-256: ${record.sha256Hash}`,
+      'Phiếu ghi nhận quyết định nội bộ; không thay thế chữ ký số CA.',
+    ])
+  );
 
   const filteredData = data.filter((item) => {
     const matchSearch =
@@ -85,35 +145,35 @@ export const WorkflowHistoryModule: React.FC = () => {
       {/* 4 KPI Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhật ký kiểm toán lưu vết</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quyết định đã lưu lịch sử</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalAuditLogs.toLocaleString('vi-VN')} giao dịch
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Lưu trữ bất biến chống chối bỏ</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Dữ liệu lấy từ hồ sơ quy trình</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chứng thư số CA hợp lệ</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quyết định có mã SHA-256</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            100% Verified
+            {data.filter((d) => Boolean(d.sha256Hash)).length}
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Chuỗi băm SHA-256 toàn vẹn tuyệt đối</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Có thể kiểm tra nội dung khi mở hồ sơ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giao dịch ký duyệt thành công</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            1.375 phê duyệt
+            {approvedCount} phê duyệt
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Được cấp dấu mộc điện tử hợp pháp</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Quyết định nội bộ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Giao dịch từ chối / Bổ sung</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
-            45 trường hợp
+            {rejectedCount} trường hợp
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Kiểm soát rủi ro & chi tiêu vượt trần</div>
+            <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Từ chối hoặc cần bổ sung</div>
         </div>
       </div>
 
@@ -122,7 +182,7 @@ export const WorkflowHistoryModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input
             prefix={<SearchOutlined style={{ color: '#bbb' }} />}
-            placeholder="Tìm theo mã giao dịch, mã tờ trình, người duyệt, IP..."
+            placeholder="Tìm theo mã giao dịch, mã hồ sơ, người xử lý..."
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             style={{ width: 340, borderRadius: 6 }}
@@ -153,12 +213,7 @@ export const WorkflowHistoryModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button
-            icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất báo cáo kiểm toán tuân thủ')}
-          >
-            Xuất Báo Cáo Kiểm Toán
-          </Button>
+          <Button icon={<DownloadOutlined />} disabled={!filteredData.length} onClick={exportHistory}>Xuất lịch sử</Button>
         </div>
       </div>
 
@@ -201,7 +256,7 @@ export const WorkflowHistoryModule: React.FC = () => {
               ),
             },
             {
-              title: 'Người ký & Quyết định',
+              title: 'Người xử lý & Quyết định',
               key: 'decision',
               width: 190,
               render: (_: any, r: WorkflowAuditRecord) => {
@@ -230,23 +285,17 @@ export const WorkflowHistoryModule: React.FC = () => {
               },
             },
             {
-              title: 'Thời gian & Địa chỉ IP',
+              title: 'Thời gian xử lý',
               key: 'time',
               width: 190,
               render: (_: any, r: WorkflowAuditRecord) => (
                 <div style={{ fontSize: 12 }}>
                   <div style={{ fontWeight: 600, color: '#0F172A' }}>{r.timestamp}</div>
-                  <div style={{ color: '#64748B', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                    <GlobalOutlined /> {r.ipAddress}
-                  </div>
-                  <div style={{ color: '#64748B', fontSize: 10.5, display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
-                    <LaptopOutlined /> {r.deviceInfo.split('·')[0]}
-                  </div>
                 </div>
               ),
             },
             {
-              title: 'Chứng thư số Token CA',
+              title: 'Phương thức & Mã băm',
               key: 'cert',
               width: 180,
               render: (_: any, r: WorkflowAuditRecord) => (
@@ -254,10 +303,7 @@ export const WorkflowHistoryModule: React.FC = () => {
                   <span style={{ fontSize: 11.5, color: '#7C3AED', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <SafetyCertificateOutlined /> {r.certificateProvider}
                   </span>
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{r.certificateSerial}</div>
-                  <Tag color="success" style={{ marginTop: 2, fontSize: 10 }}>
-                    SHA-256 Valid
-                  </Tag>
+                  <Tag color={r.validityStatus === 'Hợp lệ & Toàn vẹn' ? 'success' : 'default'} style={{ marginTop: 2, fontSize: 10 }}>{r.validityStatus}</Tag>
                 </div>
               ),
             },
@@ -274,7 +320,7 @@ export const WorkflowHistoryModule: React.FC = () => {
                       setDetailItem(r);
                       setDrawerOpen(true);
                     }}
-                    title="Xem chi tiết bằng chứng ký số điện tử"
+                    title="Xem quyết định và dữ liệu kiểm tra"
                   >
                     Chi tiết
                   </Button>
@@ -294,9 +340,8 @@ export const WorkflowHistoryModule: React.FC = () => {
         />
       </div>
 
-      {/* DRAWER: Bằng Chứng Ký Số & Chứng Nhận Kiểm Toán Điện Tử */}
       <Drawer
-        title="Bằng Chứng Ký Số &amp; Chứng Nhận Kiểm Toán Pháp Lý"
+        title="Chi tiết quyết định quy trình"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={680}
@@ -328,63 +373,53 @@ export const WorkflowHistoryModule: React.FC = () => {
               )}
             </div>
 
-            {/* Official Digital Signature Certificate Seal */}
             <div style={{ border: '2px solid #009688', background: '#F0FDF4', borderRadius: 8, padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#009688', fontWeight: 800, fontSize: 14 }}>
                 <SafetyCertificateOutlined style={{ fontSize: 24 }} />
-                CHỨNG THƯ KÝ SỐ ĐIỆN TỬ HỢP CHUẨN QUỐC GIA
+                QUYẾT ĐỊNH PHÊ DUYỆT NỘI BỘ
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12, fontSize: 12 }}>
                 <div>
-                  <span style={{ color: '#64748B' }}>Chủ thể ký số:</span>
+                  <span style={{ color: '#64748B' }}>Người xử lý:</span>
                   <div style={{ fontWeight: 700, color: '#0F172A' }}>{detailItem.approver}</div>
                 </div>
                 <div>
-                  <span style={{ color: '#64748B' }}>Chức danh thẩm quyền:</span>
+                  <span style={{ color: '#64748B' }}>Vai trò:</span>
                   <div style={{ fontWeight: 700, color: '#0F172A' }}>{detailItem.approverRole}</div>
                 </div>
                 <div>
-                  <span style={{ color: '#64748B' }}>Tổ chức cấp phát CA:</span>
+                  <span style={{ color: '#64748B' }}>Phương thức ghi nhận:</span>
                   <div style={{ fontWeight: 700, color: '#2563EB' }}>{detailItem.certificateProvider}</div>
                 </div>
                 <div>
-                  <span style={{ color: '#64748B' }}>Số Serial Chứng Thư:</span>
-                  <div style={{ fontWeight: 700, color: '#7C3AED' }}>{detailItem.certificateSerial}</div>
-                </div>
-                <div>
-                  <span style={{ color: '#64748B' }}>Thời gian đóng dấu thời gian (TSA):</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{detailItem.timestamp} (GMT+7)</div>
-                </div>
-                <div>
-                  <span style={{ color: '#64748B' }}>Trạng thái xác thực:</span>
-                  <div><Tag color="success">Đã kiểm tra hợp lệ</Tag></div>
+                  <span style={{ color: '#64748B' }}>Thời gian:</span>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{new Date(detailItem.timestamp).toLocaleString('vi-VN')}</div>
                 </div>
               </div>
 
               <div style={{ marginTop: 12, borderTop: '1px dashed #CBD5E1', paddingTop: 10 }}>
-                <span style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>MÃ BĂM TOÀN VẸN VĂN BẢN:</span>
+                <span style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>MÃ SHA-256 ĐÃ LƯU:</span>
                 <div style={{ fontSize: 11, fontFamily: 'monospace', color: '#0F172A', background: '#FFFFFF', padding: '6px 8px', borderRadius: 4, border: '1px solid #E2E8F0', marginTop: 4, wordBreak: 'break-all' }}>
                   {detailItem.sha256Hash}
                 </div>
               </div>
             </div>
 
-            {/* Forensic Metadata Box */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#FFFFFF' }}>
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <GlobalOutlined style={{ color: '#2563EB' }} /> Thông Tin Thiết Bị &amp; Hạ Tầng Mạng Lúc Ký:
+                <HistoryOutlined style={{ color: '#2563EB' }} /> Dữ liệu ghi nhận:
               </div>
               <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div><strong>Địa chỉ IP mạng:</strong> {detailItem.ipAddress}</div>
-                <div><strong>Môi trường &amp; Thiết bị:</strong> {detailItem.deviceInfo}</div>
-                <div><strong>Số lượng tệp đính kèm niêm phong:</strong> {detailItem.attachmentCount} tài liệu gốc</div>
+                <div><strong>Cấp xử lý:</strong> {detailItem.level}</div>
+                <div><strong>Số tệp đính kèm:</strong> {detailItem.attachmentCount}</div>
+                <div><strong>Hash trước đó:</strong> {detailItem.hashPayload?.previousHash || 'Không có'}</div>
               </div>
             </div>
 
             {/* Approval Comment */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>
-              <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>Ý kiến / Nhận xét phê duyệt chính thức:</div>
+              <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>Ý kiến xử lý:</div>
               <div style={{ fontSize: 12.5, color: '#334155', fontStyle: 'italic', lineHeight: 1.6 }}>
                 "{detailItem.comments}"
               </div>
@@ -394,10 +429,10 @@ export const WorkflowHistoryModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất chứng chỉ kiểm toán giao dịch ${detailItem.txCode} (PDF)`)}
+                onClick={() => exportDecision(detailItem)}
                 style={{ flex: 1 }}
               >
-                In Chứng Thư Kiểm Toán (PDF)
+                Tải phiếu xử lý (PDF)
               </Button>
               <Button
                 type="primary"
@@ -405,7 +440,7 @@ export const WorkflowHistoryModule: React.FC = () => {
                 onClick={() => handleVerifyIntegrity(detailItem)}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
-                Đối soát chữ ký số
+                Kiểm tra mã băm
               </Button>
             </div>
           </div>

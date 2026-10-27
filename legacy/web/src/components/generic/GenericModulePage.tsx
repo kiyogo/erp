@@ -16,6 +16,7 @@ import { findItemByPath } from '../../utils/routeHelper';
 import { Modal, Form, Input, Select, Button, message } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
 import { createSystemCode } from '../../utils/systemCode';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 // Import specialized domain modules
 import { OrgUnitsModule } from '../../modules/business/OrgUnitsModule';
@@ -83,6 +84,8 @@ import { SuppliersModule } from '../../modules/crm/SuppliersModule';
 import { SupplierEvaluationModule } from '../../modules/crm/SupplierEvaluationModule';
 import { CustomerFeedbackModule } from '../../modules/crm/CustomerFeedbackModule';
 import { PartnersModule } from '../../modules/crm/PartnersModule';
+import { PromotionsModule } from '../../modules/crm/PromotionsModule';
+import { LoyaltyModule } from '../../modules/crm/LoyaltyModule';
 import { InsuranceModule } from '../../modules/insurance/InsuranceModule';
 
 // Assets deep submodules
@@ -215,6 +218,7 @@ export const GenericModulePage: React.FC = () => {
   if (currentPath === '/employee/payslip') return <EmployeePayslipModule />;
   if (currentPath === '/employee/contracts') return <EmployeeContractsModule />;
   if (currentPath === '/employee/proposals') return <EmployeeProposalsModule />;
+  if (currentPath === '/employee/workflows/requests') return <WorkflowRequestsModule />;
   if (currentPath === '/employee/assets') return <EmployeeAssetsModule />;
   if (currentPath === '/employee/files') return <Files />;
   if (currentPath === '/employee/notifications') return <EmployeeNotificationsModule />;
@@ -343,6 +347,8 @@ export const GenericModulePage: React.FC = () => {
   // 8. CRM & Insurance
   if (p === '/crm/customers') return <CustomersModule />;
   if (p === '/crm/suppliers') return <SuppliersModule />;
+  if (p === '/crm/promotions') return <PromotionsModule />;
+  if (p === '/crm/loyalty') return <LoyaltyModule />;
   if (p === '/crm/suppliers-eval') return <SupplierEvaluationModule />;
   if (p === '/crm/feedback' || p.startsWith('/crm/feedback')) return <CustomerFeedbackModule />;
   if (p === '/crm/partners' || p.startsWith('/crm/partners')) return <PartnersModule />;
@@ -430,13 +436,28 @@ export const GenericModulePage: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
   const [searchText, setSearchText] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const loadData = () => {
-    setData(dataService.getGenericData(currentPath));
-    dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
+  const loadData = async () => {
+    setRefreshing(true);
+    try {
+      const rows = await dataService.refreshGenericData(currentPath);
+      setData(rows);
+      try {
+        const units = await dataService.fetchOrgUnitsList();
+        setDepartmentOptions(units.map((unit) => ({ label: unit, value: unit })));
+      } catch {
+        // The records remain usable when the optional department lookup is unavailable.
+      }
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể tải dữ liệu mới nhất.');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   useEffect(() => {
@@ -447,30 +468,45 @@ export const GenericModulePage: React.FC = () => {
     return unsub;
   }, [currentPath]);
 
-  const handleSave = (values: any) => {
-    let updated: any[];
-    if (editingItem) {
-      updated = data.map((item) => (item.key === editingItem.key ? { ...item, ...values, updatedAt: 'Vừa cập nhật' } : item));
-      message.success(`Đã cập nhật mục: ${values.name}`);
-    } else {
-      const newItem = {
-        key: String(Date.now()),
-        code: values.code || createSystemCode('code', title),
-        name: values.name,
-        category: values.category || 'Phòng Kỹ Thuật',
-        status: values.status || 'Đang hoạt động',
-        updatedAt: 'Vừa xong',
-        author: 'Administrator',
-      };
-      updated = [newItem, ...data];
-      message.success(`Đã thêm mới mục: ${values.name}`);
+  const handleSave = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    const timestamp = new Date().toISOString();
+    const commonFields = {
+      ...values,
+      category: values.category || '',
+      status: values.status || 'Đang hoạt động',
+      updatedAt: timestamp,
+      updatedBy: user?.name || user?.email || '',
+    };
+    try {
+      if (editingItem) {
+        await dataService.updateGenericRecord(currentPath, {
+          key: editingItem.key ?? editingItem.code,
+          ...commonFields,
+        });
+        message.success(`Đã cập nhật mục: ${values.name}`);
+      } else {
+        const newItem = {
+          ...commonFields,
+          key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          code: values.code || createSystemCode('code', title),
+          name: values.name,
+          createdAt: timestamp,
+          createdBy: user?.name || user?.email || '',
+        };
+        await dataService.createGenericRecord(currentPath, newItem);
+        message.success(`Đã thêm mới mục: ${values.name}`);
+      }
+      dataService.logAction(editingItem ? 'Cập nhật' : 'Thêm mới', title, `Cập nhật dữ liệu mục: ${values.name}`);
+      setModalOpen(false);
+      setEditingItem(null);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu dữ liệu. Vui lòng thử lại.');
+    } finally {
+      setSaving(false);
     }
-    setData(updated);
-    dataService.saveGenericData(currentPath, updated);
-    dataService.logAction(editingItem ? 'Cập nhật' : 'Thêm mới', title, `Cập nhật dữ liệu mục: ${values.name}`);
-    setModalOpen(false);
-    setEditingItem(null);
-    form.resetFields();
   };
 
   const handleDelete = (record: any) => {
@@ -480,12 +516,15 @@ export const GenericModulePage: React.FC = () => {
       okText: 'Xóa mục',
       cancelText: 'Hủy',
       okButtonProps: { danger: true },
-      onOk: () => {
-        const updated = data.filter((d) => d.key !== record.key);
-        setData(updated);
-        dataService.saveGenericData(currentPath, updated);
-        dataService.logAction('Xóa', title, `Xóa mục: ${record.name} (${record.code})`);
-        message.success(`Đã xóa mục ${record.name}`);
+      onOk: async () => {
+        try {
+          await dataService.deleteGenericRecord(currentPath, String(record.key ?? record.code ?? ''));
+          dataService.logAction('Xóa', title, `Xóa mục: ${record.name} (${record.code})`);
+          message.success(`Đã xóa mục ${record.name}`);
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || error?.message || 'Không thể xóa dữ liệu. Vui lòng thử lại.');
+          throw error;
+        }
       },
     });
   };
@@ -596,10 +635,13 @@ export const GenericModulePage: React.FC = () => {
           allowClear
         />
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<ReloadOutlined />} onClick={loadData}>
+          <Button icon={<ReloadOutlined />} loading={refreshing} disabled={refreshing} onClick={loadData}>
             Làm mới
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success(`Đã xuất dữ liệu ${title} ra file Excel`)}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile(`${title.replace(/[^\p{L}\p{N}_-]+/gu, '_')}.xlsx`, generateValidXlsxBlob([
+            ['Mã', 'Tên đối tượng', 'Phân loại / Đơn vị', 'Trạng thái', 'Người tạo', 'Ngày tạo', 'Người cập nhật', 'Ngày cập nhật'],
+            ...filteredData.map((item) => [item.code || '', item.name || '', item.category || '', item.status || '', item.createdBy || item.author || '', item.createdAt || '', item.updatedBy || '', item.updatedAt || '']),
+          ]))}>
             Xuất Excel
           </Button>
           <Button
@@ -664,7 +706,7 @@ export const GenericModulePage: React.FC = () => {
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               {editingItem ? 'Lưu thay đổi' : 'Thêm mới'}
             </Button>
           </div>

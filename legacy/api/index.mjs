@@ -1382,6 +1382,74 @@ function optionalAmount(value, field) {
   return amount;
 }
 
+function formatWorkflowFileSize(size) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function normalizeWorkflowAttachments(values, actor, { pdfOnly = false } = {}) {
+  if (!Array.isArray(values) || values.length > 20) throw new HttpError(422, 'Danh sách tệp đính kèm không hợp lệ hoặc vượt quá 20 tệp.');
+  const ids = values.map((file) => requiredText(file?.fileNodeId, 'Mã tệp đính kèm', 160));
+  if (new Set(ids).size !== ids.length) throw new HttpError(422, 'Tệp đính kèm bị trùng.');
+  const attachments = [];
+  for (const id of ids) {
+    const file = await db.prepare("SELECT id, name, mime_type, size, storage_key, owner_id, origin_module, node_type, deleted_at, created_at FROM file_nodes WHERE id = ?").get(id);
+    if (!file || file.node_type !== 'file' || file.deleted_at || file.origin_module !== 'workflow-requests') {
+      throw new HttpError(422, 'Tệp đính kèm không tồn tại hoặc không thuộc luồng hồ sơ.');
+    }
+    if (file.owner_id !== actor.id) throw new HttpError(403, 'Chỉ người tải tệp lên mới được đính kèm tệp vào hồ sơ.');
+    if (Number(file.size) <= 0) throw new HttpError(422, 'Không thể đính kèm tệp rỗng.');
+    if (pdfOnly) {
+      if (!/\.pdf$/i.test(file.name) || !file.storage_key) throw new HttpError(422, 'Trường này chỉ nhận tệp PDF hợp lệ.');
+      let content;
+      try { content = await readFile(fileStoragePath(file.storage_key)); } catch { throw new HttpError(422, 'Không đọc được nội dung tệp PDF.'); }
+      if (content.subarray(0, 5).toString('ascii') !== '%PDF-') throw new HttpError(422, 'Nội dung tệp không phải PDF hợp lệ.');
+    }
+    attachments.push({
+      fileNodeId: file.id,
+      fileName: file.name,
+      fileSizeBytes: Number(file.size),
+      fileSize: formatWorkflowFileSize(Number(file.size)),
+      fileType: file.mime_type || 'application/octet-stream',
+      uploadTime: file.created_at,
+    });
+  }
+  return attachments;
+}
+
+function normalizeWorkflowFormData(schema, values, attachments) {
+  if (!Array.isArray(schema)) return {};
+  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpError(422, 'Dữ liệu trường bổ sung không hợp lệ.');
+  const customFields = schema.filter((field) => !['title', 'content', 'attachments'].includes(String(field.fieldName)));
+  const names = new Set(customFields.map((field) => String(field.fieldName)));
+  if (Object.keys(values).some((name) => !names.has(name))) throw new HttpError(422, 'Dữ liệu chứa trường không có trong biểu mẫu quy trình.');
+  const result = {};
+  for (const field of schema) {
+    const name = String(field.fieldName);
+    if (name === 'title' || name === 'content') continue;
+    if (name === 'attachments') {
+      if (field.required && attachments.length === 0) throw new HttpError(422, `${field.label} là bắt buộc.`);
+      continue;
+    }
+    const value = values[name];
+    const empty = value === undefined || value === null || (typeof value === 'string' && !value.trim());
+    if (empty && field.required) throw new HttpError(422, `${field.label} là bắt buộc.`);
+    if (empty) { result[name] = ''; continue; }
+    const type = String(field.type || '').toLowerCase();
+    if (type.includes('số') || type.includes('number')) {
+      const number = typeof value === 'number' ? value : Number(String(value).trim());
+      if (!Number.isFinite(number) || Math.abs(number) > 1_000_000_000_000) throw new HttpError(422, `${field.label} phải là số hợp lệ.`);
+      result[name] = number;
+    } else if (type.includes('ngày') || type.includes('date')) {
+      result[name] = requiredIsoDate(value, field.label);
+    } else {
+      result[name] = requiredText(value, field.label, 4_000);
+    }
+  }
+  return result;
+}
+
 function requiredIsoDate(value, field) {
   const date = requiredText(value, field, 10);
   const timestamp = Date.parse(`${date}T00:00:00.000Z`);
@@ -1389,6 +1457,72 @@ function requiredIsoDate(value, field) {
     throw new HttpError(422, `${field} không đúng định dạng YYYY-MM-DD.`);
   }
   return date;
+}
+
+function parseMeetingTimeRange(value) {
+  const slot = requiredText(value, 'Khung giờ', 40);
+  const match = /^(?:([01]\d|2[0-3]):([0-5]\d))\s*-\s*(?:([01]\d|2[0-3]):([0-5]\d))$/.exec(slot);
+  if (!match) throw new HttpError(422, 'Khung giờ phải theo dạng HH:mm - HH:mm.');
+  const start = Number(match[1]) * 60 + Number(match[2]);
+  const end = Number(match[3]) * 60 + Number(match[4]);
+  if (end <= start || end - start > 240) throw new HttpError(422, 'Thời gian họp phải từ 1 phút đến 4 giờ và không qua ngày.');
+  return { slot, start, end };
+}
+
+function buildAssetDepreciationSchedule({ originalCost, residualValue, lifeMonths, startDate, depreciatedMonths = 0, method, productionCapacity = 0, productionByPeriod = {} }) {
+  const cost = Number(originalCost);
+  const residual = Number(residualValue);
+  const life = Number(lifeMonths);
+  if (!Number.isSafeInteger(cost) || cost <= 0 || !Number.isSafeInteger(residual) || residual < 0 || residual >= cost) {
+    throw new HttpError(422, 'Nguyên giá phải lớn hơn 0 và giá trị thu hồi phải nhỏ hơn nguyên giá.');
+  }
+  if (!Number.isSafeInteger(life) || life < 1 || life > 120) throw new HttpError(422, 'Thời gian khấu hao phải từ 1 đến 120 tháng.');
+  const start = requiredIsoDate(startDate, 'Ngày bắt đầu khấu hao');
+  const methods = ['Đường thẳng', 'Số dư giảm dần có điều chỉnh', 'Theo sản lượng / Công suất'];
+  oneOf(method, 'Phương pháp khấu hao', methods);
+  const alreadyPosted = Number(depreciatedMonths);
+  if (!Number.isSafeInteger(alreadyPosted) || alreadyPosted < 0 || alreadyPosted > life) throw new HttpError(422, 'Số kỳ đã trích khấu hao không hợp lệ.');
+  const capacity = method === 'Theo sản lượng / Công suất' ? requiredAmount(productionCapacity, 'Tổng sản lượng dự kiến') : 0;
+  const base = cost - residual;
+  const startYear = Number(start.slice(0, 4));
+  const startMonth = Number(start.slice(5, 7));
+  const rate = (life <= 48 ? 1.5 : life <= 72 ? 2 : 2.5) * 12 / life;
+  let accumulated = 0;
+  const rows = [];
+  for (let index = 0; index < life; index += 1) {
+    const monthSerial = startMonth - 1 + index;
+    const periodYear = startYear + Math.floor(monthSerial / 12);
+    const periodMonth = monthSerial % 12 + 1;
+    const period = `${periodYear}-${String(periodMonth).padStart(2, '0')}`;
+    const remaining = Math.max(0, base - accumulated);
+    let productionUnits;
+    let amount = 0;
+    if (remaining > 0) {
+      if (method === 'Đường thẳng') amount = Math.min(remaining, Math.round(base / life));
+      else if (method === 'Số dư giảm dần có điều chỉnh') {
+        const monthsLeft = life - index;
+        amount = Math.min(remaining, Math.round(Math.max(remaining / monthsLeft, remaining * rate / 12)));
+      } else {
+        productionUnits = Number(productionByPeriod?.[period]) || 0;
+        if (!Number.isSafeInteger(productionUnits) || productionUnits < 0 || productionUnits > capacity) {
+          throw new HttpError(422, `Sản lượng kỳ ${period} không hợp lệ.`);
+        }
+        amount = Math.min(remaining, Math.round(base * productionUnits / capacity));
+      }
+    }
+    amount = Math.max(0, Math.min(remaining, amount));
+    accumulated += amount;
+    rows.push({
+      period,
+      monthNumber: index + 1,
+      monthlyAmount: amount,
+      accumulatedAmount: accumulated,
+      remainingAmount: Math.max(residual, cost - accumulated),
+      posted: index < alreadyPosted,
+      ...(productionUnits === undefined ? {} : { productionUnits }),
+    });
+  }
+  return rows;
 }
 
 function oneOf(value, field, allowed) {
@@ -1402,11 +1536,15 @@ const USER_COLLECTION_SCOPES = new Set([
   'attendance.leave-requests',
   'attendance.overtime-requests',
   'meeting-room.bookings',
+  'meeting_rooms',
+  'room_bookings',
   'tickets.requests',
   'leave_requests',
   'attendance_overtime',
   'attendance_leave_summary',
   'attendance_explanations',
+  'workflow_requests',
+  'workflow_blueprints',
 ]);
 
 function normalizeCollectionScope(value) {
@@ -1421,17 +1559,74 @@ function canUseCollectionAsUser(scope) {
   return USER_COLLECTION_SCOPES.has(scope) || USER_COLLECTION_PREFIXES.some((prefix) => scope.startsWith(prefix));
 }
 
+async function workflowDelegationRows() {
+  const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_delegations'").all();
+  return rows.map((row) => parseJsonObject(row.payload_json));
+}
+
+function workflowDelegationApplies(delegation, workflow) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!delegation.fromDate || !delegation.toDate || today < delegation.fromDate || today > delegation.toDate) return false;
+  const scope = String(delegation.scope || '').trim().toLocaleLowerCase();
+  const workflowCode = String(workflow.workflowCode || '').trim().toLocaleLowerCase();
+  const category = String(workflow.category || '').trim().toLocaleLowerCase();
+  if (!['*', 'all', 'all_workflows', 'workflow_requests', 'toàn công ty', 'tất cả quy trình', 'mọi quy trình', workflowCode, category].includes(scope)) return false;
+  const maxBudgetAmount = Number(delegation.maxBudgetAmount) || 0;
+  return maxBudgetAmount <= 0 || Number(workflow.budgetAmount) <= maxBudgetAmount;
+}
+
+function workflowDecisionAccess(actor, workflow, delegations = []) {
+  if (actor.role === 'ADMIN') return { allowed: true, delegated: false };
+  if (workflow.status !== 'Chờ bạn ký duyệt' || !workflow.currentApproverId || workflow.requesterId === actor.id) return { allowed: false, delegated: false };
+  if (workflow.currentApproverId === actor.id) return { allowed: true, delegated: false };
+  const delegated = delegations.some((rule) => rule.delegatorId === workflow.currentApproverId
+    && rule.delegateeId === actor.id && workflowDelegationApplies(rule, workflow));
+  return { allowed: delegated, delegated };
+}
+
+async function canDecideWorkflow(actor, workflow) {
+  if (actor.role === 'ADMIN') return true;
+  return workflowDecisionAccess(actor, workflow, await workflowDelegationRows()).allowed;
+}
+
+async function canReadWorkflowAttachment(actor, fileId) {
+  if (actor.role === 'ADMIN') return true;
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'workflow_requests'").all();
+  for (const row of rows) {
+    const workflow = publicCollectionRecord(row);
+    if (!workflow.attachments?.some((attachment) => attachment.fileNodeId === fileId)) continue;
+    if (row.owner_id === actor.id || await canDecideWorkflow(actor, workflow)) return true;
+  }
+  return false;
+}
+
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (['asset_disposals', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions'].includes(scope) && actor.role !== 'ADMIN') {
+    if (scope === 'crm_feedback') throw new HttpError(403, 'Chỉ quản trị viên được quản lý phản ánh khách hàng.');
+    if (scope === 'crm_supplier_evaluations') throw new HttpError(403, 'Chỉ quản trị viên được quản lý đánh giá nhà cung cấp.');
+    if (scope === 'crm_promotions') throw new HttpError(403, 'Chỉ quản trị viên được quản lý chương trình khuyến mại.');
+    throw new HttpError(403, 'Chỉ quản trị viên được truy cập hồ sơ tài sản này.');
+  }
   if (actor.role !== 'ADMIN' && !canUseCollectionAsUser(scope)) {
     throw new HttpError(403, 'Bạn không có quyền truy cập dữ liệu quản trị này.');
+  }
+  if (scope === 'meeting_rooms' && actor.role !== 'ADMIN' && request.method !== 'GET') throw new HttpError(403, 'Chỉ quản trị viên được quản lý danh mục phòng họp.');
+  if (scope === 'meeting_rooms' && request.method === 'DELETE') throw new HttpError(409, 'Danh mục phòng họp được lưu để giữ lịch sử đặt phòng.');
+  if (scope === 'meeting_room_settings' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
+  if (scope === 'meeting_room_settings' && request.method === 'DELETE') throw new HttpError(409, 'Thiết lập phòng họp được lưu để bảo toàn lịch sử thay đổi.');
+  if (scope === 'room_bookings' && ['PATCH', 'DELETE'].includes(request.method)) {
+    if (request.method === 'DELETE') throw new HttpError(409, 'Lịch họp phải được hủy để giữ lại lịch sử sử dụng phòng.');
+  }
+  if (actor.role !== 'ADMIN' && scope === 'workflow_blueprints' && request.method !== 'GET') {
+    throw new HttpError(403, 'Chỉ quản trị viên được thay đổi cấu hình quy trình.');
   }
   if (actor.role !== 'ADMIN' && ['hr_job_openings', 'hr_recruitment_candidates', 'hr_onboarding_tasks', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews'].includes(scope)) {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý tuyển dụng.');
   }
   if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary' && request.method !== 'GET') throw new HttpError(403, 'Chỉ quản trị viên được điều chỉnh số dư phép.');
   if (scope === 'employee_timesheets' && request.method !== 'GET') throw new HttpError(405, 'Vui lòng chấm công qua chức năng ghi nhận giờ vào/ra.');
-  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives'].includes(scope)) {
+  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings'].includes(scope)) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
   return actor;
@@ -1442,6 +1637,900 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Bản ghi phải là một đối tượng JSON.');
   }
   const record = { ...value };
+  if (scope === 'meeting_room_settings') {
+    if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
+    const maxDuration = Number(record.maxDuration);
+    const maxAdvanceDays = Number(record.maxAdvanceDays);
+    if (!Number.isSafeInteger(maxDuration) || maxDuration < 15 || maxDuration > 240) throw new HttpError(422, 'Thời lượng tối đa phải từ 15 đến 240 phút.');
+    if (!Number.isSafeInteger(maxAdvanceDays) || maxAdvanceDays < 1 || maxAdvanceDays > 365) throw new HttpError(422, 'Số ngày đặt trước phải từ 1 đến 365 ngày.');
+    const updatedAt = now();
+    const updated = {
+      key: 'default', maxDuration, maxAdvanceDays,
+      updatedBy: actor.name, updatedById: actor.id, updatedAt,
+      ...(current?.createdAt ? { createdAt: current.createdAt } : { createdAt: updatedAt }),
+      history: [ ...(Array.isArray(current?.history) ? current.history : []), { action: 'Cập nhật quy định đặt phòng', actor: actor.name, actorId: actor.id, at: updatedAt } ],
+    };
+    return { record: updated, recordKey: 'default', serialized: JSON.stringify(updated) };
+  }
+  if (scope === 'meeting_rooms') {
+    if (current) {
+      const status = oneOf(record.status, 'Trạng thái phòng họp', ['Trống', 'Đang sử dụng', 'Bảo trì', 'Tạm ngưng']);
+      const updatedAt = now();
+      const updated = {
+        ...current, status, updatedBy: actor.name, updatedById: actor.id, updatedAt,
+        history: [ ...(Array.isArray(current.history) ? current.history : []), { action: `Đổi trạng thái thành ${status}`, actor: actor.name, actorId: actor.id, at: updatedAt } ],
+      };
+      return { record: updated, recordKey: current.key, serialized: JSON.stringify(updated) };
+    }
+    for (const field of Object.keys(record)) if (!['key', 'name', 'capacity', 'location', 'equipment'].includes(field)) delete record[field];
+    record.key = requiredText(record.key, 'Khóa phòng họp', 160);
+    record.name = requiredText(record.name, 'Tên phòng họp', 160);
+    const duplicateName = await db.prepare(`SELECT record_key FROM collection_records
+      WHERE scope = 'meeting_rooms' AND LOWER(json_extract(payload_json, '$.name')) = LOWER(?) LIMIT 1`).get(record.name);
+    if (duplicateName) throw new HttpError(409, 'Tên phòng họp đã tồn tại.');
+    const capacity = Number(record.capacity);
+    if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > 1_000) throw new HttpError(422, 'Sức chứa phải là số nguyên từ 1 đến 1.000.');
+    record.capacity = capacity;
+    record.location = requiredText(record.location, 'Vị trí phòng họp', 255);
+    const equipment = Array.isArray(record.equipment) ? record.equipment : String(record.equipment || '').split(',');
+    record.equipment = [...new Set(equipment.map(item => optionalText(item, 'Thiết bị phòng họp', 100)).filter(Boolean))].slice(0, 40);
+    record.status = 'Trống';
+    record.createdBy = actor.name;
+    record.createdById = actor.id;
+    record.createdAt = now();
+  }
+  if (scope === 'room_bookings') {
+    if (current) {
+      if (actor.role !== 'ADMIN' && actor.id !== current.bookerId) throw new HttpError(403, 'Chỉ người đặt lịch hoặc quản trị viên được hủy lịch này.');
+      if (current.status !== 'Đã xác nhận' || value.status !== 'Đã hủy') throw new HttpError(409, 'Chỉ lịch đang xác nhận mới được hủy.');
+      record.key = current.key;
+      record.status = 'Đã hủy';
+      record.canceledBy = actor.name;
+      record.canceledById = actor.id;
+      record.canceledAt = now();
+      record.history = [...(Array.isArray(current.history) ? current.history : []), {
+        action: 'Hủy lịch họp', actor: actor.name, actorId: actor.id, at: record.canceledAt,
+      }];
+    } else {
+      for (const field of Object.keys(record)) if (!['key', 'roomKey', 'roomName', 'meetingTitle', 'date', 'timeSlot', 'participantsCount'].includes(field)) delete record[field];
+      record.key = requiredText(record.key, 'Khóa lịch họp', 160);
+      const suppliedRoomName = optionalText(record.roomName, 'Tên phòng họp', 160);
+      const roomKey = optionalText(record.roomKey, 'Khóa phòng họp', 160)
+        || (await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'meeting_rooms' AND LOWER(json_extract(payload_json, '$.name')) = LOWER(?) LIMIT 1").get(suppliedRoomName))?.record_key;
+      if (!roomKey) throw new HttpError(422, 'Chọn một phòng họp đang có trong danh mục.');
+      const roomRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'meeting_rooms' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(roomKey);
+      const room = publicCollectionRecord(roomRow);
+      if (!room || room.status === 'Bảo trì' || room.status === 'Tạm ngưng') throw new HttpError(422, 'Phòng họp không tồn tại hoặc đang tạm ngưng sử dụng.');
+      const date = requiredIsoDate(record.date, 'Ngày họp');
+      const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      if (date < businessDate) throw new HttpError(422, 'Không thể đặt phòng cho ngày đã qua.');
+      const { slot, start, end } = parseMeetingTimeRange(record.timeSlot);
+      const settingsRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'meeting_room_settings' AND record_key = 'default' ORDER BY updated_at DESC LIMIT 1").get();
+      const settings = publicCollectionRecord(settingsRow) || { maxDuration: 120, maxAdvanceDays: 14 };
+      const bookingDay = Date.parse(`${date}T00:00:00.000Z`);
+      const businessDay = Date.parse(`${businessDate}T00:00:00.000Z`);
+      if (end - start > Number(settings.maxDuration || 120)) throw new HttpError(422, `Thời lượng họp vượt quá giới hạn ${settings.maxDuration || 120} phút.`);
+      if ((bookingDay - businessDay) / 86_400_000 > Number(settings.maxAdvanceDays || 14)) throw new HttpError(422, `Chỉ được đặt phòng trước tối đa ${settings.maxAdvanceDays || 14} ngày.`);
+      const participantsCount = Number(record.participantsCount);
+      if (!Number.isSafeInteger(participantsCount) || participantsCount < 1 || participantsCount > room.capacity) {
+        throw new HttpError(422, `Số người tham gia phải từ 1 đến ${room.capacity}.`);
+      }
+      const bookings = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'room_bookings' AND json_extract(payload_json, '$.date') = ?").all(date);
+      const conflict = bookings.map(row => parseJsonObject(row.payload_json)).some(booking => {
+        if (booking.status !== 'Đã xác nhận' || (booking.roomKey !== room.key && String(booking.roomName || '').toLocaleLowerCase() !== String(room.name).toLocaleLowerCase())) return false;
+        try {
+          const other = parseMeetingTimeRange(booking.timeSlot);
+          return start < other.end && other.start < end;
+        } catch {
+          return String(booking.timeSlot || '') === slot;
+        }
+      });
+      if (conflict) throw new HttpError(409, 'Phòng đã có lịch trùng khung giờ. Hãy chọn khung giờ khác.');
+      record.roomKey = room.key;
+      record.roomName = room.name;
+      record.roomLocation = room.location;
+      record.roomCapacity = room.capacity;
+      record.meetingTitle = requiredText(record.meetingTitle, 'Tiêu đề cuộc họp', 255);
+      record.date = date;
+      record.timeSlot = slot;
+      record.participantsCount = participantsCount;
+      record.booker = actor.name;
+      record.bookerId = actor.id;
+      record.status = 'Đã xác nhận';
+      record.createdAt = now();
+      record.history = [{ action: 'Đặt phòng họp', actor: actor.name, actorId: actor.id, at: record.createdAt }];
+    }
+  }
+  if (scope === 'crm_feedback') {
+    const priorities = ['Khẩn cấp', 'Cao', 'Trung bình'];
+    const allowedFields = new Set(['key', 'feedbackCode', 'clientName', 'contactPerson', 'phone', 'serviceName', 'rating', 'content', 'priority', 'assignedStaffId', 'assignedStaff', 'status', 'resolutionAction', 'receivedDate', 'resolvedDate', 'resolvedBy', 'resolvedById', 'createdBy', 'createdById', 'createdAt']);
+    for (const field of Object.keys(record)) if (!allowedFields.has(field)) delete record[field];
+    if (!current) {
+      record.key = requiredText(record.key, 'Khóa phản ánh', 160);
+      record.feedbackCode = requiredText(record.feedbackCode, 'Mã phản ánh', 80);
+      const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'crm_feedback' AND LOWER(json_extract(payload_json, '$.feedbackCode')) = LOWER(?) LIMIT 1`).get(record.feedbackCode);
+      if (duplicateCode) throw new HttpError(409, 'Mã phản ánh đã tồn tại.');
+      record.clientName = requiredText(record.clientName, 'Khách hàng', 255);
+      record.contactPerson = optionalText(record.contactPerson, 'Người phản ánh', 160);
+      record.phone = optionalText(record.phone, 'Số điện thoại', 80);
+      record.serviceName = requiredText(record.serviceName, 'Dịch vụ liên quan', 255);
+      const rating = record.rating == null || record.rating === '' ? null : Number(record.rating);
+      if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) throw new HttpError(422, 'Đánh giá phải là số nguyên từ 1 đến 5 sao.');
+      record.rating = rating;
+      record.content = requiredText(record.content, 'Nội dung phản ánh', 4_000);
+      record.priority = oneOf(record.priority, 'Mức độ ưu tiên', priorities);
+      const assignedStaffId = requiredText(record.assignedStaffId, 'Cán bộ phụ trách', 160);
+      const assignedStaff = await db.prepare(`SELECT u.id, u.name, p.employment_status FROM users u
+        LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1`).get(assignedStaffId);
+      if (!assignedStaff || assignedStaff.employment_status === 'Đã nghỉ việc') throw new HttpError(422, 'Cán bộ phụ trách phải là nhân viên đang hoạt động.');
+      record.assignedStaffId = assignedStaff.id;
+      record.assignedStaff = assignedStaff.name;
+      record.receivedDate = now().slice(0, 10);
+      record.resolutionAction = '';
+      record.resolvedDate = '';
+      record.resolvedBy = '';
+      record.resolvedById = '';
+      record.status = 'Đang xử lý';
+      record.createdBy = actor.name;
+      record.createdById = actor.id;
+      record.createdAt = now();
+    } else {
+      if (current.status !== 'Đang xử lý' || value.status !== 'Đã giải quyết thỏa đáng') {
+        throw new HttpError(422, 'Phản ánh chỉ được chuyển từ đang xử lý sang đã giải quyết.');
+      }
+      record.key = current.key;
+      for (const field of ['feedbackCode', 'clientName', 'contactPerson', 'phone', 'serviceName', 'rating', 'content', 'priority', 'assignedStaff', 'assignedStaffId', 'receivedDate', 'createdBy', 'createdById', 'createdAt']) {
+        record[field] = current[field];
+      }
+      record.resolutionAction = requiredText(value.resolutionAction, 'Biện pháp xử lý', 4_000);
+      record.status = 'Đã giải quyết thỏa đáng';
+      record.resolvedDate = now().slice(0, 10);
+      record.resolvedBy = actor.name;
+      record.resolvedById = actor.id;
+    }
+  }
+  if (scope === 'crm_supplier_evaluations') {
+    if (current) throw new HttpError(422, 'Đánh giá nhà cung cấp đã lưu không thể sửa.');
+    const allowedFields = new Set(['key', 'evalCode', 'supplierId', 'evalPeriod', 'qualityScore', 'deliveryScore', 'priceScore', 'serviceScore', 'strengths', 'weaknesses', 'decision', 'supplierName', 'category', 'totalScore', 'tier', 'evaluator', 'evaluatorId', 'evalDate', 'createdAt', 'createdBy', 'createdById']);
+    for (const field of Object.keys(record)) if (!allowedFields.has(field)) delete record[field];
+    record.key = requiredText(record.key, 'Khóa đánh giá', 160);
+    record.evalCode = requiredText(record.evalCode, 'Mã đánh giá', 80);
+    const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+      WHERE scope = 'crm_supplier_evaluations' AND LOWER(json_extract(payload_json, '$.evalCode')) = LOWER(?) LIMIT 1`).get(record.evalCode);
+    if (duplicateCode) throw new HttpError(409, 'Mã đánh giá nhà cung cấp đã tồn tại.');
+    const supplierId = requiredText(record.supplierId, 'Nhà cung cấp', 160);
+    const supplier = await db.prepare("SELECT id, name, industry, status FROM crm_contacts WHERE id = ? AND contact_type = 'supplier'").get(supplierId);
+    if (!supplier || String(supplier.status).toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Nhà cung cấp không tồn tại hoặc đang tạm dừng.');
+    record.supplierId = supplier.id;
+    record.supplierName = supplier.name;
+    record.category = supplier.industry;
+    record.evalPeriod = requiredText(record.evalPeriod, 'Kỳ đánh giá', 100);
+    const scoreLimits = { qualityScore: 40, deliveryScore: 30, priceScore: 20, serviceScore: 10 };
+    for (const [field, maximum] of Object.entries(scoreLimits)) {
+      const score = Number(record[field]);
+      if (record[field] === '' || record[field] === undefined || !Number.isInteger(score) || score < 0 || score > maximum) {
+        throw new HttpError(422, `Điểm ${field} phải là số nguyên từ 0 đến ${maximum}.`);
+      }
+      record[field] = score;
+    }
+    record.totalScore = record.qualityScore + record.deliveryScore + record.priceScore + record.serviceScore;
+    record.tier = record.totalScore >= 90 ? 'Hạng A' : record.totalScore >= 75 ? 'Hạng B' : 'Hạng C';
+    record.evaluator = actor.name;
+    record.evaluatorId = actor.id;
+    record.evalDate = now().slice(0, 10);
+    record.createdAt = now();
+    record.createdBy = actor.name;
+    record.createdById = actor.id;
+    record.strengths = optionalText(record.strengths, 'Ưu điểm', 2_000);
+    record.weaknesses = optionalText(record.weaknesses, 'Điểm cần cải thiện', 2_000);
+    const decisions = ['Duy trì đối tác chiến lược', 'Gia hạn hợp đồng & đàm phán giá', 'Yêu cầu khắc phục SLA trong 30 ngày', 'Chấm dứt hợp tác'];
+    record.decision = record.decision ? oneOf(record.decision, 'Kết luận đề xuất', decisions) : '';
+  }
+  if (scope === 'crm_promotions') {
+    const editable = new Set([
+      'key', 'code', 'name', 'startDate', 'endDate', 'promotionType', 'target', 'enabled', 'allowConcurrent',
+      'eligibleItemCodes', 'amountBasis', 'orgUnitKeys', 'employeeIds', 'applyOnce', 'combinablePromotionKeys',
+      'taxCondition', 'minimumSubtotal', 'unitPrice', 'unit', 'customerKeys', 'discountKind', 'discountValue',
+    ]);
+    for (const field of Object.keys(record)) if (!editable.has(field)) delete record[field];
+    record.key = current ? current.key : requiredText(record.key, 'Khóa chương trình', 160);
+    record.code = requiredText(record.code, 'Mã chương trình', 80);
+    const duplicate = await db.prepare(`SELECT record_key FROM collection_records
+      WHERE scope = 'crm_promotions' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) AND record_key <> ? LIMIT 1`)
+      .get(record.code, current?.key || '');
+    if (duplicate) throw new HttpError(409, 'Mã chương trình khuyến mại đã tồn tại.');
+    record.name = requiredText(record.name, 'Tên chương trình', 180);
+    record.startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu');
+    record.endDate = requiredIsoDate(record.endDate, 'Ngày kết thúc');
+    if (record.endDate < record.startDate) throw new HttpError(422, 'Ngày kết thúc phải bằng hoặc sau ngày bắt đầu.');
+    record.promotionType = oneOf(record.promotionType, 'Loại khuyến mại', ['Chiết khấu', 'Tặng quà', 'Tích điểm']);
+    record.target = requiredText(record.target, 'Đối tượng áp dụng', 180);
+    record.amountBasis = oneOf(record.amountBasis, 'Căn cứ khuyến mại', ['Thành tiền trước thuế', 'Thành tiền sau thuế']);
+    record.taxCondition = oneOf(record.taxCondition, 'Điều kiện thuế', ['Bất kỳ', 'Có thuế', 'Không thuế']);
+    record.discountKind = oneOf(record.discountKind, 'Kiểu chiết khấu', ['Phần trăm', 'Số tiền']);
+    record.minimumSubtotal = optionalAmount(record.minimumSubtotal, 'Điều kiện theo thành tiền');
+    record.unitPrice = optionalAmount(record.unitPrice, 'Đơn giá áp dụng');
+    record.discountValue = optionalAmount(record.discountValue, 'Giá trị khuyến mại');
+    if (record.promotionType === 'Chiết khấu' && record.discountValue <= 0) throw new HttpError(422, 'Chương trình chiết khấu phải có giá trị lớn hơn 0.');
+    if (record.discountKind === 'Phần trăm' && record.discountValue > 100) throw new HttpError(422, 'Chiết khấu theo phần trăm không được vượt quá 100%.');
+    record.unit = requiredText(record.unit, 'Đơn vị', 80);
+    const list = (input, field, maxItems = 500, maxLength = 160) => {
+      if (input === undefined || input === null) return [];
+      if (!Array.isArray(input) || input.length > maxItems) throw new HttpError(422, `${field} không hợp lệ.`);
+      const values = input.map((item) => requiredText(item, field, maxLength));
+      if (new Set(values).size !== values.length) throw new HttpError(422, `${field} không được trùng lặp.`);
+      return values;
+    };
+    record.eligibleItemCodes = list(record.eligibleItemCodes, 'Mã hàng áp dụng', 500, 100);
+    record.orgUnitKeys = list(record.orgUnitKeys, 'Cơ cấu tổ chức', 250);
+    record.employeeIds = list(record.employeeIds, 'Nhân viên áp dụng', 500);
+    record.customerKeys = list(record.customerKeys, 'Khách hàng', 500);
+    record.combinablePromotionKeys = record.allowConcurrent === true ? list(record.combinablePromotionKeys, 'Chương trình áp dụng đồng thời', 200) : [];
+    if (record.promotionType === 'Tặng quà' && !record.eligibleItemCodes.length) throw new HttpError(422, 'Chương trình tặng quà phải khai báo mã hàng hoặc bộ quà áp dụng.');
+    if (record.orgUnitKeys.length) {
+      const placeholders = record.orgUnitKeys.map(() => '?').join(',');
+      const rows = await db.prepare(`SELECT record_key FROM collection_records WHERE scope = 'business_org_units' AND record_key IN (${placeholders})`).all(...record.orgUnitKeys);
+      if (rows.length !== record.orgUnitKeys.length) throw new HttpError(422, 'Có đơn vị áp dụng không còn tồn tại.');
+    }
+    for (const id of record.employeeIds) {
+      const employee = await db.prepare("SELECT id FROM users WHERE id = ? AND is_active = 1").get(id);
+      if (!employee) throw new HttpError(422, 'Nhân viên áp dụng phải là tài khoản đang hoạt động.');
+    }
+    for (const key of record.customerKeys) {
+      const customer = await db.prepare("SELECT id FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(key);
+      if (!customer) throw new HttpError(422, 'Khách hàng áp dụng không tồn tại trong danh bạ CRM.');
+    }
+    for (const key of record.combinablePromotionKeys) {
+      if (key === record.key) throw new HttpError(422, 'Chương trình không thể áp dụng đồng thời với chính nó.');
+      const other = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'crm_promotions' AND record_key = ?").get(key);
+      if (!other) throw new HttpError(422, 'Chương trình áp dụng đồng thời không tồn tại.');
+    }
+    const timestamp = now();
+    const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    record.enabled = record.enabled === true;
+    record.allowConcurrent = record.allowConcurrent === true;
+    record.applyOnce = record.applyOnce === true;
+    record.owner = current?.owner || actor.name;
+    record.ownerId = current?.ownerId || actor.id;
+    record.createdAt = current?.createdAt || timestamp;
+    record.createdBy = current?.createdBy || actor.name;
+    record.createdById = current?.createdById || actor.id;
+    record.updatedAt = timestamp;
+    record.updatedBy = actor.name;
+    record.updatedById = actor.id;
+    record.status = record.endDate < businessDate ? 'Đã kết thúc' : !record.enabled ? 'Tạm dừng' : record.startDate > businessDate ? 'Nháp' : 'Đang hoạt động';
+    record.history = [...(Array.isArray(current?.history) ? current.history : []), {
+      action: current ? 'Cập nhật chương trình' : 'Tạo chương trình', actor: actor.name, actorId: actor.id, at: timestamp,
+    }].slice(-200);
+  }
+  if (scope === 'asset_items') {
+    const assetCode = String(record.code || '').trim();
+    const barcode = String(record.barcode || '').trim().replace(/\s+/g, '');
+    if (assetCode) {
+      const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_items' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) AND record_key <> ? LIMIT 1`)
+        .get(assetCode, current?.key || record.key || '');
+      if (duplicateCode) throw new HttpError(409, 'Mã tài sản đã tồn tại.');
+      record.code = assetCode;
+    }
+    if (barcode) {
+      const duplicateBarcode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_items' AND LOWER(REPLACE(json_extract(payload_json, '$.barcode'), ' ', '')) = LOWER(?) AND record_key <> ? LIMIT 1`)
+        .get(barcode, current?.key || record.key || '');
+      if (duplicateBarcode) throw new HttpError(409, 'Mã barcode đã tồn tại.');
+      record.barcode = barcode;
+    }
+  }
+  if (scope === 'asset_depreciations') {
+    if (current) {
+      for (const field of ['assetKey', 'assetCode', 'assetName', 'category', 'department', 'originalCost', 'lifeMonths', 'residualValue', 'startDate', 'depreciationMethod', 'costAccount', 'assetAccount', 'productionCapacity']) {
+        record[field] = current[field];
+      }
+    } else {
+      record.key = requiredText(record.key, 'Khóa hồ sơ khấu hao', 160);
+      const assetKey = requiredText(record.assetKey, 'Tài sản', 160);
+      const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(assetKey);
+      const asset = publicCollectionRecord(assetRow);
+      if (!asset || !['Đang sử dụng', 'Trong kho'].includes(asset.status)) {
+        throw new HttpError(422, 'Chỉ tài sản đang sử dụng hoặc trong kho mới được lập hồ sơ khấu hao.');
+      }
+      const code = requiredText(asset.code || asset.assetCode, 'Mã tài sản', 80);
+      const duplicateAsset = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_depreciations'
+          AND (json_extract(payload_json, '$.assetKey') = ? OR LOWER(json_extract(payload_json, '$.assetCode')) = LOWER(?))
+        LIMIT 1`).get(asset.key, code);
+      if (duplicateAsset) throw new HttpError(409, 'Tài sản đã có hồ sơ khấu hao.');
+      const originalCost = optionalAmount(asset.originalPrice, 'Nguyên giá tài sản');
+      const accumulatedDepreciation = optionalAmount(asset.accumulatedDepreciation, 'Khấu hao lũy kế');
+      if (originalCost <= 0 || accumulatedDepreciation !== 0) {
+        throw new HttpError(422, 'Chỉ lập hồ sơ mới khi tài sản có nguyên giá hợp lệ và chưa có khấu hao lũy kế.');
+      }
+      const lifeMonths = Number(asset.depreciationMonths);
+      if (!Number.isSafeInteger(lifeMonths) || lifeMonths < 1 || lifeMonths > 120) {
+        throw new HttpError(422, 'Thời gian khấu hao trong danh mục phải từ 1 đến 120 tháng.');
+      }
+      const residualValue = optionalAmount(record.residualValue, 'Giá trị thu hồi');
+      if (residualValue >= originalCost) throw new HttpError(422, 'Giá trị thu hồi phải nhỏ hơn nguyên giá.');
+      const methods = ['Đường thẳng', 'Số dư giảm dần có điều chỉnh', 'Theo sản lượng / Công suất'];
+      record.depreciationMethod = oneOf(record.depreciationMethod, 'Phương pháp khấu hao', methods);
+      record.costAccount = oneOf(record.costAccount, 'Tài khoản chi phí', [
+        'Nợ 6421 (CP Quản lý CNTT)', 'Nợ 6422 (CP Vật liệu & CCDC Văn phòng)',
+        'Nợ 641 (CP Bán Hàng)', 'Nợ 627 (CP Sản xuất chung)',
+      ]);
+      record.assetAccount = oneOf(record.assetAccount, 'Tài khoản hao mòn', [
+        'Có 2141 (Hao mòn TSCĐ hữu hình)', 'Có 2143 (Hao mòn TSCĐ vô hình)',
+      ]);
+      const startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu khấu hao');
+      const productionCapacity = record.depreciationMethod === 'Theo sản lượng / Công suất'
+        ? requiredAmount(record.productionCapacity, 'Tổng sản lượng dự kiến') : 0;
+      const scheduleList = buildAssetDepreciationSchedule({
+        originalCost, residualValue, lifeMonths, startDate, method: record.depreciationMethod,
+        productionCapacity, productionByPeriod: {},
+      });
+      const [endYear, endMonth] = scheduleList.at(-1).period.split('-').map(Number);
+      record.assetKey = asset.key;
+      record.assetCode = code;
+      record.assetName = requiredText(asset.name || asset.assetName, 'Tên tài sản', 255);
+      record.category = optionalText(asset.category, 'Nhóm tài sản', 120);
+      record.department = optionalText(asset.department, 'Phòng ban', 160);
+      record.originalCost = originalCost;
+      record.residualValue = residualValue;
+      record.lifeMonths = lifeMonths;
+      record.startDate = startDate;
+      record.productionCapacity = productionCapacity || undefined;
+      record.productionByPeriod = {};
+      record.depreciatedMonths = 0;
+      record.monthlyDeprec = scheduleList[0].monthlyAmount;
+      record.yearlyDeprec = scheduleList.filter((row) => row.period.startsWith(startDate.slice(0, 4))).reduce((sum, row) => sum + row.monthlyAmount, 0);
+      record.accumulatedDeprec = 0;
+      record.netBookValue = originalCost;
+      record.endDate = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+      record.lastRunDate = 'Chưa trích';
+      record.status = 'Đang trích khấu hao';
+      record.notes = optionalText(record.notes, 'Ghi chú', 2_000);
+      record.scheduleList = scheduleList;
+      record.createdBy = actor.name;
+      record.createdById = actor.id;
+      record.createdAt = now();
+    }
+  }
+  if (scope === 'asset_disposals') {
+    const methods = ['Bán đấu giá nội bộ CBNV', 'Bán thanh lý cho đơn vị thu mua ngoài', 'Tiêu hủy an toàn (Data Wiping / Shredding)', 'Tặng / Quyên góp từ thiện', 'Báo mất / Thất lạc do rủi ro'];
+    const finalStatuses = ['Đã thanh lý & Hoàn tất sổ sách', 'Đã tiêu hủy an toàn', 'Đã xử lý mất'];
+    const needsDataWipe = (category, method) => method.startsWith('Tiêu hủy') || ['Thiết bị IT', 'Máy chủ & Hạ tầng IDC'].includes(category);
+    record.key = current?.key || requiredText(record.key, 'Khóa biên bản thanh lý', 160);
+    if (!current) {
+      record.disposalCode = requiredText(record.disposalCode, 'Mã biên bản thanh lý', 80);
+      const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_disposals' AND LOWER(json_extract(payload_json, '$.disposalCode')) = LOWER(?) LIMIT 1`).get(record.disposalCode);
+      if (duplicateCode) throw new HttpError(409, 'Mã biên bản thanh lý đã tồn tại.');
+      record.disposalMethod = oneOf(record.disposalMethod, 'Hình thức thanh lý', methods);
+      record.reason = requiredText(record.reason, 'Lý do thanh lý', 2_000);
+      record.disposalDate = requiredIsoDate(record.disposalDate, 'Ngày đề xuất');
+      record.startingAuctionPrice = optionalAmount(record.startingAuctionPrice, 'Giá khởi điểm');
+      record.councilLeader = requiredText(record.councilLeader, 'Chủ tịch hội đồng', 160);
+      record.councilMembers = requiredText(record.councilMembers, 'Thành viên hội đồng', 1_000);
+      record.notes = optionalText(record.notes, 'Ghi chú', 2_000);
+      const assetKey = requiredText(record.assetKey, 'Tài sản', 160);
+      const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(assetKey);
+      const asset = publicCollectionRecord(assetRow);
+      if (!asset || !['Đang sử dụng', 'Trong kho', 'Chờ thanh lý'].includes(asset.status)) {
+        throw new HttpError(422, 'Tài sản không tồn tại hoặc không đủ điều kiện đề xuất thanh lý.');
+      }
+      const duplicateAsset = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_disposals' AND json_extract(payload_json, '$.assetKey') = ?
+          AND json_extract(payload_json, '$.status') IN ('Chờ hội đồng phê duyệt', 'Đang thực hiện xử lý', 'Đang đấu giá / Thu gom') LIMIT 1`).get(assetKey);
+      if (duplicateAsset) throw new HttpError(409, 'Tài sản đã có một hồ sơ thanh lý đang xử lý.');
+      const originalCost = optionalAmount(asset.originalPrice, 'Nguyên giá tài sản');
+      const accumulatedDepreciation = optionalAmount(asset.accumulatedDepreciation, 'Khấu hao lũy kế');
+      if (accumulatedDepreciation > originalCost) throw new HttpError(422, 'Khấu hao lũy kế không được vượt nguyên giá.');
+      record.assetKey = asset.key;
+      record.assetCode = requiredText(asset.code, 'Mã tài sản', 80);
+      record.assetName = requiredText(asset.name, 'Tên tài sản', 255);
+      record.category = optionalText(asset.category, 'Nhóm tài sản', 120);
+      record.serialNo = optionalText(asset.model, 'Số hiệu tài sản', 160);
+      record.sourceAssetStatus = asset.status;
+      record.originalCost = originalCost;
+      record.accumulatedDepreciation = accumulatedDepreciation;
+      record.netBookValue = originalCost - accumulatedDepreciation;
+      record.actualDisposalPrice = 0;
+      record.disposalCost = 0;
+      record.netGainLoss = 0;
+      record.buyerName = ''; record.buyerPhone = '';
+      record.securityDataWipeCertified = false; record.dataWipeOfficer = '';
+      record.requester = actor.name; record.requesterId = actor.id; record.requestedAt = now();
+      record.approvedBy = ''; record.approvedById = ''; record.approvedAt = '';
+      record.completedBy = ''; record.completedById = ''; record.completedAt = '';
+      record.status = 'Chờ hội đồng phê duyệt';
+    } else {
+      const immutable = ['disposalCode', 'disposalMethod', 'reason', 'disposalDate', 'startingAuctionPrice', 'councilLeader', 'councilMembers', 'notes', 'assetKey', 'assetCode', 'assetName', 'category', 'serialNo', 'sourceAssetStatus', 'originalCost', 'accumulatedDepreciation', 'netBookValue', 'requester', 'requesterId', 'requestedAt'];
+      for (const field of immutable) record[field] = current[field];
+      const requestedStatus = record.status;
+      Object.assign(record, current);
+      if (current.status === 'Chờ hội đồng phê duyệt' && requestedStatus === 'Đang thực hiện xử lý') {
+        record.status = requestedStatus;
+        record.approvedBy = actor.name; record.approvedById = actor.id; record.approvedAt = now();
+      } else if (['Đang thực hiện xử lý', 'Đang đấu giá / Thu gom'].includes(current.status) && finalStatuses.includes(requestedStatus)) {
+        record.status = requestedStatus;
+        record.actualDisposalPrice = optionalAmount(value.actualDisposalPrice, 'Số tiền thu thực tế');
+        record.disposalCost = optionalAmount(value.disposalCost, 'Chi phí xử lý');
+        record.disposalDate = requiredIsoDate(value.disposalDate, 'Ngày xử lý thực tế');
+        record.buyerName = optionalText(value.buyerName, 'Bên mua / tiếp nhận', 255);
+        record.buyerPhone = optionalText(value.buyerPhone, 'Số điện thoại liên hệ', 80);
+        if ((record.disposalMethod.startsWith('Bán') && record.actualDisposalPrice <= 0)
+          || (record.disposalMethod.startsWith('Bán') && !record.buyerName)
+          || (record.disposalMethod.startsWith('Tặng') && !record.buyerName)) {
+          throw new HttpError(422, 'Hồ sơ bán phải có số tiền lớn hơn 0 và bên mua; hồ sơ tặng phải có đơn vị tiếp nhận.');
+        }
+        const expectedStatus = record.disposalMethod.startsWith('Tiêu hủy') ? 'Đã tiêu hủy an toàn'
+          : record.disposalMethod.startsWith('Báo mất') ? 'Đã xử lý mất' : 'Đã thanh lý & Hoàn tất sổ sách';
+        if (requestedStatus !== expectedStatus) throw new HttpError(422, 'Trạng thái hoàn tất không khớp với hình thức xử lý.');
+        record.securityDataWipeCertified = value.securityDataWipeCertified === true;
+        record.dataWipeOfficer = record.securityDataWipeCertified ? requiredText(value.dataWipeOfficer, 'Người ghi nhận xóa dữ liệu', 160) : '';
+        if (needsDataWipe(record.category, record.disposalMethod) && !record.securityDataWipeCertified) {
+          throw new HttpError(422, 'Tài sản hoặc hình thức xử lý này cần ghi nhận thao tác xóa dữ liệu trước khi hoàn tất.');
+        }
+        record.netGainLoss = record.actualDisposalPrice - record.disposalCost - record.netBookValue;
+        if (!Number.isSafeInteger(record.netGainLoss)) throw new HttpError(422, 'Kết quả lãi/lỗ vượt giới hạn tính toán.');
+        record.completedBy = actor.name; record.completedById = actor.id; record.completedAt = now();
+      } else {
+        throw new HttpError(422, 'Hồ sơ đã được xử lý hoặc trạng thái chuyển tiếp không hợp lệ.');
+      }
+    }
+  }
+  if (scope === 'asset_todos') {
+    const categories = ['Cấp phát / Bàn giao', 'Thu hồi tài sản', 'Bảo dưỡng / Kiểm định', 'Sửa chữa & Thay thế', 'Kiểm kê đối soát', 'Thanh lý & Tiêu hủy', 'Đề xuất mua sắm'];
+    const priorities = ['Khẩn cấp (P1)', 'Cao (P2)', 'Trung bình (P3)', 'Thấp (P4)', 'Thấp'];
+    const taskStatuses = ['Chờ xử lý', 'Đang thực hiện', 'Chờ phê duyệt cấp trên', 'Đã hoàn thành'];
+    const deriveSla = (deadline, at = now()) => {
+      const dueDay = String(deadline).slice(0, 10);
+      const currentDay = String(at).slice(0, 10);
+      const dueTime = Date.parse(`${dueDay}T00:00:00Z`);
+      const currentTime = Date.parse(`${currentDay}T00:00:00Z`);
+      if (!Number.isFinite(dueTime) || !Number.isFinite(currentTime)) return 'Trong hạn SLA';
+      if (dueTime < currentTime) return 'Trễ hạn SLA';
+      return dueTime - currentTime <= 2 * 86_400_000 ? 'Sắp chạm hạn SLA' : 'Trong hạn SLA';
+    };
+    const normalizeChecklist = (entries, { forceIncomplete = false } = {}) => {
+      if (!Array.isArray(entries) || entries.length < 1 || entries.length > 30) throw new HttpError(422, 'Checklist phải có từ 1 đến 30 mục.');
+      const normalized = entries.map((entry) => ({
+        item: requiredText(entry?.item, 'Nội dung checklist', 300),
+        done: forceIncomplete ? false : entry?.done === true,
+      }));
+      if (new Set(normalized.map((entry) => entry.item.toLowerCase())).size !== normalized.length) throw new HttpError(422, 'Checklist không được có mục trùng lặp.');
+      return normalized;
+    };
+    const estimatedHours = (input) => {
+      const value = Number(input);
+      if (!Number.isFinite(value) || value < 0.5 || value > 1000) throw new HttpError(422, 'Thời gian dự kiến phải từ 0,5 đến 1.000 giờ.');
+      return value;
+    };
+    if (!current) {
+      record.key = requiredText(record.key, 'Khóa nhiệm vụ', 160);
+      record.taskCode = requiredText(record.taskCode, 'Mã nhiệm vụ', 80);
+      const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_todos' AND LOWER(json_extract(payload_json, '$.taskCode')) = LOWER(?) LIMIT 1`).get(record.taskCode);
+      if (duplicateCode) throw new HttpError(409, 'Mã nhiệm vụ đã tồn tại.');
+      record.taskTitle = requiredText(record.taskTitle, 'Tiêu đề nhiệm vụ', 300);
+      record.taskCategory = oneOf(record.taskCategory, 'Nhóm nhiệm vụ', categories);
+      record.priority = oneOf(record.priority, 'Mức ưu tiên', priorities);
+      record.deadline = requiredIsoDate(record.deadline, 'Hạn hoàn thành');
+      record.assignedStaffId = requiredText(record.assignedStaffId, 'Nhân viên phụ trách', 160);
+      const assignedEmployee = await db.prepare(`SELECT u.id, u.name, u.employee_code, p.department, p.employment_status
+        FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+        WHERE u.id = ? AND u.role = 'USER' AND u.is_active = 1`).get(record.assignedStaffId);
+      if (!assignedEmployee || assignedEmployee.employment_status === 'Đã nghỉ việc') throw new HttpError(422, 'Nhân viên phụ trách phải là tài khoản nhân viên đang hoạt động.');
+      record.assignedStaff = assignedEmployee.name;
+      record.assignedDepartment = assignedEmployee.department || '';
+      record.requester = requiredText(record.requester, 'Người yêu cầu / bộ phận', 160);
+      record.relatedAssetCode = optionalText(record.relatedAssetCode, 'Mã tài sản', 80);
+      record.location = requiredText(record.location, 'Vị trí / phòng ban', 160);
+      record.estimatedHours = estimatedHours(record.estimatedHours);
+      record.actualHours = 0;
+      record.notes = optionalText(record.notes, 'Ghi chú', 2_000);
+      record.checklist = normalizeChecklist(record.checklist, { forceIncomplete: true });
+      record.status = 'Chờ xử lý';
+      record.slaStatus = deriveSla(record.deadline);
+      record.resolutionResult = '';
+      record.createdBy = actor.name; record.createdById = actor.id; record.createdAt = now();
+      record.updatedBy = actor.name; record.updatedById = actor.id; record.updatedAt = record.createdAt;
+      record.completedBy = ''; record.completedById = ''; record.completedAt = '';
+    } else {
+      const requestedStatus = record.status;
+      const previous = current.status;
+      Object.assign(record, current);
+      const checklistChanged = value.checklist !== undefined && JSON.stringify(value.checklist) !== JSON.stringify(current.checklist);
+      if (checklistChanged) {
+        if (previous !== 'Đang thực hiện') throw new HttpError(422, 'Checklist chỉ sửa được khi nhiệm vụ đang thực hiện.');
+        const updated = normalizeChecklist(value.checklist);
+        if (updated.length !== current.checklist.length || updated.some((entry, index) => entry.item !== current.checklist[index]?.item)) {
+          throw new HttpError(422, 'Không thể thay đổi cấu trúc checklist sau khi tạo nhiệm vụ.');
+        }
+        record.checklist = updated;
+      } else if (requestedStatus !== previous) {
+        const allowedNext = {
+          'Chờ xử lý': ['Đang thực hiện'],
+          'Đang thực hiện': ['Chờ phê duyệt cấp trên'],
+          'Chờ phê duyệt cấp trên': ['Đã hoàn thành'],
+        };
+        if (!taskStatuses.includes(requestedStatus) || !allowedNext[previous]?.includes(requestedStatus)) {
+          throw new HttpError(422, 'Chuyển trạng thái nhiệm vụ không hợp lệ.');
+        }
+        if (['Chờ phê duyệt cấp trên', 'Đã hoàn thành'].includes(requestedStatus)
+          && (!record.checklist.length || record.checklist.some((entry) => !entry.done))) {
+          throw new HttpError(422, 'Phải hoàn thành toàn bộ checklist trước khi gửi duyệt hoặc nghiệm thu.');
+        }
+        record.status = requestedStatus;
+        if (requestedStatus === 'Đã hoàn thành') {
+          const actual = Number(value.actualHours);
+          if (!Number.isFinite(actual) || actual < 0.5 || actual > 1000) throw new HttpError(422, 'Thời gian thực tế phải từ 0,5 đến 1.000 giờ.');
+          record.actualHours = actual;
+          record.resolutionResult = requiredText(value.resolutionResult, 'Kết quả nghiệm thu', 2_000);
+          record.completedBy = actor.name; record.completedById = actor.id; record.completedAt = now();
+        }
+      } else {
+        throw new HttpError(422, 'Không có thay đổi hợp lệ cho nhiệm vụ.');
+      }
+      record.slaStatus = deriveSla(record.deadline, record.completedAt || now());
+      record.updatedBy = actor.name; record.updatedById = actor.id; record.updatedAt = now();
+    }
+  }
+  if (scope === 'asset_maintenances') {
+    const frequencies = ['Hàng tháng', 'Hàng quý (3 tháng)', 'Định kỳ 6 tháng', 'Hàng năm'];
+    const frequencyDays = { 'Hàng tháng': 30, 'Hàng quý (3 tháng)': 90, 'Định kỳ 6 tháng': 180, 'Hàng năm': 365 };
+    const maintenanceTypes = ['Phòng ngừa định kỳ', 'Kiểm định an toàn PCCC & Điện', 'Nâng cấp bảo trì Firmware / Patch OS'];
+    const slaLevels = ['SLA Platinum (4h)', 'SLA Gold (8h)', 'SLA Standard (24h)'];
+    const checklistDefaults = [
+      'Kiểm tra ngoại quan, ốc vít và các điểm tiếp xúc cáp',
+      'Vệ sinh bụi bẩn khe thông gió và bộ làm mát',
+      'Kiểm tra thông số điện áp, nhiệt độ và công suất tải',
+      'Cập nhật bản ghi nhật ký vận hành kỹ thuật',
+    ];
+    const today = now().slice(0, 10);
+    const scheduleStatus = (date) => {
+      const due = Date.parse(`${date}T00:00:00Z`);
+      const current = Date.parse(`${today}T00:00:00Z`);
+      if (due < current) return 'Quá hạn bảo dưỡng';
+      if (due - current <= 7 * 86_400_000) return 'Sắp đến hạn';
+      return 'Đã lên lịch';
+    };
+    const normalizeChecklist = (entries, { forceIncomplete = false } = {}) => {
+      if (!Array.isArray(entries) || entries.length !== checklistDefaults.length) throw new HttpError(422, 'Checklist bảo dưỡng không hợp lệ.');
+      const normalized = entries.map((entry, index) => ({
+        item: requiredText(entry?.item, 'Nội dung checklist', 300),
+        done: forceIncomplete ? false : entry?.done === true,
+        note: optionalText(entry?.note, 'Ghi chú checklist', 1_000),
+      }));
+      if (normalized.some((entry, index) => entry.item !== checklistDefaults[index])) throw new HttpError(422, 'Không thể thay đổi cấu trúc checklist bảo dưỡng.');
+      return normalized;
+    };
+    const parseDate = (value, field) => {
+      if (!value) return '';
+      return requiredIsoDate(value, field);
+    };
+    const addCycle = (date, frequency) => {
+      const next = new Date(`${date}T00:00:00.000Z`);
+      next.setUTCDate(next.getUTCDate() + frequencyDays[frequency]);
+      return next.toISOString().slice(0, 10);
+    };
+    if (!current) {
+      record.key = requiredText(record.key, 'Khóa kế hoạch bảo dưỡng', 160);
+      record.maintCode = requiredText(record.maintCode, 'Mã kế hoạch', 80);
+      const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_maintenances' AND LOWER(json_extract(payload_json, '$.maintCode')) = LOWER(?) LIMIT 1`).get(record.maintCode);
+      if (duplicateCode) throw new HttpError(409, 'Mã kế hoạch bảo dưỡng đã tồn tại.');
+      record.frequency = oneOf(record.frequency, 'Tần suất bảo dưỡng', frequencies);
+      record.maintenanceType = oneOf(record.maintenanceType, 'Loại hình bảo dưỡng', maintenanceTypes);
+      record.slaLevel = oneOf(record.slaLevel, 'Mức ưu tiên xử lý', slaLevels);
+      record.estimatedBudget = optionalAmount(record.estimatedBudget, 'Dự toán kinh phí');
+      record.lastDate = parseDate(record.lastDate, 'Ngày bảo dưỡng gần nhất');
+      record.nextDate = requiredIsoDate(record.nextDate, 'Ngày bảo dưỡng tiếp theo');
+      if (record.lastDate && record.lastDate > record.nextDate) throw new HttpError(422, 'Ngày bảo dưỡng tiếp theo phải bằng hoặc sau ngày gần nhất.');
+      const assetKey = requiredText(record.assetKey, 'Tài sản', 160);
+      const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(assetKey);
+      const asset = publicCollectionRecord(assetRow);
+      if (!asset || !['Đang sử dụng', 'Trong kho'].includes(asset.status)) throw new HttpError(422, 'Chỉ tài sản đang sử dụng hoặc trong kho mới được lập lịch bảo dưỡng.');
+      const duplicateAsset = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'asset_maintenances' AND json_extract(payload_json, '$.assetKey') = ? LIMIT 1").get(assetKey);
+      if (duplicateAsset) throw new HttpError(409, 'Tài sản đã có kế hoạch bảo dưỡng định kỳ.');
+      const employeeId = requiredText(record.responsibleEngineerId, 'Kỹ sư phụ trách', 160);
+      const engineer = await db.prepare(`SELECT u.id, u.name, p.employment_status FROM users u
+        LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.role = 'USER' AND u.is_active = 1`).get(employeeId);
+      if (!engineer || engineer.employment_status === 'Đã nghỉ việc') throw new HttpError(422, 'Kỹ sư phụ trách phải là tài khoản nhân viên đang hoạt động.');
+      record.assetKey = asset.key;
+      record.assetCodes = requiredText(asset.code || asset.assetCode, 'Mã tài sản', 80);
+      record.systemName = requiredText(asset.name || asset.assetName, 'Tên tài sản', 255);
+      record.category = optionalText(asset.category, 'Nhóm tài sản', 120);
+      record.location = optionalText(record.location || asset.location || asset.currentLocation || asset.department, 'Vị trí lắp đặt', 255);
+      record.responsibleEngineerId = engineer.id;
+      record.responsibleEngineer = engineer.name;
+      record.vendorPartner = optionalText(record.vendorPartner, 'Đối tác kỹ thuật', 255);
+      record.actualCost = 0;
+      record.healthScore = 0;
+      record.certificateCode = '';
+      record.checklist = checklistDefaults.map((item) => ({ item, done: false, note: '' }));
+      record.status = scheduleStatus(record.nextDate);
+      record.notes = optionalText(record.notes, 'Ghi chú', 2_000);
+      record.maintenanceHistory = [];
+      record.lastCompletionStatus = '';
+      record.startedBy = ''; record.startedById = ''; record.startedAt = '';
+      record.createdBy = actor.name; record.createdById = actor.id; record.createdAt = now();
+      record.updatedBy = actor.name; record.updatedById = actor.id; record.updatedAt = record.createdAt;
+    } else {
+      const requestedStatus = value.status;
+      const fields = Object.keys(value).filter((field) => field !== 'key' && JSON.stringify(value[field]) !== JSON.stringify(current[field]));
+      const isStart = fields.length === 1 && fields[0] === 'status' && requestedStatus === 'Đang tiến hành bảo dưỡng';
+      const isChecklist = fields.length === 1 && fields[0] === 'checklist';
+      const completionFields = new Set(['status', 'performedDate', 'actualCost', 'healthScore', 'checklist', 'notes', 'certificateCode']);
+      const isCompletion = requestedStatus === 'Đã hoàn thành đúng lịch' && Object.hasOwn(value, 'performedDate')
+        && Object.hasOwn(value, 'actualCost') && Object.hasOwn(value, 'healthScore') && Object.hasOwn(value, 'checklist')
+        && fields.every((field) => completionFields.has(field));
+      if (isStart) {
+        if (!['Đã lên lịch', 'Sắp đến hạn', 'Quá hạn bảo dưỡng'].includes(current.status)) throw new HttpError(422, 'Kế hoạch không ở trạng thái có thể bắt đầu.');
+        Object.assign(record, current, {
+          status: 'Đang tiến hành bảo dưỡng', startedBy: actor.name, startedById: actor.id, startedAt: now(),
+          checklist: current.lastCompletedAt ? checklistDefaults.map((item) => ({ item, done: false, note: '' })) : current.checklist,
+        });
+      } else if (isChecklist) {
+        if (current.status !== 'Đang tiến hành bảo dưỡng') throw new HttpError(422, 'Checklist chỉ được sửa khi đang tiến hành bảo dưỡng.');
+        const checklist = normalizeChecklist(value.checklist);
+        Object.assign(record, current, { checklist });
+      } else if (isCompletion) {
+        if (current.status !== 'Đang tiến hành bảo dưỡng') throw new HttpError(422, 'Chỉ được nghiệm thu kế hoạch đang tiến hành.');
+        const performedDate = requiredIsoDate(value.performedDate, 'Ngày thực hiện');
+        if (performedDate > today) throw new HttpError(422, 'Ngày thực hiện không được ở tương lai.');
+        if (current.lastDate && performedDate < current.lastDate) throw new HttpError(422, 'Ngày thực hiện không được trước lần bảo dưỡng gần nhất.');
+        const checklist = normalizeChecklist(value.checklist);
+        if (checklist.some((entry) => !entry.done)) throw new HttpError(422, 'Cần hoàn thành mọi mục checklist trước khi nghiệm thu.');
+        const actualCost = optionalAmount(value.actualCost, 'Chi phí thực tế');
+        const healthScore = Number(value.healthScore);
+        if (!Number.isSafeInteger(healthScore) || healthScore < 0 || healthScore > 100) throw new HttpError(422, 'Điểm sức khỏe phải là số nguyên từ 0 đến 100.');
+        const nextDate = addCycle(performedDate, current.frequency);
+        const history = Array.isArray(current.maintenanceHistory) ? current.maintenanceHistory : [];
+        Object.assign(record, current, {
+          status: scheduleStatus(nextDate), lastDate: performedDate, nextDate,
+          checklist: checklistDefaults.map((item) => ({ item, done: false, note: '' })),
+          actualCost, healthScore, certificateCode: optionalText(value.certificateCode, 'Số chứng nhận', 160),
+          notes: optionalText(value.notes, 'Ghi chú nghiệm thu', 2_000), lastCompletionStatus: performedDate <= current.nextDate ? 'Đúng hạn' : 'Trễ hạn',
+          lastCompletedAt: now(), lastCompletedBy: actor.name, lastCompletedById: actor.id,
+          maintenanceHistory: [...history, { date: performedDate, dueDate: current.nextDate, nextDate, completedOnTime: performedDate <= current.nextDate, actualCost, healthScore, checklist, notes: optionalText(value.notes, 'Ghi chú nghiệm thu', 2_000), certificateCode: optionalText(value.certificateCode, 'Số chứng nhận', 160), completedBy: actor.name, completedById: actor.id, completedAt: now() }],
+        });
+      } else {
+        throw new HttpError(422, 'Chỉ được bắt đầu, cập nhật checklist hoặc nghiệm thu theo đúng quy trình.');
+      }
+      for (const field of ['maintCode', 'assetKey', 'assetCodes', 'systemName', 'category', 'location', 'frequency', 'maintenanceType', 'slaLevel', 'responsibleEngineer', 'responsibleEngineerId', 'vendorPartner', 'estimatedBudget', 'createdBy', 'createdById', 'createdAt']) {
+        record[field] = current[field];
+      }
+      record.updatedBy = actor.name; record.updatedById = actor.id; record.updatedAt = now();
+    }
+  }
+  if (scope === 'asset_systems') {
+    const categories = ['Vị trí & Tủ Rack', 'Nhóm & Loại tài sản', 'Định mức cấp phát chức danh', 'Quy tắc sinh mã tự động', 'Mẫu văn bản & Quy trình', 'Nhà cung cấp'];
+    const statuses = ['Đang áp dụng', 'Tạm ngưng'];
+    if (!current) {
+      record.key = requiredText(record.key, 'Khóa cấu hình', 160);
+      record.code = requiredText(record.code, 'Mã cấu hình', 80);
+      const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'asset_systems' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) LIMIT 1`).get(record.code);
+      if (duplicateCode) throw new HttpError(409, 'Mã cấu hình đã tồn tại.');
+      record.name = requiredText(record.name, 'Tên cấu hình', 255);
+      record.category = oneOf(record.category, 'Phân loại cấu hình', categories);
+      record.details = requiredText(record.details, 'Nội dung quy định', 4_000);
+      record.scope = requiredText(record.scope, 'Phạm vi áp dụng', 255);
+      record.allocatedRole = requiredText(record.allocatedRole, 'Chức danh áp dụng', 255);
+      record.standardPackage = optionalText(record.standardPackage, 'Gói tiêu chuẩn', 2_000);
+      record.budgetLimit = optionalAmount(record.budgetLimit, 'Hạn mức kinh phí');
+      const months = Number(record.depreciationMonthsDefault ?? 0);
+      if (!Number.isSafeInteger(months) || months < 0 || months > 1_200) throw new HttpError(422, 'Thời gian khấu hao phải là số tháng nguyên từ 0 đến 1.200.');
+      record.depreciationMonthsDefault = months;
+      record.prefixPattern = optionalText(record.prefixPattern, 'Quy tắc sinh mã', 100);
+      if (record.category === 'Quy tắc sinh mã tự động' && (record.prefixPattern.split('{YYYY}').length !== 2
+        || record.prefixPattern.split('{####}').length !== 2
+        || /[{}]/.test(record.prefixPattern.replace('{YYYY}', '').replace('{####}', '')))) {
+        throw new HttpError(422, 'Quy tắc sinh mã cần có đúng một {YYYY} và một {####}.');
+      }
+      const responsiblePersonId = requiredText(record.responsiblePersonId, 'Người phụ trách', 160);
+      const responsiblePerson = await db.prepare(`SELECT u.id, u.name, u.is_active, p.employment_status FROM users u
+        LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1`).get(responsiblePersonId);
+      if (!responsiblePerson || responsiblePerson.employment_status === 'Đã nghỉ việc') throw new HttpError(422, 'Người phụ trách phải là nhân viên đang hoạt động.');
+      record.responsiblePersonId = responsiblePerson.id;
+      record.responsiblePerson = responsiblePerson.name;
+      record.notes = optionalText(record.notes, 'Ghi chú', 2_000);
+      record.status = 'Đang áp dụng';
+      record.createdBy = actor.name; record.createdById = actor.id; record.createdAt = now();
+      record.updatedBy = actor.name; record.updatedById = actor.id; record.updatedAt = record.createdAt;
+    } else {
+      if (value.status === current.status || !statuses.includes(value.status)) throw new HttpError(422, 'Trạng thái cấu hình không thay đổi hoặc không hợp lệ.');
+      Object.assign(record, current, { status: value.status, updatedBy: actor.name, updatedById: actor.id, updatedAt: now() });
+    }
+  }
+  if (scope === 'business_travels') {
+    record.key = current?.key || requiredText(record.key, 'Khóa chuyến công tác', 160);
+    record.travelCode = current?.travelCode || requiredText(record.travelCode, 'Mã chuyến công tác', 80);
+    const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
+      WHERE scope = 'business_travels' AND LOWER(json_extract(payload_json, '$.travelCode')) = LOWER(?) AND record_key <> ? LIMIT 1`)
+      .get(record.travelCode, record.key);
+    if (duplicateCode) throw new HttpError(409, 'Mã chuyến công tác đã tồn tại.');
+    record.tripType = current?.tripType || oneOf(record.tripType, 'Loại chuyến đi', ['Nội địa', 'Quốc tế']);
+    record.destination = current?.destination || requiredText(record.destination, 'Địa điểm công tác', 500);
+    record.purpose = current?.purpose || requiredText(record.purpose, 'Mục đích công tác', 4_000);
+    record.startDate = current?.startDate || requiredIsoDate(record.startDate, 'Ngày bắt đầu công tác');
+    record.endDate = current?.endDate || requiredIsoDate(record.endDate, 'Ngày kết thúc công tác');
+    const startTimestamp = Date.parse(`${record.startDate}T00:00:00Z`);
+    const endTimestamp = Date.parse(`${record.endDate}T00:00:00Z`);
+    if (endTimestamp < startTimestamp) throw new HttpError(422, 'Ngày kết thúc phải từ ngày bắt đầu trở đi.');
+    record.daysCount = Math.floor((endTimestamp - startTimestamp) / 86_400_000) + 1;
+    record.budgetEstimated = optionalAmount(current?.budgetEstimated ?? record.budgetEstimated, 'Dự toán công tác');
+    record.advanceAmount = optionalAmount(current?.advanceAmount ?? record.advanceAmount, 'Tạm ứng đề xuất');
+    if (record.advanceAmount > record.budgetEstimated) throw new HttpError(422, 'Tạm ứng đề xuất không được vượt dự toán.');
+    record.flightTicket = optionalText(current?.flightTicket ?? record.flightTicket, 'Thông tin phương tiện', 500);
+    record.hotelName = optionalText(current?.hotelName ?? record.hotelName, 'Thông tin lưu trú', 500);
+
+    if (!current) {
+      record.employeeId = requiredText(record.employeeId, 'Nhân viên đi công tác', 160);
+      if (actor.role !== 'ADMIN' && record.employeeId !== actor.id) throw new HttpError(403, 'Nhân viên chỉ được tạo đề xuất cho chính mình.');
+      const employee = await db.prepare(`SELECT u.id, u.name, u.employee_code, p.department, p.position
+        FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+        WHERE u.id = ? AND u.is_active = 1 AND COALESCE(p.employment_status, 'Chính thức') <> 'Đã nghỉ việc'`).get(record.employeeId);
+      if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại, không hoạt động hoặc đã nghỉ việc.');
+      record.employeeName = employee.name;
+      record.empCode = employee.employee_code;
+      record.department = employee.department || '';
+      record.position = employee.position || '';
+      record.requester = actor.name;
+      record.requesterId = actor.id;
+      record.requestedAt = now();
+      record.status = 'Chờ lãnh đạo duyệt';
+      record.approver = '';
+      record.approvedBy = ''; record.approvedById = ''; record.approvedAt = '';
+      record.rejectedAt = ''; record.rejectionReason = '';
+      record.decisionBy = ''; record.decisionById = ''; record.decisionAt = '';
+      record.actualExpense = 0;
+      record.settlementStatus = 'Chưa quyết toán';
+      record.invoiceReference = ''; record.invoiceFileId = ''; record.invoiceFileName = '';
+      record.settlementNote = ''; record.settlementRecordedBy = ''; record.settlementRecordedAt = '';
+      record.settlementRecordedById = '';
+      record.settledBy = ''; record.settledAt = '';
+      record.settledById = '';
+    } else {
+      record.employeeId = current.employeeId;
+      record.employeeName = current.employeeName;
+      record.empCode = current.empCode;
+      record.department = current.department;
+      record.position = current.position;
+      record.requester = current.requester;
+      record.requesterId = current.requesterId;
+      record.requestedAt = current.requestedAt;
+      record.approver = current.approver || '';
+      record.approvedBy = current.approvedBy || ''; record.approvedById = current.approvedById || '';
+      record.approvedAt = current.approvedAt || ''; record.rejectedAt = current.rejectedAt || '';
+      record.rejectionReason = current.rejectionReason || '';
+      const changingStatus = record.status !== current.status;
+      if (changingStatus) {
+        if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được duyệt hoặc từ chối đề xuất công tác.');
+        if (current.status !== 'Chờ lãnh đạo duyệt') throw new HttpError(422, 'Chỉ đề xuất đang chờ duyệt mới được xử lý.');
+        record.status = oneOf(record.status, 'Quyết định công tác', ['Đã duyệt công tác', 'Từ chối']);
+        record.approver = actor.name;
+        record.decisionBy = actor.name; record.decisionById = actor.id; record.decisionAt = now();
+        if (record.status === 'Đã duyệt công tác') {
+          record.approvedBy = actor.name; record.approvedById = actor.id; record.approvedAt = record.decisionAt;
+          record.rejectionReason = ''; record.rejectedAt = '';
+        } else {
+          record.rejectionReason = requiredText(record.rejectionReason, 'Lý do từ chối', 1_000);
+          record.rejectedAt = record.decisionAt;
+          record.approvedBy = ''; record.approvedById = ''; record.approvedAt = '';
+        }
+      } else {
+        const settlementFields = ['actualExpense', 'invoiceReference', 'invoiceFileId', 'invoiceFileName', 'settlementNote'];
+        const settlementChanged = settlementFields.some((field) => JSON.stringify(record[field] ?? '') !== JSON.stringify(current[field] ?? ''));
+        if (settlementChanged) {
+          if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được ghi nhận quyết toán công tác.');
+          if (current.status !== 'Đã duyệt công tác') throw new HttpError(422, 'Chỉ chuyến công tác đã duyệt mới được quyết toán.');
+          if (current.settlementStatus === 'Đã quyết toán xong') throw new HttpError(422, 'Quyết toán đã hoàn tất và không thể sửa trực tiếp.');
+          record.actualExpense = requiredAmount(record.actualExpense, 'Chi phí thực tế');
+          record.invoiceReference = optionalText(record.invoiceReference, 'Mã tham chiếu chứng từ', 120);
+          record.invoiceFileId = optionalText(record.invoiceFileId, 'Tệp chứng từ', 160);
+          record.invoiceFileName = optionalText(record.invoiceFileName, 'Tên tệp chứng từ', 255);
+          record.settlementNote = optionalText(record.settlementNote, 'Ghi chú quyết toán', 1_000);
+          if (record.invoiceFileId) {
+            const file = await db.prepare("SELECT id FROM file_nodes WHERE id = ? AND node_type = 'file' AND deleted_at IS NULL").get(record.invoiceFileId);
+            if (!file) throw new HttpError(422, 'Không tìm thấy tệp chứng từ đã tải lên.');
+          }
+          record.settlementStatus = record.invoiceReference || record.invoiceFileId ? 'Đã quyết toán xong' : 'Chờ nộp hóa đơn đỏ';
+          record.settlementRecordedBy = actor.name; record.settlementRecordedById = actor.id; record.settlementRecordedAt = now();
+          record.settledBy = record.settlementStatus === 'Đã quyết toán xong' ? actor.name : '';
+          record.settledById = record.settlementStatus === 'Đã quyết toán xong' ? actor.id : '';
+          record.settledAt = record.settlementStatus === 'Đã quyết toán xong' ? record.settlementRecordedAt : '';
+        } else {
+          record.actualExpense = Number(current.actualExpense) || 0;
+          record.settlementStatus = current.settlementStatus || 'Chưa quyết toán';
+          record.invoiceReference = current.invoiceReference || ''; record.invoiceFileId = current.invoiceFileId || '';
+          record.invoiceFileName = current.invoiceFileName || ''; record.settlementNote = current.settlementNote || '';
+          record.settlementRecordedBy = current.settlementRecordedBy || ''; record.settlementRecordedById = current.settlementRecordedById || '';
+          record.settlementRecordedAt = current.settlementRecordedAt || ''; record.settledBy = current.settledBy || '';
+          record.settledById = current.settledById || ''; record.settledAt = current.settledAt || '';
+        }
+      }
+    }
+  }
+  if (scope === 'workflow_requests' && current?.status === 'Yêu cầu bổ sung') {
+    if (actor.id !== current.requesterId) throw new HttpError(403, 'Chỉ người gửi hồ sơ mới được nộp thông tin bổ sung.');
+    const submission = record.resubmission;
+    if (!submission || typeof submission !== 'object' || Array.isArray(submission)) {
+      throw new HttpError(422, 'Hồ sơ đang chờ người gửi bổ sung thông tin.');
+    }
+    if (Object.keys(submission).some(field => !['summaryDetails', 'budgetAmount', 'response', 'formData', 'attachments'].includes(field))) {
+      throw new HttpError(422, 'Thông tin bổ sung chứa trường không được phép.');
+    }
+    const summaryDetails = requiredText(submission.summaryDetails, 'Nội dung hồ sơ', 8_000);
+    const response = requiredText(submission.response, 'Phản hồi yêu cầu bổ sung', 4_000);
+    const budgetAmount = optionalAmount(submission.budgetAmount ?? current.budgetAmount, 'Dự toán kinh phí');
+    const pdfOnly = (current.approvalFormFields || []).some(field => field.fieldName === 'attachments' && String(field.type).toLowerCase().includes('pdf'));
+    const newAttachments = await normalizeWorkflowAttachments(submission.attachments ?? [], actor, { pdfOnly });
+    const attachments = [...(Array.isArray(current.attachments) ? current.attachments : []), ...newAttachments];
+    if (attachments.length > 20 || new Set(attachments.map(file => file.fileNodeId)).size !== attachments.length) {
+      throw new HttpError(422, 'Tệp bổ sung bị trùng hoặc tổng số tệp vượt quá 20.');
+    }
+    const formData = normalizeWorkflowFormData(
+      current.approvalFormFields || [],
+      { ...(current.formData || {}), ...(submission.formData || {}) },
+      attachments,
+    );
+    const timestamp = now();
+    const eventPayload = {
+      requestCode: current.code,
+      workflowCode: current.workflowCode,
+      txCode: `WF-TX-${randomUUID()}`,
+      level: Number(current.currentLevel),
+      approverId: actor.id,
+      approver: actor.name,
+      approverRole: actor.role,
+      decision: 'Đã nộp bổ sung',
+      timestamp,
+      comments: response,
+      previousHash: current.approvalHistory?.at(-1)?.sha256Hash || '',
+    };
+    const sha256Hash = createHash('sha256').update(JSON.stringify(eventPayload)).digest('hex');
+    Object.assign(record, current, {
+      summaryDetails,
+      budgetAmount,
+      formData,
+      attachments,
+      status: 'Chờ bạn ký duyệt',
+      currentLevel: Number(current.currentLevel),
+      roleRequirement: current.roleRequirement,
+      updatedAt: timestamp,
+      updatedBy: actor.id,
+      resubmittedAt: timestamp,
+      resubmittedBy: actor.id,
+      resubmissionNote: response,
+      lastDecision: 'Đã nộp bổ sung',
+      slaDeadlineAt: new Date(Date.now() + Number(current.slaHoursTarget || 4) * 60 * 60 * 1000).toISOString(),
+      slaHoursLeft: Number(current.slaHoursTarget || 4),
+      approvalHistory: [
+        ...(Array.isArray(current.approvalHistory) ? current.approvalHistory : []),
+        {
+          ...eventPayload,
+          hashPayload: eventPayload,
+          sha256Hash,
+          certificateProvider: 'Không áp dụng',
+          certificateSerial: '',
+          validityStatus: 'Không áp dụng',
+          attachmentCount: attachments.length,
+          budgetAmount,
+          workflowName: current.workflowName,
+          category: current.category,
+          actorType: 'requester',
+        },
+      ],
+    });
+    record.slaDeadline = record.slaDeadlineAt;
+    delete record.resubmission;
+    const recordKey = requiredText(current.key ?? current.code, 'Khóa hồ sơ', 160);
+    const serialized = JSON.stringify(record);
+    if (serialized.length > 128 * 1024) throw new HttpError(422, 'Bản ghi vượt quá dung lượng cho phép.');
+    return { recordKey, record, serialized };
+  }
   if (scope === 'hr_employee_history') {
     record.employeeId = requiredText(record.employeeId, 'Nhân viên', 160);
     const employee = await getUserById(record.employeeId);
@@ -1508,6 +2597,300 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.remainingBudget = record.allocatedBudget - record.actualSpent;
     record.utilizationRate = Math.round(record.actualSpent / record.allocatedBudget * 1000) / 10;
     record.status = record.utilizationRate > 100 ? 'Vượt ngân sách' : record.utilizationRate > 80 ? 'Cảnh báo hạn mức' : 'Trong hạn mức';
+  }
+  if (scope === 'workflow_requests') {
+    const pending = 'Chờ bạn ký duyệt';
+    record.code = requiredText(record.code, 'Mã hồ sơ', 160);
+    record.workflowCode = requiredText(record.workflowCode, 'Mã quy trình', 80);
+    record.workflowName = requiredText(record.workflowName, 'Tiêu đề hồ sơ', 240);
+    record.category = oneOf(record.category, 'Phân loại', ['Mua sắm & Tài sản', 'Tài chính & Thanh toán', 'Hợp đồng & Pháp chế', 'Nhân sự & Phúc lợi', 'Văn phòng & Hành chính', 'Vận hành Kỹ thuật & IDC']);
+    record.department = requiredText(record.department, 'Phòng ban', 160);
+    record.summaryDetails = requiredText(record.summaryDetails, 'Nội dung hồ sơ', 8_000);
+    record.budgetAmount = optionalAmount(record.budgetAmount, 'Dự toán kinh phí');
+    record.priority = oneOf(record.priority, 'Mức độ ưu tiên', ['Khẩn cấp (P1)', 'Cao (P2)', 'Bình thường (P3)']);
+    const blueprintRow = current ? null : await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_blueprints' AND LOWER(json_extract(payload_json, '$.workflowCode')) = LOWER(?) LIMIT 1").get(record.workflowCode);
+    const blueprint = blueprintRow ? parseJsonObject(blueprintRow.payload_json) : null;
+    if (blueprint && blueprint.status !== 'Đang áp dụng') throw new HttpError(422, 'Quy trình đã tạm ngưng hoặc chưa được kích hoạt.');
+    if (blueprint) {
+      record.category = blueprint.category;
+      if (blueprint.applicableBudgetLimit > 0 && record.budgetAmount > blueprint.applicableBudgetLimit) throw new HttpError(422, 'Dự toán vượt hạn mức của quy trình.');
+    }
+    record.approvalFormFields = Array.isArray(current?.approvalFormFields)
+      ? current.approvalFormFields
+      : Array.isArray(blueprint?.formFields) ? blueprint.formFields : [];
+    if (!current) {
+      const pdfOnly = record.approvalFormFields.some(field => field.fieldName === 'attachments' && String(field.type).toLowerCase().includes('pdf'));
+      record.attachments = await normalizeWorkflowAttachments(record.attachments || [], actor, { pdfOnly });
+      record.formData = normalizeWorkflowFormData(record.approvalFormFields, record.formData || {}, record.attachments);
+    } else {
+      record.attachments = Array.isArray(current.attachments) ? current.attachments : [];
+      record.formData = current.formData && typeof current.formData === 'object' ? current.formData : {};
+    }
+    let slaHours = record.priority === 'Khẩn cấp (P1)' ? 2 : record.priority === 'Cao (P2)' ? 4 : 8;
+    const timestamp = now();
+    const currentLevel = current ? Number(current.currentLevel) : 1;
+    let budgetTier = null;
+    if (!current) {
+      const tiers = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_settings'").all();
+      budgetTier = tiers.map(row => parseJsonObject(row.payload_json)).find(tier => tier.status === 'Kích hoạt' && record.budgetAmount >= Number(tier.minAmount) && record.budgetAmount <= Number(tier.maxAmount)) || null;
+    }
+    const configuredTierSteps = budgetTier
+      ? Number(/^\s*(\d+)/.exec(String(budgetTier.requiredLevels || ''))?.[1]) || String(budgetTier.requiredLevels || '').split(/➔|→|->/).map(value => value.trim()).filter(Boolean).length
+      : 0;
+    const blueprintSteps = Number(blueprint?.approvalFlow?.length || 0);
+    const totalLevels = current ? Number(current.totalLevels) : blueprint
+      ? Math.max(blueprintSteps, configuredTierSteps)
+      : Math.max(1, configuredTierSteps, Number(record.totalLevels || 1));
+    if (!Number.isInteger(totalLevels) || totalLevels < 1 || totalLevels > 10 || !Number.isInteger(currentLevel) || currentLevel < 1 || currentLevel > totalLevels) {
+      throw new HttpError(422, 'Số cấp phê duyệt không hợp lệ.');
+    }
+    record.totalLevels = totalLevels;
+    record.currentLevel = currentLevel;
+    const configuredStepNames = blueprint?.approvalFlow?.map(step => String(step.roleName || '').trim())
+      || String(budgetTier?.requiredLevels || '').split(/➔|→|->/).map(value => value.replace(/^\s*\d+\s*Cấp:\s*/i, '').trim()).filter(Boolean);
+    record.approvalSteps = Array.isArray(current?.approvalSteps) ? [...current.approvalSteps] : Array.from({ length: totalLevels }, (_, index) => configuredStepNames[index] || `Cấp ${index + 1}`);
+    record.approvalAssignees = Array.isArray(current?.approvalAssignees)
+      ? [...current.approvalAssignees]
+      : Array.from({ length: totalLevels }, (_, index) => {
+          const step = blueprint?.approvalFlow?.[index];
+          return step?.approverId ? { userId: step.approverId, name: step.defaultApprover } : null;
+        });
+    record.approvalSlaHours = Array.isArray(current?.approvalSlaHours)
+      ? [...current.approvalSlaHours]
+      : Array.from({ length: totalLevels }, (_, index) => Math.min(
+          slaHours,
+          Number(budgetTier?.slaHours || slaHours),
+          Number(blueprint?.approvalFlow?.[index]?.slaHours || slaHours),
+        ));
+    record.approvalCanRejectLevels = Array.isArray(current?.approvalCanRejectLevels)
+      ? [...current.approvalCanRejectLevels]
+      : Array.from({ length: totalLevels }, (_, index) => blueprint?.approvalFlow?.[index]?.canReject !== false);
+    record.approvalPKILevels = Array.isArray(current?.approvalPKILevels)
+      ? [...current.approvalPKILevels]
+      : Array.from({ length: totalLevels }, (_, index) => Boolean(budgetTier?.requirePKI || blueprint?.approvalFlow?.[index]?.requireTokenPKI));
+    record.requester = current?.requester || actor.name;
+    record.requesterId = current?.requesterId || actor.id;
+    record.submittedAt = current?.submittedAt || timestamp;
+    record.createdAt = current?.createdAt || timestamp;
+    record.createdBy = current?.createdBy || actor.id;
+    record.updatedAt = timestamp;
+    record.updatedBy = actor.id;
+    record.approvalHistory = Array.isArray(current?.approvalHistory) ? [...current.approvalHistory] : [];
+    record.roleRequirement = record.approvalSteps[currentLevel - 1] || `Cấp ${currentLevel}`;
+    record.currentApproverId = record.approvalAssignees[currentLevel - 1]?.userId || '';
+    record.currentApprover = record.approvalAssignees[currentLevel - 1]?.name || '';
+      record.tokenRequired = Boolean(record.approvalPKILevels[currentLevel - 1]);
+      record.slaHoursTarget = current?.slaHoursTarget || Number(record.approvalSlaHours[currentLevel - 1] || slaHours);
+    delete record.digitalSignatureInfo;
+
+    if (!current) {
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'workflow_requests' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) LIMIT 1").get(record.code);
+      if (duplicate) throw new HttpError(409, 'Mã hồ sơ đã tồn tại.');
+      record.status = pending;
+      record.slaDeadlineAt = new Date(Date.now() + Number(record.slaHoursTarget || slaHours) * 60 * 60 * 1000).toISOString();
+      record.slaDeadline = record.slaDeadlineAt;
+      record.slaHoursLeft = Number(record.slaHoursTarget || slaHours);
+      record.approvalHistory = [];
+      delete record.approvalNotes;
+      delete record.decision;
+    } else {
+      if (current.status !== pending) throw new HttpError(422, 'Hồ sơ đã kết thúc hoặc đang chờ người gửi bổ sung.');
+      if (!workflowDecisionAccess(actor, current, await workflowDelegationRows()).allowed) {
+        throw new HttpError(403, 'Chỉ người được giao phê duyệt hoặc người được ủy quyền đang hiệu lực mới được xử lý hồ sơ.');
+      }
+      const decision = oneOf(record.decision, 'Quyết định', ['Đã phê duyệt', 'Từ chối', 'Yêu cầu bổ sung']);
+      if (decision !== 'Đã phê duyệt' && current.approvalCanRejectLevels?.[currentLevel - 1] === false) {
+        throw new HttpError(422, 'Cấp phê duyệt này chỉ được phê duyệt, không được từ chối hoặc yêu cầu bổ sung.');
+      }
+      if (decision === 'Đã phê duyệt' && current.tokenRequired) throw new HttpError(409, 'Tầng ngân sách này bắt buộc ký CA; nhà cung cấp ký số chưa được tích hợp.');
+      const comments = optionalText(record.approvalNote, 'Ý kiến xử lý', 4_000);
+      if (decision !== 'Đã phê duyệt' && !comments) throw new HttpError(422, 'Cần ghi lý do khi từ chối hoặc yêu cầu bổ sung.');
+      const eventPayload = {
+        requestCode: record.code,
+        workflowCode: record.workflowCode,
+        txCode: `WF-TX-${randomUUID()}`,
+        level: currentLevel,
+        approverId: actor.id,
+        approver: actor.name,
+        approverRole: actor.role,
+        decision,
+        timestamp,
+        comments,
+        previousHash: record.approvalHistory.at(-1)?.sha256Hash || '',
+      };
+      const sha256Hash = createHash('sha256').update(JSON.stringify(eventPayload)).digest('hex');
+      record.approvalHistory.push({
+        ...eventPayload,
+        hashPayload: eventPayload,
+        sha256Hash,
+        certificateProvider: 'Chữ ký nội bộ',
+        certificateSerial: '',
+        validityStatus: 'Chưa kiểm tra',
+        attachmentCount: record.attachments.length,
+        budgetAmount: record.budgetAmount,
+        workflowName: record.workflowName,
+        category: record.category,
+      });
+      record.lastDecision = decision;
+      record.approvalNotes = comments;
+      if (decision === 'Đã phê duyệt') {
+        record.currentLevel = currentLevel >= totalLevels ? totalLevels : currentLevel + 1;
+        record.roleRequirement = record.approvalSteps[record.currentLevel - 1] || `Cấp ${record.currentLevel}`;
+        record.currentApproverId = record.approvalAssignees[record.currentLevel - 1]?.userId || '';
+        record.currentApprover = record.approvalAssignees[record.currentLevel - 1]?.name || '';
+        record.tokenRequired = Boolean(record.approvalPKILevels[record.currentLevel - 1]);
+        record.slaHoursTarget = Number(record.approvalSlaHours[record.currentLevel - 1] || slaHours);
+        record.status = currentLevel >= totalLevels ? 'Đã phê duyệt' : pending;
+        if (record.status === pending) {
+          record.slaDeadlineAt = new Date(Date.now() + Number(record.slaHoursTarget || slaHours) * 60 * 60 * 1000).toISOString();
+          record.slaDeadline = record.slaDeadlineAt;
+          record.slaHoursLeft = Number(record.slaHoursTarget || slaHours);
+        } else record.slaHoursLeft = 0;
+      } else {
+        record.status = decision === 'Từ chối' ? 'Đã từ chối' : 'Yêu cầu bổ sung';
+        record.slaHoursLeft = 0;
+      }
+      delete record.decision;
+      delete record.approvalNote;
+    }
+  }
+  if (scope === 'workflow_blueprints') {
+    record.workflowCode = requiredText(record.workflowCode, 'Mã quy trình', 80).toUpperCase();
+    record.workflowName = requiredText(record.workflowName, 'Tên quy trình', 240);
+    record.category = oneOf(record.category, 'Phân loại', ['Mua sắm & Tài sản', 'Tài chính & Thanh toán', 'Hợp đồng & Pháp chế', 'Nhân sự & Phúc lợi', 'Văn phòng & Hành chính', 'Vận hành Kỹ thuật & IDC']);
+    record.description = optionalText(record.description, 'Mô tả', 4_000);
+    record.scope = requiredText(record.scope, 'Phạm vi áp dụng', 160);
+    const totalSteps = Number(record.totalSteps);
+    if (!Number.isInteger(totalSteps) || totalSteps < 1 || totalSteps > 10) throw new HttpError(422, 'Số cấp phê duyệt phải từ 1 đến 10.');
+    record.totalSteps = totalSteps;
+    record.slaTargetHours = requiredAmount(record.slaTargetHours, 'SLA mục tiêu');
+    record.applicableBudgetLimit = optionalAmount(record.applicableBudgetLimit, 'Hạn mức áp dụng');
+    record.status = oneOf(record.status || 'Bản nháp', 'Trạng thái quy trình', ['Đang áp dụng', 'Bản nháp', 'Tạm ngưng']);
+    if (!Array.isArray(record.approvalFlow) || record.approvalFlow.length !== totalSteps) throw new HttpError(422, 'Sơ đồ phê duyệt phải có đủ số cấp đã khai báo.');
+    record.approvalFlow = await Promise.all(record.approvalFlow.map(async (step, index) => {
+      if (!step || typeof step !== 'object' || Array.isArray(step)) throw new HttpError(422, 'Cấu hình cấp phê duyệt không hợp lệ.');
+      const approverId = optionalText(step.approverId, 'Người phê duyệt', 160);
+      const approver = approverId ? await getUserById(approverId) : null;
+      if (approverId && !approver?.is_active) throw new HttpError(422, `Người phê duyệt cấp ${index + 1} không tồn tại hoặc đã ngừng hoạt động.`);
+      return {
+        level: index + 1,
+        roleName: requiredText(step.roleName, 'Vai trò phê duyệt', 160),
+        defaultApprover: approver?.name || requiredText(step.defaultApprover, 'Người nhận mặc định', 160),
+        ...(approver ? { approverId: approver.id } : {}),
+        slaHours: requiredAmount(step.slaHours, 'SLA cấp phê duyệt'),
+        canReject: step.canReject !== false,
+        requireTokenPKI: Boolean(step.requireTokenPKI),
+      };
+    }));
+    if (!Array.isArray(record.formFields) || record.formFields.length > 40) throw new HttpError(422, 'Danh sách trường biểu mẫu không hợp lệ.');
+    const fieldNames = new Set();
+    const reservedFieldNames = new Set(['key', 'code', 'workflowcode', 'workflowname', 'category', 'department', 'priority', 'budgetamount', 'summarydetails', 'supplementalresponse', 'constructor', 'prototype', 'tostring', 'hasownproperty']);
+    record.formFields = record.formFields.map((field) => {
+      if (!field || typeof field !== 'object' || Array.isArray(field)) throw new HttpError(422, 'Trường biểu mẫu không hợp lệ.');
+      const fieldName = requiredText(field.fieldName, 'Mã trường biểu mẫu', 80);
+      const normalizedName = fieldName.toLowerCase();
+      if (!/^[a-z][a-zA-Z0-9_]{0,79}$/.test(fieldName) || fieldNames.has(normalizedName) || (reservedFieldNames.has(normalizedName) && !['title', 'content', 'attachments'].includes(fieldName))) {
+        throw new HttpError(422, 'Mã trường biểu mẫu không hợp lệ, bị trùng hoặc dành riêng cho hệ thống.');
+      }
+      fieldNames.add(normalizedName);
+      return {
+        fieldName,
+        label: requiredText(field.label, 'Tên trường biểu mẫu', 160),
+        type: requiredText(field.type, 'Kiểu trường biểu mẫu', 80),
+        required: Boolean(field.required),
+      };
+    });
+    record.version = requiredText(record.version || current?.version || 'v1.0', 'Phiên bản', 32);
+    record.createdAt = current?.createdAt || now();
+    record.createdBy = current?.createdBy || actor.name;
+    record.updatedAt = now();
+    record.updatedBy = actor.name;
+    const requests = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_requests'").all();
+    const linked = requests.map(row => parseJsonObject(row.payload_json)).filter(item => item.workflowCode === record.workflowCode);
+    const completed = linked.filter(item => ['Đã phê duyệt', 'Đã ký số phê duyệt'].includes(item.status)).length;
+    const closed = completed + linked.filter(item => item.status === 'Đã từ chối').length;
+    record.activeInstancesCount = linked.filter(item => ['Chờ bạn ký duyệt', 'Yêu cầu bổ sung'].includes(item.status)).length;
+    record.totalCompletedCount = completed;
+    record.passRate = closed ? Math.round(completed / closed * 10_000) / 100 : 0;
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'workflow_blueprints' AND LOWER(json_extract(payload_json, '$.workflowCode')) = LOWER(?) AND record_key <> ? LIMIT 1").get(record.workflowCode, current?.key || record.workflowCode);
+    if (duplicate) throw new HttpError(409, 'Mã quy trình đã tồn tại.');
+  }
+  if (scope === 'workflow_settings') {
+    record.tierName = requiredText(record.tierName, 'Tên phân cấp', 160);
+    record.minAmount = optionalAmount(record.minAmount, 'Số tiền tối thiểu');
+    record.maxAmount = requiredAmount(record.maxAmount, 'Số tiền tối đa');
+    if (record.minAmount >= record.maxAmount) throw new HttpError(422, 'Mức tối đa phải lớn hơn mức tối thiểu.');
+    record.requiredLevels = requiredText(record.requiredLevels, 'Luồng phê duyệt', 500);
+    record.slaHours = requiredAmount(record.slaHours, 'SLA');
+    record.autoEscalateHours = requiredAmount(record.autoEscalateHours, 'Thời gian leo thang');
+    if (record.slaHours > 72 || record.autoEscalateHours > 72) throw new HttpError(422, 'SLA và thời gian leo thang không được vượt quá 72 giờ.');
+    record.requirePKI = Boolean(record.requirePKI);
+    record.status = oneOf(record.status || 'Kích hoạt', 'Trạng thái tầng hạn mức', ['Kích hoạt', 'Tạm dừng']);
+    record.createdAt = current?.createdAt || now();
+    record.createdBy = current?.createdBy || actor.name;
+    record.updatedAt = now();
+    record.updatedBy = actor.name;
+    if (record.status === 'Kích hoạt') {
+      const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'workflow_settings'").all();
+      for (const row of rows) {
+        if (row.record_key === current?.key) continue;
+        const tier = parseJsonObject(row.payload_json);
+        if (tier.status === 'Kích hoạt' && record.minAmount <= Number(tier.maxAmount) && record.maxAmount >= Number(tier.minAmount)) {
+          throw new HttpError(409, 'Khoảng ngân sách bị trùng với một tầng đang kích hoạt.');
+        }
+      }
+    }
+  }
+  if (scope === 'workflow_delegations') {
+    record.delegatorId = requiredText(record.delegatorId, 'Người ủy quyền', 160);
+    record.delegateeId = requiredText(record.delegateeId, 'Người nhận ủy quyền', 160);
+    if (record.delegatorId === record.delegateeId) throw new HttpError(422, 'Người ủy quyền và người nhận phải khác nhau.');
+    const [delegator, delegatee] = await Promise.all([getUserById(record.delegatorId), getUserById(record.delegateeId)]);
+    if (!delegator?.is_active || !delegatee?.is_active) throw new HttpError(422, 'Cả hai tài khoản phải đang hoạt động.');
+    const delegatorProfile = await employeeProfileRowByUserId(delegator.id);
+    const delegateeProfile = await employeeProfileRowByUserId(delegatee.id);
+    record.delegator = delegator.name;
+    record.delegatorRole = delegatorProfile?.position || delegator.role;
+    record.delegatee = delegatee.name;
+    record.delegateeRole = delegateeProfile?.position || delegatee.role;
+    record.fromDate = requiredIsoDate(record.fromDate, 'Ngày bắt đầu ủy quyền');
+    record.toDate = requiredIsoDate(record.toDate, 'Ngày kết thúc ủy quyền');
+    if (record.toDate < record.fromDate) throw new HttpError(422, 'Ngày kết thúc phải từ ngày bắt đầu trở đi.');
+    record.scope = requiredText(record.scope, 'Phạm vi ủy quyền', 500);
+    record.maxBudgetAmount = optionalAmount(record.maxBudgetAmount, 'Hạn mức được ủy quyền');
+    record.reason = requiredText(record.reason, 'Lý do ủy quyền', 2_000);
+    record.notifySlack = Boolean(record.notifySlack);
+    if (record.notifySlack) throw new HttpError(409, 'Thông báo Slack chưa được tích hợp.');
+    const today = new Date().toISOString().slice(0, 10);
+    record.status = today < record.fromDate ? 'Sắp tới' : today <= record.toDate ? 'Đang hiệu lực' : 'Đã hết hạn';
+    record.createdAt = current?.createdAt || now();
+    record.createdBy = current?.createdBy || actor.name;
+    record.updatedAt = now();
+    record.updatedBy = actor.name;
+  }
+  if (scope === 'workflow_security_settings') {
+    const recordKey = 'security';
+    const storedRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_security_settings' AND record_key = ?").get(recordKey);
+    const stored = storedRow ? parseJsonObject(storedRow.payload_json) : {};
+    const suppliedWebhook = optionalText(record.slackWebhook, 'Webhook Slack', 2_000);
+    if (suppliedWebhook && (!/^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_/-]+$/.test(suppliedWebhook))) {
+      throw new HttpError(422, 'Webhook Slack không hợp lệ.');
+    }
+    record.key = recordKey;
+    record.caProvider = oneOf(record.caProvider || 'not_configured', 'Nhà cung cấp CA', ['not_configured', 'viettel_ca', 'vnpt_ca', 'fpt_ca']);
+    record.encryptionStandard = oneOf(record.encryptionStandard || 'rsa_2048', 'Chuẩn mã hóa', ['rsa_2048', 'rsa_4096', 'ecdsa_p256']);
+    record.sessionTimeout = requiredAmount(record.sessionTimeout, 'Thời gian khóa phiên');
+    if (record.sessionTimeout < 5 || record.sessionTimeout > 60) throw new HttpError(422, 'Thời gian khóa phiên phải từ 5 đến 60 phút.');
+    record.autoEscalate = oneOf(record.autoEscalate || 'no', 'Tự động leo thang', ['yes', 'no']);
+    record.requireOtpForLargeBudget = oneOf(record.requireOtpForLargeBudget || 'no', 'Yêu cầu OTP', ['yes', 'no']);
+    record.dailyDigestTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(record.dailyDigestTime || '')) ? record.dailyDigestTime : '08:00';
+    record.slackWebhookEncrypted = suppliedWebhook ? encryptSetting(suppliedWebhook) : stored.slackWebhookEncrypted || '';
+    record.slackWebhookConfigured = Boolean(record.slackWebhookEncrypted);
+    delete record.slackWebhook;
+    record.createdAt = stored.createdAt || now();
+    record.createdBy = stored.createdBy || actor.name;
+    record.updatedAt = now();
+    record.updatedBy = actor.name;
   }
   const candidate = record.key ?? record.id ?? record.code;
   const recordKey = candidate === undefined || candidate === null || String(candidate).trim() === ''
@@ -1870,6 +3253,11 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
 
 function publicCollectionRecord(row) {
   const record = serializeCollectionRecord(row);
+  if (record && row.scope === 'workflow_security_settings') {
+    record.slackWebhookConfigured = Boolean(record.slackWebhookEncrypted);
+    delete record.slackWebhookEncrypted;
+    record.slackWebhook = '';
+  }
   if (record && row.scope === 'employee_timesheets') return { ...record, employeeId: row.owner_id };
   return record;
 }
@@ -1879,6 +3267,25 @@ async function recordAuditEvent(actorId, action, scope, resourceId = '', details
   await db.prepare(`INSERT INTO audit_events (id, actor_id, action, resource_scope, resource_id, details_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(randomUUID(), actorId || null, requiredText(action, 'Hành động', 120), normalizeCollectionScope(scope), String(resourceId || '').slice(0, 160), serialized.slice(0, 8_192), now());
+}
+
+function loyaltyBalances(entries) {
+  const balances = new Map();
+  for (const entry of entries) {
+    if (!Number.isSafeInteger(entry.delta)) throw new HttpError(500, 'Sổ điểm chứa dữ liệu không hợp lệ.');
+    const balance = (balances.get(entry.customerId) || 0n) + BigInt(entry.delta);
+    balances.set(entry.customerId, balance);
+  }
+  for (const [customerId, balance] of balances) {
+    if (balance < 0n || balance > BigInt(Number.MAX_SAFE_INTEGER)) throw new HttpError(500, 'Số dư điểm không hợp lệ.');
+    balances.set(customerId, Number(balance));
+  }
+  return balances;
+}
+
+async function loyaltyEntries() {
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'crm_loyalty_ledger' ORDER BY created_at DESC, record_key DESC").all();
+  return rows.map(publicCollectionRecord).filter(Boolean);
 }
 
 function validateCashTransaction(input) {
@@ -2846,6 +4253,156 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
+async function runAssetDepreciationBatch(request) {
+  const actor = await requireAdmin(request);
+  const payload = await readJson(request, 4 * 1024 * 1024);
+  const period = requiredText(payload.period, 'Kỳ khấu hao', 7);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new HttpError(422, 'Kỳ khấu hao phải theo định dạng YYYY-MM.');
+  const businessDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  if (period !== businessDate.slice(0, 7)) throw new HttpError(422, 'Chỉ được ghi khấu hao cho kỳ hiện tại.');
+  if (!Array.isArray(payload.entries) || payload.entries.length < 1 || payload.entries.length > 500) {
+    throw new HttpError(422, 'Danh sách tài sản khấu hao không hợp lệ.');
+  }
+  const depreciationKeys = payload.entries.map((entry) => requiredText(entry?.depreciationKey, 'Hồ sơ khấu hao', 160));
+  if (new Set(depreciationKeys).size !== depreciationKeys.length) throw new HttpError(422, 'Một tài sản không thể xuất hiện nhiều lần trong cùng kỳ.');
+  const timestamp = now();
+  const updated = [];
+  let totalAmount = 0;
+  await db.transaction(async () => {
+    if (db.pool) {
+      for (const scope of ['asset_depreciations', 'asset_items', 'finance_general_ledger']) {
+        await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+      }
+    }
+    for (const entry of payload.entries) {
+      const depreciationRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_depreciations' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(entry.depreciationKey);
+      const depreciation = publicCollectionRecord(depreciationRow);
+      if (!depreciation) throw new HttpError(404, `Không tìm thấy hồ sơ khấu hao ${entry.depreciationKey}.`);
+      if (depreciation.status !== 'Đang trích khấu hao') throw new HttpError(422, `Tài sản ${depreciation.assetCode} không ở trạng thái có thể ghi khấu hao.`);
+      const assetRows = depreciation.assetKey
+        ? [await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(depreciation.assetKey)].filter(Boolean)
+        : await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) ORDER BY updated_at DESC").all(depreciation.assetCode);
+      if (assetRows.length !== 1) throw new HttpError(409, `Không xác định duy nhất tài sản gốc ${depreciation.assetCode}.`);
+      const assetRow = assetRows[0];
+      const asset = publicCollectionRecord(assetRow);
+      if (!asset || !['Đang sử dụng', 'Trong kho', 'Đang sửa chữa'].includes(asset.status)) {
+        throw new HttpError(422, `Tài sản ${depreciation.assetCode} đã thanh lý hoặc đang chờ thanh lý.`);
+      }
+      const originalCost = optionalAmount(depreciation.originalCost, 'Nguyên giá khấu hao');
+      const residualValue = optionalAmount(depreciation.residualValue, 'Giá trị thu hồi');
+      const lifeMonths = Number(depreciation.lifeMonths);
+      const depreciatedMonths = Number(depreciation.depreciatedMonths || 0);
+      const method = oneOf(depreciation.depreciationMethod, 'Phương pháp khấu hao', ['Đường thẳng', 'Số dư giảm dần có điều chỉnh', 'Theo sản lượng / Công suất']);
+      const inventoryCost = optionalAmount(asset.originalPrice, 'Nguyên giá danh mục');
+      const inventoryAccumulated = optionalAmount(asset.accumulatedDepreciation, 'Hao mòn lũy kế danh mục');
+      if (inventoryCost !== originalCost || inventoryAccumulated !== Number(depreciation.accumulatedDeprec || 0)) {
+        throw new HttpError(409, `Số dư danh mục tài sản ${depreciation.assetCode} đã thay đổi; cần đối chiếu trước khi ghi kỳ.`);
+      }
+      const expectedBookValue = originalCost - inventoryAccumulated;
+      if (asset.netBookValue !== undefined && optionalAmount(asset.netBookValue, 'Giá trị còn lại danh mục') !== expectedBookValue) {
+        throw new HttpError(409, `Giá trị còn lại của ${depreciation.assetCode} không khớp sổ khấu hao.`);
+      }
+      const index = depreciatedMonths;
+      const previousProduction = depreciation.productionByPeriod || {};
+      if (String(depreciation.lastRunDate || '').slice(0, 7) === period || Object.hasOwn(previousProduction, period)) {
+        throw new HttpError(409, `Tài sản ${depreciation.assetCode} đã ghi nhận kỳ ${period}.`);
+      }
+      const beforeSchedule = buildAssetDepreciationSchedule({
+        originalCost, residualValue, lifeMonths, startDate: depreciation.startDate, depreciatedMonths: index,
+        method, productionCapacity: depreciation.productionCapacity, productionByPeriod: previousProduction,
+      });
+      const openingAccumulated = index > 0 ? beforeSchedule[index - 1]?.accumulatedAmount : 0;
+      if (Math.abs(Number(openingAccumulated || 0) - Number(depreciation.accumulatedDeprec || 0)) > 1) {
+        throw new HttpError(409, `Số lũy kế đã lưu của ${depreciation.assetCode} không khớp lịch.`);
+      }
+      const currentRow = beforeSchedule[index];
+      if (!currentRow || currentRow.period !== period) {
+        throw new HttpError(422, `Tài sản ${depreciation.assetCode} chưa đến kỳ khấu hao.`);
+      }
+      const productionByPeriod = { ...previousProduction };
+      let productionUnits;
+      if (method === 'Theo sản lượng / Công suất') {
+        productionUnits = requiredAmount(entry.productionUnits, 'Sản lượng kỳ');
+        const used = Object.values(previousProduction).reduce((sum, quantity) => sum + Number(quantity || 0), 0);
+        if (used + productionUnits > Number(depreciation.productionCapacity)) throw new HttpError(422, `Sản lượng vượt công suất còn lại của ${depreciation.assetCode}.`);
+        productionByPeriod[period] = productionUnits;
+      } else if (entry.productionUnits !== undefined) {
+        throw new HttpError(422, 'Không nhận sản lượng cho phương pháp khấu hao theo thời gian.');
+      }
+      const schedule = buildAssetDepreciationSchedule({
+        originalCost, residualValue, lifeMonths, startDate: depreciation.startDate, depreciatedMonths: index,
+        method, productionCapacity: depreciation.productionCapacity, productionByPeriod,
+      });
+      const currentRowWithProduction = schedule[index];
+      const amount = requiredAmount(entry.amount, 'Số khấu hao kỳ');
+      if (currentRowWithProduction.monthlyAmount <= 0 || amount !== currentRowWithProduction.monthlyAmount || currentRowWithProduction.period !== period) {
+        throw new HttpError(422, `Số khấu hao ${depreciation.assetCode} không khớp phương pháp và dữ liệu kỳ.`);
+      }
+      const nextMonths = index + 1;
+      const nextSchedule = buildAssetDepreciationSchedule({
+        originalCost, residualValue, lifeMonths, startDate: depreciation.startDate, depreciatedMonths: nextMonths,
+        method, productionCapacity: depreciation.productionCapacity, productionByPeriod,
+      });
+      const finished = nextMonths >= lifeMonths || currentRowWithProduction.remainingAmount <= residualValue;
+      const sourceReference = `asset-depreciation:${period}:${depreciation.key}`;
+      const existingEntry = await db.prepare(`SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger'
+        AND (record_key = ? OR json_extract(payload_json, '$.sourceReference') = ?) LIMIT 1`).get(sourceReference, sourceReference);
+      if (existingEntry) throw new HttpError(409, `Bút toán khấu hao ${depreciation.assetCode} kỳ ${period} đã tồn tại.`);
+      const nextDepreciation = {
+        ...depreciation,
+        assetKey: asset.key,
+        productionByPeriod,
+        depreciatedMonths: nextMonths,
+        monthlyDeprec: nextSchedule[nextMonths]?.monthlyAmount ?? currentRowWithProduction.monthlyAmount,
+        yearlyDeprec: nextSchedule.filter((row) => row.period.startsWith(`${period.slice(0, 4)}-`)).reduce((sum, row) => sum + row.monthlyAmount, 0),
+        accumulatedDeprec: currentRowWithProduction.accumulatedAmount,
+        netBookValue: currentRowWithProduction.remainingAmount,
+        lastRunDate: businessDate,
+        status: finished ? 'Đã trích hết 100%' : 'Đang trích khấu hao',
+        scheduleList: nextSchedule,
+      };
+      const nextAsset = {
+        ...asset,
+        accumulatedDepreciation: currentRowWithProduction.accumulatedAmount,
+        netBookValue: currentRowWithProduction.remainingAmount,
+        history: [...(Array.isArray(asset.history) ? asset.history : []), {
+          key: randomUUID(), date: businessDate, action: 'Ghi nhận khấu hao tài sản', actor: actor.name,
+          note: `Kỳ ${period} · ${depreciation.assetCode} · ${amount.toLocaleString('vi-VN')} VNĐ`,
+        }],
+      };
+      const depreciationUpdate = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+        .run(JSON.stringify(nextDepreciation), timestamp, depreciationRow.id, depreciationRow.payload_json);
+      if (!depreciationUpdate.changes) throw new HttpError(409, `Hồ sơ khấu hao ${depreciation.assetCode} vừa được thay đổi.`);
+      const assetUpdate = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+        .run(JSON.stringify(nextAsset), timestamp, assetRow.id, assetRow.payload_json);
+      if (!assetUpdate.changes) throw new HttpError(409, `Danh mục tài sản ${depreciation.assetCode} vừa được thay đổi.`);
+      const accountCode = (value, prefix) => String(value || '').replace(new RegExp(`^${prefix}\\s*`, 'i'), '').split(' (')[0].trim();
+      const ledgerEntry = {
+        key: sourceReference,
+        voucherCode: `KH-${period.replace('-', '')}-${String(updated.length + 1).padStart(3, '0')}`,
+        entryDate: businessDate,
+        description: `Khấu hao ${depreciation.assetCode} - ${depreciation.assetName} kỳ ${period}`,
+        debitAccount: accountCode(depreciation.costAccount, 'Nợ'),
+        creditAccount: accountCode(depreciation.assetAccount, 'Có'),
+        amount,
+        author: actor.name,
+        status: 'Đã ghi sổ cái',
+        sourceModule: 'asset_depreciation',
+        sourceReference,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`)
+        .run(randomUUID(), sourceReference, actor.id, JSON.stringify(ledgerEntry), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'post_depreciation', 'asset_depreciations', depreciation.key, { period, assetKey: asset.key, amount, sourceReference });
+      totalAmount += amount;
+      updated.push(nextDepreciation);
+    }
+  });
+  return { period, count: updated.length, totalAmount, records: updated };
+}
+
 async function handleRequest(request, response) {
   allowOrigin(request, response);
   if (request.method === 'OPTIONS') {
@@ -2872,6 +4429,10 @@ async function handleRequest(request, response) {
   }
   if (resource.length > 1 && resource.endsWith('/')) {
     resource = resource.slice(0, -1);
+  }
+  if (resource === '/assets/depreciation-runs' && request.method === 'POST') {
+    sendJson(response, 200, await runAssetDepreciationBatch(request));
+    return;
   }
 
   if (request.method === 'POST' && resource === '/auth/login') {
@@ -3500,9 +5061,20 @@ async function handleRequest(request, response) {
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
 
   if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
+    && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'crm_loyalty_ledger') {
+    await requireAdmin(request);
+    throw new HttpError(409, 'Sổ điểm chỉ được cập nhật qua chức năng tích điểm và đổi thưởng.');
+  }
+
+  if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
     && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'finance_internal_transfers') {
     await requireAdmin(request);
     throw new HttpError(409, 'Lệnh điều chuyển phải được ghi hoặc hủy qua API điều chuyển để bảo toàn sổ quỹ.');
+  }
+  if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
+    && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'finance_payments') {
+    await requireUser(request);
+    throw new HttpError(409, 'Đề nghị thanh toán phải đi qua API quy trình để lưu đúng người lập, người duyệt và lịch sử xử lý.');
   }
   if ((collectionMatch || collectionRecordMatch) && !['GET', 'HEAD'].includes(request.method)
     && ['admin_sessions', 'admin_backups'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
@@ -3518,6 +5090,27 @@ async function handleRequest(request, response) {
     const query = String(url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 200);
     const sort = String(url.searchParams.get('sort') || '').trim();
     const order = url.searchParams.get('order') === 'asc' ? 'ASC' : 'DESC';
+    if (actor.role !== 'ADMIN' && scope === 'workflow_requests') {
+      const allRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'workflow_requests' ORDER BY updated_at DESC, record_key ASC").all();
+      const delegations = await workflowDelegationRows();
+      let visible = allRows.map((row) => {
+        const record = publicCollectionRecord(row);
+        const access = workflowDecisionAccess(actor, record, delegations);
+        return row.owner_id === actor.id || access.allowed ? { ...record, canDecide: access.allowed, delegatedFor: access.delegated ? record.currentApprover : '' } : null;
+      }).filter(Boolean);
+      if (query) visible = visible.filter((item) => JSON.stringify(item).toLowerCase().includes(query));
+      if (/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(sort)) {
+        visible.sort((left, right) => {
+          const a = left[sort]; const b = right[sort];
+          const compared = typeof a === 'number' && typeof b === 'number' ? a - b : String(a ?? '').localeCompare(String(b ?? ''), 'vi');
+          return order === 'ASC' ? compared : -compared;
+        });
+      }
+      const total = visible.length;
+      const data = visible.slice((page - 1) * limit, page * limit);
+      sendJson(response, 200, { data, pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) } });
+      return;
+    }
     const sortExpression = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(sort)
       ? `json_extract(payload_json, '$.${sort}')`
       : 'updated_at';
@@ -3533,11 +5126,14 @@ async function handleRequest(request, response) {
       'drop_menus',
       'system_broadcasts',
       'enterprise_settings',
+      'workflow_blueprints',
+      'meeting_rooms',
+      'room_bookings',
     ]);
     if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary') {
       where.push("(owner_id = ? OR json_extract(payload_json, '$.employeeId') = ?)");
       parameters.push(actor.id, actor.id);
-    } else if (actor.role !== 'ADMIN' && !SHARED_READ_SCOPES.has(scope) && !scope.startsWith('business_') && !scope.startsWith('dropdown_')) {
+    } else if (actor.role !== 'ADMIN' && !SHARED_READ_SCOPES.has(scope) && (scope === 'business_travels' || (!scope.startsWith('business_') && !scope.startsWith('dropdown_')))) {
       where.push('owner_id = ?');
       parameters.push(actor.id);
     }
@@ -3604,6 +5200,7 @@ async function handleRequest(request, response) {
     try {
       await db.transaction(async () => {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        if (scope === 'asset_disposals' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         item = await normalizeCollectionRecord(payload.record, scope, actor);
         if (['leave_requests', 'attendance_overtime', 'attendance_leave_summary'].includes(scope)) ownerId = item.record.employeeId;
         await db.prepare(`INSERT INTO collection_records
@@ -3636,24 +5233,215 @@ async function handleRequest(request, response) {
       'drop_menus',
       'system_broadcasts',
       'enterprise_settings',
+      'workflow_blueprints',
+      'meeting_rooms',
+      'room_bookings',
     ]);
     const isShared = actor.role === 'ADMIN' || (request.method === 'GET' && (SHARED_READ_SCOPES.has(scope) || scope.startsWith('business_') || scope.startsWith('dropdown_')));
-    const ownershipSql = isShared ? '' : ' AND owner_id = ?';
-    const ownershipParams = isShared ? [] : [actor.id];
+    const businessTravelOwnerRead = scope === 'business_travels' && request.method === 'GET' && actor.role !== 'ADMIN';
+    const sharedAccess = isShared && !businessTravelOwnerRead;
+    const workflowRequestAccess = scope === 'workflow_requests' && request.method !== 'DELETE' && actor.role !== 'ADMIN';
+    const ownershipSql = sharedAccess || workflowRequestAccess ? '' : ' AND owner_id = ?';
+    const ownershipParams = sharedAccess || workflowRequestAccess ? [] : [actor.id];
     const existing = await db.prepare(`SELECT * FROM collection_records WHERE scope = ? AND record_key = ?${ownershipSql} ORDER BY updated_at DESC LIMIT 1`)
       .get(scope, recordKey, ...ownershipParams);
     if (!existing) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+
+    if (scope === 'workflow_requests' && actor.role !== 'ADMIN') {
+      const current = publicCollectionRecord(existing);
+      const isOwner = existing.owner_id === actor.id;
+      if (request.method === 'DELETE' ? !isOwner : !isOwner && !await canDecideWorkflow(actor, current)) {
+        throw new HttpError(404, 'Không tìm thấy bản ghi.');
+      }
+    }
+
+    if (request.method === 'GET') {
+      const record = publicCollectionRecord(existing);
+      if (scope === 'workflow_requests' && actor.role !== 'ADMIN') {
+        const access = workflowDecisionAccess(actor, record, await workflowDelegationRows());
+        record.canDecide = access.allowed;
+        record.delegatedFor = access.delegated ? record.currentApprover : '';
+      }
+      sendJson(response, 200, { record });
+      return;
+    }
 
     if (request.method === 'PATCH') {
       const payload = await readJson(request, 256 * 1024);
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
+      if (scope === 'room_bookings') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        const current = publicCollectionRecord(existing);
+        if (fields.length !== 1 || fields[0] !== 'status' || patch.status !== 'Đã hủy') {
+          throw new HttpError(422, 'Lịch họp chỉ được cập nhật bằng thao tác hủy.');
+        }
+        if (current.status !== 'Đã xác nhận') throw new HttpError(409, 'Lịch họp đã được xử lý.');
+      }
+      if (scope === 'meeting_rooms') {
+        const fields = Object.keys(patch).filter(field => field !== 'key');
+        if (actor.role !== 'ADMIN' || fields.length !== 1 || fields[0] !== 'status') throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Phòng họp chỉ cho phép quản trị viên cập nhật trạng thái.');
+      }
+      if (scope === 'meeting_room_settings') {
+        if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
+        if (Object.keys(patch).some(field => !['maxDuration', 'maxAdvanceDays'].includes(field))) throw new HttpError(422, 'Chỉ được cập nhật giới hạn thời lượng và số ngày đặt trước.');
+        if (!Object.keys(patch).length) throw new HttpError(422, 'Chưa có thiết lập nào được thay đổi.');
+      }
+      if (scope === 'asset_depreciations') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        const current = publicCollectionRecord(existing);
+        const validToggle = fields.length === 1 && fields[0] === 'status'
+          && ((current.status === 'Đang trích khấu hao' && patch.status === 'Tạm dừng trích KH')
+            || (current.status === 'Tạm dừng trích KH' && patch.status === 'Đang trích khấu hao'));
+        if (!validToggle) throw new HttpError(422, 'Tiến độ khấu hao chỉ được ghi qua thao tác hạch toán theo kỳ.');
+      }
+      if (scope === 'crm_feedback') {
+        const fields = Object.keys(patch);
+        if (actor.role !== 'ADMIN' || fields.length !== 2 || !fields.includes('status') || !fields.includes('resolutionAction')) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Chỉ được đóng phản ánh bằng trạng thái và biện pháp xử lý.');
+        }
+      }
+      if (scope === 'crm_promotions') {
+        const editable = new Set([
+          'key', 'code', 'name', 'startDate', 'endDate', 'promotionType', 'target', 'enabled', 'allowConcurrent',
+          'eligibleItemCodes', 'amountBasis', 'orgUnitKeys', 'employeeIds', 'applyOnce', 'combinablePromotionKeys',
+          'taxCondition', 'minimumSubtotal', 'unitPrice', 'unit', 'customerKeys', 'discountKind', 'discountValue',
+        ]);
+        const unsupported = Object.keys(patch).filter((field) => !editable.has(field));
+        if (actor.role !== 'ADMIN' || unsupported.length || !Object.keys(patch).some((field) => field !== 'key')
+          || (patch.key !== undefined && patch.key !== recordKey)) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Chương trình chỉ được cập nhật bằng các trường cấu hình được phép.');
+        }
+      }
+      if (scope === 'asset_disposals') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        const allowed = new Set(['status', 'actualDisposalPrice', 'disposalCost', 'disposalDate', 'buyerName', 'buyerPhone', 'securityDataWipeCertified', 'dataWipeOfficer']);
+        const finalFields = new Set(['status', 'actualDisposalPrice', 'disposalCost', 'disposalDate', 'buyerName', 'buyerPhone', 'securityDataWipeCertified', 'dataWipeOfficer']);
+        const isApproval = fields.length === 1 && fields[0] === 'status' && patch.status === 'Đang thực hiện xử lý';
+        const isFinalization = fields.includes('status') && ['actualDisposalPrice', 'disposalCost', 'disposalDate'].every((field) => fields.includes(field))
+          && fields.every((field) => finalFields.has(field));
+        if (actor.role !== 'ADMIN' || (!isApproval && !isFinalization) || fields.some((field) => !allowed.has(field))) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Chỉ được phê duyệt hoặc hoàn tất thanh lý bằng các trường được phép.');
+        }
+      }
+      if (scope === 'asset_todos') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        const statusOnly = fields.length === 1 && fields[0] === 'status';
+        const checklistOnly = fields.length === 1 && fields[0] === 'checklist';
+        const completion = fields.length === 3 && ['status', 'actualHours', 'resolutionResult'].every((field) => fields.includes(field)) && patch.status === 'Đã hoàn thành';
+        if (actor.role !== 'ADMIN' || (!statusOnly && !checklistOnly && !completion)) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Nhiệm vụ chỉ được cập nhật trạng thái, checklist hoặc nghiệm thu bằng thao tác cho phép.');
+        }
+      }
+      if (scope === 'asset_maintenances') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        const isStart = fields.length === 1 && fields[0] === 'status' && patch.status === 'Đang tiến hành bảo dưỡng';
+        const isChecklist = fields.length === 1 && fields[0] === 'checklist';
+        const allowedCompletion = new Set(['status', 'performedDate', 'actualCost', 'healthScore', 'checklist', 'notes', 'certificateCode']);
+        const isCompletion = patch.status === 'Đã hoàn thành đúng lịch' && fields.includes('performedDate')
+          && fields.includes('actualCost') && fields.includes('healthScore') && fields.includes('checklist')
+          && fields.every((field) => allowedCompletion.has(field));
+        if (actor.role !== 'ADMIN' || (!isStart && !isChecklist && !isCompletion)) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Chỉ được bắt đầu, cập nhật checklist hoặc nghiệm thu theo đúng quy trình.');
+        }
+      }
+      if (scope === 'asset_systems') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        if (actor.role !== 'ADMIN' || fields.length !== 1 || fields[0] !== 'status') {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Cấu hình hệ thống chỉ cho phép đổi trạng thái bằng thao tác riêng.');
+        }
+      }
+      if (scope === 'business_travels') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        const decisionFields = new Set(['status', 'rejectionReason']);
+        const settlementFields = new Set(['actualExpense', 'invoiceReference', 'invoiceFileId', 'invoiceFileName', 'settlementNote']);
+        const isDecision = fields.includes('status');
+        const isSettlement = fields.some((field) => settlementFields.has(field));
+        if (!fields.length || (isDecision && (actor.role !== 'ADMIN' || fields.some((field) => !decisionFields.has(field))))
+          || (isSettlement && (actor.role !== 'ADMIN' || fields.some((field) => !settlementFields.has(field))))
+          || (!isDecision && !isSettlement)) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Chỉ được duyệt, từ chối hoặc ghi quyết toán theo các trường cho phép.');
+        }
+      }
+      if (scope === 'workflow_requests') {
+        const allowedFields = new Set(['decision', 'approvalNote', 'resubmission']);
+        if (Object.keys(patch).some(field => !allowedFields.has(field))) {
+          throw new HttpError(422, 'Hồ sơ quy trình chỉ được cập nhật bằng thao tác xử lý được phép.');
+        }
+        if (Object.hasOwn(patch, 'resubmission') && Object.keys(patch).length !== 1) {
+          throw new HttpError(422, 'Nộp bổ sung không thể gộp với quyết định xử lý khác.');
+        }
+      }
       await db.transaction(async () => {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        if (scope === 'asset_disposals' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
+        if (scope === 'asset_maintenances' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
         const current = publicCollectionRecord(fresh) || {};
+        if (scope === 'room_bookings' && current.status !== 'Đã xác nhận') throw new HttpError(409, 'Lịch họp đã được hủy hoặc thay đổi bởi yêu cầu khác.');
+        if (scope === 'crm_promotions') {
+          const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+          if (current.endDate < businessDate || current.status === 'Đã kết thúc') throw new HttpError(409, 'Chương trình đã kết thúc và được lưu để bảo toàn lịch sử.');
+        }
+        if (scope === 'meeting_rooms' && ['Bảo trì', 'Tạm ngưng'].includes(patch.status)) {
+          const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+          const activeBookings = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'room_bookings' AND json_extract(payload_json, '$.date') >= ?").all(today);
+          const hasFutureBooking = activeBookings.some(row => {
+            const booking = parseJsonObject(row.payload_json);
+            return booking.status === 'Đã xác nhận' && (booking.roomKey === current.key || String(booking.roomName || '').toLocaleLowerCase() === String(current.name || '').toLocaleLowerCase());
+          });
+          if (hasFutureBooking) throw new HttpError(409, 'Không thể tạm ngưng phòng đang có lịch đã xác nhận. Hãy xử lý lịch trước.');
+        }
+        if (scope === 'asset_depreciations' && current.status === patch.status) throw new HttpError(422, 'Trạng thái khấu hao vừa được cập nhật bởi một thao tác khác.');
+        if (scope === 'crm_feedback' && current.status !== 'Đang xử lý') throw new HttpError(422, 'Phản ánh đã được xử lý bởi một yêu cầu khác.');
+        if (scope === 'business_travels' && Object.hasOwn(patch, 'status') && current.status !== 'Chờ lãnh đạo duyệt') {
+          throw new HttpError(422, 'Đề xuất công tác đã được xử lý bởi một yêu cầu khác.');
+        }
+        if (scope === 'business_travels' && Object.keys(patch).some((field) => ['actualExpense', 'invoiceReference', 'invoiceFileId', 'invoiceFileName', 'settlementNote'].includes(field))
+          && current.settlementStatus === 'Đã quyết toán xong') {
+          throw new HttpError(422, 'Quyết toán đã hoàn tất bởi một yêu cầu khác.');
+        }
         const item = await normalizeCollectionRecord({ ...current, ...patch, key: current.key ?? recordKey }, scope, actor, current);
+        if (scope === 'asset_maintenances' && item.record.lastCompletedAt !== current.lastCompletedAt) {
+          const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(current.assetKey);
+          const asset = publicCollectionRecord(assetRow);
+          if (!asset || ['Đã thanh lý', 'Chờ thanh lý'].includes(asset.status)) throw new HttpError(422, 'Tài sản không còn đủ điều kiện để ghi nhận bảo dưỡng.');
+          const completed = item.record.maintenanceHistory.at(-1);
+          const updatedAsset = {
+            ...asset,
+            history: [...(Array.isArray(asset.history) ? asset.history : []), {
+              key: randomUUID(), date: completed.completedAt, action: 'Hoàn tất bảo dưỡng định kỳ', actor: actor.name,
+              note: `${item.record.maintCode} · ${item.record.assetCodes} · ${completed.date} · Chi phí ${completed.actualCost}`,
+            }],
+          };
+          await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+            .run(JSON.stringify(updatedAsset), completed.completedAt, assetRow.id);
+        }
+        if (scope === 'asset_disposals' && item.record.status !== current.status) {
+          const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(current.assetKey);
+          if (!assetRow) throw new HttpError(422, 'Không tìm thấy tài sản liên kết để cập nhật.');
+          const asset = publicCollectionRecord(assetRow);
+          const approving = item.record.status === 'Đang thực hiện xử lý';
+          const expectedStatus = approving ? current.sourceAssetStatus : 'Chờ thanh lý';
+          const nextStatus = approving ? 'Chờ thanh lý' : 'Đã thanh lý';
+          if (asset.status !== expectedStatus) throw new HttpError(422, 'Trạng thái tài sản đã thay đổi; hãy tải lại và kiểm tra hồ sơ.');
+          const timestamp = approving ? item.record.approvedAt : item.record.completedAt;
+          const history = Array.isArray(asset.history) ? asset.history : [];
+          const updatedAsset = {
+            ...asset,
+            status: nextStatus,
+            history: [...history, {
+              key: randomUUID(),
+              date: timestamp,
+              action: approving ? 'Đưa vào xử lý thanh lý' : 'Hoàn tất xử lý thanh lý',
+              actor: actor.name,
+              note: `${item.record.disposalCode} · ${item.record.disposalMethod}${approving ? '' : ` · ${item.record.status}`}`,
+            }],
+          };
+          await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+            .run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+        }
         if (scope === 'attendance_shift_assignments' && current.status === 'Chờ duyệt đổi ca' && patch.swapDecision) {
           if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được duyệt đổi ca.');
           if (!['Đã duyệt', 'Từ chối'].includes(patch.swapDecision)) throw new HttpError(422, 'Quyết định đổi ca không hợp lệ.');
@@ -3684,7 +5472,31 @@ async function handleRequest(request, response) {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
-        if (['leave_requests', 'attendance_overtime', 'hr_rewards', 'hr_performance_reviews'].includes(scope)) {
+        if (scope === 'workflow_requests') {
+          const current = publicCollectionRecord(fresh);
+          if (current.status !== 'Chờ bạn ký duyệt' || current.approvalHistory?.length) throw new HttpError(422, 'Hồ sơ đã xử lý nên không thể xóa.');
+        } else if (scope === 'crm_feedback') {
+          throw new HttpError(422, 'Phản ánh khách hàng được lưu để bảo toàn lịch sử xử lý.');
+        } else if (scope === 'crm_supplier_evaluations') {
+          throw new HttpError(422, 'Đánh giá nhà cung cấp được lưu để bảo toàn lịch sử đối tác.');
+        } else if (scope === 'crm_promotions') {
+          throw new HttpError(409, 'Chương trình khuyến mại được lưu để bảo toàn lịch sử áp dụng.');
+        } else if (scope === 'business_travels') {
+          const current = publicCollectionRecord(fresh);
+          if (current.status !== 'Chờ lãnh đạo duyệt') throw new HttpError(422, 'Đề xuất đã được xử lý nên không thể xóa.');
+        } else if (scope === 'asset_disposals') {
+          const current = publicCollectionRecord(fresh);
+          if (current.status !== 'Chờ hội đồng phê duyệt') throw new HttpError(422, 'Chỉ hồ sơ chưa được phê duyệt mới có thể xóa.');
+        } else if (scope === 'asset_todos') {
+          const current = publicCollectionRecord(fresh);
+          if (current.status !== 'Chờ xử lý') throw new HttpError(422, 'Chỉ nhiệm vụ chưa bắt đầu mới có thể xóa.');
+        } else if (scope === 'asset_maintenances') {
+          const current = publicCollectionRecord(fresh);
+          if (current.startedAt || (Array.isArray(current.maintenanceHistory) && current.maintenanceHistory.length)) throw new HttpError(422, 'Chỉ kế hoạch chưa bắt đầu mới có thể xóa.');
+        } else if (scope === 'asset_depreciations') {
+          const current = publicCollectionRecord(fresh);
+          if (Number(current.depreciatedMonths || 0) > 0 || current.lastRunDate !== 'Chưa trích') throw new HttpError(422, 'Hồ sơ đã ghi khấu hao phải được giữ để bảo toàn sổ kế toán.');
+        } else if (['leave_requests', 'attendance_overtime', 'hr_rewards', 'hr_performance_reviews'].includes(scope)) {
           const current = publicCollectionRecord(fresh);
           if (!['Chờ duyệt', 'Chờ phê duyệt', 'Chờ phê duyệt điểm'].includes(current.status)) throw new HttpError(422, 'Không thể xóa bản ghi đã phê duyệt hoặc từ chối.');
         }
@@ -3773,7 +5585,10 @@ async function handleRequest(request, response) {
   const fileDownloadMatch = /^\/files\/([^/]+)\/download$/.exec(resource);
   if (fileDownloadMatch && request.method === 'GET') {
     const actor = await requireUser(request);
-    const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileDownloadMatch[1])));
+    const node = await fileNodeById(decodeURIComponent(fileDownloadMatch[1]));
+    if (!node || node.deleted_at || (!canAccessFileNode(actor, node) && !await canReadWorkflowAttachment(actor, node.id))) {
+      throw new HttpError(404, 'Tệp này không tồn tại.');
+    }
     if (node.node_type !== 'file') throw new HttpError(422, 'Chỉ có thể tải xuống tệp.');
     if (!node.storage_key) throw new HttpError(404, 'Nội dung tệp chưa được lưu.');
     let content;
@@ -4118,6 +5933,144 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/finance/payments') {
+    const actor = await requireUser(request);
+    const rows = actor.role === 'ADMIN'
+      ? await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payments' ORDER BY created_at DESC, record_key DESC").all()
+      : await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payments' AND owner_id = ? ORDER BY created_at DESC, record_key DESC").all(actor.id);
+    sendJson(response, 200, { data: rows.map(publicCollectionRecord).filter(Boolean) });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/finance/payment-accounts') {
+    await requireAdmin(request);
+    const accounts = (await internalTransferAccounts()).filter(account => account.status === 'Đang hoạt động');
+    sendJson(response, 200, { accounts });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/payments') {
+    const actor = await requireUser(request);
+    const input = await readJson(request, 32 * 1024);
+    const beneficiary = requiredText(input.beneficiary, 'Đơn vị thụ hưởng', 200);
+    const category = requiredText(input.category, 'Nội dung thanh toán', 500);
+    const amount = requiredAmount(input.amount, 'Số tiền thanh toán');
+    if (amount < 1_000) throw new HttpError(422, 'Số tiền thanh toán tối thiểu là 1.000 đồng.');
+    const paymentMethod = oneOf(input.paymentMethod, 'Phương thức thanh toán', ['Chuyển khoản VCB', 'Chuyển khoản TCB', 'Tiền mặt', 'Thẻ tín dụng DN']);
+    const bankAccountInfo = requiredText(input.bankAccountInfo, 'Thông tin thụ hưởng', 200);
+    const id = randomUUID();
+    const timestamp = now();
+    const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date(timestamp)).map(part => [part.type, part.value]));
+    const createdDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    const payment = {
+      key: id,
+      code: `PAY-${dateParts.year}-${id.slice(0, 8).toUpperCase()}`,
+      beneficiary,
+      taxCode: optionalText(input.taxCode, 'Mã số thuế', 30),
+      bankAccountInfo,
+      category,
+      amount,
+      paymentMethod,
+      creator: actor.name,
+      creatorId: actor.id,
+      empCode: actor.employee_code || '',
+      approver: '',
+      approverId: '',
+      createdDate,
+      createdAt: timestamp,
+      status: 'Chờ duyệt',
+      notes: optionalText(input.notes, 'Ghi chú', 1_000),
+      history: [{ action: 'Trình duyệt', status: 'Chờ duyệt', actor: actor.name, actorId: actor.id, at: timestamp }],
+    };
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_payments'))");
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_payments', ?, ?, ?, ?, ?)`)
+        .run(id, id, actor.id, JSON.stringify(payment), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'submit_payment_request', 'finance_payments', id, { amount, paymentMethod });
+    });
+    sendJson(response, 201, { payment });
+    return;
+  }
+
+  const paymentActionMatch = /^\/finance\/payments\/([^/]+)\/(approve|reject|execute)$/.exec(resource);
+  if (paymentActionMatch && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    const key = requiredText(decodeURIComponent(paymentActionMatch[1]), 'Mã đề nghị', 160);
+    const action = paymentActionMatch[2];
+    const input = await readJson(request, 16 * 1024);
+    const reason = action === 'reject' ? requiredText(input.reason, 'Lý do từ chối', 1_000) : '';
+    const settlementReference = action === 'execute' ? requiredText(input.settlementReference, 'Mã giao dịch hoặc chứng từ chi', 120) : '';
+    const sourceAccountId = action === 'execute' ? requiredText(input.sourceAccountId, 'Tài khoản nguồn', 200) : '';
+    if (action === 'execute' && settlementReference.length < 3) throw new HttpError(422, 'Mã giao dịch hoặc chứng từ chi phải có ít nhất 3 ký tự.');
+    let payment;
+    await db.transaction(async () => {
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_payments:${key}`]);
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payments' AND record_key = ? ORDER BY created_at LIMIT 1").get(key);
+      if (!row) throw new HttpError(404, 'Không tìm thấy đề nghị thanh toán.');
+      const current = publicCollectionRecord(row);
+      const timestamp = now();
+      if (action === 'approve') {
+        if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Đề nghị này không còn ở trạng thái chờ duyệt.');
+        payment = { ...current, status: 'Đã phê duyệt', approver: actor.name, approverId: actor.id, approvedAt: timestamp };
+      } else if (action === 'reject') {
+        if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Chỉ có thể từ chối đề nghị đang chờ duyệt.');
+        payment = { ...current, status: 'Từ chối', approver: actor.name, approverId: actor.id, rejectedAt: timestamp, rejectionReason: reason };
+      } else {
+        if (current.status !== 'Đã phê duyệt') throw new HttpError(409, 'Chỉ có thể ghi nhận chi cho đề nghị đã được phê duyệt.');
+        await lockTransferLedger();
+        const source = (await internalTransferAccounts()).find(account => account.key === sourceAccountId);
+        if (!source || source.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản nguồn không tồn tại hoặc đã ngừng hoạt động.');
+        if (current.paymentMethod === 'Tiền mặt' && source.source !== 'petty') throw new HttpError(422, 'Phương thức tiền mặt phải ghi chi từ quỹ tiền mặt.');
+        if (current.paymentMethod !== 'Tiền mặt' && source.source !== 'bank') throw new HttpError(422, 'Phương thức thanh toán này phải ghi chi từ tài khoản ngân hàng.');
+        if (current.paymentMethod === 'Chuyển khoản VCB' && !/vietcombank|\bvcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Vietcombank phù hợp với phương thức thanh toán.');
+        if (current.paymentMethod === 'Chuyển khoản TCB' && !/techcombank|\btcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Techcombank phù hợp với phương thức thanh toán.');
+        if (!Number.isSafeInteger(source.balance) || source.balance < current.amount) throw new HttpError(422, 'Số dư tài khoản nguồn không đủ cho khoản chi.');
+        const transactionId = randomUUID();
+        const transactionCode = `${current.code}-OUT`;
+        const transactionNote = `${current.category}; Tham chiếu: ${settlementReference}`.slice(0, 1_000);
+        const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+        }).formatToParts(new Date(timestamp)).map(part => [part.type, part.value]));
+        const paymentDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+        await db.prepare(`INSERT INTO finance_cash_transactions (
+          id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+          account_name, status, note, employee_code, created_by, created_at, updated_at
+        ) VALUES (?, ?, 'Chi', ?, 'Thanh toán đề nghị', ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, ?, ?)`)
+          .run(transactionId, transactionCode, source.source, current.amount, paymentDate, current.beneficiary,
+            source.name, transactionNote, current.empCode || null, actor.id, timestamp, timestamp);
+        payment = {
+          ...current, status: 'Đã thanh toán', paidBy: actor.name, paidById: actor.id, paidAt: timestamp,
+          settlementReference, settlementRecordedInternally: true, sourceAccountId: source.key,
+          sourceAccount: source.name, sourceType: source.source, financeTransactionId: transactionId, ledgerRecorded: true,
+        };
+      }
+      payment.history = [...(Array.isArray(current.history) ? current.history : []), {
+        action: action === 'approve' ? 'Phê duyệt' : action === 'reject' ? 'Từ chối' : 'Ghi nhận đã chi',
+        status: payment.status,
+        actor: actor.name,
+        actorId: actor.id,
+        at: timestamp,
+        ...(reason ? { reason } : {}),
+        ...(settlementReference ? { reference: settlementReference } : {}),
+        ...(payment.sourceAccount ? { sourceAccount: payment.sourceAccount, financeTransactionId: payment.financeTransactionId } : {}),
+      }];
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(payment), timestamp, row.id);
+      await recordAuditEvent(actor.id, `payment_${action}`, 'finance_payments', key, {
+        code: payment.code,
+        amount: payment.amount,
+        ...(payment.sourceAccountId ? { sourceAccountId: payment.sourceAccountId, financeTransactionId: payment.financeTransactionId } : {}),
+        ...(reason ? { reason } : {}),
+        ...(settlementReference ? { settlementReference } : {}),
+      });
+    });
+    sendJson(response, 200, { payment });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/finance/cash-transactions') {
     await requireAdmin(request);
     const source = url.searchParams.get('source');
@@ -4376,6 +6329,121 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/crm/loyalty') {
+    await requireAdmin(request);
+    const entries = await loyaltyEntries();
+    const balances = loyaltyBalances(entries);
+    const customers = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE contact_type = 'customer' ORDER BY name, code").all();
+    sendJson(response, 200, {
+      customers: customers.map((customer) => ({ key: customer.id, code: customer.code, name: customer.name, status: customer.status, balance: balances.get(customer.id) || 0 })),
+      entries,
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/crm/loyalty/entries') {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request);
+    const requestId = requiredText(input.requestId, 'Mã yêu cầu', 160);
+    const type = oneOf(input.type, 'Loại giao dịch điểm', ['earn', 'redeem']);
+    const customerId = requiredText(input.customerId, 'Khách hàng', 160);
+    const points = requiredAmount(input.points, 'Số điểm');
+    const reference = requiredText(input.reference, 'Mã tham chiếu', 160);
+    const rewardName = type === 'redeem' ? requiredText(input.rewardName, 'Phần thưởng', 255) : '';
+    const note = optionalText(input.note, 'Ghi chú', 1000);
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('crm_loyalty_ledger'))");
+      const entries = await loyaltyEntries();
+      const balances = loyaltyBalances(entries);
+      const existing = entries.find((entry) => entry.key === requestId);
+      if (existing) {
+        if (existing.type !== type || existing.customerId !== customerId || existing.points !== points
+          || existing.reference !== reference || existing.rewardName !== rewardName || existing.note !== note) {
+          throw new HttpError(409, 'Mã yêu cầu đã được dùng cho giao dịch khác.');
+        }
+        result = { entry: existing, balance: balances.get(customerId) || 0, replayed: true };
+        return;
+      }
+      const customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
+      if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
+      if (entries.some((entry) => entry.customerId === customerId && entry.type === type && entry.status !== 'Đã hủy'
+        && String(entry.reference || '').toLocaleLowerCase() === reference.toLocaleLowerCase())) {
+        throw new HttpError(409, 'Mã tham chiếu đã được ghi nhận cho khách hàng này.');
+      }
+      const balance = balances.get(customerId) || 0;
+      const delta = type === 'earn' ? points : -points;
+      const nextBalance = balance + delta;
+      if (!Number.isSafeInteger(nextBalance)) throw new HttpError(422, 'Số dư điểm vượt giới hạn tính toán.');
+      if (nextBalance < 0) throw new HttpError(422, 'Khách hàng không đủ điểm để đổi thưởng.');
+      const timestamp = now();
+      const entry = {
+        key: requestId, type, customerId, customerCode: customer.code, customerName: customer.name,
+        points, delta, balanceAfter: nextBalance, reference, rewardName, note,
+        status: type === 'earn' ? 'Đã ghi nhận' : 'Chờ trao', createdAt: timestamp,
+        createdBy: actor.name, createdById: actor.id,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'crm_loyalty_ledger', ?, ?, ?, ?, ?)`)
+        .run(randomUUID(), requestId, actor.id, JSON.stringify(entry), timestamp, timestamp);
+      await recordAuditEvent(actor.id, type === 'earn' ? 'loyalty_earn' : 'loyalty_redeem', 'crm_loyalty_ledger', requestId, { customerId, points, reference });
+      result = { entry, balance: nextBalance, replayed: false };
+    });
+    sendJson(response, result.replayed ? 200 : 201, result);
+    return;
+  }
+
+  const loyaltyAction = /^\/crm\/loyalty\/entries\/([^/]+)\/(fulfill|cancel)$/.exec(resource);
+  if (request.method === 'POST' && loyaltyAction) {
+    const actor = await requireAdmin(request);
+    const key = requiredText(decodeURIComponent(loyaltyAction[1]), 'Mã giao dịch điểm', 160);
+    const action = loyaltyAction[2];
+    const input = await readJson(request);
+    const detail = requiredText(action === 'fulfill' ? input.reference : input.reason, action === 'fulfill' ? 'Mã xác nhận trao thưởng' : 'Lý do hủy', 500);
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('crm_loyalty_ledger'))");
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'crm_loyalty_ledger' AND record_key = ? ORDER BY created_at LIMIT 1").get(key);
+      if (!row) throw new HttpError(404, 'Không tìm thấy giao dịch điểm.');
+      const entry = publicCollectionRecord(row);
+      if (action === 'fulfill' && (entry.type !== 'redeem' || entry.status !== 'Chờ trao')) throw new HttpError(409, 'Chỉ phần thưởng đang chờ mới được xác nhận trao.');
+      if (action === 'cancel' && !((entry.type === 'redeem' && entry.status === 'Chờ trao') || (entry.type === 'earn' && entry.status === 'Đã ghi nhận'))) {
+        throw new HttpError(409, 'Giao dịch điểm đã được xử lý và không thể hủy.');
+      }
+      const entries = await loyaltyEntries();
+      const balance = loyaltyBalances(entries).get(entry.customerId) || 0;
+      const timestamp = now();
+      let nextBalance = balance;
+      if (action === 'cancel') {
+        const delta = entry.type === 'earn' ? -entry.points : entry.points;
+        nextBalance = balance + delta;
+        if (!Number.isSafeInteger(nextBalance) || nextBalance < 0) throw new HttpError(422, 'Không đủ điểm để hủy giao dịch tích điểm này.');
+        const adjustment = {
+          key: `adjust-${randomUUID()}`, type: entry.type === 'earn' ? 'reversal' : 'refund',
+          customerId: entry.customerId, customerCode: entry.customerCode, customerName: entry.customerName,
+          points: entry.points, delta, balanceAfter: nextBalance, reference: entry.reference, rewardName: entry.rewardName,
+          note: detail, sourceKey: entry.key, status: 'Đã ghi nhận', createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+        };
+        await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, 'crm_loyalty_ledger', ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), adjustment.key, actor.id, JSON.stringify(adjustment), timestamp, timestamp);
+        entry.status = 'Đã hủy';
+        entry.cancelReason = detail;
+      } else {
+        entry.status = 'Đã trao';
+        entry.fulfillmentReference = detail;
+      }
+      entry.handledAt = timestamp;
+      entry.handledBy = actor.name;
+      entry.handledById = actor.id;
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(entry), timestamp, row.id);
+      await recordAuditEvent(actor.id, action === 'fulfill' ? 'loyalty_fulfill' : 'loyalty_cancel', 'crm_loyalty_ledger', key, { detail });
+      result = { entry, balance: nextBalance };
+    });
+    sendJson(response, 200, result);
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/crm/contacts') {
     const actor = await requireAdmin(request);
     const type = url.searchParams.get('type');
@@ -4384,6 +6452,51 @@ async function handleRequest(request, response) {
       ? await db.prepare('SELECT * FROM crm_contacts WHERE contact_type = ? ORDER BY created_at DESC').all(type)
       : await db.prepare('SELECT * FROM crm_contacts ORDER BY created_at DESC').all();
     sendJson(response, 200, { data: rows.map(r => publicCrmContact(r, actor)) });
+    return;
+  }
+
+  const crmContactMatch = resource.match(/^\/crm\/contacts\/([^/]+)$/);
+  if (request.method === 'PATCH' && crmContactMatch) {
+    const actor = await requireAdmin(request);
+    const id = decodeURIComponent(crmContactMatch[1]);
+    const row = await db.prepare('SELECT * FROM crm_contacts WHERE id = ?').get(id);
+    if (!row) throw new HttpError(404, 'Không tìm thấy đối tác cần cập nhật.');
+    const body = await readJson(request);
+    const patch = body?.patch;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật đối tác không hợp lệ.');
+    const editableFields = new Set([
+      'name', 'taxCode', 'industry', 'contactPerson', 'phone', 'email', 'address', 'bankAccount',
+      'creditLimit', 'totalValue', 'debtBalance', 'tier', 'accountManager', 'status',
+    ]);
+    const unsupportedFields = Object.keys(patch).filter(field => !editableFields.has(field));
+    if (unsupportedFields.length) throw new HttpError(422, 'Không thể thay đổi mã hoặc loại đối tác.');
+    if (!Object.keys(patch).length) throw new HttpError(422, 'Chưa có thông tin nào để cập nhật.');
+
+    const contact = validateCrmContact({ ...publicCrmContact(row, actor), ...patch, type: row.contact_type });
+    const timestamp = now();
+    await db.prepare(`UPDATE crm_contacts SET
+      name = ?, tax_code = ?, industry = ?, contact_person = ?, phone = ?, email = ?, address = ?, bank_account = ?,
+      credit_limit = ?, total_value = ?, debt_balance = ?, tier = ?, account_manager = ?, status = ?, updated_at = ?
+      WHERE id = ?`)
+      .run(
+        contact.name,
+        contact.taxCode,
+        contact.industry,
+        contact.contactPerson,
+        encryptField(contact.phone, 'crm'),
+        encryptField(contact.email, 'crm'),
+        encryptField(contact.address, 'crm'),
+        encryptField(contact.bankAccount, 'crm'),
+        contact.creditLimit,
+        contact.totalValue,
+        contact.debtBalance,
+        contact.tier,
+        contact.accountManager,
+        contact.status,
+        timestamp,
+        id,
+      );
+    sendJson(response, 200, { contact: publicCrmContact(await db.prepare('SELECT * FROM crm_contacts WHERE id = ?').get(id), actor) });
     return;
   }
 

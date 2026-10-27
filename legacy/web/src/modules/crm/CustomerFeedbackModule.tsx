@@ -1,5 +1,8 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
+import { collectionsApi, employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { customerFeedbackExportRows, customerFeedbackMetrics } from './customerFeedbackRules';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -11,13 +14,11 @@ import {
   UserOutlined,
   PrinterOutlined,
   EyeOutlined,
-  SafetyCertificateOutlined,
-  WarningOutlined,
   StarOutlined,
   CloseCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
 
 export interface EnterpriseFeedbackItem {
   key: string;
@@ -26,13 +27,16 @@ export interface EnterpriseFeedbackItem {
   contactPerson: string;
   phone: string;
   serviceName: string;
-  rating: number; // 1-5 sao
+  rating: number | null;
   content: string;
   priority: 'Khẩn cấp' | 'Cao' | 'Trung bình';
   resolutionAction: string;
   assignedStaff: string;
+  assignedStaffId: string;
   receivedDate: string;
   resolvedDate?: string;
+  resolvedBy?: string;
+  resolvedById?: string;
   status: 'Đã giải quyết thỏa đáng' | 'Đang xử lý';
 }
 
@@ -40,15 +44,28 @@ const INITIAL_FEEDBACK: EnterpriseFeedbackItem[] = [];
 
 export const CustomerFeedbackModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseFeedbackItem[]>(INITIAL_FEEDBACK);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const list = dataService.getGenericData('crm_feedback');
     setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    void Promise.all([dataService.refreshGenericData('crm_feedback'), employeesApi.getAll()])
+      .then(([records, response]) => {
+        if (!mounted) return;
+        setData(Array.isArray(records) ? records : []);
+        setEmployees((response.data.data || []).filter((employee) => employee.isActive && employee.status !== 'Đã nghỉ việc'));
+      })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được phản ánh khách hàng hoặc danh sách nhân viên.'); })
+      .finally(() => { if (mounted) setLoading(false); });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('crm_feedback');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -56,52 +73,75 @@ export const CustomerFeedbackModule: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [resolutionForm] = Form.useForm();
+  const [resolveModalOpen, setResolveModalOpen] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedFeedback, setSelectedFeedback] = useState<EnterpriseFeedbackItem | null>(null);
 
-  const avgRating = (data.reduce((sum, item) => sum + item.rating, 0) / (data.length || 1)).toFixed(1);
-  const resolvedCount = data.filter((d) => d.status === 'Đã giải quyết thỏa đáng').length;
-  const inProgressCount = data.filter((d) => d.status === 'Đang xử lý').length;
-  const urgentCount = data.filter((d) => d.priority === 'Khẩn cấp').length;
+  const metrics = customerFeedbackMetrics(data);
 
-  const handleCreate = (values: any) => {
-    const newFb: EnterpriseFeedbackItem = {
-      ...values,
-      key: String(Date.now()),
-      rating: Number(values.rating) || 5,
-      receivedDate: new Date().toISOString().substring(0, 10),
-      contactPerson: values.contactPerson || 'Đại diện đối tác',
-      phone: values.phone || '0900 000 000',
-      status: 'Đang xử lý',
-    };
-    const nextItems = [newFb, ...data]; setData(nextItems); dataService.saveGenericData('crm_feedback', nextItems);
-    message.success(`Đã tiếp nhận phản ánh từ khách hàng: ${values.clientName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    setSaving(true);
+    try {
+      const key = crypto.randomUUID();
+      const saved = await dataService.createGenericRecord('crm_feedback', {
+        key,
+        feedbackCode: values.feedbackCode,
+        clientName: values.clientName,
+        contactPerson: values.contactPerson || '',
+        phone: values.phone || '',
+        serviceName: values.serviceName,
+        rating: values.rating === undefined || values.rating === '' ? null : Number(values.rating),
+        content: values.content,
+        priority: values.priority,
+        assignedStaffId: values.assignedStaffId,
+      }) as EnterpriseFeedbackItem;
+      await dataService.refreshGenericData('crm_feedback');
+      message.success(`Đã tiếp nhận phản ánh từ khách hàng: ${saved.clientName}`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tiếp nhận phản ánh. Vui lòng thử lại.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleResolve = (record: EnterpriseFeedbackItem) => {
-    const updated = data.map((d) =>
-      d.key === record.key
-        ? {
-            ...d,
-            status: 'Đã giải quyết thỏa đáng' as const,
-            resolvedDate: new Date().toISOString().substring(0, 10),
-          }
-        : d
-    );
-    setData(updated);
-    dataService.saveGenericData('crm_feedback', updated);
-    message.success(`Đã đánh dấu giải quyết thỏa đáng phản ánh: ${record.feedbackCode}`);
-    if (selectedFeedback && selectedFeedback.key === record.key) {
-      setSelectedFeedback({
-        ...selectedFeedback,
+    setSelectedFeedback(record);
+    resolutionForm.resetFields();
+    setResolveModalOpen(true);
+  };
+
+  const submitResolution = async (values: { resolutionAction: string }) => {
+    if (!selectedFeedback) return;
+    setSaving(true);
+    try {
+      const response = await collectionsApi.patch<EnterpriseFeedbackItem>('crm_feedback', selectedFeedback.key, {
         status: 'Đã giải quyết thỏa đáng',
-        resolvedDate: new Date().toISOString().substring(0, 10),
+        resolutionAction: values.resolutionAction,
       });
+      setSelectedFeedback(response.data.record);
+      await dataService.refreshGenericData('crm_feedback');
+      message.success(`Đã cập nhật biện pháp xử lý cho phản ánh ${selectedFeedback.feedbackCode}`);
+      setResolveModalOpen(false);
+      resolutionForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái phản ánh. Vui lòng tải lại dữ liệu.');
+    } finally {
+      setSaving(false);
     }
   };
+
+  const exportFeedback = () => downloadFile('Bao_cao_phan_anh_khach_hang.xlsx', generateValidXlsxBlob(customerFeedbackExportRows(filteredData)));
+  const printFeedback = (record: EnterpriseFeedbackItem) => downloadFile(`${record.feedbackCode}_bien_ban_phan_anh.pdf`, generateValidPdfBlob(
+    'BIEN BAN TIEP NHAN PHAN ANH KHACH HANG', `${record.feedbackCode} | ${record.clientName}`,
+    [`Ngay nhan: ${record.receivedDate}`, `Nguoi phan anh: ${record.contactPerson || 'Chua cung cap'}`, `Dien thoai: ${record.phone || 'Chua cung cap'}`,
+      `Dich vu: ${record.serviceName}`, `Danh gia: ${record.rating == null ? 'Chua danh gia' : `${record.rating}/5`}`, `Uu tien: ${record.priority}`,
+      `Can bo phu trach: ${record.assignedStaff}`, `Trang thai: ${record.status}`, `Noi dung: ${record.content}`,
+      `Bien phap xu ly: ${record.resolutionAction || 'Chua ghi nhan'}`, `Ngay dong ho so: ${record.resolvedDate || 'Chua dong'}`, `Nguoi dong ho so: ${record.resolvedBy || 'Chua ghi nhan'}`],
+  ));
 
   const filteredData = data.filter((item) => {
     const matchStatus =
@@ -148,15 +188,15 @@ export const CustomerFeedbackModule: React.FC = () => {
       dataIndex: 'rating',
       key: 'rating',
       width: 140,
-      render: (r: number) => (
+      render: (r: number | null) => r == null ? <span style={{ color: '#64748B' }}>Chưa đánh giá</span> : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, color: '#F59E0B' }}>
           {[...Array(5)].map((_, i) => (
             <StarFilled key={i} style={{ color: i < r ? '#F59E0B' : '#E2E8F0', fontSize: 13 }} />
           ))}
-          <span style={{ fontWeight: 700, color: '#0F172A', marginLeft: 4, fontSize: 12.5 }}>({r}/5)</span>
+          <span style={{ fontWeight: 700, color: '#0F172A', marginLeft: 4, fontSize: 12.5 }}>{r}/5</span>
         </div>
       ),
-      sorter: (a: EnterpriseFeedbackItem, b: EnterpriseFeedbackItem) => a.rating - b.rating,
+      sorter: (a: EnterpriseFeedbackItem, b: EnterpriseFeedbackItem) => (a.rating ?? 0) - (b.rating ?? 0),
     },
     {
       title: 'Mức độ ưu tiên',
@@ -223,39 +263,39 @@ export const CustomerFeedbackModule: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+    <div aria-busy={loading} style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ số hài lòng khách hàng</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Điểm hài lòng trung bình</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <StarFilled style={{ fontSize: 22 }} /> {avgRating} / 5.0 sao
+            <StarFilled style={{ fontSize: 22 }} /> {metrics.averageRating?.toFixed(1) ?? '—'} / 5 sao
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>94.2% Khách hàng đánh giá Rất Tốt</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Trên {data.filter((item) => item.rating != null).length} lượt có đánh giá</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ giải quyết thỏa đáng</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ phản ánh đã đóng hồ sơ</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {Math.round((resolvedCount / (data.length || 1)) * 100)}% hoàn thành
+            {metrics.resolutionRate == null ? '—' : `${metrics.resolutionRate}%`} đã đóng
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{resolvedCount} / {data.length} Vụ việc đã đóng hồ sơ</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{metrics.resolvedCount} / {metrics.feedbackCount} phản ánh đã đóng hồ sơ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Vụ việc đang theo dõi &amp; xử lý</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: inProgressCount > 0 ? '#2563EB' : '#64748B', marginTop: 4 }}>
-            {inProgressCount} sự vụ
+          <div style={{ fontSize: 24, fontWeight: 800, color: metrics.inProgressCount > 0 ? '#2563EB' : '#64748B', marginTop: 4 }}>
+            {metrics.inProgressCount} phản ánh
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Cam kết thời gian phản hồi ≤ 2 giờ</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Đang xử lý</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Sự cố mức độ Khẩn cấp</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>
-            {urgentCount} vụ việc
+          <div style={{ fontSize: 24, fontWeight: 800, color: metrics.urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>
+            {metrics.urgentCount} phản ánh
           </div>
-          <div style={{ fontSize: 11.5, color: urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 2 }}>Không có vụ việc tồn đọng quá hạn</div>
+          <div style={{ fontSize: 11.5, color: metrics.urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 2 }}>Khẩn cấp đang xử lý</div>
         </div>
       </div>
 
@@ -294,7 +334,7 @@ export const CustomerFeedbackModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo khảo sát CSAT')}>
+          <Button icon={<DownloadOutlined />} onClick={exportFeedback} disabled={loading}>
             Xuất Báo Cáo
           </Button>
 
@@ -303,15 +343,14 @@ export const CustomerFeedbackModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              const today = new Date();
+              const dateCode = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
               form.setFieldsValue({
-                feedbackCode: `FB-2026-0${data.length + 1}`,
-                rating: 5,
-                priority: 'Cao',
-                assignedStaff: 'Lê Hoàng Yến',
-                resolutionAction: 'Đã liên hệ trực tiếp và cập nhật phương án khắc phục',
+                feedbackCode: `FB-${dateCode}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
               });
               setModalOpen(true);
             }}
+            disabled={loading || employees.length === 0}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Tiếp nhận phản ánh mới
@@ -335,10 +374,12 @@ export const CustomerFeedbackModule: React.FC = () => {
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="feedbackCode" label="Mã phản hồi" rules={[{ required: true }]}>
-              <Input />
+              <Input readOnly />
             </Form.Item>
-            <Form.Item name="rating" label="Đánh giá sao CSAT" rules={[{ required: true }]}>
+            <Form.Item name="rating" label="Đánh giá sao CSAT">
               <Select
+                allowClear
+                placeholder="Chọn mức đánh giá"
                 options={[
                   { label: '5 Sao', value: 5 },
                   { label: '4 Sao', value: 4 },
@@ -359,9 +400,14 @@ export const CustomerFeedbackModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="serviceName" label="Dịch vụ liên quan" initialValue="Dịch vụ Hạ Tầng Cloud Server" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="serviceName" label="Dịch vụ liên quan" rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="phone" label="Số điện thoại liên hệ">
+              <Input />
+            </Form.Item>
+          </div>
 
           <Form.Item name="content" label="Nội dung ý kiến phản ánh" rules={[{ required: true }]}>
             <Input.TextArea rows={3} placeholder="Chi tiết phản ánh, khiếu nại hoặc góp ý của khách hàng..." />
@@ -377,18 +423,21 @@ export const CustomerFeedbackModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="assignedStaff" label="Cán bộ phụ trách xử lý" rules={[{ required: true }]}>
-              <Input />
+            <Form.Item name="assignedStaffId" label="Cán bộ phụ trách xử lý" rules={[{ required: true }]}>
+              <Select
+                showSearch
+                placeholder="Chọn nhân viên"
+                options={employees.map((employee) => ({
+                  value: employee.userId || employee.id,
+                  label: `${employee.fullName || employee.name}${employee.employeeCode ? ` · ${employee.employeeCode}` : ''}`,
+                }))}
+              />
             </Form.Item>
           </div>
 
-          <Form.Item name="resolutionAction" label="Biện pháp xử lý &amp; Cam kết khắc phục">
-            <Input />
-          </Form.Item>
-
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Tiếp nhận ý kiến
             </Button>
           </div>
@@ -417,7 +466,7 @@ export const CustomerFeedbackModule: React.FC = () => {
                 </Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Người gửi: <strong>{selectedFeedback.contactPerson}</strong> ({selectedFeedback.phone}) · Ngày: {selectedFeedback.receivedDate}
+                Người gửi: <strong>{selectedFeedback.contactPerson || 'Chưa cung cấp'}</strong> · Điện thoại: {selectedFeedback.phone || 'Chưa cung cấp'} · Ngày: {selectedFeedback.receivedDate}
               </div>
             </div>
 
@@ -427,11 +476,11 @@ export const CustomerFeedbackModule: React.FC = () => {
                 Đánh Giá Hài Lòng Khách Hàng:
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#F59E0B', fontSize: 16 }}>
-                {[...Array(5)].map((_, i) => (
-                  <StarFilled key={i} style={{ color: i < selectedFeedback.rating ? '#F59E0B' : '#CBD5E1' }} />
+                  {[...Array(5)].map((_, i) => (
+                  <StarFilled key={i} style={{ color: selectedFeedback.rating != null && i < selectedFeedback.rating ? '#F59E0B' : '#CBD5E1' }} />
                 ))}
                 <span style={{ fontWeight: 800, color: '#0F172A', marginLeft: 8, fontSize: 15 }}>
-                  {selectedFeedback.rating} / 5 Điểm
+                  {selectedFeedback.rating == null ? 'Chưa đánh giá' : `${selectedFeedback.rating} / 5 Điểm`}
                 </span>
               </div>
               <div style={{ marginTop: 8, fontSize: 12.5, color: '#475569' }}>
@@ -455,11 +504,12 @@ export const CustomerFeedbackModule: React.FC = () => {
                 <CheckCircleOutlined /> Biện Pháp Khắc Phục &amp; Cam Kết Chất Lượng:
               </div>
               <div style={{ fontSize: 13, color: '#14532D', lineHeight: 1.5 }}>
-                {selectedFeedback.resolutionAction}
+                {selectedFeedback.resolutionAction || 'Chưa ghi nhận biện pháp xử lý'}
               </div>
               <div style={{ fontSize: 12, color: '#166534', marginTop: 6 }}>
                 Cán bộ phụ trách: <strong>{selectedFeedback.assignedStaff}</strong>
                 {selectedFeedback.resolvedDate && <span> · Ngày đóng hồ sơ: {selectedFeedback.resolvedDate}</span>}
+                {selectedFeedback.resolvedBy && <span> · Người đóng hồ sơ: {selectedFeedback.resolvedBy}</span>}
               </div>
             </div>
 
@@ -470,19 +520,38 @@ export const CustomerFeedbackModule: React.FC = () => {
                   style={{ flex: 1, backgroundColor: '#10B981', borderColor: '#10B981' }}
                   onClick={() => handleResolve(selectedFeedback)}
                 >
-                  Xác Nhận Khách Hàng Hài Lòng &amp; Đóng Hồ Sơ
+                  Ghi nhận kết quả và đóng hồ sơ
                 </Button>
               )}
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in biên bản xử lý phản ánh ${selectedFeedback.feedbackCode}`)}
+                onClick={() => printFeedback(selectedFeedback)}
               >
-                In Biên Bản (A4)
+                Tải biên bản PDF
               </Button>
             </div>
           </div>
         )}
       </Drawer>
+      <Modal
+        title="Ghi nhận biện pháp xử lý"
+        open={resolveModalOpen}
+        onCancel={() => setResolveModalOpen(false)}
+        footer={null}
+        width={560}
+      >
+        <Form form={resolutionForm} layout="vertical" onFinish={submitResolution} style={{ marginTop: 14 }}>
+          <Form.Item name="resolutionAction" label="Biện pháp xử lý và kết quả" rules={[{ required: true, whitespace: true, message: 'Vui lòng ghi biện pháp xử lý.' }]}>
+            <Input.TextArea rows={4} maxLength={4000} showCount />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => setResolveModalOpen(false)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#10B981', borderColor: '#10B981' }}>
+              Lưu kết quả và đóng hồ sơ
+            </Button>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 };

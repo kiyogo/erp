@@ -52,9 +52,12 @@ export interface RepairItem {
 import { useEffect } from 'react';
 import { collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { buildRepairAssetUpdate, findAssetByCode } from './assetOperations';
 
 export const AssetRepairsModule: React.FC = () => {
   const [data, setData] = useState<RepairItem[]>([]);
+  const [assets, setAssets] = useState<any[]>([]);
   const [deptOptions, setDeptOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -66,22 +69,25 @@ export const AssetRepairsModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [completeModalOpen, setCompleteModalOpen] = useState(false);
   const [completeTarget, setCompleteTarget] = useState<RepairItem | null>(null);
-  const [actualCostInput, setActualCostInput] = useState<number>(0);
-  const [completeNotes, setCompleteNotes] = useState('Đã kiểm tra kỹ thuật test 24h, thiết bị hoạt động hoàn hảo, nghiệm thu đạt chuẩn.');
+  const [actualCostInput, setActualCostInput] = useState<number | ''>('');
+  const [completeNotes, setCompleteNotes] = useState('');
 
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   const loadData = async () => {
     try {
-      const [res, orgUnits] = await Promise.all([
+      const [res, orgUnits, assetRes] = await Promise.all([
         collectionsApi.get<RepairItem>('asset_repairs', { limit: 500 }),
         dataService.fetchOrgUnitsList(),
+        collectionsApi.get<any>('asset_items', { limit: 500 }),
       ]);
       const list = res.data?.data || [];
       setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setAssets(assetRes.data?.data || []);
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
-    } catch {
-      setData([]);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách phiếu sửa chữa.');
     }
   };
 
@@ -95,82 +101,207 @@ export const AssetRepairsModule: React.FC = () => {
   const inProgressCount = data.filter((d) => d.status === 'Đang sửa chữa tại hãng' || d.status === 'Chờ linh kiện thay thế').length;
   const pendingQuoteCount = data.filter((d) => d.status === 'Chờ duyệt báo giá').length;
   const fixedCount = data.filter((d) => d.status === 'Đã sửa xong & Bàn giao').length;
+  const closedCount = data.filter((d) => d.status === 'Đã sửa xong & Bàn giao' || d.status === 'Không thể sửa chữa').length;
+  const completionRate = closedCount ? Math.round((fixedCount / closedCount) * 100) : null;
 
   const handleOpenCreate = () => {
     form.resetFields();
+    const today = new Date().toISOString().substring(0, 10);
     form.setFieldsValue({
-      repairCode: `SC-2026-0${data.length + 18}`,
+      repairCode: `SC-${today.replace(/-/g, '')}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
       severity: 'Cao (P2)',
       repairUnit: 'Trung tâm bảo hành chính hãng',
-      vendor: 'Trung Tâm Dịch Vụ Ủy Quyền',
+      vendor: '',
       costBearing: 'Công ty chi trả',
-      startDate: new Date().toISOString().substring(0, 10),
-      expectedEndDate: new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10),
-      estimatedCost: 2000000,
-      department: 'Phòng Ban Kỹ Thuật',
-      warrantyAfterRepair: '6 tháng bảo hành linh kiện',
-      approver: 'Trần Tuấn Anh (CTO)',
+      startDate: today,
+      expectedEndDate: '',
+      estimatedCost: undefined,
+      department: undefined,
+      warrantyAfterRepair: '',
+      approver: '',
     });
     setModalOpen(true);
   };
 
-  const handleCreate = async (values: any) => {
-    const id = `repair-${Date.now()}`;
-    const newItem: RepairItem = {
-      ...values,
-      key: id,
-      estimatedCost: Number(values.estimatedCost) || 0,
-      actualCost: 0,
-      status: 'Chờ duyệt báo giá',
-    };
+  const currentActor = () => {
     try {
-      await collectionsApi.create('asset_repairs', newItem, id);
-      message.success(`Đã lập phiếu báo hỏng sửa chữa: ${values.repairCode} cho tài sản ${values.assetName}`);
+      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
+      return String(user?.name || user?.fullName || user?.email || 'Tài khoản hiện tại');
+    } catch { return 'Tài khoản hiện tại'; }
+  };
+
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    if (data.some((item) => item.repairCode.trim().toLocaleLowerCase() === String(values.repairCode).trim().toLocaleLowerCase())) {
+      message.error('Mã phiếu sửa đã tồn tại.');
+      return;
+    }
+    const estimatedCost = Number(values.estimatedCost);
+    if (!Number.isFinite(estimatedCost) || estimatedCost < 0 || String(values.expectedEndDate) < String(values.startDate)) {
+      message.error('Dự toán phải là số không âm và ngày dự kiến không sớm hơn ngày gửi sửa.');
+      return;
+    }
+    setSaving(true);
+    let oldAsset: any = null;
+    let assetUpdated = false;
+    try {
+      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
+      oldAsset = findAssetByCode(assetsResponse.data?.data || [], String(values.assetCode || ''));
+      const key = `repair-${crypto.randomUUID()}`;
+      const newItem: RepairItem = {
+        ...values,
+        key,
+        assetCode: String(oldAsset.code || oldAsset.assetCode),
+        assetName: String(oldAsset.name || oldAsset.assetName || ''),
+        category: String(oldAsset.category || ''),
+        serialNo: String(oldAsset.serialNo || oldAsset.serialNumber || ''),
+        estimatedCost,
+        actualCost: 0,
+        approver: '',
+        status: 'Chờ duyệt báo giá',
+      };
+      const updatedAsset = buildRepairAssetUpdate(oldAsset, currentActor(), new Date().toLocaleString('sv-SE'), newItem.repairCode, 'Bắt đầu sửa chữa', newItem.issueDescription);
+      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
+      assetUpdated = true;
+      await collectionsApi.create('asset_repairs', newItem, key);
+      await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), dataService.refreshGenericData('asset_items')]);
+      message.success(`Đã lưu phiếu ${newItem.repairCode} và chuyển tài sản sang trạng thái sửa chữa.`);
       setModalOpen(false);
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể tạo phiếu sửa chữa.');
+      let rollbackFailed = false;
+      if (assetUpdated && oldAsset) {
+        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
+        catch { rollbackFailed = true; }
+      }
+      message.error(rollbackFailed
+        ? 'Không lưu được phiếu và chưa thể hoàn tác trạng thái tài sản; hãy đối chiếu danh mục tài sản.'
+        : error?.response?.data?.message || error?.message || 'Không thể tạo phiếu sửa chữa.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleApproveQuote = async (record: RepairItem) => {
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    if (saving || record.status !== 'Chờ duyệt báo giá') return;
+    const nowStr = new Date().toLocaleString('sv-SE');
+    setSaving(true);
     try {
       await collectionsApi.update('asset_repairs', record.key, {
         status: 'Đang sửa chữa tại hãng',
         approvedAt: nowStr,
+        approver: currentActor(),
       });
-      message.success(`Đã phê duyệt báo giá sửa chữa ${record.repairCode} số tiền ${record.estimatedCost.toLocaleString('vi-VN')} ₫`);
+      await dataService.refreshGenericData('asset_repairs').catch(() => []);
+      message.success(`Đã lưu phê duyệt báo giá ${record.repairCode} bởi ${currentActor()}.`);
       await loadData();
-    } catch {
-      message.error('Không thể duyệt báo giá.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể duyệt báo giá.');
+    } finally {
+      setSaving(false);
     }
   };
 
+  const handleRepairStatusUpdate = async (record: RepairItem, nextStatus: 'Đang sửa chữa tại hãng' | 'Chờ linh kiện thay thế' | 'Không thể sửa chữa') => {
+    if (saving) return;
+    const validSource = nextStatus === 'Chờ linh kiện thay thế'
+      ? record.status === 'Đang sửa chữa tại hãng'
+      : nextStatus === 'Đang sửa chữa tại hãng'
+        ? record.status === 'Chờ linh kiện thay thế'
+        : record.status === 'Đang sửa chữa tại hãng' || record.status === 'Chờ linh kiện thay thế';
+    if (!validSource) return;
+
+    setSaving(true);
+    const nowStr = new Date().toLocaleString('sv-SE');
+    const actor = currentActor();
+    let oldAsset: any = null;
+    let assetUpdated = false;
+    try {
+      if (nextStatus !== 'Đang sửa chữa tại hãng') {
+        const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
+        oldAsset = findAssetByCode(assetsResponse.data?.data || [], record.assetCode);
+        const assetAction = nextStatus === 'Chờ linh kiện thay thế' ? 'Chờ linh kiện thay thế' : 'Không thể sửa chữa';
+        const note = nextStatus === 'Không thể sửa chữa' ? 'Đã xác nhận không thể sửa; chuyển chờ thanh lý.' : 'Tạm dừng chờ linh kiện thay thế.';
+        const updatedAsset = buildRepairAssetUpdate(oldAsset, actor, nowStr, record.repairCode, assetAction, note);
+        await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
+        assetUpdated = true;
+      }
+      await collectionsApi.update('asset_repairs', record.key, {
+        status: nextStatus,
+        notes: [record.notes, `${nowStr} | ${actor} | ${nextStatus}`].filter(Boolean).join('\n'),
+      });
+      await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), ...(assetUpdated ? [dataService.refreshGenericData('asset_items')] : [])]);
+      message.success(`Đã lưu trạng thái ${nextStatus} cho phiếu ${record.repairCode}.`);
+      await loadData();
+    } catch (error: any) {
+      let rollbackFailed = false;
+      if (assetUpdated && oldAsset) {
+        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
+        catch { rollbackFailed = true; }
+      }
+      message.error(rollbackFailed
+        ? 'Không lưu được trạng thái phiếu và chưa thể hoàn tác tài sản; hãy đối chiếu danh mục và phiếu sửa.'
+        : error?.response?.data?.message || error?.message || 'Không thể cập nhật trạng thái sửa chữa.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmUnrepairable = (record: RepairItem) => Modal.confirm({
+    title: 'Xác nhận tài sản không thể sửa?',
+    content: `Phiếu ${record.repairCode} sẽ đóng và tài sản ${record.assetCode} được chuyển sang trạng thái chờ thanh lý.`,
+    okText: 'Xác nhận không thể sửa',
+    cancelText: 'Hủy',
+    onOk: () => handleRepairStatusUpdate(record, 'Không thể sửa chữa'),
+  });
+
   const handleOpenCompleteModal = (record: RepairItem) => {
     setCompleteTarget(record);
-    setActualCostInput(record.estimatedCost || 0);
-    setCompleteNotes('Đã kiểm tra kỹ thuật test 24h, thiết bị hoạt động hoàn hảo, nghiệm thu đạt chuẩn bàn giao.');
+    setActualCostInput('');
+    setCompleteNotes('');
     setCompleteModalOpen(true);
   };
 
   const handleConfirmComplete = async () => {
-    if (completeTarget) {
-      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-      try {
-        await collectionsApi.update('asset_repairs', completeTarget.key, {
-          status: 'Đã sửa xong & Bàn giao',
-          actualCost: actualCostInput,
-          completedDate: nowStr,
-          notes: `${completeTarget.notes || ''} [Nghiệm thu: ${completeNotes}]`,
-        });
-        message.success(`Đã nghiệm thu sửa chữa và bàn giao lại tài sản ${completeTarget.assetCode} cho nhân sự!`);
-        setCompleteModalOpen(false);
-        await loadData();
-      } catch {
-        message.error('Không thể nghiệm thu sửa chữa.');
+    if (!completeTarget || saving || completeTarget.status !== 'Đang sửa chữa tại hãng') return;
+    const actualCost = Number(actualCostInput);
+    if (actualCostInput === '' || !Number.isFinite(actualCost) || actualCost < 0 || !completeNotes.trim()) {
+      message.error('Nhập chi phí thực tế không âm và kết quả nghiệm thu.');
+      return;
+    }
+    setSaving(true);
+    const nowStr = new Date().toLocaleString('sv-SE');
+    let oldAsset: any = null;
+    let assetUpdated = false;
+    try {
+      const assetsResponse = await collectionsApi.get<any>('asset_items', { limit: 500 });
+      oldAsset = findAssetByCode(assetsResponse.data?.data || [], completeTarget.assetCode);
+      const updatedAsset = buildRepairAssetUpdate(oldAsset, currentActor(), nowStr, completeTarget.repairCode, 'Hoàn tất sửa chữa', completeNotes);
+      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
+      assetUpdated = true;
+      await collectionsApi.update('asset_repairs', completeTarget.key, {
+        status: 'Đã sửa xong & Bàn giao',
+        actualCost,
+        completedDate: nowStr,
+        notes: [completeTarget.notes, `Nghiệm thu: ${completeNotes.trim()}`].filter(Boolean).join('\n'),
+      });
+      await Promise.allSettled([dataService.refreshGenericData('asset_repairs'), dataService.refreshGenericData('asset_items')]);
+      message.success(`Đã lưu nghiệm thu ${completeTarget.repairCode} và trả trạng thái tài sản về sử dụng/kho.`);
+      setCompleteModalOpen(false);
+      setDrawerOpen(false);
+      await loadData();
+    } catch (error: any) {
+      let rollbackFailed = false;
+      if (assetUpdated && oldAsset) {
+        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
+        catch { rollbackFailed = true; }
       }
+      message.error(rollbackFailed
+        ? 'Không lưu được nghiệm thu và chưa thể hoàn tác trạng thái tài sản; hãy đối chiếu danh mục và phiếu sửa.'
+        : error?.response?.data?.message || error?.message || 'Không thể nghiệm thu sửa chữa.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -189,12 +320,27 @@ export const AssetRepairsModule: React.FC = () => {
     return matchSearch && matchStatus && matchSeverity;
   });
 
+  const exportRegister = () => downloadFile('So_theo_doi_sua_chua_tai_san.xlsx', generateValidXlsxBlob([
+    ['Mã phiếu', 'Mã tài sản', 'Tài sản', 'Serial', 'Mức độ', 'Người báo', 'Phòng ban', 'Đơn vị sửa', 'Liên hệ', 'Mô tả sự cố', 'Nguyên nhân', 'Phương án', 'Linh kiện', 'Dự toán', 'Thực tế', 'Nguồn chi trả', 'Ngày gửi', 'Hẹn xong', 'Ngày bàn giao', 'Bảo hành sau sửa', 'Người duyệt', 'Ngày duyệt', 'Trạng thái', 'Ghi chú'],
+    ...filteredData.map((item) => [item.repairCode, item.assetCode, item.assetName, item.serialNo, item.severity, item.requester, item.department, item.vendor, item.vendorContact, item.issueDescription, item.rootCause, item.solution, item.replacedParts, item.estimatedCost, item.actualCost, item.costBearing, item.startDate, item.expectedEndDate, item.completedDate || '', item.warrantyAfterRepair, item.approver, item.approvedAt || '', item.status, item.notes]),
+  ]));
+
+  const printRepair = (item: RepairItem) => downloadFile(`${item.repairCode.replace(/[^a-z0-9_-]/gi, '_')}_Phieu_sua_chua.pdf`, generateValidPdfBlob('PHIEU BAO HONG VA SUA CHUA TAI SAN', `${item.repairCode} | ${item.assetCode} - ${item.assetName}`, [
+    `Serial: ${item.serialNo}`, `Muc do: ${item.severity}`, `Nguoi bao: ${item.requester} | Phong ban: ${item.department}`,
+    `Don vi sua: ${item.vendor} | Lien he: ${item.vendorContact || 'Chua ghi nhan'}`, `Hien tuong: ${item.issueDescription}`,
+    `Nguyen nhan: ${item.rootCause || 'Chua ghi nhan'}`, `Phuong an: ${item.solution || 'Chua ghi nhan'}`, `Linh kien thay: ${item.replacedParts || 'Chua ghi nhan'}`,
+    `Du toan: ${item.estimatedCost} VND | Thuc te: ${item.actualCost} VND | Nguon: ${item.costBearing}`,
+    `Ngay gui: ${item.startDate} | Hen hoan thanh: ${item.expectedEndDate} | Ngay ban giao: ${item.completedDate || 'Chua hoan tat'}`,
+    `Bao hanh sau sua: ${item.warrantyAfterRepair || 'Chua ghi nhan'}`, `Nguoi duyet: ${item.approver || 'Chua duyet'} | ${item.approvedAt || ''}`,
+    `Trang thai: ${item.status}`, `Ghi chu / nghiem thu: ${item.notes || 'Chua ghi nhan'}`,
+  ]));
+
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       {/* KPI Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chi phí sửa chữa đã thanh toán</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chi phí sửa chữa thực tế đã ghi nhận</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
             {totalActualSpend.toLocaleString('vi-VN')} ₫
           </div>
@@ -222,9 +368,9 @@ export const AssetRepairsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ nghiệm thu thành công</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            100% đạt chuẩn SLA
+            {completionRate === null ? 'Chưa có dữ liệu' : `${completionRate}% đã sửa xong`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Khắc phục triệt để lỗi kỹ thuật</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{fixedCount} hoàn tất / {closedCount} phiếu đã đóng</div>
         </div>
       </div>
 
@@ -247,7 +393,9 @@ export const AssetRepairsModule: React.FC = () => {
               { label: 'Tất cả trạng thái', value: 'all' },
               { label: 'Chờ duyệt báo giá', value: 'Chờ duyệt báo giá' },
               { label: 'Đang sửa chữa tại hãng', value: 'Đang sửa chữa tại hãng' },
+              { label: 'Chờ linh kiện thay thế', value: 'Chờ linh kiện thay thế' },
               { label: 'Đã sửa xong & Bàn giao', value: 'Đã sửa xong & Bàn giao' },
+              { label: 'Không thể sửa chữa', value: 'Không thể sửa chữa' },
             ]}
           />
           <Select
@@ -259,13 +407,13 @@ export const AssetRepairsModule: React.FC = () => {
               { label: 'Khẩn cấp (P1)', value: 'Khẩn cấp (P1)' },
               { label: 'Cao (P2)', value: 'Cao (P2)' },
               { label: 'Trung bình (P3)', value: 'Trung bình (P3)' },
-              { label: 'Thấp', value: 'Thấp (P4)' },
+              { label: 'Thấp', value: 'Thấp' },
             ]}
           />
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo chi phí sửa chữa tài sản')}>
+          <Button icon={<DownloadOutlined />} onClick={exportRegister}>
             Xuất Excel
           </Button>
           <Button
@@ -332,9 +480,9 @@ export const AssetRepairsModule: React.FC = () => {
               key: 'cost',
               render: (_: any, r: RepairItem) => (
                 <div>
-                  <div style={{ fontSize: 12, color: '#64748B' }}>Dự toán: {r.estimatedCost.toLocaleString('vi-VN')} ₫</div>
+                  <div style={{ fontSize: 12, color: '#64748B' }}>Dự toán: {Number(r.estimatedCost || 0).toLocaleString('vi-VN')} ₫</div>
                   <strong style={{ color: '#16A34A', fontSize: 13 }}>
-                    Thực tế: {r.actualCost > 0 ? `${r.actualCost.toLocaleString('vi-VN')} ₫` : '0 ₫'}
+                    Thực tế: {Number(r.actualCost || 0).toLocaleString('vi-VN')} ₫
                   </strong>
                   <div style={{ fontSize: 11, color: '#64748B' }}>Nguồn: {r.costBearing}</div>
                 </div>
@@ -366,9 +514,9 @@ export const AssetRepairsModule: React.FC = () => {
             {
               title: 'Thao tác',
               key: 'act',
-              width: 160,
+              width: 250,
               render: (_: any, r: RepairItem) => (
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <Button
                     size="small"
                     icon={<EyeOutlined />}
@@ -404,6 +552,18 @@ export const AssetRepairsModule: React.FC = () => {
                       Nghiệm thu
                     </Button>
                   )}
+                  {r.status === 'Đang sửa chữa tại hãng' && (
+                    <>
+                      <Button size="small" onClick={() => handleRepairStatusUpdate(r, 'Chờ linh kiện thay thế')} title="Tạm dừng chờ linh kiện">Chờ linh kiện</Button>
+                      <Button size="small" danger onClick={() => confirmUnrepairable(r)} title="Đóng phiếu và chuyển chờ thanh lý">Không thể sửa</Button>
+                    </>
+                  )}
+                  {r.status === 'Chờ linh kiện thay thế' && (
+                    <>
+                      <Button size="small" type="primary" onClick={() => handleRepairStatusUpdate(r, 'Đang sửa chữa tại hãng')}>Tiếp tục sửa</Button>
+                      <Button size="small" danger onClick={() => confirmUnrepairable(r)}>Không thể sửa</Button>
+                    </>
+                  )}
                 </div>
               ),
             },
@@ -431,7 +591,7 @@ export const AssetRepairsModule: React.FC = () => {
                   { label: 'Khẩn cấp (P1) - Dừng hệ thống', value: 'Khẩn cấp (P1)' },
                   { label: 'Cao (P2) - Ảnh hưởng lớn', value: 'Cao (P2)' },
                   { label: 'Trung bình (P3) - Lỗi cục bộ', value: 'Trung bình (P3)' },
-                  { label: 'Thấp - Sự cố nhỏ', value: 'Thấp (P4)' },
+              { label: 'Thấp - Sự cố nhỏ', value: 'Thấp' },
                 ]}
               />
             </Form.Item>
@@ -440,21 +600,29 @@ export const AssetRepairsModule: React.FC = () => {
                 options={[
                   { label: 'Trung tâm bảo hành chính hãng', value: 'Trung tâm bảo hành chính hãng' },
                   { label: 'Nội bộ IT Cty khắc phục', value: 'Nội bộ IT Cty' },
-                  { label: 'Đơn vị dịch vụ ngoài', value: 'Đơn vị dịch vụ ngoài (3rd Party)' },
+                  { label: 'Đơn vị dịch vụ ngoài', value: 'Đơn vị dịch vụ ngoài' },
                 ]}
               />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
-            <Form.Item name="assetCode" label="Mã tài sản" rules={[{ required: true, message: 'Nhập mã TS' }]}>
-              <Input placeholder="Ví dụ: TS-IT-002" />
+            <Form.Item name="assetCode" label="Tài sản trong danh mục" rules={[{ required: true, message: 'Chọn tài sản trong danh mục' }]}>
+              <Select
+                showSearch
+                placeholder="Chọn mã tài sản..."
+                options={assets.map((asset) => ({ label: `${asset.code || asset.assetCode} — ${asset.name || asset.assetName} (${asset.status || 'Chưa rõ trạng thái'})`, value: asset.code || asset.assetCode }))}
+                onChange={(code: string) => {
+                  const asset = assets.find((item) => String(item.code || item.assetCode) === String(code));
+                  form.setFieldsValue({ assetName: asset?.name || asset?.assetName || '', serialNo: asset?.serialNo || asset?.serialNumber || '' });
+                }}
+              />
             </Form.Item>
-            <Form.Item name="assetName" label="Tên tài sản cần sửa" rules={[{ required: true, message: 'Nhập tên tài sản' }]}>
-              <Input placeholder="Ví dụ: Laptop Dell Precision 5680" />
+            <Form.Item name="assetName" label="Tên tài sản cần sửa">
+              <Input disabled placeholder="Tự lấy từ danh mục tài sản" />
             </Form.Item>
-            <Form.Item name="serialNo" label="Số Serial / Tag" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: 8H7K2X3" />
+            <Form.Item name="serialNo" label="Số Serial / Tag">
+              <Input disabled placeholder="Tự lấy từ danh mục tài sản" />
             </Form.Item>
           </div>
 
@@ -508,14 +676,12 @@ export const AssetRepairsModule: React.FC = () => {
             </Form.Item>
             <Form.Item name="department" label="Phòng ban" rules={[{ required: true }]}>
               <Select
-                options={deptOptions.length > 0 ? deptOptions : [
-                  { label: 'Ban Giám Đốc', value: 'Ban Giám Đốc' },
-                ]}
+                options={deptOptions}
                 placeholder="Chọn phòng ban..."
               />
             </Form.Item>
-            <Form.Item name="approver" label="Cán bộ duyệt chi" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
+            <Form.Item name="approver" label="Người phê duyệt">
+              <Input disabled placeholder="Ghi nhận tài khoản khi duyệt báo giá" />
             </Form.Item>
           </div>
 
@@ -586,11 +752,11 @@ export const AssetRepairsModule: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
                 <div>
                   <span style={{ color: '#64748B' }}>Dự toán ban đầu:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{detailItem.estimatedCost.toLocaleString('vi-VN')} ₫</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{Number(detailItem.estimatedCost || 0).toLocaleString('vi-VN')} ₫</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Thực tế thanh toán:</span>
-                  <div style={{ fontWeight: 700, color: '#16A34A' }}>{detailItem.actualCost.toLocaleString('vi-VN')} ₫</div>
+                  <div style={{ fontWeight: 700, color: '#16A34A' }}>{Number(detailItem.actualCost || 0).toLocaleString('vi-VN')} ₫</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Nguồn chi trả:</span>
@@ -633,7 +799,7 @@ export const AssetRepairsModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất phiếu sửa chữa ${detailItem.repairCode} (PDF)`)}
+                onClick={() => printRepair(detailItem)}
                 style={{ flex: 1 }}
               >
                 In phiếu sửa (PDF)
@@ -649,14 +815,24 @@ export const AssetRepairsModule: React.FC = () => {
                 </Button>
               )}
               {detailItem.status === 'Đang sửa chữa tại hãng' && (
-                <Button
-                  type="primary"
-                  icon={<SafetyCertificateOutlined />}
-                  onClick={() => handleOpenCompleteModal(detailItem)}
-                  style={{ backgroundColor: '#16A34A', borderColor: '#16A34A', flex: 1 }}
-                >
-                  Nghiệm thu bàn giao
-                </Button>
+                <>
+                  <Button
+                    type="primary"
+                    icon={<SafetyCertificateOutlined />}
+                    onClick={() => handleOpenCompleteModal(detailItem)}
+                    style={{ backgroundColor: '#16A34A', borderColor: '#16A34A', flex: 1 }}
+                  >
+                    Nghiệm thu bàn giao
+                  </Button>
+                  <Button onClick={() => handleRepairStatusUpdate(detailItem, 'Chờ linh kiện thay thế')}>Chờ linh kiện</Button>
+                  <Button danger onClick={() => confirmUnrepairable(detailItem)}>Không thể sửa</Button>
+                </>
+              )}
+              {detailItem.status === 'Chờ linh kiện thay thế' && (
+                <>
+                  <Button type="primary" onClick={() => handleRepairStatusUpdate(detailItem, 'Đang sửa chữa tại hãng')}>Tiếp tục sửa</Button>
+                  <Button danger onClick={() => confirmUnrepairable(detailItem)}>Không thể sửa</Button>
+                </>
               )}
             </div>
           </div>
@@ -674,15 +850,15 @@ export const AssetRepairsModule: React.FC = () => {
         {completeTarget && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
             <Alert
-              message="Xác nhận hoàn thành sửa chữa"
-              description={`Xác nhận tài sản "${completeTarget.assetName}" (Mã: ${completeTarget.assetCode}) đã được đơn vị "${completeTarget.vendor}" sửa chữa xong và kiểm thử hoạt động bình thường.`}
+              message="Ghi nhận nghiệm thu sửa chữa"
+              description={`Nhập chi phí và kết quả kiểm tra thực tế của tài sản ${completeTarget.assetCode} - ${completeTarget.assetName}.`}
               type="success"
               showIcon
             />
 
             <div>
               <label style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 6 }}>
-                Chi phí thực tế thanh toán quyết toán (VNĐ):
+                Chi phí sửa chữa thực tế (VNĐ):
               </label>
               <Input
                 type="number"
@@ -693,7 +869,7 @@ export const AssetRepairsModule: React.FC = () => {
                 style={{ fontSize: 15, fontWeight: 700, color: '#16A34A' }}
               />
               <span style={{ fontSize: 11.5, color: '#64748B', marginTop: 4, display: 'block' }}>
-                * Dự toán ban đầu: {completeTarget.estimatedCost.toLocaleString('vi-VN')} ₫
+                * Dự toán ban đầu: {Number(completeTarget.estimatedCost || 0).toLocaleString('vi-VN')} ₫
               </span>
             </div>
 
