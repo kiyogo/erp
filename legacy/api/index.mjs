@@ -2195,7 +2195,9 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       'Kiểm tra thông số điện áp, nhiệt độ và công suất tải',
       'Cập nhật bản ghi nhật ký vận hành kỹ thuật',
     ];
-    const today = now().slice(0, 10);
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
     const scheduleStatus = (date) => {
       const due = Date.parse(`${date}T00:00:00Z`);
       const current = Date.parse(`${today}T00:00:00Z`);

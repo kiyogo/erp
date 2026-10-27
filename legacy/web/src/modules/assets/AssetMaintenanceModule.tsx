@@ -372,7 +372,11 @@ export const AssetMaintenanceModule: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="lastDate" label="Ngày bảo dưỡng gần nhất"><Input type="date" /></Form.Item>
             <Form.Item name="nextDate" label="Ngày bảo dưỡng tiếp theo" rules={[{ required: true }]}><Input type="date" /></Form.Item>
-            <Form.Item name="estimatedBudget" label="Dự toán (VNĐ)" rules={[{ type: 'number', min: 0 }]}><Input type="number" min={0} step={1000} /></Form.Item>
+            <Form.Item name="estimatedBudget" label="Dự toán (VNĐ)" rules={[{ validator: async (_rule: unknown, value: unknown) => {
+              if (value === undefined || value === null || value === '') return;
+              const amount = Number(value);
+              if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1_000_000_000_000) throw new Error('Dự toán phải là số nguyên không âm hợp lệ.');
+            } }]}><Input type="number" min={0} step={1000} /></Form.Item>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}><Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button><Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu kế hoạch</Button></div>
         </Form>
