@@ -10,6 +10,8 @@ dist-check/
 # Local databases & uploads
 data/
 */data/
+!web/src/data/
+!web/src/data/menuData.tsx
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal

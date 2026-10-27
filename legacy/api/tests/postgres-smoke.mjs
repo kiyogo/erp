@@ -144,7 +144,25 @@ try {
   const pgRedemption = redemptionRace.find((item) => item.status === 201).body.entry;
   assert.equal((await request(`/crm/loyalty/entries/${pgRedemption.key}/cancel`, 'POST', { reason: 'PG cancellation' })).balance, 100);
   await request(`/crm/loyalty/entries/${pgRedemption.key}/cancel`, 'POST', { reason: 'duplicate' }, 409);
-  assert.equal((await request('/crm/loyalty')).customers.find((item) => item.key === promotionCustomer.key).balance, 100); completed++;
+  const earnRace = await Promise.all(['pg-loyalty-race-a', 'pg-loyalty-race-b'].map(async (requestId) => {
+    const response = await fetch(`${base}/crm/loyalty/entries`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ...pgPoints, requestId, points: 5, reference: 'PG-SALE-RACE' }),
+    });
+    return response.status;
+  }));
+  assert.deepEqual(earnRace.sort((a, b) => a - b), [201, 409]);
+  const pendingReward = (await request('/crm/loyalty/entries', 'POST', { requestId: 'pg-loyalty-pending', type: 'redeem', customerId: promotionCustomer.key, points: 10, reference: 'PG-REDEEM-RACE', rewardName: 'PG reward' }, 201)).entry;
+  const decisionRace = await Promise.all(['fulfill', 'cancel'].map(async (action) => {
+    const response = await fetch(`${base}/crm/loyalty/entries/${pendingReward.key}/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(action === 'fulfill' ? { reference: 'PG-GIFT' } : { reason: 'PG cancellation' }),
+    });
+    return { action, status: response.status };
+  }));
+  assert.deepEqual(decisionRace.map((item) => item.status).sort((a, b) => a - b), [200, 409]);
+  const expectedBalance = decisionRace.find((item) => item.status === 200).action === 'fulfill' ? 95 : 105;
+  assert.equal((await request('/crm/loyalty')).customers.find((item) => item.key === promotionCustomer.key).balance, expectedBalance); completed++;
   const supplierEvaluationInput = { key: 'pg-supplier-evaluation', evalCode: 'PG-NCC-DG-1', supplierId: supplier.key, evalPeriod: 'Quý IV / 2026', qualityScore: 35, deliveryScore: 25, priceScore: 18, serviceScore: 8, evaluator: 'Forged', evaluatorId: 'forged', totalScore: 0, tier: 'Hạng C' };
   const supplierEvaluation = (await request('/collections/crm_supplier_evaluations', 'POST', { record: supplierEvaluationInput }, 201)).record;
   assert.equal(supplierEvaluation.supplierName, updatedSupplier.name);

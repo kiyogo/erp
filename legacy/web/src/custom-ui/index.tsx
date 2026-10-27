@@ -1734,6 +1734,19 @@ export const Select: React.FC<SelectProps> = ({
                   } else if (e.key === 'Backspace' && !searchQuery && values.length > 0) {
                     const nextValues = values.slice(0, -1);
                     onChange && onChange(nextValues);
+                  } else if (e.key === 'Enter' && mode === 'tags') {
+                    e.preventDefault();
+                    const typed = searchQuery.trim();
+                    if (typed) {
+                      const matchingOption = options.find((option) =>
+                        String(option.value).toLocaleLowerCase() === typed.toLocaleLowerCase()
+                        || (typeof option.label === 'string' && option.label.trim().toLocaleLowerCase() === typed.toLocaleLowerCase()));
+                      const nextValue = matchingOption?.value ?? typed;
+                      if (!values.some((value) => String(value) === String(nextValue))) onChange && onChange([...values, nextValue]);
+                      setSearchQuery('');
+                    } else if (displayedOptions.length > 0) {
+                      handleSelect(displayedOptions[0].value);
+                    }
                   } else if (e.key === 'Enter' && displayedOptions.length > 0) {
                     e.preventDefault();
                     handleSelect(displayedOptions[0].value);

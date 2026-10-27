@@ -166,25 +166,25 @@ export const LoyaltyModule: React.FC = () => {
     <div className="transparent-table-card"><KTable dataSource={visibleEntries} columns={entryColumns} rowKey="key" loading={loading} pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có giao dịch điểm.' }} /></div>
 
     <Modal title={entryType === 'earn' ? 'Ghi nhận tích điểm' : 'Đổi điểm lấy thưởng'} open={!!entryType} onCancel={() => setEntryType(null)} footer={null} width={620}>
-      <Form form={entryForm} layout="vertical" onFinish={saveEntry} style={{ marginTop: 12 }}>
+      <Form form={entryForm} layout="vertical" onFinish={saveEntry} style={{ marginTop: 14 }}>
         <Form.Item name="customerId" label="Khách hàng" rules={[{ required: true }]}><Select showSearch options={customers.filter((item) => !item.status.toLocaleLowerCase().includes('tạm')).map((item) => ({ value: item.key, label: `${item.code} · ${item.name} · ${item.balance.toLocaleString('vi-VN')} điểm` }))} /></Form.Item>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <Form.Item name="points" label="Số điểm" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
           <Form.Item name="reference" label="Mã tham chiếu" rules={[{ required: true, whitespace: true }]}><Input maxLength={160} /></Form.Item>
         </div>
         {entryType === 'redeem' && <Form.Item name="rewardName" label="Phần thưởng" rules={[{ required: true, whitespace: true }]}><Input maxLength={255} /></Form.Item>}
         <Form.Item name="note" label="Ghi chú"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14 }}>
           <Button onClick={() => setEntryType(null)}>Hủy</Button>
           <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu giao dịch</Button>
         </div>
       </Form>
     </Modal>
     <Modal title={action === 'fulfill' ? 'Xác nhận trao thưởng' : 'Hủy giao dịch điểm'} open={!!action} onCancel={() => { setAction(null); setTarget(null); }} footer={null} width={540}>
-      <Form form={actionForm} layout="vertical" onFinish={saveAction} style={{ marginTop: 12 }}>
-        <div style={{ marginBottom: 12 }}>{target?.customerName} · {target?.reference} · {target?.points.toLocaleString('vi-VN')} điểm</div>
+      <Form form={actionForm} layout="vertical" onFinish={saveAction} style={{ marginTop: 14 }}>
+        <div style={{ marginBottom: 14 }}>{target?.customerName} · {target?.reference} · {target?.points.toLocaleString('vi-VN')} điểm</div>
         <Form.Item name="detail" label={action === 'fulfill' ? 'Mã xác nhận trao thưởng' : 'Lý do hủy'} rules={[{ required: true, whitespace: true }]}><Input maxLength={500} /></Form.Item>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14 }}>
           <Button onClick={() => { setAction(null); setTarget(null); }}>Đóng</Button>
           <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Xác nhận</Button>
         </div>

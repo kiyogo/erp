@@ -215,45 +215,45 @@ export const PromotionsModule: React.FC = () => {
     </div>
 
     <Modal title={editing ? 'Cập nhật chương trình khuyến mại' : 'Thêm chương trình khuyến mại'} open={formOpen} onCancel={() => { setFormOpen(false); setEditing(null); }} footer={null} width={900}>
-      <Form form={form} layout="vertical" onFinish={save} style={{ marginTop: 12, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+      <Form form={form} layout="vertical" onFinish={save} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 14 }}>
           <Form.Item name="code" label="Mã chương trình" rules={[{ required: true, whitespace: true }]}><Input maxLength={80} /></Form.Item>
           <Form.Item name="name" label="Tên chương trình" rules={[{ required: true, whitespace: true }]}><Input maxLength={180} /></Form.Item>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
           <Form.Item name="startDate" label="Từ ngày" rules={[{ required: true }]}><Input type="date" /></Form.Item>
           <Form.Item name="endDate" label="Đến ngày" rules={[{ required: true }]}><Input type="date" /></Form.Item>
           <Form.Item name="promotionType" label="Loại khuyến mại" rules={[{ required: true }]}><Select options={['Chiết khấu', 'Tặng quà', 'Tích điểm'].map((value) => ({ value, label: value }))} /></Form.Item>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <Form.Item name="target" label="Đối tượng áp dụng" rules={[{ required: true, whitespace: true }]}><Input maxLength={180} /></Form.Item>
           <Form.Item name="amountBasis" label="Căn cứ khuyến mại" rules={[{ required: true }]}><Select options={['Thành tiền trước thuế', 'Thành tiền sau thuế'].map((value) => ({ value, label: value }))} /></Form.Item>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <Form.Item name="orgUnitKeys" label="Cơ cấu tổ chức"><Select mode="multiple" options={orgOptions} placeholder="Chọn đơn vị áp dụng" /></Form.Item>
           <Form.Item name="employeeIds" label="Nhân viên áp dụng"><Select mode="multiple" options={employeeOptions} placeholder="Chọn nhân viên" /></Form.Item>
         </div>
         <Form.Item name="eligibleItemCodes" label="Bộ quà hoặc hàng hóa áp dụng"><Select mode="tags" options={[]} placeholder="Nhập mã hàng hóa rồi nhấn Enter" /></Form.Item>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <Form.Item name="customerKeys" label="Khách hàng"><Select mode="multiple" options={customerOptions} placeholder="Để trống để không giới hạn khách hàng cụ thể" /></Form.Item>
           <Form.Item name="combinablePromotionKeys" label="Chương trình được áp dụng đồng thời"><Select mode="multiple" options={promotionOptions} placeholder="Chọn chương trình có thể kết hợp" /></Form.Item>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
           <Form.Item name="taxCondition" label="Điều kiện thuế" rules={[{ required: true }]}><Select options={['Bất kỳ', 'Có thuế', 'Không thuế'].map((value) => ({ value, label: value }))} /></Form.Item>
           <Form.Item name="minimumSubtotal" label="Điều kiện theo thành tiền"><Input type="number" min={0} step={1} /></Form.Item>
           <Form.Item name="unitPrice" label="Đơn giá áp dụng"><Input type="number" min={0} step={1} /></Form.Item>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
           <Form.Item name="discountKind" label="Kiểu chiết khấu" rules={[{ required: true }]}><Select options={['Phần trăm', 'Số tiền'].map((value) => ({ value, label: value }))} /></Form.Item>
           <Form.Item name="discountValue" label="Giá trị chiết khấu"><Input type="number" min={0} step={1} /></Form.Item>
           <Form.Item name="unit" label="Đơn vị"><Input maxLength={80} /></Form.Item>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 24px', padding: '4px 0 12px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, padding: '4px 0 14px' }}>
           <Form.Item name="enabled" label="Kích hoạt" valuePropName="checked"><Switch checkedChildren="Có" unCheckedChildren="Không" /></Form.Item>
           <Form.Item name="allowConcurrent" label="Áp dụng đồng thời khuyến mại khác" valuePropName="checked"><Switch checkedChildren="Có" unCheckedChildren="Không" /></Form.Item>
           <Form.Item name="applyOnce" label="Giới hạn sử dụng" valuePropName="checked"><Switch checkedChildren="Có" unCheckedChildren="Không" /></Form.Item>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
           <Button onClick={() => { setFormOpen(false); setEditing(null); }}>Hủy</Button>
           <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{editing ? 'Lưu thay đổi' : 'Lưu chương trình'}</Button>
         </div>
