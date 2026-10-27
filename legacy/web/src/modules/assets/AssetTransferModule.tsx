@@ -21,7 +21,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Steps } from '../../custom-ui';
-import { collectionsApi } from '../../api/endpoints';
+import { collectionsApi, assetTransfersApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export interface TransferItem {
@@ -58,6 +58,8 @@ const INITIAL_TRANSFERS: TransferItem[] = [];
 
 export const AssetTransferModule: React.FC = () => {
   const [data, setData] = useState<TransferItem[]>(INITIAL_TRANSFERS);
+  const [assets, setAssets] = useState<any[]>([]);
+  const [originLocation, setOriginLocation] = useState('');
 
   useEffect(() => {
     void loadData();
@@ -80,8 +82,16 @@ export const AssetTransferModule: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const response = await collectionsApi.get<TransferItem>('asset_transfers', { limit: 500 });
-      setData((response.data?.data || []).map((item: any) => ({ ...item, key: item.id || item.key })));
+      const items: TransferItem[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const response = await collectionsApi.get<TransferItem>('asset_transfers', { limit: 500, page });
+        items.push(...(response.data?.data || []));
+        totalPages = response.data?.pagination?.totalPages || 0;
+        page++;
+      } while (page <= totalPages);
+      setData(items);
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tải danh sách điều chuyển tài sản.');
     }
@@ -95,6 +105,8 @@ export const AssetTransferModule: React.FC = () => {
 
   const handleOpenCreate = () => {
     form.resetFields();
+    setOriginLocation('');
+    void dataService.refreshGenericData('asset_items').then(setAssets).catch(() => { setAssets([]); message.error('Không tải được danh mục tài sản.'); });
     form.setFieldsValue({
       transferDate: new Date().toLocaleDateString('sv-SE'),
       shippingCost: 0,
@@ -103,82 +115,31 @@ export const AssetTransferModule: React.FC = () => {
   };
 
   const handleCreate = async (values: any) => {
-    if (data.some((item) => item.transferCode.trim().toLowerCase() === String(values.transferCode).trim().toLowerCase())) {
-      message.error('Mã lệnh điều chuyển đã tồn tại.');
-      return;
-    }
-    const cost = Number(values.shippingCost || 0);
-    if (!Number.isFinite(cost) || cost < 0 || String(values.expectedDeliveryDate) < String(values.transferDate)) {
-      message.error('Cước vận chuyển phải không âm và ngày nhận dự kiến không sớm hơn ngày gửi.');
-      return;
-    }
+    if (saving) return;
     setSaving(true);
     try {
-      const assets = await collectionsApi.get<any>('asset_items', { limit: 500 });
-      const asset = (assets.data?.data || []).find((item: any) => String(item.code || item.assetCode).trim().toLowerCase() === String(values.assetCode).trim().toLowerCase());
-      if (!asset) {
-        message.error('Mã tài sản không có trong danh mục tài sản đang lưu.');
-        return;
-      }
-      if (asset.status === 'Đã thanh lý') {
-        message.error('Không thể điều chuyển tài sản đã thanh lý.');
-        return;
-      }
-    const newItem: TransferItem = {
-      ...values,
-      key: `transfer-${crypto.randomUUID()}`,
-      assetCode: asset.code || asset.assetCode,
-      assetName: asset.name || asset.assetName || values.assetName,
-      category: asset.category || '',
-      originalPrice: Number(asset.originalPrice) || 0,
-      netBookValue: Number(asset.netBookValue) || 0,
-      serialNo: String(values.serialNo || ''),
-      shippingCost: cost,
-      approver: '',
-      approvedAt: undefined,
-      receivedDate: undefined,
-      receiveCondition: undefined,
-      status: 'Chờ phê duyệt',
-    };
-      await collectionsApi.create('asset_transfers', newItem, newItem.key);
-      setData((current) => [newItem, ...current]);
+      const saved = (await assetTransfersApi.create(values)).data.transfer as TransferItem;
+      setData((current) => [saved, ...current]);
       await dataService.refreshGenericData('asset_transfers').catch(() => []);
-    message.success(`Đã lập lệnh điều chuyển tài sản: ${values.transferCode}`);
-    setModalOpen(false);
-    form.resetFields();
+      message.success(`Đã lập lệnh điều chuyển tài sản: ${saved.transferCode}`);
+      setModalOpen(false);
+      form.resetFields();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể lưu lệnh điều chuyển tài sản.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const currentActor = () => {
-    try {
-      const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
-      return user?.name || user?.fullName || user?.email || 'Người dùng hiện tại';
-    } catch { return 'Người dùng hiện tại'; }
+    } finally { setSaving(false); }
   };
 
   const handleTransition = async (record: TransferItem, status: TransferItem['status']) => {
-    if (saving || record.status === 'Đã điều chuyển hoàn tất' || record.status === 'Từ chối điều chuyển') return;
-    const updated: TransferItem = {
-      ...record,
-      status,
-      ...(status === 'Đang vận chuyển' ? { approver: currentActor(), approvedAt: new Date().toLocaleString('sv-SE') } : {}),
-    };
+    if (saving) return;
     setSaving(true);
     try {
-      await collectionsApi.update('asset_transfers', record.key, updated);
+      const updated = (await assetTransfersApi.transition(record.key, status === 'Đang vận chuyển' ? 'approve' : 'reject')).data.transfer as TransferItem;
       setData((current) => current.map((item) => item.key === record.key ? updated : item));
       setDetailItem((current) => current?.key === record.key ? updated : current);
       await dataService.refreshGenericData('asset_transfers').catch(() => []);
       message.success(status === 'Đang vận chuyển' ? `Đã lưu phê duyệt lệnh ${record.transferCode}.` : `Đã lưu từ chối lệnh ${record.transferCode}.`);
-    } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái điều chuyển.');
-    } finally {
-      setSaving(false);
-    }
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái điều chuyển.'); }
+    finally { setSaving(false); }
   };
 
   const handleApprove = (record: TransferItem) => handleTransition(record, 'Đang vận chuyển');
@@ -192,59 +153,17 @@ export const AssetTransferModule: React.FC = () => {
 
   const handleConfirmReceive = async () => {
     if (!receiveTarget || saving) return;
-    if (receiveTarget.status !== 'Đang vận chuyển') {
-      message.error('Chỉ xác nhận nhận tài sản sau khi lệnh đã được duyệt gửi.');
-      return;
-    }
-    if (!receiveConditionText.trim()) {
-      message.error('Nhập tình trạng tài sản thực tế khi nhận.');
-      return;
-    }
+    if (!receiveConditionText.trim()) { message.error('Nhập tình trạng tài sản thực tế khi nhận.'); return; }
     setSaving(true);
-    let oldAsset: any = null;
-    let assetUpdated = false;
     try {
-      const assets = await collectionsApi.get<any>('asset_items', { limit: 500 });
-      oldAsset = (assets.data?.data || []).find((item: any) => String(item.code || item.assetCode).trim().toLowerCase() === receiveTarget.assetCode.trim().toLowerCase());
-      if (!oldAsset) throw new Error('Không tìm thấy tài sản gốc để cập nhật vị trí và người quản lý.');
-      const receivedDate = new Date().toLocaleString('sv-SE');
-      const actor = currentActor();
-      const updatedAsset = {
-        ...oldAsset,
-        location: receiveTarget.toLocation,
-        department: receiveTarget.toDepartment,
-        assignedTo: receiveTarget.toCustodian,
-        history: [
-          ...(Array.isArray(oldAsset.history) ? oldAsset.history : []),
-          { key: `transfer-${crypto.randomUUID()}`, date: receivedDate, action: 'Điều chuyển tài sản', actor, note: `Phiếu ${receiveTarget.transferCode}; ${receiveTarget.fromLocation} → ${receiveTarget.toLocation}; tình trạng nhận: ${receiveConditionText.trim()}` },
-        ],
-      };
-      await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), updatedAsset);
-      assetUpdated = true;
-      const updatedTransfer: TransferItem = {
-        ...receiveTarget,
-        status: 'Đã điều chuyển hoàn tất',
-        receivedDate,
-        receiveCondition: receiveConditionText.trim(),
-      };
-      await collectionsApi.update('asset_transfers', receiveTarget.key, updatedTransfer);
-      setData((current) => current.map((item) => item.key === receiveTarget.key ? updatedTransfer : item));
-      setDetailItem((current) => current?.key === receiveTarget.key ? updatedTransfer : current);
+      const updated = (await assetTransfersApi.transition(receiveTarget.key, 'receive', { receiveCondition: receiveConditionText })).data.transfer as TransferItem;
+      setData((current) => current.map((item) => item.key === receiveTarget.key ? updated : item));
+      setDetailItem((current) => current?.key === receiveTarget.key ? updated : current);
       await Promise.allSettled([dataService.refreshGenericData('asset_transfers'), dataService.refreshGenericData('asset_items')]);
       message.success(`Đã lưu nghiệm thu và cập nhật vị trí tài sản ${receiveTarget.assetCode}.`);
       setReceiveModalOpen(false);
-    } catch (error: any) {
-      let rollbackFailed = false;
-      if (assetUpdated && oldAsset) {
-        try { await collectionsApi.update('asset_items', String(oldAsset.key || oldAsset.id), oldAsset); }
-        catch { rollbackFailed = true; }
-      }
-      message.error(rollbackFailed
-        ? 'Nghiệm thu gặp lỗi và chưa thể hoàn tác vị trí tài sản. Hãy đối chiếu hồ sơ tài sản và phiếu điều chuyển.'
-        : error?.response?.data?.message || error?.message || 'Không thể lưu nghiệm thu điều chuyển.');
-    } finally {
-      setSaving(false);
-    }
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể lưu nghiệm thu điều chuyển.'); }
+    finally { setSaving(false); }
   };
 
   const filteredData = data.filter((item) => {
@@ -500,12 +419,17 @@ export const AssetTransferModule: React.FC = () => {
         width={760}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="transferCode" label="Mã lệnh điều chuyển" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: DC-2026-008" />
             </Form.Item>
-            <Form.Item name="assetCode" label="Mã tài sản" rules={[{ required: true, message: 'Nhập mã TS' }]}>
-              <Input placeholder="Ví dụ: TS-SRV-002" />
+            <Form.Item name="assetCode" label="Mã tài sản" rules={[{ required: true, message: 'Chọn tài sản' }]}>
+              <Select showSearch placeholder="Chọn tài sản" options={assets.filter((item) => item.status !== 'Đã thanh lý' && (item.code || item.assetCode)).map((item) => ({ value: String(item.code || item.assetCode), label: `${item.code || item.assetCode} — ${item.name || item.assetName || ''}` }))}
+                onChange={(code: string) => {
+                  const asset = assets.find((item) => String(item.code || item.assetCode) === code);
+                  setOriginLocation(String(asset?.location || ''));
+                  form.setFieldsValue({ assetName: asset?.name || asset?.assetName || '', fromLocation: asset?.location || '', fromDepartment: asset?.department || '', fromCustodian: asset?.assignedTo || '' });
+                }} />
             </Form.Item>
             <Form.Item name="serialNo" label="Số Serial / Tag" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: 8H7K2X3" />
@@ -516,12 +440,13 @@ export const AssetTransferModule: React.FC = () => {
             <Input placeholder="Ví dụ: Switch Core Cisco Catalyst 9300 48 Port" />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <div style={{ background: '#FEF2F2', padding: 12, borderRadius: 8, border: '1px solid #FECACA' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#991B1B', marginBottom: 8 }}>ĐƠN VỊ XUẤT ĐI:</div>
               <Form.Item name="fromLocation" label="Địa điểm gửi" rules={[{ required: true }]}>
                 <Select
                   options={[
+                    ...(originLocation ? [{ label: originLocation, value: originLocation }] : []),
                     { label: 'Trụ sở chính Hà Nội', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
                     { label: 'IDC Viettel Duy Tân Hà Nội', value: 'IDC Viettel Duy Tân Hà Nội' },
                     { label: 'Chi nhánh TP.HCM', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
@@ -560,7 +485,7 @@ export const AssetTransferModule: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 12, marginTop: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 14, marginTop: 12 }}>
             <Form.Item name="carrierName" label="Đơn vị vận chuyển" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: Viettel Post Hỏa Tốc / Xe chuyên dụng Cty" />
             </Form.Item>
@@ -572,7 +497,7 @@ export const AssetTransferModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="transferDate" label="Ngày bắt đầu gửi" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
@@ -591,7 +516,7 @@ export const AssetTransferModule: React.FC = () => {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy bỏ</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Xác nhận lập lệnh điều chuyển
             </Button>
           </div>
@@ -787,6 +712,7 @@ export const AssetTransferModule: React.FC = () => {
                 type="primary"
                 icon={<CheckCircleOutlined />}
                 onClick={handleConfirmReceive}
+                loading={saving}
                 style={{ backgroundColor: '#16A34A', borderColor: '#16A34A' }}
               >
                 Xác nhận nghiệm thu

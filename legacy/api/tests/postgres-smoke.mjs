@@ -50,6 +50,18 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  await request('/collections/asset_items', 'POST', { record: { key: 'pg-transfer-asset', code: 'PG-TRANSFER-ASSET', name: 'PG asset', status: 'Đang sử dụng', location: 'PG A', department: 'IT', assignedTo: 'PG A', originalPrice: 1000, netBookValue: 700, history: [] } }, 201);
+  const pgAssetTransfer = (await request('/assets/transfers', 'POST', { transferCode: 'PG-TRANSFER-01', assetCode: 'PG-TRANSFER-ASSET', toLocation: 'PG B', toDepartment: 'Sales', toCustodian: 'PG B', carrierName: 'Carrier', shippingCost: 0, transferDate: '2030-01-01', expectedDeliveryDate: '2030-01-02', reason: 'PG transfer' }, 201)).transfer;
+  await request(`/assets/transfers/${pgAssetTransfer.key}/approve`, 'POST', {});
+  const pgAssetTransferRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/assets/transfers/${pgAssetTransfer.key}/receive`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ receiveCondition: 'Tốt' }) });
+    return response.status;
+  }));
+  assert.deepEqual(pgAssetTransferRace.sort((a, b) => a - b), [200, 409]);
+  const pgMovedAsset = (await request('/collections/asset_items/pg-transfer-asset')).record;
+  assert.equal(pgMovedAsset.location, 'PG B');
+  assert.equal(pgMovedAsset.history.filter((item) => item.action === 'Điều chuyển tài sản').length, 1);
+  assert.equal((await request(`/collections/asset_transfers/${pgAssetTransfer.key}`)).record.status, 'Đã điều chuyển hoàn tất'); completed++;
   await request('/collections/payroll', 'POST', { record: { key: 'pg-payroll-post', employeeCode: 'PG-PAY-1', employeeName: 'PG employee', month: '2031-08', status: 'Chưa chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 } }, 201);
   const pgPayroll = { period: '08/2031', employerInsurance: 200 };
   const pgPayrollPreview = await request('/finance/payroll/ledger-preview', 'POST', pgPayroll);

@@ -5217,6 +5217,11 @@ async function handleRequest(request, response) {
   const collectionMatch = /^\/collections\/([^/]+)$/.exec(resource);
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
 
+  if ((collectionMatch || collectionRecordMatch) && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_transfers') {
+    await requireAdmin(request);
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Vui lòng xử lý điều chuyển qua chức năng tài sản.');
+  }
+
   if ((collectionMatch || collectionRecordMatch)
     && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'asset_licenses') {
     await requireAdmin(request);
@@ -6395,6 +6400,95 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'cancel_internal_transfer', 'finance_internal_transfers', key, { reason });
     });
     sendJson(response, 200, { transfer });
+    return;
+  }
+
+  const assetTransferAction = /^\/assets\/transfers\/([^/]+)\/(approve|reject|receive)$/.exec(resource);
+  if (request.method === 'POST' && (resource === '/assets/transfers' || assetTransferAction)) {
+    const actor = await requireAdmin(request);
+    const input = await readJson(request);
+    const timestamp = now();
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_transfers'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
+      }
+      const findAsset = async (key, code) => {
+        if (key) {
+          const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ?").get(key);
+          if (!row) throw new HttpError(404, 'Không tìm thấy tài sản gốc.');
+          return row;
+        }
+        const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items'").all();
+        const wanted = String(code || '').trim().toLocaleLowerCase('vi-VN');
+        const matching = rows.filter((row) => String(publicCollectionRecord(row)?.code || publicCollectionRecord(row)?.assetCode || '').trim().toLocaleLowerCase('vi-VN') === wanted);
+        if (matching.length !== 1) throw new HttpError(409, 'Không xác định duy nhất tài sản gốc theo mã.');
+        return matching[0];
+      };
+      if (!assetTransferAction) {
+        const transferCode = requiredText(input.transferCode, 'Mã lệnh điều chuyển', 80);
+        const assetCode = requiredText(input.assetCode, 'Mã tài sản', 160);
+        const row = await findAsset('', assetCode);
+        const asset = publicCollectionRecord(row);
+        if (asset.status === 'Đã thanh lý') throw new HttpError(422, 'Không thể điều chuyển tài sản đã thanh lý.');
+        const existingRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_transfers'").all();
+        const existing = existingRows.map(publicCollectionRecord).filter(Boolean);
+        if (existing.some((item) => String(item.transferCode || '').trim().toLocaleLowerCase('vi-VN') === transferCode.toLocaleLowerCase('vi-VN'))) throw new HttpError(409, 'Mã lệnh điều chuyển đã tồn tại.');
+        if (existing.some((item) => ['Chờ phê duyệt', 'Đang vận chuyển'].includes(item.status) && (item.assetKey === asset.key || String(item.assetCode || '').trim().toLocaleLowerCase('vi-VN') === assetCode.toLocaleLowerCase('vi-VN')))) throw new HttpError(409, 'Tài sản đã có lệnh điều chuyển đang xử lý.');
+        const transferDate = requiredIsoDate(input.transferDate, 'Ngày gửi');
+        const expectedDeliveryDate = requiredIsoDate(input.expectedDeliveryDate, 'Ngày nhận dự kiến');
+        if (expectedDeliveryDate < transferDate) throw new HttpError(422, 'Ngày nhận dự kiến không được trước ngày gửi.');
+        const origin = { location: String(asset.location || ''), department: String(asset.department || ''), assignedTo: String(asset.assignedTo || '') };
+        result = {
+          key: randomUUID(), transferCode, assetKey: asset.key, assetCode: asset.code || asset.assetCode,
+          assetName: requiredText(asset.name || asset.assetName, 'Tên tài sản', 255), category: String(asset.category || ''),
+          serialNo: optionalText(input.serialNo, 'Số serial', 160), originalPrice: optionalAmount(asset.originalPrice, 'Nguyên giá'),
+          netBookValue: optionalAmount(asset.netBookValue, 'Giá trị còn lại'), assetOrigin: origin,
+          fromLocation: origin.location || requiredText(input.fromLocation, 'Địa điểm gửi', 255),
+          fromDepartment: origin.department || requiredText(input.fromDepartment, 'Phòng ban gửi', 255),
+          fromCustodian: origin.assignedTo || requiredText(input.fromCustodian, 'Người bàn giao', 255),
+          toLocation: requiredText(input.toLocation, 'Địa điểm nhận', 255), toDepartment: requiredText(input.toDepartment, 'Phòng ban nhận', 255),
+          toCustodian: requiredText(input.toCustodian, 'Người tiếp nhận', 255), carrierName: requiredText(input.carrierName, 'Đơn vị vận chuyển', 255),
+          trackingCode: optionalText(input.trackingCode, 'Mã vận đơn', 160), shippingCost: optionalAmount(input.shippingCost, 'Cước vận chuyển'),
+          transferDate, expectedDeliveryDate, reason: requiredText(input.reason, 'Lý do điều chuyển', 2000),
+          condition: optionalText(input.condition, 'Tình trạng gửi', 2000), notes: optionalText(input.notes, 'Ghi chú', 2000),
+          status: 'Chờ phê duyệt', approver: '', createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+        };
+        await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'asset_transfers', ?, ?, ?, ?, ?)")
+          .run(randomUUID(), result.key, actor.id, JSON.stringify(result), timestamp, timestamp);
+        await recordAuditEvent(actor.id, 'create_asset_transfer', 'asset_transfers', result.key, { assetKey: asset.key });
+      } else {
+        const key = requiredText(decodeURIComponent(assetTransferAction[1]), 'Mã lệnh', 160);
+        const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_transfers' AND record_key = ?").get(key);
+        if (!row) throw new HttpError(404, 'Không tìm thấy lệnh điều chuyển.');
+        const transfer = publicCollectionRecord(row);
+        const action = assetTransferAction[2];
+        if (action === 'approve' || action === 'reject') {
+          if (transfer.status !== 'Chờ phê duyệt') throw new HttpError(409, 'Lệnh không còn chờ phê duyệt.');
+          result = { ...transfer, status: action === 'approve' ? 'Đang vận chuyển' : 'Từ chối điều chuyển', approver: actor.name, approvedById: actor.id, approvedAt: timestamp };
+        } else {
+          if (transfer.status !== 'Đang vận chuyển') throw new HttpError(409, 'Chỉ nhận tài sản khi lệnh đang vận chuyển.');
+          const condition = requiredText(input.receiveCondition, 'Tình trạng nhận', 2000);
+          const assetRow = await findAsset(transfer.assetKey, transfer.assetCode);
+          const asset = publicCollectionRecord(assetRow);
+          if (asset.status === 'Đã thanh lý') throw new HttpError(409, 'Tài sản đã thanh lý, không thể nghiệm thu điều chuyển.');
+          const origin = transfer.assetOrigin || { location: transfer.fromLocation, department: transfer.fromDepartment, assignedTo: transfer.fromCustodian };
+          const same = (left, right) => String(left || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN') === String(right || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN');
+          if (!same(asset.location, origin.location) || !same(asset.department, origin.department) || !same(asset.assignedTo, origin.assignedTo)) throw new HttpError(409, 'Vị trí hoặc người giữ tài sản đã thay đổi. Cần đối chiếu trước khi nhận.');
+          const toLocation = requiredText(transfer.toLocation, 'Địa điểm nhận', 255);
+          const toDepartment = requiredText(transfer.toDepartment, 'Phòng ban nhận', 255);
+          const toCustodian = requiredText(transfer.toCustodian, 'Người tiếp nhận', 255);
+          const history = { key: `transfer-${randomUUID()}`, date: timestamp, action: 'Điều chuyển tài sản', actor: actor.name, actorId: actor.id, note: `Phiếu ${transfer.transferCode}; ${transfer.fromLocation} → ${toLocation}; tình trạng nhận: ${condition}` };
+          const updatedAsset = { ...asset, location: toLocation, department: toDepartment, assignedTo: toCustodian, history: [...(Array.isArray(asset.history) ? asset.history : []), history] };
+          await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
+          result = { ...transfer, assetKey: asset.key, status: 'Đã điều chuyển hoàn tất', receivedDate: timestamp, receiveCondition: condition, receivedBy: actor.name, receivedById: actor.id };
+        }
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(result), timestamp, row.id);
+        await recordAuditEvent(actor.id, `${action}_asset_transfer`, 'asset_transfers', key, { assetKey: result.assetKey || '' });
+      }
+    });
+    sendJson(response, assetTransferAction ? 200 : 201, { transfer: result });
     return;
   }
 

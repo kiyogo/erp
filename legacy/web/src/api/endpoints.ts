@@ -883,3 +883,8 @@ export const payrollLedgerApi = {
   previewAdjustment: (data: { period: string; employerInsurance: number }) => api.post<{ period: string; sequence: number; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/adjustment-preview', data),
   postAdjustment: (data: { period: string; employerInsurance: number; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/adjustment-post', data),
 };
+
+export const assetTransfersApi = {
+  create: (data: Record<string, unknown>) => api.post<{ transfer: any }>('/assets/transfers', data),
+  transition: (key: string, action: 'approve' | 'reject' | 'receive', data: Record<string, unknown> = {}) => api.post<{ transfer: any }>(`/assets/transfers/${encodeURIComponent(key)}/${action}`, data),
+};

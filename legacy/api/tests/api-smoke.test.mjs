@@ -59,6 +59,55 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
   return body;
 }
 
+test('asset transfers enforce decisions and receive asset and document atomically', async () => {
+  const asset = { key: 'transfer-asset-test', code: 'TS-TRANSFER-API', name: 'Máy kiểm thử', status: 'Đang sử dụng', location: 'Kho A', department: 'IT', assignedTo: 'Người A', originalPrice: 1000, netBookValue: 700, history: [] };
+  await request('/collections/asset_items', 'POST', { record: asset }, 201);
+  const input = { transferCode: 'DC-API-01', assetCode: asset.code, fromLocation: 'Giả mạo', fromDepartment: 'Giả mạo', fromCustodian: 'Giả mạo', toLocation: 'Kho B', toDepartment: 'Kinh doanh', toCustodian: 'Người B', carrierName: 'Vận chuyển', trackingCode: 'VĐ-01', shippingCost: 0, transferDate: '2030-01-01', expectedDeliveryDate: '2030-01-02', reason: 'Điều chuyển', status: 'Đã điều chuyển hoàn tất', approver: 'Giả mạo' };
+  const created = (await request('/assets/transfers', 'POST', input, 201)).transfer;
+  assert.equal(created.status, 'Chờ phê duyệt');
+  assert.equal(created.fromLocation, 'Kho A');
+  assert.equal(created.createdById, session.user.id);
+  await request('/assets/transfers', 'POST', { ...input, transferCode: 'DC-API-02' }, 409);
+  await request('/assets/transfers', 'POST', { ...input, transferCode: 'DC-API-INVALID', assetCode: 'MISSING' }, 409);
+  await request('/collections/asset_transfers', 'PUT', { records: [] }, 409);
+  await request(`/collections/asset_transfers/${created.key}`, 'PATCH', { patch: { status: 'Đã điều chuyển hoàn tất' } }, 409);
+  await request(`/assets/transfers/${created.key}/receive`, 'POST', { receiveCondition: 'Tốt' }, 409);
+  const approved = (await request(`/assets/transfers/${created.key}/approve`, 'POST', { approver: 'Giả mạo' })).transfer;
+  assert.equal(approved.approver, session.user.name);
+  await request(`/assets/transfers/${created.key}/reject`, 'POST', {}, 409);
+  await request(`/assets/transfers/${created.key}/receive`, 'POST', { receiveCondition: '' }, 422);
+  await request(`/collections/asset_items/${asset.key}`, 'PATCH', { patch: { location: 'Kho khác' } });
+  await request(`/assets/transfers/${created.key}/receive`, 'POST', { receiveCondition: 'Tốt' }, 409);
+  assert.equal((await request(`/collections/asset_transfers/${created.key}`)).record.status, 'Đang vận chuyển');
+  await request(`/collections/asset_items/${asset.key}`, 'PATCH', { patch: { location: 'Kho A' } });
+  const fixture = new DatabaseSync(env.KIYOVN_DB_PATH);
+  fixture.exec("CREATE TRIGGER fail_transfer_update BEFORE UPDATE ON collection_records WHEN NEW.scope = 'asset_transfers' BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+  await request(`/assets/transfers/${created.key}/receive`, 'POST', { receiveCondition: 'Tốt' }, 500);
+  fixture.exec('DROP TRIGGER fail_transfer_update');
+  fixture.close();
+  assert.equal((await request(`/collections/asset_items/${asset.key}`)).record.location, 'Kho A');
+  const race = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/assets/transfers/${created.key}/receive`, { method: 'POST', headers, body: JSON.stringify({ receiveCondition: 'Tốt', receivedBy: 'Giả mạo' }) });
+    return response.status;
+  }));
+  assert.deepEqual(race.sort((a, b) => a - b), [200, 409]);
+  const received = (await request(`/collections/asset_transfers/${created.key}`)).record;
+  const finalAsset = (await request(`/collections/asset_items/${asset.key}`)).record;
+  assert.equal(received.status, 'Đã điều chuyển hoàn tất');
+  assert.equal(received.receivedById, session.user.id);
+  assert.equal(finalAsset.location, 'Kho B');
+  assert.equal(finalAsset.department, 'Kinh doanh');
+  assert.equal(finalAsset.assignedTo, 'Người B');
+  assert.equal(finalAsset.history.filter((item) => item.action === 'Điều chuyển tài sản').length, 1);
+  assert.equal(finalAsset.history.at(-1).actorId, session.user.id);
+  await request('/assets/transfers', 'POST', input, 409);
+  await request('/users', 'POST', { email: 'asset-transfer-user@example.test', name: 'Người thử', password: 'Asset-Transfer-26!Secure', employeeCode: 'TRANSFER-USER', role: 'USER' }, 201);
+  const user = await request('/auth/login', 'POST', { email: 'asset-transfer-user@example.test', password: 'Asset-Transfer-26!Secure' });
+  const userHeaders = { ...headers, Authorization: `Bearer ${user.access_token || user.token}` };
+  await request('/collections/asset_transfers', 'GET', undefined, 403, userHeaders);
+  await request('/assets/transfers', 'POST', input, 403, userHeaders);
+});
+
 test('payroll ledger posts reviewed figures atomically and prevents duplicate or forged entries', async () => {
   const record = { key: 'payroll-ledger-test-1', employeeCode: 'P-ONE', employeeName: 'Nhân viên', month: '2030-10', status: 'Đã chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 };
   await request('/collections/payroll', 'POST', { record }, 201);
