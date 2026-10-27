@@ -1865,14 +1865,21 @@ textarea.ant-input {
   margin-bottom: 0 !important;
 }
 
-.ant-modal [style*="gap"],
-.ant-modal div[style*="gap"] {
-  gap: 14px !important;
+/* Protect internal form controls (multi-select tags, inputs, buttons) from layout gap */
+.ant-modal .ant-select-selector,
+.ant-select-selector {
+  gap: 4px !important;
+  row-gap: 4px !important;
+  column-gap: 4px !important;
 }
 
-.ant-modal .ant-modal-body div[style*="flexDirection: column"],
-.ant-modal .ant-modal-body div[style*="flex-direction: column"],
-.ant-modal .ant-modal-body div[style*="flexDirection: 'column'"] {
+.ant-modal .ant-select-selection-item {
+  margin: 2px 0 !important;
+}
+
+.ant-modal .ant-modal-body > div[style*="flexDirection: column"],
+.ant-modal .ant-modal-body > div[style*="flex-direction: column"],
+.ant-modal .ant-modal-body > div[style*="flexDirection: 'column'"] {
   gap: 14px !important;
   padding-top: 0 !important;
   margin-top: 0 !important;
