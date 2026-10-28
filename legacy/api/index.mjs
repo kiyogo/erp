@@ -1610,6 +1610,8 @@ async function canReadWorkflowAttachment(actor, fileId) {
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'tickets' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý ticket hỗ trợ.');
+  if (scope === 'tickets' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Ticket phải được tạo hoặc cập nhật từng hồ sơ để giữ lịch sử xử lý.');
   if (['finance_inventory', 'finance_inventory_transactions', 'finance_inventory_warehouses', 'finance_inventory_settings'].includes(scope) && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý dữ liệu kho hàng.');
   }
@@ -1654,6 +1656,62 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Bản ghi phải là một đối tượng JSON.');
   }
   let record = { ...value };
+  if (scope === 'tickets') {
+    const at = now();
+    if (current) {
+      if (current.status === 'Đã hoàn thành') throw new HttpError(409, 'Ticket đã hoàn tất và được lưu để bảo toàn lịch sử.');
+      const status = oneOf(record.status, 'Trạng thái ticket', ['Đang xử lý', 'Đã hoàn thành']);
+      if (current.status !== 'Mới tạo' && current.status !== 'Đang xử lý') throw new HttpError(409, 'Trạng thái ticket hiện tại không cho phép cập nhật.');
+      if (current.status === 'Đang xử lý' && status !== 'Đã hoàn thành') throw new HttpError(409, 'Ticket đang xử lý chỉ có thể được hoàn tất.');
+      const history = Array.isArray(current.history) ? current.history : [];
+      const updated = {
+        ...current,
+        status,
+        acceptedAt: current.acceptedAt || at,
+        ...(status === 'Đã hoàn thành' ? { resolvedAt: at } : {}),
+        updatedAt: at,
+        updatedBy: actor.name,
+        updatedById: actor.id,
+        history: [...history, {
+          action: status === 'Đã hoàn thành' ? 'Hoàn tất yêu cầu' : 'Tiếp nhận yêu cầu',
+          actor: actor.name,
+          actorId: actor.id,
+          at,
+        }],
+      };
+      return { record: updated, recordKey: current.key, serialized: JSON.stringify(updated) };
+    }
+
+    const code = requiredText(record.code || record.key, 'Mã ticket', 80).toLocaleUpperCase();
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'tickets' AND (LOWER(record_key) = LOWER(?) OR LOWER(json_extract(payload_json, '$.code')) = LOWER(?)) LIMIT 1").get(code, code);
+    if (duplicate) throw new HttpError(409, 'Mã ticket đã tồn tại.');
+    const title = requiredText(record.title, 'Tiêu đề ticket', 300);
+    const description = requiredText(record.description, 'Mô tả ticket', 4_000);
+    const priority = oneOf(record.priority, 'Mức độ ưu tiên', ['Khẩn cấp', 'Cao', 'Trung bình', 'Thấp']);
+    const departmentName = requiredText(record.department, 'Phòng ban', 160);
+    const departments = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'business_org_units'").all();
+    const department = departments.map((row) => parseJsonObject(row.payload_json))
+      .find((item) => String(item.name || '').trim().toLocaleLowerCase() === departmentName.toLocaleLowerCase());
+    if (!department || department.status === 'Tạm ngưng' || department.isActive === false) {
+      throw new HttpError(422, 'Phòng ban không tồn tại hoặc đã tạm ngưng.');
+    }
+    record = {
+      key: code,
+      code,
+      title,
+      description,
+      requester: actor.name,
+      requesterId: actor.id,
+      department: department.name,
+      priority,
+      status: 'Mới tạo',
+      createdDate: at,
+      createdBy: actor.name,
+      createdById: actor.id,
+      history: [{ action: 'Tạo ticket', actor: actor.name, actorId: actor.id, at }],
+    };
+    return { record, recordKey: code, serialized: JSON.stringify(record) };
+  }
   if (scope === 'meeting_room_settings') {
     if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
     const maxDuration = Number(record.maxDuration);
@@ -6023,6 +6081,12 @@ async function handleRequest(request, response) {
       const payload = await readJson(request, 256 * 1024);
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
+      if (scope === 'tickets') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key');
+        if (fields.length !== 1 || fields[0] !== 'status' || !['Đang xử lý', 'Đã hoàn thành'].includes(patch.status)) {
+          throw new HttpError(422, 'Ticket chỉ được chuyển trạng thái qua thao tác được phép.');
+        }
+      }
       if (scope === 'attendance_explanations') {
         const current = publicCollectionRecord(existing);
         if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể sửa.');

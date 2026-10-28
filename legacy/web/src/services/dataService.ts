@@ -369,11 +369,21 @@ export interface HelpdeskTicket {
   key: string;
   code: string;
   title: string;
+  description?: string;
   requester: string;
+  requesterId?: string;
   department: string;
   priority: 'Khẩn cấp' | 'Cao' | 'Trung bình' | 'Thấp' | string;
   status: 'Mới tạo' | 'Đang xử lý' | 'Đã hoàn thành' | string;
   createdDate: string;
+  createdBy?: string;
+  createdById?: string;
+  acceptedAt?: string;
+  resolvedAt?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedById?: string;
+  history?: Array<{ action: string; actor: string; actorId: string; at: string }>;
 }
 
 export interface PlanItem {
@@ -732,6 +742,22 @@ class DataService {
     return savedRecord;
   }
 
+  public async transitionTicket(key: string, status: 'Đang xử lý' | 'Đã hoàn thành'): Promise<HelpdeskTicket> {
+    const recordKey = String(key || '').trim();
+    if (!recordKey) throw new Error('Ticket thiếu mã để cập nhật.');
+    const response = await collectionsApi.update('tickets', recordKey, { status });
+    const savedRecord = response.data?.record as HelpdeskTicket | undefined;
+    if (!savedRecord || typeof savedRecord !== 'object') throw new Error('Máy chủ không trả về ticket đã cập nhật.');
+    const rows = this.genericCache.get('tickets') || [];
+    const updated = rows.some((item) => String(item.key ?? item.code ?? '') === recordKey)
+      ? rows.map((item) => String(item.key ?? item.code ?? '') === recordKey ? savedRecord : item)
+      : [savedRecord, ...rows];
+    this.genericCache.set('tickets', updated);
+    saveToStorage('tickets', updated);
+    this.notify();
+    return savedRecord;
+  }
+
   public async deleteGenericRecord(scope: string, recordKey: string): Promise<void> {
     const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
     const normalizedRecordKey = String(recordKey || '').trim();
@@ -1025,18 +1051,14 @@ class DataService {
     return this.getGenericData('tickets');
   }
 
-  public addTicket(ticket: Omit<HelpdeskTicket, 'key'>) {
-    const newT = { ...ticket, key: String(Date.now()) };
-    const current = this.getTickets();
-    const updated = [newT, ...current];
-    this.saveGenericData('tickets', updated);
-    this.logAction('Mở ticket', 'Hỗ trợ', `Mở ticket: ${ticket.title}`);
+  public addTicket(ticket: Omit<HelpdeskTicket, 'key'>): Promise<HelpdeskTicket> {
+    const key = String(ticket.code || '').trim();
+    if (!key) return Promise.reject(new Error('Ticket thiếu mã để lưu.'));
+    return this.createGenericRecord('tickets', { ...ticket, key });
   }
 
-  public updateTicketStatus(key: string, status: 'Đang xử lý' | 'Đã hoàn thành') {
-    const current = this.getTickets();
-    const updated = current.map((t) => (t.key === key ? { ...t, status } : t));
-    this.saveGenericData('tickets', updated);
+  public updateTicketStatus(key: string, status: 'Đang xử lý' | 'Đã hoàn thành'): Promise<HelpdeskTicket> {
+    return this.transitionTicket(key, status);
   }
 
   // 14. Plans (Collections: plans)

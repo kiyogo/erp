@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -7,109 +7,211 @@ import {
   CustomerServiceOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
-  AlertOutlined,
   UserOutlined,
   PrinterOutlined,
   EyeOutlined,
-  SafetyCertificateOutlined,
-  SettingOutlined,
   CloseCircleOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
-import { dataService, HelpdeskTicket } from '../../services/dataService';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { dataService, type HelpdeskTicket } from '../../services/dataService';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import {
+  canTransitionHelpdeskTicket,
+  formatHelpdeskDuration,
+  formatHelpdeskTimestamp,
+  helpdeskExportRows,
+  helpdeskMetrics,
+  helpdeskMinutesBetween,
+} from './ticketRules';
+
+type TicketFilter = 'all' | 'Khẩn cấp' | 'Cao' | 'Mới tạo' | 'Đang xử lý' | 'Đã hoàn thành';
+
+const PRIORITIES = ['Khẩn cấp', 'Cao', 'Trung bình', 'Thấp'] as const;
 
 export const TicketsModule: React.FC = () => {
+  const { user } = useAuth();
+  const mounted = useRef(false);
   const [data, setData] = useState<HelpdeskTicket[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
   const [searchText, setSearchText] = useState('');
-  const [filterTab, setFilterTab] = useState<'all' | 'Khẩn cấp' | 'Cao' | 'Mới tạo' | 'Đang xử lý' | 'Đã hoàn thành'>('all');
+  const [filterTab, setFilterTab] = useState<TicketFilter>('all');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
-
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<HelpdeskTicket | null>(null);
 
-  const loadData = () => {
-    setData(dataService.getTickets());
-    dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [tickets, units] = await Promise.all([
+        dataService.refreshGenericData('tickets'),
+        dataService.refreshGenericData('business_org_units'),
+      ]);
+      if (!mounted.current) return;
+      setData(Array.isArray(tickets) ? tickets : []);
+      setDepartmentOptions(Array.from(new Set((Array.isArray(units) ? units : [])
+        .filter((unit: any) => unit?.status !== 'Tạm ngưng' && unit?.isActive !== false && unit?.name)
+        .map((unit: any) => String(unit.name).trim())
+        .filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b, 'vi'))
+        .map((name) => ({ label: name, value: name })));
+    } catch (error: any) {
+      if (mounted.current) message.error(error?.response?.data?.message || 'Không tải được ticket hoặc danh sách phòng ban.');
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
   };
 
   useEffect(() => {
-    loadData();
-    const unsub = dataService.subscribe(loadData);
-    return unsub;
+    mounted.current = true;
+    const unsubscribe = dataService.subscribe(() => {
+      if (mounted.current) setData(dataService.getGenericData('tickets'));
+    });
+    void loadData();
+    return () => { mounted.current = false; unsubscribe(); };
   }, []);
 
-  const inProgressCount = data.filter((d) => d.status === 'Đang xử lý' || d.status === 'Mới tạo').length;
-  const completedCount = data.filter((d) => d.status === 'Đã hoàn thành').length;
-  const urgentCount = data.filter((d) => d.priority === 'Khẩn cấp').length;
-
-  const handleCreate = (values: any) => {
-    dataService.addTicket({
-      ...values,
-      status: 'Mới tạo',
-      createdDate: new Date().toISOString().replace('T', ' ').substring(0, 16),
-    });
-    message.success(`Đã mở ticket mới: ${values.title}`);
-    setModalOpen(false);
-    form.resetFields();
-    loadData();
-  };
-
-  const handleStatusChange = (ticket: HelpdeskTicket, newStatus: 'Đang xử lý' | 'Đã hoàn thành') => {
-    dataService.updateTicketStatus(ticket.key, newStatus);
-    message.success(`Đã cập nhật trạng thái ticket ${ticket.code} -> ${newStatus}`);
-    if (selectedTicket && selectedTicket.key === ticket.key) {
-      setSelectedTicket({ ...selectedTicket, status: newStatus });
-    }
-    loadData();
-  };
-
-  const filteredData = data.filter((t) => {
-    let matchTab = true;
-    if (filterTab === 'Khẩn cấp') matchTab = t.priority === 'Khẩn cấp';
-    else if (filterTab === 'Cao') matchTab = t.priority === 'Cao';
-    else if (filterTab === 'Đang xử lý') matchTab = t.status === 'Đang xử lý' || t.status === 'Mới tạo';
-    else if (filterTab === 'Đã hoàn thành') matchTab = t.status === 'Đã hoàn thành';
-
-    const matchSearch =
-      (t.title || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (t.code || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (t.requester || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (t.department || '').toLowerCase().includes(searchText.toLowerCase());
-
-    return matchTab && matchSearch;
+  const metrics = helpdeskMetrics(data);
+  const filteredData = data.filter((ticket) => {
+    const matchesTab = filterTab === 'all'
+      || (filterTab === 'Khẩn cấp' && ticket.priority === 'Khẩn cấp')
+      || (filterTab === 'Cao' && ticket.priority === 'Cao')
+      || (filterTab === 'Mới tạo' && ticket.status === 'Mới tạo')
+      || (filterTab === 'Đang xử lý' && (ticket.status === 'Đang xử lý' || ticket.status === 'Mới tạo'))
+      || (filterTab === 'Đã hoàn thành' && ticket.status === 'Đã hoàn thành');
+    const query = searchText.trim().toLocaleLowerCase();
+    const matchesSearch = !query || [ticket.code, ticket.title, ticket.description, ticket.requester, ticket.department]
+      .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+    return matchesTab && matchesSearch;
   });
+
+  const handleCreate = async (values: any) => {
+    const code = String(values.code || '').trim().toLocaleUpperCase();
+    const title = String(values.title || '').trim();
+    const description = String(values.description || '').trim();
+    const department = String(values.department || '').trim();
+    const requester = String(user?.name || '').trim();
+    if (!code || !title || !description || !department || !requester || !PRIORITIES.includes(values.priority)) {
+      message.error('Vui lòng nhập đủ tiêu đề, mô tả, mức độ, phòng ban và tài khoản gửi.');
+      return;
+    }
+    if (!departmentOptions.some((option) => option.value === department)) {
+      message.error('Phòng ban đã chọn không còn hoạt động. Hãy tải lại danh mục.');
+      return;
+    }
+    if (data.some((ticket) => ticket.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase())) {
+      message.error('Mã ticket đã tồn tại. Vui lòng tạo mã khác.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const record = {
+      key: code,
+      code,
+      title,
+      description,
+      requester,
+      requesterId: user?.id || '',
+      department,
+      priority: values.priority,
+      status: 'Mới tạo' as const,
+      createdDate: now,
+      createdBy: requester,
+      createdById: user?.id || '',
+      history: [{ action: 'Tạo ticket', actor: requester, actorId: user?.id || '', at: now }],
+    };
+    setSaving(true);
+    try {
+      const saved = await dataService.createGenericRecord('tickets', record) as HelpdeskTicket;
+      setModalOpen(false);
+      form.resetFields();
+      message.success(`Đã ghi nhận ticket ${saved.code}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu ticket. Vui lòng thử lại.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleStatusChange = async (ticket: HelpdeskTicket, nextStatus: 'Đang xử lý' | 'Đã hoàn thành') => {
+    if (saving) return;
+    if (!canTransitionHelpdeskTicket(ticket.status, nextStatus)) {
+      message.error('Trạng thái ticket vừa thay đổi. Hãy tải lại dữ liệu trước khi tiếp tục.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const saved = await dataService.transitionTicket(ticket.key, nextStatus);
+      setSelectedTicket(saved);
+      message.success(`Đã lưu trạng thái ticket ${saved.code}: ${saved.status}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể cập nhật ticket. Vui lòng tải lại dữ liệu.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportTickets = () => {
+    if (!filteredData.length) {
+      message.info('Không có ticket phù hợp để xuất.');
+      return;
+    }
+    downloadFile('Danh_sach_ticket.xlsx', generateValidXlsxBlob(helpdeskExportRows(filteredData)));
+  };
+
+  const printTicket = (ticket: HelpdeskTicket) => downloadFile(
+    `${ticket.code.replace(/[^a-z0-9_-]/gi, '_')}_phieu_ho_tro.pdf`,
+    generateValidPdfBlob('PHIEU YEU CAU HO TRO', `${ticket.code} | ${ticket.title}`, [
+      `Nguoi gui: ${ticket.requester}`,
+      `Phong ban: ${ticket.department}`,
+      `Muc do uu tien: ${ticket.priority}`,
+      `Trang thai: ${ticket.status}`,
+      `Ngay tao: ${formatHelpdeskTimestamp(ticket.createdDate)}`,
+      `Thoi diem tiep nhan: ${formatHelpdeskTimestamp(ticket.acceptedAt, 'Chua tiep nhan')}`,
+      `Thoi diem hoan tat: ${formatHelpdeskTimestamp(ticket.resolvedAt, 'Chua hoan tat')}`,
+      `Phan hoi: ${formatHelpdeskDuration(helpdeskMinutesBetween(ticket.createdDate, ticket.acceptedAt))}`,
+      `Thoi gian xu ly: ${formatHelpdeskDuration(helpdeskMinutesBetween(ticket.createdDate, ticket.resolvedAt))}`,
+      `Mo ta: ${ticket.description || 'Chua ghi nhan'}`,
+      'Lich su cap nhat:', ...(ticket.history || []).map((entry) => `${formatHelpdeskTimestamp(entry.at)} | ${entry.actor} | ${entry.action}`),
+    ]),
+  );
 
   const columns = [
     {
-      title: 'Mã Ticket & Thời gian',
+      title: 'Mã ticket và thời gian',
       key: 'code',
-      render: (_: any, record: HelpdeskTicket) => (
+      render: (_: any, ticket: HelpdeskTicket) => (
         <div>
           <div style={{ fontWeight: 700, color: '#009688', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CustomerServiceOutlined /> {record.code}
+            <CustomerServiceOutlined /> {ticket.code}
           </div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{record.createdDate}</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{formatHelpdeskTimestamp(ticket.createdDate)}</div>
         </div>
       ),
     },
     {
-      title: 'Tiêu đề sự cố / Yêu cầu IT',
-      dataIndex: 'title',
+      title: 'Tiêu đề yêu cầu hỗ trợ',
       key: 'title',
-      render: (t: string) => <span style={{ fontWeight: 600, color: '#0F172A', fontSize: 13 }}>{t}</span>,
+      render: (_: any, ticket: HelpdeskTicket) => (
+        <div>
+          <div style={{ fontWeight: 600, color: '#0F172A', fontSize: 13 }}>{ticket.title}</div>
+          {ticket.description && <div style={{ fontSize: 11.5, color: '#64748B' }}>{ticket.description}</div>}
+        </div>
+      ),
     },
     {
-      title: 'Người gửi & Phòng ban',
+      title: 'Người gửi và phòng ban',
       key: 'requester',
-      render: (_: any, record: HelpdeskTicket) => (
+      render: (_: any, ticket: HelpdeskTicket) => (
         <div>
-          <div style={{ fontWeight: 600, color: '#0F172A' }}>{record.requester}</div>
-          <div style={{ fontSize: 11.5, color: '#2563EB' }}>{record.department}</div>
+          <div style={{ fontWeight: 600, color: '#0F172A' }}>{ticket.requester}</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB' }}>{ticket.department}</div>
         </div>
       ),
     },
@@ -118,12 +220,9 @@ export const TicketsModule: React.FC = () => {
       dataIndex: 'priority',
       key: 'priority',
       width: 140,
-      render: (pri: string) => {
-        let color = 'default';
-        if (pri === 'Khẩn cấp') color = 'error';
-        else if (pri === 'Cao') color = 'warning';
-        else if (pri === 'Trung bình') color = 'processing';
-        return <Tag color={color}>{pri}</Tag>;
+      render: (priority: string) => {
+        const color = priority === 'Khẩn cấp' ? 'error' : priority === 'Cao' ? 'warning' : priority === 'Thấp' ? 'default' : 'processing';
+        return <Tag color={color}>{priority}</Tag>;
       },
     },
     {
@@ -132,10 +231,7 @@ export const TicketsModule: React.FC = () => {
       key: 'status',
       width: 150,
       render: (status: string) => {
-        let color = 'default';
-        if (status === 'Đang xử lý') color = 'processing';
-        else if (status === 'Đã hoàn thành') color = 'success';
-        else if (status === 'Mới tạo') color = 'warning';
+        const color = status === 'Đã hoàn thành' ? 'success' : status === 'Đang xử lý' ? 'processing' : 'warning';
         return <Tag color={color}>{status}</Tag>;
       },
     },
@@ -143,29 +239,21 @@ export const TicketsModule: React.FC = () => {
       title: 'Thao tác',
       key: 'actions',
       width: 180,
-      render: (_: any, record: HelpdeskTicket) => (
+      render: (_: any, ticket: HelpdeskTicket) => (
         <div style={{ display: 'flex', gap: 6 }}>
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => {
-              setSelectedTicket(record);
-              setDrawerOpen(true);
-            }}
-          >
+          <Button size="small" icon={<EyeOutlined />} onClick={() => { setSelectedTicket(ticket); setDrawerOpen(true); }}>
             Chi tiết
           </Button>
-          {record.status !== 'Đã hoàn thành' && (
+          {['Mới tạo', 'Đang xử lý'].includes(ticket.status) && (
             <Button
               size="small"
               type="primary"
-              onClick={() => handleStatusChange(record, record.status === 'Mới tạo' ? 'Đang xử lý' : 'Đã hoàn thành')}
-              style={{
-                backgroundColor: record.status === 'Mới tạo' ? '#009688' : '#10B981',
-                borderColor: record.status === 'Mới tạo' ? '#009688' : '#10B981',
-              }}
+              disabled={saving}
+              loading={saving && selectedTicket?.key === ticket.key}
+              onClick={() => void handleStatusChange(ticket, ticket.status === 'Mới tạo' ? 'Đang xử lý' : 'Đã hoàn thành')}
+              style={{ backgroundColor: ticket.status === 'Mới tạo' ? '#009688' : '#10B981', borderColor: ticket.status === 'Mới tạo' ? '#009688' : '#10B981' }}
             >
-              {record.status === 'Mới tạo' ? 'Tiếp nhận' : 'Hoàn tất'}
+              {ticket.status === 'Mới tạo' ? 'Tiếp nhận' : 'Hoàn tất'}
             </Button>
           )}
         </div>
@@ -175,48 +263,36 @@ export const TicketsModule: React.FC = () => {
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng số ticket tiếp nhận</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {data.length} ticket
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Cổng tiếp nhận hỗ trợ tập trung ITIL</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>{metrics.total} ticket</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Dữ liệu từ phiếu đã lưu</div>
         </div>
-
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ticket đang trong tiến trình xử lý</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            {inProgressCount} yêu cầu
-          </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>{completedCount} yêu cầu đã đóng hoàn tất</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ticket đang xử lý</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>{metrics.openCount} yêu cầu</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{metrics.completedCount} yêu cầu đã hoàn tất</div>
         </div>
-
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phản hồi bình quân (MTTA)</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            ≤ 10 phút
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đạt chuẩn SLA ServiceDesk 98.6%</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phản hồi bình quân đã ghi nhận</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>{formatHelpdeskDuration(metrics.averageResponseMinutes)}</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Tính theo thời điểm tiếp nhận đã lưu</div>
         </div>
-
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Yêu cầu mức độ Khẩn cấp</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>
-            {urgentCount} yêu cầu
-          </div>
-          <div style={{ fontSize: 11.5, color: urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 2 }}>Ưu tiên xử lý giải quyết trong 2 giờ</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ticket khẩn cấp</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: metrics.urgentCount > 0 ? '#DC2626' : '#16A34A', marginTop: 4 }}>{metrics.urgentCount} yêu cầu</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Thời gian xử lý bình quân: {formatHelpdeskDuration(metrics.averageResolutionMinutes)}</div>
         </div>
       </div>
 
-      {/* Filter Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all' as const, label: 'Tất cả ticket' },
             { key: 'Khẩn cấp' as const, label: 'Khẩn cấp', icon: <CloseCircleOutlined style={{ color: '#EF4444' }} /> },
-            { key: 'Cao' as const, label: 'Mức Cao', icon: <ExclamationCircleOutlined style={{ color: '#F97316' }} /> },
+            { key: 'Cao' as const, label: 'Mức cao', icon: <ExclamationCircleOutlined style={{ color: '#F97316' }} /> },
+            { key: 'Mới tạo' as const, label: 'Mới tạo', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Đang xử lý' as const, label: 'Đang xử lý', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
             { key: 'Đã hoàn thành' as const, label: 'Đã hoàn tất', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
           ].map((tab) => (
@@ -241,25 +317,30 @@ export const TicketsModule: React.FC = () => {
             prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
             placeholder="Tìm theo mã, tiêu đề, người gửi..."
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(event) => setSearchText(event.target.value)}
             style={{ width: 280 }}
             allowClear
           />
-
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách ticket ra Excel')}>
+          <Button icon={<ReloadOutlined />} onClick={() => void loadData()} disabled={loading || saving} loading={loading}>
+            Tải lại
+          </Button>
+          <Button icon={<DownloadOutlined />} onClick={exportTickets} disabled={loading || filteredData.length === 0}>
             Xuất Excel
           </Button>
-
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={loading || saving}
             onClick={() => {
+              if (!departmentOptions.length) {
+                message.error('Chưa có phòng ban đang hoạt động trong danh mục.');
+                return;
+              }
               form.resetFields();
               form.setFieldsValue({
-                code: `TK-${String(Date.now()).slice(-4)}`,
+                code: `TK-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
                 priority: 'Trung bình',
-                requester: 'Trần Tuấn Anh (CTO)',
-                department: 'Phòng Ban Kỹ Thuật',
+                department: departmentOptions[0].value,
               });
               setModalOpen(true);
             }}
@@ -270,116 +351,108 @@ export const TicketsModule: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} loading={loading} />
       </div>
 
-      {/* MODAL: Mở Ticket mới */}
       <Modal
-        title="Mở Ticket Yêu Cầu Hỗ Trợ IT ServiceDesk Mới"
+        title="Mở ticket yêu cầu hỗ trợ IT"
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => { if (!saving) setModalOpen(false); }}
         footer={null}
         width={580}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã Ticket" rules={[{ required: true }]}>
-              <Input />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="code" label="Mã ticket" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập mã ticket.' }]}>
+              <Input maxLength={80} />
             </Form.Item>
-            <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'Khẩn cấp', value: 'Khẩn cấp' },
-                  { label: 'Cao', value: 'Cao' },
-                  { label: 'Trung bình', value: 'Trung bình' },
-                  { label: 'Thấp', value: 'Thấp' },
-                ]}
-              />
+            <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true, message: 'Vui lòng chọn mức độ ưu tiên.' }]}>
+              <Select options={PRIORITIES.map((priority) => ({ label: priority, value: priority }))} />
             </Form.Item>
           </div>
-
-          <Form.Item name="title" label="Tiêu đề yêu cầu / Sự cố" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Cấp quyền truy cập cụm máy chủ hoặc Báo lỗi mạng..." />
+          <Form.Item name="title" label="Tiêu đề yêu cầu" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập tiêu đề.' }]}>
+            <Input maxLength={300} placeholder="Tóm tắt sự cố hoặc yêu cầu hỗ trợ" />
           </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="requester" label="Người gửi yêu cầu" rules={[{ required: true }]}>
-              <Input />
+          <Form.Item name="description" label="Mô tả chi tiết" rules={[{ required: true, whitespace: true, message: 'Vui lòng mô tả chi tiết.' }]}>
+            <Input.TextArea rows={4} maxLength={4000} placeholder="Mô tả tình trạng, ảnh hưởng và kết quả mong muốn" />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item label="Người gửi yêu cầu">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 32, color: '#334155' }}>
+                <UserOutlined /> {user?.name || 'Chưa xác định tài khoản'}
+              </div>
             </Form.Item>
-            <Form.Item name="department" label="Phòng ban" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
-              <Select
-                placeholder="Chọn phòng ban..."
-                options={departmentOptions}
-              />
+            <Form.Item name="department" label="Phòng ban" rules={[{ required: true, message: 'Vui lòng chọn phòng ban.' }]}>
+              <Select placeholder="Chọn phòng ban" options={departmentOptions} />
             </Form.Item>
           </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Gửi Ticket
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => setModalOpen(false)} disabled={saving}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Gửi ticket
             </Button>
           </div>
         </Form>
       </Modal>
 
-      {/* DRAWER: Chi Tiết Ticket */}
-      <Drawer
-        title="Chi Tiết Phiếu Yêu Cầu Hỗ Trợ IT ServiceDesk"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={580}
-      >
+      <Drawer title="Chi tiết phiếu yêu cầu hỗ trợ" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={580}>
         {selectedTicket && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>MÃ TICKET: {selectedTicket.code}</div>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-                    {selectedTicket.title}
-                  </div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>{selectedTicket.title}</div>
                 </div>
-                <Tag color={selectedTicket.status === 'Đã hoàn thành' ? 'success' : 'processing'}>
+                <Tag color={selectedTicket.status === 'Đã hoàn thành' ? 'success' : selectedTicket.status === 'Mới tạo' ? 'warning' : 'processing'}>
                   {selectedTicket.status}
                 </Tag>
               </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 8 }}>
                 Người gửi: <strong>{selectedTicket.requester}</strong> · Phòng ban: <strong>{selectedTicket.department}</strong>
               </div>
+              <div style={{ marginTop: 10, color: '#334155', whiteSpace: 'pre-wrap' }}>{selectedTicket.description || 'Chưa có mô tả chi tiết.'}</div>
             </div>
 
-            {/* SLA Priority Card */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Cam Kết Mức Độ Dịch Vụ:
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
-                <div>Thời điểm gửi yêu cầu: <strong>{selectedTicket.createdDate}</strong></div>
-                <div>Mức độ ưu tiên: <Tag color={selectedTicket.priority === 'Khẩn cấp' ? 'error' : 'warning'}>{selectedTicket.priority}</Tag></div>
-                <div>Thời gian phản hồi cam kết (MTTA): <strong style={{ color: '#16A34A' }}>≤ 10 phút</strong></div>
-                <div>Thời hạn xử lý hoàn tất (MTTR): <strong style={{ color: '#2563EB' }}>{selectedTicket.priority === 'Khẩn cấp' ? 'Trong vòng 2 giờ' : 'Trong vòng 8 giờ làm việc'}</strong></div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Thời gian xử lý đã ghi nhận</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12.5 }}>
+                <div>Ngày tạo: <strong>{formatHelpdeskTimestamp(selectedTicket.createdDate)}</strong></div>
+                <div>Mức độ ưu tiên: <Tag color={selectedTicket.priority === 'Khẩn cấp' ? 'error' : selectedTicket.priority === 'Cao' ? 'warning' : 'default'}>{selectedTicket.priority}</Tag></div>
+                <div>Tiếp nhận: <strong>{formatHelpdeskTimestamp(selectedTicket.acceptedAt, 'Chưa tiếp nhận')}</strong></div>
+                <div>Hoàn tất: <strong>{formatHelpdeskTimestamp(selectedTicket.resolvedAt, 'Chưa hoàn tất')}</strong></div>
+                <div>Thời gian phản hồi: <strong>{formatHelpdeskDuration(helpdeskMinutesBetween(selectedTicket.createdDate, selectedTicket.acceptedAt))}</strong></div>
+                <div>Thời gian xử lý: <strong>{formatHelpdeskDuration(helpdeskMinutesBetween(selectedTicket.createdDate, selectedTicket.resolvedAt))}</strong></div>
               </div>
             </div>
 
-            {/* Actions */}
-            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-              {selectedTicket.status !== 'Đã hoàn thành' && (
-                <Button
-                  type="primary"
-                  style={{ flex: 1, backgroundColor: '#10B981', borderColor: '#10B981' }}
-                  onClick={() => handleStatusChange(selectedTicket, 'Đã hoàn thành')}
-                >
-                  Đánh Dấu Hoàn Thành Ticket
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Lịch sử ticket</div>
+              {(selectedTicket.history || []).length === 0 && <div style={{ color: '#64748B', fontSize: 12.5 }}>Ticket cũ chưa có lịch sử chi tiết.</div>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {(selectedTicket.history || []).map((entry, index) => (
+                  <div key={`${entry.at}-${index}`} style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, fontSize: 12.5 }}>
+                    <strong style={{ color: '#009688' }}>{formatHelpdeskTimestamp(entry.at)}</strong>
+                    <span>{entry.action} · {entry.actor}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              {selectedTicket.status === 'Mới tạo' && (
+                <Button type="primary" disabled={saving} loading={saving} style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }} onClick={() => void handleStatusChange(selectedTicket, 'Đang xử lý')}>
+                  Tiếp nhận ticket
                 </Button>
               )}
-              <Button
-                icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in phiếu yêu cầu hỗ trợ ${selectedTicket.code}`)}
-              >
-                In Phiếu Yêu Cầu (A4)
+              {['Mới tạo', 'Đang xử lý'].includes(selectedTicket.status) && (
+                <Button type="primary" disabled={saving} loading={saving} style={{ flex: 1, backgroundColor: '#10B981', borderColor: '#10B981' }} onClick={() => void handleStatusChange(selectedTicket, 'Đã hoàn thành')}>
+                  Đánh dấu hoàn tất
+                </Button>
+              )}
+              <Button icon={<PrinterOutlined />} onClick={() => printTicket(selectedTicket)}>
+                In phiếu A4
               </Button>
             </div>
           </div>
@@ -388,4 +461,3 @@ export const TicketsModule: React.FC = () => {
     </div>
   );
 };
-
