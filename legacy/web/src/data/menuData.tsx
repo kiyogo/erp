@@ -27,6 +27,7 @@ import {
   CheckSquareOutlined,
   MailOutlined,
   IdcardOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 
 export const KIYOVN_MENU_ITEMS: MenuItem[] = [
@@ -511,6 +512,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'adm-roles', title: 'Nhóm quyền & vai trò', path: '/admin/roles' },
       { id: 'adm-permissions', title: 'Phân quyền chức năng', path: '/admin/permissions' },
       { id: 'adm-audit', title: 'Nhật ký kiểm toán', path: '/admin/audit-logs' },
+      { id: 'adm-trash', title: 'Thùng rác', path: '/admin/trash', icon: <DeleteOutlined /> },
       { id: 'adm-sessions', title: 'Phiên đăng nhập', path: '/admin/sessions' },
       { id: 'adm-usage', title: 'Tình hình sử dụng', path: '/admin/system/usage', icon: <BarChartOutlined /> },
       { id: 'adm-backup', title: 'Sao lưu & phục hồi', path: '/admin/backup' },

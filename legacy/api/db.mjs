@@ -625,6 +625,21 @@ export async function initDatabaseSchema() {
     CREATE INDEX IF NOT EXISTS collection_records_owner_idx
       ON collection_records(owner_id, scope, updated_at DESC);
 
+    CREATE TABLE IF NOT EXISTS trash_items (
+      id TEXT PRIMARY KEY,
+      original_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      record_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_by_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      deleted_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS trash_items_deleted_idx ON trash_items(deleted_at DESC, scope, record_key);
+    CREATE INDEX IF NOT EXISTS trash_items_owner_idx ON trash_items(owner_id, deleted_at DESC);
+
     CREATE TABLE IF NOT EXISTS audit_events (
       id TEXT PRIMARY KEY,
       actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,

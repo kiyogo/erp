@@ -862,18 +862,43 @@ export const notificationsApi = {
 export interface AuditLogEntry {
   key: string;
   id: string;
+  eventId?: string;
   timestamp: string;
   user: string;
+  role?: string;
   action: string;
   module: string;
   detail: string;
+  resourceId?: string;
+  details?: Record<string, unknown>;
 }
 
+export type AuditLogCategory = 'all' | 'sensitive' | 'approve' | 'create' | 'auth';
+
 export const auditLogsApi = {
-  getAll: (page = 1, limit = 50) =>
-    api.get<{ data: AuditLogEntry[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>('/admin/audit-logs', { params: { page, limit } }),
+  getAll: (page = 1, limit = 50, query = '', category: AuditLogCategory = 'all') =>
+    api.get<{ data: AuditLogEntry[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>('/admin/audit-logs', { params: { page, limit, q: query, category } }),
   record: (data: { action: string; module?: string; detail?: string; details?: Record<string, unknown> }) =>
     api.post<{ recorded: boolean }>('/audit-events', data),
+};
+
+export type AdminTrashItem = {
+  id: string;
+  key: string;
+  scope: string;
+  recordKey: string;
+  label: string;
+  deletedAt: string;
+  deletedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const adminTrashApi = {
+  getAll: (page = 1, limit = 50, query = '', scope = '') =>
+    api.get<{ data: AdminTrashItem[]; scopes: string[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>('/admin/trash', { params: { page, limit, q: query, scope } }),
+  restore: (id: string) => api.post<{ restored: true; record: Record<string, unknown> }>(`/admin/trash/${encodeURIComponent(id)}/restore`, {}),
+  permanentlyDelete: (id: string) => api.delete<{ deleted: true }>(`/admin/trash/${encodeURIComponent(id)}`),
 };
 
 export type ApplicationUsageCategory = 'finance' | 'business' | 'hr' | 'digital_office';

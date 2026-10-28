@@ -1563,6 +1563,19 @@ function normalizeCollectionScope(value) {
   return scope;
 }
 
+function normalizeAuditModule(value) {
+  const slug = String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '_')
+    .replace(/^[^a-z0-9]+/, '')
+    .slice(0, 80);
+  return slug.length >= 2 ? slug : `ui_${slug || 'system'}`;
+}
+
 function canUseCollectionAsUser(scope) {
   return USER_COLLECTION_SCOPES.has(scope) || USER_COLLECTION_PREFIXES.some((prefix) => scope.startsWith(prefix));
 }
@@ -6736,6 +6749,8 @@ async function handleRequest(request, response) {
     }
 
     if (request.method === 'DELETE') {
+      const trashItemId = randomUUID();
+      const deletedAt = now();
       await db.transaction(async () => {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
@@ -6777,10 +6792,14 @@ async function handleRequest(request, response) {
           const current = publicCollectionRecord(fresh);
           if (!['Chờ duyệt', 'Chờ phê duyệt', 'Chờ phê duyệt điểm'].includes(current.status)) throw new HttpError(422, 'Không thể xóa bản ghi đã phê duyệt hoặc từ chối.');
         }
+        await db.prepare(`INSERT INTO trash_items
+          (id, original_id, scope, record_key, owner_id, payload_json, created_at, updated_at, deleted_by_id, deleted_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(trashItemId, fresh.id, fresh.scope, fresh.record_key, fresh.owner_id, fresh.payload_json, fresh.created_at, fresh.updated_at, actor.id, deletedAt);
         await db.prepare('DELETE FROM collection_records WHERE id = ?').run(existing.id);
-        await recordAuditEvent(actor.id, 'delete', scope, recordKey);
+        await recordAuditEvent(actor.id, 'delete', scope, recordKey, { trashItemId });
       });
-      sendJson(response, 200, { deleted: true });
+      sendJson(response, 200, { deleted: true, trashItemId });
       return;
     }
   }
@@ -7220,25 +7239,136 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/admin/trash') {
+    await requireAdmin(request);
+    const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+    const search = String(url.searchParams.get('q') || '').trim().slice(0, 200).toLocaleLowerCase('vi');
+    const requestedScope = String(url.searchParams.get('scope') || '').trim();
+    const scope = requestedScope ? normalizeCollectionScope(requestedScope) : '';
+    const filters = [];
+    const params = [];
+    if (scope) { filters.push('t.scope = ?'); params.push(scope); }
+    if (search) {
+      filters.push(`(LOWER(t.scope) LIKE ? OR LOWER(t.record_key) LIKE ? OR LOWER(t.payload_json) LIKE ?
+        OR LOWER(COALESCE(u.name, '')) LIKE ? OR LOWER(COALESCE(u.email, '')) LIKE ?)`);
+      const term = `%${search}%`;
+      params.push(term, term, term, term, term);
+    }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const total = Number((await db.prepare(`SELECT COUNT(*) AS count FROM trash_items t LEFT JOIN users u ON u.id = t.deleted_by_id ${where}`).get(...params))?.count || 0);
+    const rows = await db.prepare(`SELECT t.*, u.name AS deleted_by_name, u.email AS deleted_by_email
+      FROM trash_items t LEFT JOIN users u ON u.id = t.deleted_by_id ${where}
+      ORDER BY t.deleted_at DESC LIMIT ? OFFSET ?`).all(...params, limit, (page - 1) * limit);
+    const scopes = await db.prepare('SELECT DISTINCT scope FROM trash_items ORDER BY scope').all();
+    const data = rows.map(row => {
+      const record = parseJsonObject(row.payload_json);
+      const label = ['name', 'title', 'code', 'requestNumber', 'employeeName', 'documentName', 'workflowName', 'assetName', 'licenseCode']
+        .map(field => String(record[field] || '').trim()).find(Boolean) || row.record_key;
+      return {
+        id: row.id, key: row.id, scope: row.scope, recordKey: row.record_key, label,
+        deletedAt: row.deleted_at, deletedBy: row.deleted_by_name ? `${row.deleted_by_name} (${row.deleted_by_email || ''})` : (row.deleted_by_email || 'Tài khoản đã xóa'),
+        createdAt: row.created_at, updatedAt: row.updated_at,
+      };
+    });
+    sendJson(response, 200, { data, scopes: scopes.map(row => row.scope), pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) } });
+    return;
+  }
+
+  const trashRestoreMatch = /^\/admin\/trash\/([^/]+)\/restore$/.exec(resource);
+  if (trashRestoreMatch && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    const trashId = requiredText(decodeURIComponent(trashRestoreMatch[1]), 'Mã mục thùng rác', 160);
+    let restoredScope = '';
+    let restoredKey = '';
+    let restoredOwnerId = '';
+    await db.transaction(async () => {
+      const entry = await db.prepare('SELECT * FROM trash_items WHERE id = ?').get(trashId);
+      if (!entry) throw new HttpError(404, 'Không tìm thấy mục trong thùng rác.');
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [entry.scope]);
+      if (!await db.prepare('SELECT id FROM users WHERE id = ?').get(entry.owner_id)) throw new HttpError(409, 'Không thể khôi phục vì tài khoản sở hữu bản ghi đã bị xóa.');
+      const existing = await db.prepare('SELECT id FROM collection_records WHERE scope = ? AND record_key = ? AND owner_id = ?').get(entry.scope, entry.record_key, entry.owner_id);
+      if (existing) throw new HttpError(409, 'Đã có bản ghi cùng khóa; hãy xử lý bản ghi hiện tại trước khi khôi phục.');
+      const record = parseJsonObject(entry.payload_json);
+      const normalized = await normalizeCollectionRecord(record, entry.scope, actor, null);
+      if (normalized.recordKey !== entry.record_key) throw new HttpError(409, 'Khóa bản ghi đã thay đổi; không thể khôi phục an toàn.');
+      const idConflict = await db.prepare('SELECT id FROM collection_records WHERE id = ?').get(entry.original_id);
+      const restoredId = idConflict ? randomUUID() : entry.original_id;
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(restoredId, entry.scope, entry.record_key, entry.owner_id, entry.payload_json, entry.created_at, entry.updated_at);
+      await db.prepare('DELETE FROM trash_items WHERE id = ?').run(trashId);
+      await recordAuditEvent(actor.id, 'restore_from_trash', entry.scope, entry.record_key, { trashItemId: trashId });
+      restoredScope = entry.scope;
+      restoredKey = entry.record_key;
+      restoredOwnerId = entry.owner_id;
+    });
+    const restoredRow = await db.prepare('SELECT * FROM collection_records WHERE scope = ? AND record_key = ? AND owner_id = ?')
+      .get(restoredScope, restoredKey, restoredOwnerId);
+    sendJson(response, 200, { restored: true, record: publicCollectionRecord(restoredRow) });
+    return;
+  }
+
+  const trashItemMatch = /^\/admin\/trash\/([^/]+)$/.exec(resource);
+  if (trashItemMatch && request.method === 'DELETE') {
+    const actor = await requireAdmin(request);
+    const trashId = requiredText(decodeURIComponent(trashItemMatch[1]), 'Mã mục thùng rác', 160);
+    await db.transaction(async () => {
+      const entry = await db.prepare('SELECT scope, record_key FROM trash_items WHERE id = ?').get(trashId);
+      if (!entry) throw new HttpError(404, 'Không tìm thấy mục trong thùng rác.');
+      await db.prepare('DELETE FROM trash_items WHERE id = ?').run(trashId);
+      await recordAuditEvent(actor.id, 'permanently_delete_trash_item', entry.scope, entry.record_key, { trashItemId: trashId });
+    });
+    sendJson(response, 200, { deleted: true });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/admin/audit-logs') {
     await requireAdmin(request);
     const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const limit = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '50', 10) || 50));
-    const total = (await db.prepare('SELECT COUNT(*) AS count FROM audit_events').get())?.count;
+    const search = String(url.searchParams.get('q') || '').trim().slice(0, 200).toLocaleLowerCase('vi');
+    const category = String(url.searchParams.get('category') || 'all');
+    const filters = [];
+    const params = [];
+    if (search) {
+      filters.push(`(LOWER(COALESCE(a.action, '')) LIKE ? OR LOWER(COALESCE(a.resource_scope, '')) LIKE ?
+        OR LOWER(COALESCE(a.resource_id, '')) LIKE ? OR LOWER(COALESCE(a.details_json, '')) LIKE ?
+        OR LOWER(COALESCE(u.name, '')) LIKE ? OR LOWER(COALESCE(u.email, '')) LIKE ?)`);
+      const term = `%${search}%`;
+      params.push(term, term, term, term, term, term);
+    }
+    const categoryFilters = {
+      sensitive: "(LOWER(a.action) LIKE '%delete%' OR LOWER(a.action) LIKE '%xóa%' OR LOWER(a.action) LIKE '%update%' OR LOWER(a.action) LIKE '%cập nhật%' OR LOWER(a.action) LIKE '%replace%' OR LOWER(a.action) LIKE '%revoke%')",
+      approve: "(LOWER(a.action) LIKE '%approve%' OR LOWER(a.action) LIKE '%duyệt%' OR LOWER(a.action) LIKE '%ký số%' OR LOWER(a.action) LIKE '%ký%')",
+      create: "(LOWER(a.action) LIKE '%create%' OR LOWER(a.action) LIKE '%tạo%' OR LOWER(a.action) LIKE '%thêm%')",
+      auth: "(LOWER(a.action) LIKE '%auth%' OR LOWER(a.action) LIKE '%login%' OR LOWER(a.action) LIKE '%logout%' OR LOWER(a.action) LIKE '%password%' OR LOWER(a.action) LIKE '%2fa%' OR LOWER(a.action) LIKE '%đăng nhập%' OR LOWER(a.action) LIKE '%mật khẩu%' OR LOWER(a.resource_scope) LIKE '%auth%' OR LOWER(a.resource_scope) LIKE '%session%' OR LOWER(a.resource_scope) LIKE '%security%' OR LOWER(a.resource_scope) LIKE '%bao_mat%')",
+    };
+    if (category !== 'all') {
+      if (!Object.hasOwn(categoryFilters, category)) throw new HttpError(422, 'Bộ lọc nhật ký không hợp lệ.');
+      filters.push(categoryFilters[category]);
+    }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const total = Number((await db.prepare(`SELECT COUNT(*) AS count FROM audit_events a LEFT JOIN users u ON u.id = a.actor_id ${where}`).get(...params))?.count || 0);
     const rows = await db.prepare(`
-      SELECT a.*, u.name AS actor_name, u.email AS actor_email
+      SELECT a.*, u.name AS actor_name, u.email AS actor_email, u.role AS actor_role
       FROM audit_events a
       LEFT JOIN users u ON u.id = a.actor_id
+      ${where}
       ORDER BY a.created_at DESC LIMIT ? OFFSET ?
-    `).all(limit, (page - 1) * limit);
+    `).all(...params, limit, (page - 1) * limit);
     const data = rows.map((r) => ({
       key: r.id,
       id: r.id,
+      eventId: r.id,
       timestamp: r.created_at ? r.created_at.replace('T', ' ').slice(0, 19) : '',
       user: r.actor_name ? `${r.actor_name} (${r.actor_email || ''})` : (r.actor_email || 'Hệ thống'),
+      role: r.actor_role || 'Hệ thống',
       action: r.action,
-      module: r.resource_scope,
+      module: parseJsonObject(r.details_json).moduleLabel || r.resource_scope,
+      resourceId: r.resource_id || '',
       detail: r.resource_id ? `Đối tượng: ${r.resource_id}` : (r.details_json || ''),
+      details: parseJsonObject(r.details_json),
     }));
     sendJson(response, 200, { data, pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) } });
     return;
@@ -7248,9 +7378,14 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const payload = await readJson(request, 64 * 1024);
     const action = requiredText(payload.action, 'Hành động', 100);
-    const moduleScope = optionalText(payload.module || payload.resourceScope, 'Phân hệ', 100) || 'Hệ thống';
+    const moduleLabel = optionalText(payload.module || payload.resourceScope, 'Phân hệ', 100) || 'Hệ thống';
+    const moduleScope = normalizeAuditModule(moduleLabel);
     const detail = optionalText(payload.detail || payload.resourceId, 'Chi tiết', 500) || '';
-    await recordAuditEvent(actor.id, action, moduleScope, detail, payload.details || {});
+    const details = payload.details && typeof payload.details === 'object' && !Array.isArray(payload.details) ? payload.details : {};
+    const auditDetails = { ...details };
+    if (moduleScope !== moduleLabel) auditDetails.moduleLabel = moduleLabel;
+    else delete auditDetails.moduleLabel;
+    await recordAuditEvent(actor.id, action, moduleScope, detail, auditDetails);
     sendJson(response, 201, { recorded: true });
     return;
   }

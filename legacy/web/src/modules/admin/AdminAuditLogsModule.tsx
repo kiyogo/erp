@@ -1,326 +1,243 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AuditOutlined,
-  SearchOutlined,
-  DownloadOutlined,
-  ReloadOutlined,
-  SafetyCertificateOutlined,
-  EyeOutlined,
-  PrinterOutlined,
-  KeyOutlined,
-  DatabaseOutlined,
-  AlertOutlined,
   CheckCircleOutlined,
-  UserOutlined,
+  DownloadOutlined,
+  EyeOutlined,
   LockOutlined,
-  WarningOutlined,
   PlusOutlined,
+  PrinterOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  UserOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Button, Input, Select, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
-import { dataService } from '../../services/dataService';
+import { Button, Drawer, Input, message, Pagination, Tag } from '../../custom-ui';
+import { auditLogsApi, type AuditLogCategory, type AuditLogEntry } from '../../api/endpoints';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 
-export interface EnterpriseAuditLog {
-  key: string;
-  eventId: string;
-  timestamp: string;
-  user: string;
-  role: string;
-  action: string;
-  actionType: 'DELETE' | 'CREATE' | 'UPDATE' | 'AUTH' | 'APPROVE';
-  module: string;
-  ipAddress: string;
-  detail: string;
-  hashSha256: string;
-  beforeSnapshot?: string;
-  afterSnapshot?: string;
+const PAGE_SIZE = 25;
+
+function classifyAction(action: string, module: string): AuditLogCategory {
+  const value = `${action} ${module}`.toLocaleLowerCase('vi');
+  if (/delete|xóa|replace|revoke|update|cập nhật|đổi trạng thái/.test(value)) return 'sensitive';
+  if (/approve|duyệt|ký số|ký duyệt/.test(value)) return 'approve';
+  if (/create|tạo|thêm mới/.test(value)) return 'create';
+  if (/auth|login|logout|password|đăng nhập|mật khẩu|phiên|bảo mật/.test(value)) return 'auth';
+  return 'all';
 }
 
-const INITIAL_LOGS: EnterpriseAuditLog[] = [];
+function actionTag(action: string, module: string) {
+  const category = classifyAction(action, module);
+  const color = category === 'sensitive' ? 'warning' : category === 'approve' ? 'success' : category === 'create' ? 'processing' : category === 'auth' ? 'purple' : 'default';
+  return <Tag color={color}>{action || 'Thao tác hệ thống'}</Tag>;
+}
+
+function formatDetails(record: AuditLogEntry): string {
+  const details = record.details || {};
+  const hasDetails = Object.keys(details).length > 0;
+  return hasDetails ? JSON.stringify(details, null, 2) : 'Không có dữ liệu chi tiết bổ sung.';
+}
 
 export const AdminAuditLogsModule: React.FC = () => {
-  const [logs, setLogs] = useState<EnterpriseAuditLog[]>(INITIAL_LOGS);
+  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [searchText, setSearchText] = useState('');
-  const [filterTab, setFilterTab] = useState('all');
-
+  const [filterTab, setFilterTab] = useState<AuditLogCategory>('all');
+  const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedLog, setSelectedLog] = useState<EnterpriseAuditLog | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
-  const sensitiveCount = logs.filter((l) => l.actionType === 'DELETE' || l.actionType === 'UPDATE').length;
-  const approvedCount = logs.filter((l) => l.actionType === 'APPROVE' || l.actionType === 'CREATE').length;
+  const loadLogs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await auditLogsApi.getAll(page, pageSize, searchText.trim(), filterTab);
+      setLogs(response.data.data || []);
+      setTotal(response.data.pagination?.total || 0);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tải nhật ký kiểm toán.');
+    } finally {
+      setLoading(false);
+    }
+  }, [filterTab, page, pageSize, searchText]);
 
-  const filteredLogs = logs.filter((item) => {
-    let matchTab = true;
-    if (filterTab === 'sensitive') matchTab = item.actionType === 'DELETE' || item.actionType === 'UPDATE';
-    else if (filterTab === 'approve') matchTab = item.actionType === 'APPROVE';
-    else if (filterTab === 'create') matchTab = item.actionType === 'CREATE';
-    else if (filterTab === 'auth') matchTab = item.actionType === 'AUTH' || item.module.includes('Bảo mật');
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadLogs(), 250);
+    return () => window.clearTimeout(timer);
+  }, [loadLogs]);
 
-    const matchSearch =
-      (item.user || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.action || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.detail || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.eventId || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.ipAddress || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.module || '').toLowerCase().includes(searchText.toLowerCase());
-
-    return matchTab && matchSearch;
-  });
+  const sensitiveCount = useMemo(() => logs.filter(log => classifyAction(log.action, log.module) === 'sensitive').length, [logs]);
+  const createCount = useMemo(() => logs.filter(log => classifyAction(log.action, log.module) === 'create').length, [logs]);
+  const totalPages = Math.ceil(total / pageSize);
 
   const columns = [
     {
-      title: 'Mã sự kiện & Thời gian',
+      title: 'Mã sự kiện và thời gian',
       key: 'time',
-      render: (_: any, record: EnterpriseAuditLog) => (
+      width: 260,
+      render: (_: unknown, record: AuditLogEntry) => (
         <div>
-          <div style={{ fontWeight: 700, color: '#009688', fontSize: 13 }}>{record.eventId}</div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{record.timestamp}</div>
+          <div style={{ fontWeight: 700, color: '#009688', fontSize: 12, wordBreak: 'break-all' }}>{record.eventId || record.id}</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 3 }}>{record.timestamp}</div>
         </div>
       ),
     },
     {
-      title: 'Tài khoản & IP',
+      title: 'Tài khoản thực hiện',
+      dataIndex: 'user',
       key: 'user',
-      render: (_: any, record: EnterpriseAuditLog) => (
+      width: 220,
+      render: (user: string, record: AuditLogEntry) => (
         <div>
-          <div style={{ fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <UserOutlined style={{ color: '#009688' }} /> {record.user}
+          <div style={{ fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <UserOutlined style={{ color: '#009688' }} /> {user || 'Hệ thống'}
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF' }}>IP: {record.ipAddress} · ({record.role})</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 3 }}>{record.role || 'Hệ thống'}</div>
         </div>
       ),
     },
+    { title: 'Hành động', dataIndex: 'action', key: 'action', render: (action: string, record: AuditLogEntry) => actionTag(action, record.module) },
+    { title: 'Phân hệ', dataIndex: 'module', key: 'module', width: 180, render: (module: string) => <Tag color="blue">{module || 'Hệ thống'}</Tag> },
+    { title: 'Đối tượng và nội dung', dataIndex: 'detail', key: 'detail', render: (detail: string) => <span style={{ fontSize: 12.5, color: '#334155', overflowWrap: 'anywhere' }}>{detail || 'Không có mô tả'}</span> },
     {
-      title: 'Hành động',
-      dataIndex: 'action',
-      key: 'action',
-      render: (a: string, record: EnterpriseAuditLog) => {
-        let color = 'default';
-        if (record.actionType === 'DELETE') color = 'error';
-        else if (record.actionType === 'APPROVE') color = 'success';
-        else if (record.actionType === 'CREATE') color = 'processing';
-        else if (record.actionType === 'UPDATE') color = 'warning';
-        return <Tag color={color}>{a}</Tag>;
-      },
-    },
-    {
-      title: 'Phân hệ',
-      dataIndex: 'module',
-      key: 'module',
-      width: 170,
-      render: (m: string) => <Tag color="blue">{m}</Tag>,
-    },
-    {
-      title: 'Nội dung chi tiết thao tác',
-      dataIndex: 'detail',
-      key: 'detail',
-      render: (d: string) => <span style={{ fontSize: 12.5, color: '#334155' }}>{d}</span>,
-    },
-    {
-      title: 'Thao tác',
+      title: 'Chi tiết',
       key: 'actions',
-      width: 130,
-      render: (_: any, record: EnterpriseAuditLog) => (
-        <Button
-          size="small"
-          icon={<EyeOutlined />}
-          onClick={() => {
-            setSelectedLog(record);
-            setDrawerOpen(true);
-          }}
-        >
-          Dấu vết số
+      width: 100,
+      render: (_: unknown, record: AuditLogEntry) => (
+        <Button size="small" icon={<EyeOutlined />} onClick={() => { setSelectedLog(record); setDrawerOpen(true); }}>
+          Xem
         </Button>
       ),
     },
   ];
 
+  const exportLogs = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const firstPage = await auditLogsApi.getAll(1, 500, searchText.trim(), filterTab);
+      const rows = [...(firstPage.data.data || [])];
+      const lastPage = firstPage.data.pagination?.totalPages || 0;
+      for (let nextPage = 2; nextPage <= lastPage; nextPage += 1) {
+        const response = await auditLogsApi.getAll(nextPage, 500, searchText.trim(), filterTab);
+        rows.push(...(response.data.data || []));
+      }
+      const sheet: Array<Array<string | number | boolean | null>> = [
+        ['Mã sự kiện', 'Thời gian', 'Tài khoản', 'Vai trò', 'Hành động', 'Phân hệ', 'Mã đối tượng', 'Chi tiết'],
+        ...rows.map(record => [record.eventId || record.id, record.timestamp, record.user, record.role || '', record.action, record.module, record.resourceId || '', formatDetails(record)]),
+      ];
+      downloadFile('Nhat_ky_kiem_toan.xlsx', generateValidXlsxBlob(sheet));
+      message.success(`Đã xuất ${rows.length} bản ghi nhật ký.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể xuất nhật ký kiểm toán.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const printSelectedLog = () => {
+    if (!selectedLog) return;
+    downloadFile(`${String(selectedLog.eventId || selectedLog.id).replace(/[^a-z0-9_-]/gi, '_')}_nhat_ky.pdf`, generateValidPdfBlob(
+      'NHẬT KÝ KIỂM TOÁN',
+      selectedLog.eventId || selectedLog.id,
+      [`Thời gian: ${selectedLog.timestamp}`, `Tài khoản: ${selectedLog.user}`, `Vai trò: ${selectedLog.role || 'Hệ thống'}`, `Hành động: ${selectedLog.action}`, `Phân hệ: ${selectedLog.module}`, `Mã đối tượng: ${selectedLog.resourceId || 'Không có'}`, `Chi tiết: ${formatDetails(selectedLog)}`],
+    ));
+  };
+
+  const downloadSelectedJson = () => {
+    if (!selectedLog) return;
+    downloadFile(`${String(selectedLog.eventId || selectedLog.id).replace(/[^a-z0-9_-]/gi, '_')}_nhat_ky.json`, new Blob([JSON.stringify(selectedLog, null, 2)], { type: 'application/json;charset=utf-8' }));
+  };
+
+  const tabs: Array<{ key: AuditLogCategory; label: string; icon?: React.ReactNode }> = [
+    { key: 'all', label: 'Tất cả nhật ký' },
+    { key: 'sensitive', label: 'Thao tác nhạy cảm', icon: <WarningOutlined style={{ color: '#F59E0B' }} /> },
+    { key: 'approve', label: 'Phê duyệt và ký', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
+    { key: 'create', label: 'Tạo dữ liệu', icon: <PlusOutlined style={{ color: '#10B981' }} /> },
+    { key: 'auth', label: 'Bảo mật và phiên', icon: <LockOutlined style={{ color: '#009688' }} /> },
+  ];
+
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng nhật ký kiểm toán lưu trữ</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {logs.length} bản ghi số
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Bảo mật mã băm SHA-256 bất biến</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thao tác nhạy cảm / Cập nhật cấu hình</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>
-            {sensitiveCount} hành vi
-          </div>
-          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Kiểm soát đặc quyền quản trị cấp cao</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hành động Ký duyệt &amp; Nghiệm thu</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {approvedCount} giao dịch
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Gắn chứng chỉ số PKI hợp lệ</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian lưu trữ pháp lý</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            10 Năm
-          </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Sẵn sàng phục vụ thanh tra kiểm toán</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <AuditOutlined style={{ fontSize: 21, color: '#009688' }} />
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Nhật ký kiểm toán</div>
+          <div style={{ fontSize: 12, color: '#64748B' }}>Dữ liệu lấy từ nhật ký máy chủ, có phân trang và lọc theo nội dung.</div>
         </div>
       </div>
 
-      {/* Filter Toolbar */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14, marginBottom: 16 }}>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bản ghi phù hợp bộ lọc</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>{total.toLocaleString('vi-VN')}</div>
+        </div>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thao tác nhạy cảm trong trang</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>{sensitiveCount}</div>
+        </div>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tạo dữ liệu trong trang</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>{createCount}</div>
+        </div>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Trang đang xem</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>{totalPages ? `${page} / ${totalPages}` : '0 / 0'}</div>
+        </div>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {[
-            { key: 'all', label: 'Tất cả nhật ký' },
-            { key: 'sensitive', label: 'Nhạy cảm & Đổi cấu hình', icon: <WarningOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'approve', label: 'Phê duyệt / Ký số', icon: <CheckCircleOutlined style={{ color: '#10B981' }} /> },
-            { key: 'create', label: 'Tạo dữ liệu mới', icon: <PlusOutlined style={{ color: '#10B981' }} /> },
-            { key: 'auth', label: 'Bảo mật & Phiên', icon: <LockOutlined style={{ color: '#009688' }} /> },
-          ].map((tab) => (
-            <Button
-              key={tab.key}
-              size="small"
-              onClick={() => setFilterTab(tab.key)}
-              style={{
-                backgroundColor: filterTab === tab.key ? '#E0F2F1' : '#FFFFFF',
-                borderColor: filterTab === tab.key ? '#009688' : '#CBD5E1',
-                color: filterTab === tab.key ? '#00796B' : '#475569',
-                fontWeight: filterTab === tab.key ? 700 : 500,
-              }}
-            >
-              {tab.label}
-            </Button>
+          {tabs.map(tab => (
+            <Button key={tab.key} size="small" icon={tab.icon} onClick={() => { setFilterTab(tab.key); setPage(1); }} style={{
+              backgroundColor: filterTab === tab.key ? '#E0F2F1' : '#FFFFFF',
+              borderColor: filterTab === tab.key ? '#009688' : '#CBD5E1',
+              color: filterTab === tab.key ? '#00796B' : '#475569',
+              fontWeight: filterTab === tab.key ? 700 : 500,
+            }}>{tab.label}</Button>
           ))}
         </div>
-
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Input
-            prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
-            placeholder="Tìm theo user, hành động, mã sự kiện, IP..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 280 }}
-            allowClear
-          />
-
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              setLogs(INITIAL_LOGS);
-              message.success('Đã tải lại toàn bộ nhật ký an ninh hệ thống');
-            }}
-          >
-            Làm mới
-          </Button>
-
-          <Button
-            icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất toàn bộ nhật ký an ninh hệ thống ra Excel')}
-          >
-            Xuất Audit Log
-          </Button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Input prefix={<SearchOutlined style={{ color: '#94A3B8' }} />} placeholder="Tìm tài khoản, hành động, mã sự kiện, phân hệ..." value={searchText} onChange={event => { setSearchText(event.target.value); setPage(1); }} style={{ width: 310, maxWidth: '100%' }} allowClear />
+          <Button icon={<ReloadOutlined />} onClick={() => void loadLogs()} loading={loading}>Làm mới</Button>
+          <Button icon={<DownloadOutlined />} onClick={() => void exportLogs()} loading={exporting}>Xuất nhật ký</Button>
         </div>
       </div>
 
-      {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable
-          dataSource={filteredLogs}
-          columns={columns}
-          rowKey="key"
-          pagination={{ pageSize: 8 }}
-        />
+        <KTable dataSource={logs} columns={columns} rowKey="key" pagination={false} locale={{ emptyText: loading ? 'Đang tải nhật ký...' : 'Không có nhật ký phù hợp.' }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 14px' }}>
+          <span style={{ fontSize: 12.5, color: '#64748B' }}>{total ? `Hiển thị ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} trên ${total.toLocaleString('vi-VN')} bản ghi` : 'Không có bản ghi'}</span>
+          <Pagination current={page} pageSize={pageSize} total={total} showSizeChanger disabled={loading} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
+        </div>
       </div>
 
-      {/* DRAWER: Dấu Vết Số Chi Tiết */}
-      <Drawer
-        title="Dấu Vết Kiểm Toán Số &amp; Pháp Lý"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={600}
-      >
+      <Drawer title="Chi tiết nhật ký kiểm toán" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={600}>
         {selectedLog && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>MÃ SỰ KIỆN: {selectedLog.eventId}</div>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-                    {selectedLog.action}
-                  </div>
-                </div>
-                <Tag color="blue">{selectedLog.module}</Tag>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Thời gian: <strong>{selectedLog.timestamp}</strong> · IP: <strong>{selectedLog.ipAddress}</strong>
-              </div>
+              <div style={{ fontSize: 12, color: '#009688', fontWeight: 800, overflowWrap: 'anywhere' }}>MÃ SỰ KIỆN: {selectedLog.eventId || selectedLog.id}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginTop: 5 }}>{selectedLog.action}</div>
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 5 }}>Thời gian: <strong>{selectedLog.timestamp}</strong></div>
             </div>
-
-            {/* Operator info */}
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 8, color: '#334155', fontSize: 12.5 }}>
+              <div>Tài khoản: <strong>{selectedLog.user || 'Hệ thống'}</strong></div>
+              <div>Vai trò: <strong>{selectedLog.role || 'Hệ thống'}</strong></div>
+              <div>Phân hệ: <strong>{selectedLog.module || 'Hệ thống'}</strong></div>
+              <div>Mã đối tượng: <strong>{selectedLog.resourceId || 'Không có'}</strong></div>
+              <div>Nội dung: <strong>{selectedLog.detail || 'Không có mô tả'}</strong></div>
+            </div>
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Chủ Thể Thực Hiện:
-              </div>
-              <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
-                <div>Tài khoản đăng nhập: <strong style={{ color: '#009688' }}>{selectedLog.user}</strong></div>
-                <div>Cấp độ đặc quyền: <strong>{selectedLog.role}</strong></div>
-                <div>Nội dung diễn giải: <em>"{selectedLog.detail}"</em></div>
-              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Dữ liệu chi tiết do máy chủ ghi nhận</div>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 260, overflow: 'auto', fontFamily: 'monospace', fontSize: 11.5, color: '#334155', background: '#F8FAFC', padding: 10, borderRadius: 5 }}>{formatDetails(selectedLog)}</pre>
             </div>
-
-            {/* Cryptographic SHA-256 hash */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <KeyOutlined /> Mã Băm Xác Thực Toàn Vẹn (HMAC SHA-256):
-              </div>
-              <div style={{ fontFamily: 'monospace', fontSize: 11.5, color: '#0F172A', wordBreak: 'break-all', background: '#FFFFFF', padding: 8, borderRadius: 4, border: '1px solid #CBD5E1' }}>
-                {selectedLog.hashSha256}
-              </div>
-              <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <CheckCircleOutlined /> Chữ ký hợp lệ, chuỗi khối kiểm toán không bị can thiệp
-              </div>
-            </div>
-
-            {/* Snapshot Difference */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Bản Chụp Trạng Thái Dữ Liệu:
-              </div>
-              <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div>
-                  <span style={{ color: '#DC2626', fontWeight: 600 }}>[Trước khi thay đổi]:</span>
-                  <div style={{ fontFamily: 'monospace', background: '#FEF2F2', padding: 6, borderRadius: 4, marginTop: 2, color: '#991B1B' }}>
-                    {selectedLog.beforeSnapshot}
-                  </div>
-                </div>
-                <div>
-                  <span style={{ color: '#16A34A', fontWeight: 600 }}>[Sau khi thay đổi]:</span>
-                  <div style={{ fontFamily: 'monospace', background: '#F0FDF4', padding: 6, borderRadius: 4, marginTop: 2, color: '#166534' }}>
-                    {selectedLog.afterSnapshot}
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <div style={{ display: 'flex', gap: 10 }}>
-              <Button
-                type="primary"
-                style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in biên bản kiểm toán pháp lý cho sự kiện ${selectedLog.eventId}`)}
-              >
-                In Trích Lục Dấu Vết Số (A4)
-              </Button>
-              <Button
-                onClick={() => message.success(`Đã xuất tệp JSON ký số cho sự kiện ${selectedLog.eventId}`)}
-              >
-                Tải JSON Forensic
-              </Button>
+              <Button type="primary" style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }} icon={<PrinterOutlined />} onClick={printSelectedLog}>Tải biên bản PDF</Button>
+              <Button icon={<DownloadOutlined />} onClick={downloadSelectedJson}>Tải dữ liệu JSON</Button>
             </div>
           </div>
         )}
@@ -328,4 +245,3 @@ export const AdminAuditLogsModule: React.FC = () => {
     </div>
   );
 };
-

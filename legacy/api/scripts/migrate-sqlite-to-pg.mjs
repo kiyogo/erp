@@ -47,6 +47,7 @@ async function main() {
     'notifications',
     'contracts',
     'collection_records',
+    'trash_items',
     'audit_events',
   ];
 

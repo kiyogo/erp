@@ -1792,3 +1792,68 @@ test('job position catalog validates fields, persists edits and restricts shared
   await request(`${scope}/${position.key}`, 'DELETE', undefined, 403, employeeHeaders);
   await request(`${scope}/${position.key}`, 'DELETE');
 });
+
+test('admin audit logs support server search and category filters with admin-only access', async () => {
+  const marker = `audit-search-${Date.now()}`;
+  await request('/audit-events', 'POST', { action: 'create_audit_probe', module: 'audit_test', detail: marker, details: { marker, count: 3 } }, 201);
+  await request('/audit-events', 'POST', { action: 'update_audit_probe', module: 'audit_test', detail: `${marker}-updated`, details: { marker, changed: true } }, 201);
+  await request('/audit-events', 'POST', { action: 'Cấu hình 2FA', module: 'Bảo mật', detail: `${marker}-security` }, 201);
+
+  const created = await request(`/admin/audit-logs?q=${marker}&category=create&page=1&limit=1`);
+  assert.equal(created.pagination.total, 1);
+  assert.equal(created.pagination.page, 1);
+  assert.equal(created.data[0].action, 'create_audit_probe');
+  assert.equal(created.data[0].role, 'ADMIN');
+  assert.equal(created.data[0].resourceId, marker);
+  assert.deepEqual(created.data[0].details, { marker, count: 3 });
+
+  const sensitive = await request(`/admin/audit-logs?q=${marker}&category=sensitive`);
+  assert.equal(sensitive.pagination.total, 1);
+  assert.equal(sensitive.data[0].action, 'update_audit_probe');
+  const security = await request(`/admin/audit-logs?q=${marker}-security&category=auth`);
+  assert.equal(security.pagination.total, 1);
+  assert.equal(security.data[0].module, 'Bảo mật');
+  await request('/admin/audit-logs?category=unknown', 'GET', undefined, 422);
+
+  await request('/users', 'POST', {
+    email: 'audit-viewer@example.test', name: 'Nhân viên xem nhật ký',
+    password: 'Audit-Viewer-26!Secure', employeeCode: 'AUDIT-VIEWER', role: 'USER',
+  }, 201);
+  const viewerSession = await request('/auth/login', 'POST', { email: 'audit-viewer@example.test', password: 'Audit-Viewer-26!Secure' });
+  const viewerHeaders = { ...headers, Authorization: `Bearer ${viewerSession.access_token || viewerSession.token}` };
+  await request('/admin/audit-logs', 'GET', undefined, 403, viewerHeaders);
+});
+
+test('admin trash preserves deleted collection records and supports safe restore or permanent deletion', async () => {
+  const scope = '/collections/trash_probe';
+  const recordKey = `trash-record-${Date.now()}`;
+  const created = (await request(scope, 'POST', { record: { key: recordKey, name: 'Hồ sơ kiểm tra thùng rác', code: 'TRASH-01' } }, 201)).record;
+  const deletion = await request(`${scope}/${encodeURIComponent(recordKey)}`, 'DELETE');
+  assert.ok(deletion.trashItemId);
+  assert.equal((await request(scope)).data.some(item => item.key === recordKey), false);
+
+  const listed = await request(`/admin/trash?q=${encodeURIComponent(recordKey)}`);
+  assert.equal(listed.pagination.total, 1);
+  assert.equal(listed.data[0].id, deletion.trashItemId);
+  assert.equal(listed.data[0].scope, 'trash_probe');
+  assert.equal(listed.data[0].recordKey, recordKey);
+  assert.equal(listed.data[0].label, created.name);
+
+  const restored = await request(`/admin/trash/${encodeURIComponent(deletion.trashItemId)}/restore`, 'POST', {});
+  assert.equal(restored.restored, true);
+  assert.equal(restored.record.key, recordKey);
+  assert.equal(restored.record.code, 'TRASH-01');
+  assert.equal((await request(scope)).data.some(item => item.key === recordKey), true);
+  await request(`${scope}/${encodeURIComponent(recordKey)}`, 'DELETE');
+  const secondTrashItem = (await request(`/admin/trash?q=${encodeURIComponent(recordKey)}`)).data[0];
+  await request(`/admin/trash/${encodeURIComponent(secondTrashItem.id)}`, 'DELETE');
+  assert.equal((await request(`/admin/trash?q=${encodeURIComponent(recordKey)}`)).pagination.total, 0);
+
+  await request('/users', 'POST', {
+    email: 'trash-viewer@example.test', name: 'Nhân viên không có quyền thùng rác',
+    password: 'Trash-Viewer-26!Secure', employeeCode: 'TRASH-VIEWER', role: 'USER',
+  }, 201);
+  const viewerSession = await request('/auth/login', 'POST', { email: 'trash-viewer@example.test', password: 'Trash-Viewer-26!Secure' });
+  const viewerHeaders = { ...headers, Authorization: `Bearer ${viewerSession.access_token || viewerSession.token}` };
+  await request('/admin/trash', 'GET', undefined, 403, viewerHeaders);
+});

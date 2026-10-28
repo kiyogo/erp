@@ -165,6 +165,7 @@ import { AdminUsersModule } from '../../modules/admin/AdminUsersModule';
 import { AdminRolesModule } from '../../modules/admin/AdminRolesModule';
 import { AdminPermissionsModule } from '../../modules/admin/AdminPermissionsModule';
 import { AdminAuditLogsModule } from '../../modules/admin/AdminAuditLogsModule';
+import { AdminTrashModule } from '../../modules/admin/AdminTrashModule';
 import { AdminSessionsModule } from '../../modules/admin/AdminSessionsModule';
 import { AdminUsageModule } from '../../modules/admin/AdminUsageModule';
 import { AdminBackupModule } from '../../modules/admin/AdminBackupModule';
@@ -248,6 +249,7 @@ export const GenericModulePage: React.FC = () => {
   if (currentPath === '/admin/roles' || p === '/roles') return <AdminRolesModule />;
   if (currentPath === '/admin/permissions' || p === '/permissions') return <AdminPermissionsModule />;
   if (currentPath === '/admin/audit-logs' || currentPath === '/admin/audit' || p === '/audit-logs' || p === '/audit') return <AdminAuditLogsModule />;
+  if (currentPath === '/admin/trash' || p === '/trash') return <AdminTrashModule />;
   if (currentPath === '/admin/sessions' || p === '/sessions') return <AdminSessionsModule />;
   if (currentPath === '/admin/backup' || p === '/backup') return <AdminBackupModule />;
   if (currentPath === '/admin/system/job-positions' || p === '/system/job-positions') return <AdminDropMenuModule positionsOnly />;
