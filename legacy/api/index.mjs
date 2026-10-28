@@ -1612,6 +1612,8 @@ async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
   if (scope === 'tickets' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý ticket hỗ trợ.');
   if (scope === 'tickets' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Ticket phải được tạo hoặc cập nhật từng hồ sơ để giữ lịch sử xử lý.');
+  if (scope === 'doc_notes' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý sổ chỉ đạo.');
+  if (scope === 'doc_notes' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Chỉ đạo phải được cập nhật từng hồ sơ để giữ lịch sử xử lý.');
   if (['finance_inventory', 'finance_inventory_transactions', 'finance_inventory_warehouses', 'finance_inventory_settings'].includes(scope) && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý dữ liệu kho hàng.');
   }
@@ -1711,6 +1713,121 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       history: [{ action: 'Tạo ticket', actor: actor.name, actorId: actor.id, at }],
     };
     return { record, recordKey: code, serialized: JSON.stringify(record) };
+  }
+  if (scope === 'doc_notes') {
+    const at = now();
+    const businessDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+    const deriveStatus = (actionItems, deadline, previousStatus = '') => {
+      const completionRate = actionItems.length
+        ? Math.round(actionItems.filter((item) => item.done).length * 100 / actionItems.length)
+        : 0;
+      if (completionRate === 100) return 'Đã hoàn thành';
+      if (deadline < businessDate) return 'Quá hạn';
+      return previousStatus === 'Cần đẩy nhanh' ? previousStatus : 'Đang thực hiện';
+    };
+    if (current) {
+      const fields = Object.keys(record).filter((field) => field !== 'key' && field !== 'noteCode' && record[field] !== current[field]);
+      const history = Array.isArray(current.history) ? current.history : [];
+      let updated;
+      if (fields.length === 1 && fields[0] === 'isPinned') {
+        if (typeof record.isPinned !== 'boolean') throw new HttpError(422, 'Trạng thái ghim không hợp lệ.');
+        updated = {
+          ...current,
+          isPinned: record.isPinned,
+          updatedAt: at,
+          updatedBy: actor.name,
+          updatedById: actor.id,
+          history: [...history, { action: record.isPinned ? 'Ghim ưu tiên' : 'Gỡ ghim ưu tiên', actor: actor.name, actorId: actor.id, at }],
+        };
+      } else if (fields.length === 1 && fields[0] === 'actionItems') {
+        if (!Array.isArray(record.actionItems) || record.actionItems.length !== current.actionItems?.length || record.actionItems.length < 1 || record.actionItems.length > 50) {
+          throw new HttpError(422, 'Danh sách đầu việc không hợp lệ.');
+        }
+        const ids = new Set();
+        const actionItems = record.actionItems.map((item, index) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(422, 'Đầu việc không hợp lệ.');
+          const id = Number(item.id);
+          if (!Number.isSafeInteger(id) || id < 1 || ids.has(id)) throw new HttpError(422, 'Mã đầu việc không hợp lệ hoặc bị trùng.');
+          ids.add(id);
+          if (typeof item.done !== 'boolean') throw new HttpError(422, 'Trạng thái đầu việc không hợp lệ.');
+          return { id, text: requiredText(item.text, `Đầu việc ${index + 1}`, 500), done: item.done };
+        });
+        if (actionItems.some((item, index) => item.id !== current.actionItems[index].id || item.text !== current.actionItems[index].text)) {
+          throw new HttpError(422, 'Không thể thay đổi hoặc xóa đầu việc đã ban hành.');
+        }
+        const completionRate = Math.round(actionItems.filter((item) => item.done).length * 100 / actionItems.length);
+        updated = {
+          ...current,
+          actionItems,
+          completionRate,
+          status: deriveStatus(actionItems, current.deadline, current.status),
+          updatedAt: at,
+          updatedBy: actor.name,
+          updatedById: actor.id,
+          history: [...history, {
+            action: `Cập nhật tiến độ ${actionItems.filter((item) => item.done).length}/${actionItems.length} đầu việc`,
+            actor: actor.name, actorId: actor.id, at,
+          }],
+        };
+        if (completionRate === 100) updated.completedAt = current.completedAt || at;
+        else delete updated.completedAt;
+      } else {
+        throw new HttpError(422, 'Chỉ được ghim hoặc cập nhật trạng thái từng đầu việc.');
+      }
+      return { record: updated, recordKey: current.key, serialized: JSON.stringify(updated) };
+    }
+
+    const noteCode = requiredText(record.noteCode || record.key, 'Mã chỉ đạo', 80);
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'doc_notes' AND (LOWER(record_key) = LOWER(?) OR LOWER(json_extract(payload_json, '$.noteCode')) = LOWER(?)) LIMIT 1").get(noteCode, noteCode);
+    if (duplicate) throw new HttpError(409, 'Mã chỉ đạo đã tồn tại.');
+    const title = requiredText(record.title, 'Tiêu đề chỉ đạo', 300);
+    const category = oneOf(record.category, 'Phân loại chỉ đạo', ['Ý kiến chỉ đạo BGĐ', 'Giao ban tuần & Tháng', 'Biên bản cuộc họp HĐQT', 'Ghi nhớ dự án & Kỹ thuật', 'Chỉ đạo đột xuất']);
+    const priority = oneOf(record.priority, 'Mức độ ưu tiên', ['Khẩn cấp P1', 'Ưu tiên cao P2', 'Bình thường P3']);
+    const author = requiredText(record.author, 'Người chỉ đạo', 160);
+    const authorRole = requiredText(record.authorRole, 'Chức danh', 160);
+    const departmentName = requiredText(record.assignedToDept, 'Đơn vị thực thi', 160);
+    const departments = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'business_org_units'").all();
+    const department = departments.map((row) => parseJsonObject(row.payload_json))
+      .find((item) => String(item.name || '').trim().toLocaleLowerCase() === departmentName.toLocaleLowerCase());
+    if (!department || department.status === 'Tạm ngưng' || department.isActive === false) {
+      throw new HttpError(422, 'Đơn vị thực thi không tồn tại hoặc đã tạm ngưng.');
+    }
+    const deadline = requiredIsoDate(record.deadline, 'Hạn chót hoàn thành');
+    const content = requiredText(record.content, 'Nội dung chỉ đạo', 4_000);
+    if (!Array.isArray(record.actionItems) || record.actionItems.length < 1 || record.actionItems.length > 50) {
+      throw new HttpError(422, 'Cần có từ 1 đến 50 đầu việc cụ thể.');
+    }
+    const actionItems = record.actionItems.map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(422, 'Đầu việc không hợp lệ.');
+      return { id: index + 1, text: requiredText(item.text, `Đầu việc ${index + 1}`, 500), done: false };
+    });
+    if (record.isPinned !== undefined && typeof record.isPinned !== 'boolean') throw new HttpError(422, 'Trạng thái ghim không hợp lệ.');
+    const completionRate = 0;
+    const status = deriveStatus(actionItems, deadline);
+    record = {
+      key: noteCode,
+      noteCode,
+      title,
+      category,
+      priority,
+      author,
+      authorRole,
+      assignedToDept: department.name,
+      deadline,
+      createdDate: at,
+      createdBy: actor.name,
+      createdById: actor.id,
+      isPinned: record.isPinned === true,
+      completionRate,
+      content,
+      actionItems,
+      status,
+      history: [{ action: 'Ban hành chỉ đạo', actor: actor.name, actorId: actor.id, at }],
+      reminderHistory: [],
+    };
+    return { record, recordKey: noteCode, serialized: JSON.stringify(record) };
   }
   if (scope === 'meeting_room_settings') {
     if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
@@ -6087,6 +6204,12 @@ async function handleRequest(request, response) {
           throw new HttpError(422, 'Ticket chỉ được chuyển trạng thái qua thao tác được phép.');
         }
       }
+      if (scope === 'doc_notes') {
+        const fields = Object.keys(patch).filter((field) => field !== 'key' && field !== 'noteCode');
+        const isPin = fields.length === 1 && fields[0] === 'isPinned' && typeof patch.isPinned === 'boolean';
+        const isActionUpdate = fields.length === 1 && fields[0] === 'actionItems' && Array.isArray(patch.actionItems);
+        if (!isPin && !isActionUpdate) throw new HttpError(422, 'Chỉ được ghim chỉ đạo hoặc cập nhật trạng thái đầu việc.');
+      }
       if (scope === 'attendance_explanations') {
         const current = publicCollectionRecord(existing);
         if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể sửa.');
@@ -6682,6 +6805,51 @@ async function handleRequest(request, response) {
       pendingWorkflows: pendingProposalList,
       recentAuditLogs,
     });
+    return;
+  }
+
+  const directiveReminderMatch = /^\/document-notes\/([^/]+)\/remind$/.exec(resource);
+  if (directiveReminderMatch && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    const noteKey = requiredText(decodeURIComponent(directiveReminderMatch[1]), 'Mã chỉ đạo', 160);
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('doc_notes'))");
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'doc_notes' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(noteKey);
+      if (!row) throw new HttpError(404, 'Không tìm thấy chỉ đạo.');
+      const note = publicCollectionRecord(row);
+      const actionItems = Array.isArray(note.actionItems) ? note.actionItems : [];
+      if (actionItems.length > 0 && actionItems.every((item) => item.done === true)) throw new HttpError(409, 'Chỉ đạo đã hoàn thành, không cần gửi nhắc việc.');
+      const recipients = await db.prepare(`SELECT u.id FROM users u
+        INNER JOIN employee_profiles p ON p.user_id = u.id
+        WHERE u.is_active = 1 AND COALESCE(p.employment_status, '') <> 'Đã nghỉ việc'
+          AND LOWER(TRIM(COALESCE(p.department, ''))) = LOWER(TRIM(?))
+        ORDER BY u.id`).all(note.assignedToDept);
+      if (recipients.length === 0) throw new HttpError(422, 'Đơn vị chưa có nhân sự đang hoạt động để nhận nhắc việc.');
+      const timestamp = now();
+      const notificationTitle = `Nhắc việc: ${note.noteCode}`.slice(0, 255);
+      const notificationMessage = `${note.title}\nHạn chót: ${note.deadline}\nĐơn vị: ${note.assignedToDept}\n${String(note.content || '').slice(0, 1_400)}`.slice(0, 2_000);
+      const notificationInsert = await db.prepare(`INSERT INTO notifications (id, user_id, title, message, type, link, is_read, created_at)
+        VALUES (?, ?, ?, ?, 'document_note', '/admin/documents/notes', 0, ?)`);
+      for (const recipient of recipients) await notificationInsert.run(randomUUID(), recipient.id, notificationTitle, notificationMessage, timestamp);
+      const updated = {
+        ...note,
+        reminderHistory: [...(Array.isArray(note.reminderHistory) ? note.reminderHistory : []), {
+          actor: actor.name, actorId: actor.id, at: timestamp, recipientCount: recipients.length,
+        }],
+        updatedAt: timestamp,
+        updatedBy: actor.name,
+        updatedById: actor.id,
+        history: [...(Array.isArray(note.history) ? note.history : []), {
+          action: `Gửi nhắc việc nội bộ đến ${recipients.length} nhân sự`, actor: actor.name, actorId: actor.id, at: timestamp,
+        }],
+      };
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(updated), timestamp, row.id);
+      await recordAuditEvent(actor.id, 'send_internal_reminder', 'doc_notes', note.key, { recipientCount: recipients.length });
+      result = { record: updated, recipientCount: recipients.length };
+    });
+    sendJson(response, 200, result);
     return;
   }
 

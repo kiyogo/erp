@@ -853,6 +853,10 @@ export const collectionsApi = {
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
 };
 
+export const documentNotesApi = {
+  remind: (recordKey: string) => api.post<{ record: Record<string, any>; recipientCount: number }>(`/document-notes/${encodeURIComponent(recordKey)}/remind`),
+};
+
 export const inventoryApi = {
   createTransaction: (data: Record<string, unknown>) =>
     api.post<{ transaction: Record<string, any>; replayed: boolean }>('/finance/inventory/transactions', data),

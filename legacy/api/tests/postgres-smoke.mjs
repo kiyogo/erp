@@ -50,6 +50,55 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  const noteAdminToken = token;
+  const noteDepartment = 'PG directive operations';
+  await request('/collections/business_org_units', 'POST', { record: { key: 'pg-directive-department', name: noteDepartment, status: 'Hoạt động' } }, 201);
+  const noteEmployee = (await request('/users', 'POST', {
+    email: 'pg-directive-user@example.test', name: 'PG directive employee', employeeCode: 'PG-DIRECTIVE-USER',
+    password: 'PG-Directive-User-26!Secure', role: 'USER', department: noteDepartment, position: 'PG Operator',
+  }, 201)).user;
+  const noteCode = 'CD-PG-LIFECYCLE';
+  const noteDeadlineDate = new Date(`${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}T00:00:00.000Z`);
+  noteDeadlineDate.setUTCDate(noteDeadlineDate.getUTCDate() + 7);
+  const directive = (await request('/collections/doc_notes', 'POST', { record: {
+    key: 'forged-pg-directive-key', noteCode, title: 'PG directive lifecycle', category: 'Ý kiến chỉ đạo BGĐ', priority: 'Khẩn cấp P1',
+    author: 'PG director', authorRole: 'Giám đốc', assignedToDept: noteDepartment, deadline: noteDeadlineDate.toISOString().slice(0, 10),
+    content: 'PG directive persistence, progress and reminder test', isPinned: false, completionRate: 100, status: 'Đã hoàn thành',
+    createdBy: 'forged actor', createdById: 'forged actor', actionItems: [{ id: 50, text: 'Inspect device', done: true }, { id: 60, text: 'Record result', done: true }],
+  } }, 201)).record;
+  assert.equal(directive.key, noteCode);
+  assert.equal(directive.createdById, login.user.id);
+  assert.equal(directive.completionRate, 0);
+  assert.equal(directive.status, 'Đang thực hiện');
+  assert.deepEqual(directive.actionItems.map(item => item.done), [false, false]);
+  assert.equal(directive.history[0].actorId, login.user.id);
+  await request('/collections/doc_notes', 'POST', { record: { ...directive, key: 'duplicate-pg-key', noteCode: noteCode.toLowerCase() } }, 409);
+  const noteEmployeeSession = await request('/auth/login', 'POST', { email: noteEmployee.email, password: 'PG-Directive-User-26!Secure' });
+  token = noteEmployeeSession.token;
+  await request('/collections/doc_notes', 'POST', { record: {} }, 403);
+  token = noteAdminToken;
+  let patchedDirective = (await request(`/collections/doc_notes/${encodeURIComponent(noteCode)}`, 'PATCH', { patch: { isPinned: true } })).record;
+  assert.equal(patchedDirective.isPinned, true);
+  assert.equal(patchedDirective.history.at(-1).actorId, login.user.id);
+  patchedDirective = (await request(`/collections/doc_notes/${encodeURIComponent(noteCode)}`, 'PATCH', { patch: { actionItems: [
+    { ...patchedDirective.actionItems[0], done: true }, patchedDirective.actionItems[1],
+  ] } })).record;
+  assert.equal(patchedDirective.completionRate, 50);
+  assert.equal(patchedDirective.history.at(-1).action, 'Cập nhật tiến độ 1/2 đầu việc');
+  const remindedDirective = await request(`/document-notes/${encodeURIComponent(noteCode)}/remind`, 'POST', {});
+  assert.equal(remindedDirective.recipientCount, 1);
+  assert.equal(remindedDirective.record.reminderHistory.length, 1);
+  assert.equal(remindedDirective.record.reminderHistory[0].actorId, login.user.id);
+  token = noteEmployeeSession.token;
+  const noteNotifications = (await request('/notifications')).data;
+  assert.ok(noteNotifications.some(item => item.type === 'document_note' && item.title === `Nhắc việc: ${noteCode}`));
+  token = noteAdminToken;
+  patchedDirective = (await request(`/collections/doc_notes/${encodeURIComponent(noteCode)}`, 'PATCH', { patch: { actionItems: patchedDirective.actionItems.map(item => ({ ...item, done: true })) } })).record;
+  assert.equal(patchedDirective.completionRate, 100);
+  assert.ok(patchedDirective.completedAt);
+  await request(`/document-notes/${encodeURIComponent(noteCode)}/remind`, 'POST', {}, 409);
+  completed++;
+  token = noteAdminToken;
   const inventoryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   await request('/collections/finance_inventory', 'POST', { record: {
     key: 'pg-inventory-return', sku: 'PG-RETURN-01', name: 'PostgreSQL return test', category: 'Test', unit: 'Cái', warehouse: 'Kho A',

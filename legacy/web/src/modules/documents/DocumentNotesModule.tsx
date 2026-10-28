@@ -1,60 +1,80 @@
 import { dataService } from '../../services/dataService';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
   DownloadOutlined,
-  FileTextOutlined,
   PushpinOutlined,
-  UserOutlined,
   CheckCircleOutlined,
-  ClockCircleOutlined,
-  AlertOutlined,
-  CalendarOutlined,
   TeamOutlined,
-  ThunderboltOutlined,
   EyeOutlined,
-  EditOutlined,
-  DeleteOutlined,
   CheckSquareOutlined,
   BorderOutlined,
   PrinterOutlined,
   BellOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer } from '../../custom-ui';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { NOTE_CATEGORIES, NOTE_PRIORITIES, formatNoteDate, formatNoteTimestamp, noteCompletionRate, noteExportRows, noteStatus, parseNoteActionItems, type MeetingDirectiveNote } from './notesRules';
 
-export interface MeetingDirectiveNote {
-  key: string;
-  noteCode: string;
-  title: string;
-  category: 'Ý kiến chỉ đạo BGĐ' | 'Giao ban tuần & Tháng' | 'Biên bản cuộc họp HĐQT' | 'Ghi nhớ dự án & Kỹ thuật' | 'Chỉ đạo đột xuất';
-  priority: 'Khẩn cấp P1' | 'Ưu tiên cao P2' | 'Bình thường P3';
-  author: string;
-  authorRole: string;
-  assignedToDept: string;
-  deadline: string;
-  createdDate: string;
-  isPinned: boolean;
-  completionRate: number;
-  content: string;
-  actionItems: { id: number; text: string; done: boolean }[];
-  status: 'Đang thực hiện' | 'Đã hoàn thành' | 'Cần đẩy nhanh' | 'Quá hạn';
+export type { MeetingDirectiveNote } from './notesRules';
+
+function normalizeNotes(records: any[]): MeetingDirectiveNote[] {
+  return records.map((record) => {
+    const actionItems = Array.isArray(record.actionItems) ? record.actionItems : [];
+    return {
+      ...record,
+      actionItems,
+      completionRate: noteCompletionRate(actionItems),
+      status: noteStatus({ ...record, actionItems }),
+      history: Array.isArray(record.history) ? record.history : [],
+      reminderHistory: Array.isArray(record.reminderHistory) ? record.reminderHistory : [],
+    };
+  });
 }
 
-const INITIAL_NOTES: MeetingDirectiveNote[] = [];
-
 export const DocumentNotesModule: React.FC = () => {
-  const [data, setData] = useState<MeetingDirectiveNote[]>(INITIAL_NOTES);
+  const { user } = useAuth();
+  const mounted = useRef(false);
+  const [data, setData] = useState<MeetingDirectiveNote[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [savingKey, setSavingKey] = useState('');
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [notes, units] = await Promise.all([
+        dataService.refreshGenericData('doc_notes'),
+        dataService.refreshGenericData('business_org_units'),
+      ]);
+      if (!mounted.current) return;
+      setData(normalizeNotes(Array.isArray(notes) ? notes : []));
+      setDepartmentOptions(Array.from(new Set((Array.isArray(units) ? units : [])
+        .filter((unit: any) => unit?.status !== 'Tạm ngưng' && unit?.isActive !== false && unit?.name)
+        .map((unit: any) => String(unit.name).trim())
+        .filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b, 'vi'))
+        .map((name) => ({ label: name, value: name })));
+    } catch (error: any) {
+      if (mounted.current) message.error(error?.response?.data?.message || 'Không tải được sổ chỉ đạo và danh mục đơn vị.');
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const list = dataService.getGenericData('doc_notes');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('doc_notes');
-      setData(Array.isArray(updated) ? updated : []);
+    mounted.current = true;
+    const unsubscribe = dataService.subscribe(() => {
+      if (!mounted.current) return;
+      const updated = normalizeNotes(dataService.getGenericData('doc_notes'));
+      setData(updated);
+      setSelectedNote((current) => current ? updated.find((note) => note.key === current.key) || current : current);
     });
-    return unsub;
+    void loadData();
+    return () => { mounted.current = false; unsubscribe(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -67,66 +87,144 @@ export const DocumentNotesModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedNote, setSelectedNote] = useState<MeetingDirectiveNote | null>(null);
 
-  const totalNotes = data.length;
-  const pinnedCount = data.filter((d) => d.isPinned).length;
-  const p1Count = data.filter((d) => d.priority === 'Khẩn cấp P1').length;
-  const completedCount = data.filter((d) => d.status === 'Đã hoàn thành').length;
+  const currentData = data.map((note) => ({
+    ...note,
+    completionRate: noteCompletionRate(note.actionItems || []),
+    status: noteStatus(note),
+  }));
+  const totalNotes = currentData.length;
+  const pinnedCount = currentData.filter((note) => note.isPinned).length;
+  const p1Count = currentData.filter((note) => note.priority === 'Khẩn cấp P1').length;
+  const completedCount = currentData.filter((note) => note.status === 'Đã hoàn thành').length;
+  const completionPercentage = totalNotes ? Math.round(completedCount * 100 / totalNotes) : null;
 
-  const handleCreate = (values: any) => {
-    const rawActions = (values.rawActions || '')
-      .split('\n')
-      .filter((s: string) => s.trim().length > 0)
-      .map((text: string, idx: number) => ({ id: idx + 1, text: text.trim(), done: false }));
+  const handleCreate = async (values: any) => {
+    const noteCode = String(values.noteCode || '').trim();
+    const title = String(values.title || '').trim();
+    const author = String(values.author || '').trim();
+    const authorRole = String(values.authorRole || '').trim();
+    const assignedToDept = String(values.assignedToDept || '').trim();
+    let actionItems;
+    try {
+      actionItems = parseNoteActionItems(String(values.rawActions || ''));
+    } catch (error: any) {
+      message.error(error?.message || 'Danh sách đầu việc không hợp lệ.');
+      return;
+    }
+    if (!noteCode || !title || !author || !authorRole || !assignedToDept || !values.deadline || !values.content?.trim()) {
+      message.error('Vui lòng nhập đủ thông tin chỉ đạo, đơn vị, hạn chót, nội dung và đầu việc.');
+      return;
+    }
+    if (!departmentOptions.some((option) => option.value === assignedToDept)) {
+      message.error('Đơn vị thực thi không còn hoạt động. Hãy tải lại danh mục.');
+      return;
+    }
+    if (currentData.some((note) => note.noteCode.toLocaleLowerCase() === noteCode.toLocaleLowerCase())) {
+      message.error('Mã chỉ đạo đã tồn tại. Vui lòng dùng mã khác.');
+      return;
+    }
 
-    const newItem: MeetingDirectiveNote = {
-      ...values,
-      key: String(Date.now()),
-      isPinned: Boolean(values.isPinned),
-      createdDate: new Date().toISOString().substring(0, 10),
-      author: 'Quản trị viên',
-      authorRole: values.authorRole || 'Tổng Giám Đốc (CEO)',
-      completionRate: 0,
-      actionItems: rawActions.length > 0 ? rawActions : [{ id: 1, text: 'Triển khai theo nội dung chỉ đạo', done: false }],
-      status: 'Đang thực hiện',
-    };
-
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('doc_notes', nextItems);
-    message.success(`Đã tạo chỉ đạo mới: ${values.title} (${values.noteCode})`);
-    setModalOpen(false);
-    form.resetFields();
+    setSavingKey('create');
+    try {
+      const saved = await dataService.createGenericRecord('doc_notes', {
+        key: noteCode,
+        noteCode,
+        title,
+        category: values.category,
+        priority: values.priority,
+        author,
+        authorRole,
+        assignedToDept,
+        deadline: values.deadline,
+        isPinned: values.isPinned === true,
+        content: String(values.content).trim(),
+        actionItems,
+      }) as MeetingDirectiveNote;
+      setSelectedNote(normalizeNotes([saved])[0]);
+      message.success(`Đã ban hành chỉ đạo ${saved.noteCode}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu chỉ đạo. Vui lòng thử lại.');
+    } finally {
+      setSavingKey('');
+    }
   };
 
-  const handleTogglePin = (record: MeetingDirectiveNote) => {
-    setData(
-      data.map((d) => (d.key === record.key ? { ...d, isPinned: !d.isPinned } : d))
-    );
-    message.success(`${record.isPinned ? 'Đã gỡ ghim' : 'Đã ghim ưu tiên'}: ${record.noteCode}`);
+  const updateNote = async (note: MeetingDirectiveNote, patch: Record<string, unknown>) => {
+    if (savingKey) return;
+    setSavingKey(note.key);
+    try {
+      const saved = await dataService.updateDocumentNote(note.key, patch);
+      const updated = normalizeNotes([saved])[0];
+      setSelectedNote((current) => current?.key === updated.key ? updated : current);
+      return updated;
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu thay đổi. Vui lòng tải lại dữ liệu.');
+      return undefined;
+    } finally {
+      setSavingKey('');
+    }
   };
 
-  const handleToggleActionItem = (noteKey: string, itemId: number) => {
-    setData((prev) =>
-      prev.map((note) => {
-        if (note.key !== noteKey) return note;
-        const newActions = note.actionItems.map((act) =>
-          act.id === itemId ? { ...act, done: !act.done } : act
-        );
-        const doneCount = newActions.filter((a) => a.done).length;
-        const newRate = Math.round((doneCount / newActions.length) * 100);
-        const newStatus = newRate === 100 ? 'Đã hoàn thành' : 'Đang thực hiện';
-        const updated = { ...note, actionItems: newActions, completionRate: newRate, status: newStatus as any };
-        if (selectedNote && selectedNote.key === noteKey) {
-          setSelectedNote(updated);
-        }
-        return updated;
-      })
-    );
+  const handleTogglePin = async (note: MeetingDirectiveNote) => {
+    const updated = await updateNote(note, { isPinned: !note.isPinned });
+    if (updated) message.success(updated.isPinned ? 'Đã ghim chỉ đạo ưu tiên.' : 'Đã gỡ ghim chỉ đạo.');
   };
 
-  const filteredData = data.filter((item) => {
+  const handleToggleActionItem = async (note: MeetingDirectiveNote, itemId: number) => {
+    const actionItems = (note.actionItems || []).map((item) => item.id === itemId ? { ...item, done: !item.done } : item);
+    const updated = await updateNote(note, { actionItems });
+    if (updated) setSelectedNote(updated);
+  };
+
+  const handleRemind = async (note: MeetingDirectiveNote) => {
+    if (savingKey) return;
+    setSavingKey(note.key);
+    try {
+      const result = await dataService.remindDocumentNote(note.key);
+      const updated = normalizeNotes([result.record])[0];
+      setSelectedNote(updated);
+      message.success(`Đã gửi nhắc việc đến ${result.recipientCount} nhân sự của ${note.assignedToDept}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể gửi nhắc việc nội bộ.');
+    } finally {
+      setSavingKey('');
+    }
+  };
+
+  const exportNotes = () => {
+    if (!filteredData.length) {
+      message.info('Không có chỉ đạo phù hợp để xuất.');
+      return;
+    }
+    downloadFile('So_chi_dao_dieu_hanh.xlsx', generateValidXlsxBlob(noteExportRows(filteredData)));
+  };
+
+  const printNote = (note: MeetingDirectiveNote) => downloadFile(
+    `${note.noteCode.replace(/[^a-z0-9_-]/gi, '_')}_chi_dao.pdf`,
+    generateValidPdfBlob('PHIEU CHI DAO DIEU HANH', `${note.noteCode} | ${note.title}`, [
+      `Phan loai: ${note.category}`,
+      `Muc do: ${note.priority}`,
+      `Nguoi chi dao: ${note.author}`,
+      `Chuc danh: ${note.authorRole}`,
+      `Don vi thuc thi: ${note.assignedToDept}`,
+      `Ngay ban hanh: ${formatNoteDate(note.createdDate)}`,
+      `Han chot: ${formatNoteDate(note.deadline)}`,
+      `Trang thai: ${note.status}`,
+      `Tien do: ${note.completionRate}%`,
+      `Noi dung: ${note.content}`,
+      'Danh sach dau viec:', ...(note.actionItems || []).map((item) => `${item.done ? '[x]' : '[ ]'} ${item.text}`),
+      `So lan gui nhac viec: ${note.reminderHistory?.length ?? 0}`,
+    ]),
+  );
+
+  const filteredData = currentData.filter((item) => {
     const matchCategory =
       categoryFilter === 'all' ||
       (categoryFilter === 'pinned' && item.isPinned) ||
       (categoryFilter === 'completed' && item.status === 'Đã hoàn thành') ||
+      (categoryFilter === 'overdue' && item.status === 'Quá hạn') ||
       item.category === categoryFilter;
 
     const matchPriority =
@@ -144,7 +242,7 @@ export const DocumentNotesModule: React.FC = () => {
 
   const columns = [
     {
-      title: 'Mã & Trọng yếu',
+      title: 'Mã và mức độ ưu tiên',
       key: 'noteCode',
       width: 150,
       render: (_: any, record: MeetingDirectiveNote) => (
@@ -162,7 +260,7 @@ export const DocumentNotesModule: React.FC = () => {
       ),
     },
     {
-      title: 'Tiêu đề chỉ đạo & Nội dung tóm tắt',
+      title: 'Tiêu đề và nội dung tóm tắt',
       key: 'title',
       render: (_: any, record: MeetingDirectiveNote) => (
         <div>
@@ -196,7 +294,7 @@ export const DocumentNotesModule: React.FC = () => {
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, marginBottom: 2 }}>
             <span style={{ color: '#64748B' }}>
-              {r.actionItems.filter((a) => a.done).length}/{r.actionItems.length} việc
+              {(r.actionItems || []).filter((a) => a.done).length}/{(r.actionItems || []).length} việc
             </span>
             <strong style={{ color: r.completionRate === 100 ? '#16A34A' : '#2563EB' }}>
               {r.completionRate}%
@@ -212,6 +310,13 @@ export const DocumentNotesModule: React.FC = () => {
       ),
     },
     {
+      title: 'Trạng thái',
+      dataIndex: 'status',
+      key: 'status',
+      width: 145,
+      render: (status: string) => <Tag color={status === 'Đã hoàn thành' ? 'success' : status === 'Quá hạn' ? 'error' : status === 'Cần đẩy nhanh' ? 'warning' : 'processing'}>{status}</Tag>,
+    },
+    {
       title: 'Người chỉ đạo & Hạn chót',
       key: 'author',
       width: 180,
@@ -219,8 +324,8 @@ export const DocumentNotesModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 600, color: '#0F172A', fontSize: 12.5 }}>{record.author}</div>
           <div style={{ fontSize: 11, color: '#64748B' }}>{record.authorRole}</div>
-          <div style={{ fontSize: 11, color: '#DC2626', marginTop: 2, fontWeight: 600 }}>
-            Hạn: {record.deadline}
+          <div style={{ fontSize: 11, color: record.status === 'Quá hạn' ? '#DC2626' : '#64748B', marginTop: 2, fontWeight: 600 }}>
+            Hạn: {formatNoteDate(record.deadline)}
           </div>
         </div>
       ),
@@ -244,7 +349,10 @@ export const DocumentNotesModule: React.FC = () => {
           <Button
             size="small"
             icon={<PushpinOutlined />}
-            onClick={() => handleTogglePin(record)}
+            onClick={() => void handleTogglePin(record)}
+            disabled={Boolean(savingKey)}
+            loading={savingKey === record.key}
+            aria-label={record.isPinned ? 'Gỡ ghim chỉ đạo' : 'Ghim chỉ đạo'}
             style={{
               color: record.isPinned ? '#E11D48' : '#64748B',
               borderColor: record.isPinned ? '#FCA5A5' : '#CBD5E1',
@@ -264,29 +372,29 @@ export const DocumentNotesModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalNotes} chỉ đạo
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo dõi tiến trình trực tiếp</div>
+                    <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo dõi đầu việc theo đơn vị</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ đạo khẩn cấp P1 &amp; Ghim ưu tiên</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
-            {pinnedCount} đang ghim ({p1Count} P1)
+            {pinnedCount} ghim · {p1Count} P1
           </div>
           <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Cần giải quyết dứt điểm</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ đạo đã hoàn tất 100%</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chỉ đạo đã hoàn thành</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {completedCount} chỉ đạo
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tỷ lệ đáp ứng SLA 91.5%</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tỷ lệ chỉ đạo hoàn tất: {completionPercentage === null ? 'Chưa đủ dữ liệu' : `${completionPercentage}%`}</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Hành động giao việc</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            {data.reduce((acc, cur) => acc + cur.actionItems.length, 0)} đầu việc
+            {currentData.reduce((acc, cur) => acc + (cur.actionItems || []).length, 0)} đầu việc
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Phân quyền trực tiếp đến phòng ban</div>
         </div>
@@ -298,10 +406,11 @@ export const DocumentNotesModule: React.FC = () => {
           {[
             { key: 'all', label: 'Tất cả' },
             { key: 'pinned', label: 'Ghim ưu tiên', icon: <PushpinOutlined style={{ color: '#EC4899' }} /> },
-            { key: 'Ý kiến chỉ đạo BGĐ', label: 'Chỉ đạo BGĐ' },
-            { key: 'Giao ban tuần & Tháng', label: 'Giao ban tuần' },
-            { key: 'Ghi nhớ dự án & Kỹ thuật', label: 'Dự án & Kỹ thuật' },
+            { key: NOTE_CATEGORIES[0], label: 'Chỉ đạo BGĐ' },
+            { key: NOTE_CATEGORIES[1], label: 'Giao ban tuần' },
+            { key: NOTE_CATEGORIES[3], label: 'Dự án và kỹ thuật' },
             { key: 'completed', label: 'Đã hoàn thành' },
+            { key: 'overdue', label: 'Quá hạn' },
           ].map((tab) => (
             <Button
               key={tab.key}
@@ -334,7 +443,7 @@ export const DocumentNotesModule: React.FC = () => {
 
           <Input
             prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
-            placeholder="Tìm theo mã, tiêu đề, người chỉ đạo, phòng ban..."
+            placeholder="Tìm theo mã, tiêu đề, người chỉ đạo, đơn vị..."
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             style={{ width: 280 }}
@@ -344,8 +453,20 @@ export const DocumentNotesModule: React.FC = () => {
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={loading || Boolean(savingKey)}
             onClick={() => {
+              if (!departmentOptions.length) {
+                message.error('Chưa có đơn vị đang hoạt động trong danh mục.');
+                return;
+              }
               form.resetFields();
+              form.setFieldsValue({
+                noteCode: `CD-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+                category: NOTE_CATEGORIES[0],
+                priority: NOTE_PRIORITIES[2],
+                author: user?.name || '',
+                isPinned: false,
+              });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -353,22 +474,22 @@ export const DocumentNotesModule: React.FC = () => {
             Tạo chỉ đạo mới
           </Button>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ tay chỉ đạo điều hành!')}>
-            Xuất Sổ
+          <Button icon={<DownloadOutlined />} onClick={exportNotes} disabled={loading || filteredData.length === 0}>
+            Xuất sổ
           </Button>
         </div>
       </div>
 
       {/* Main Notes Table */}
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} loading={loading} />
       </div>
 
       {/* MODAL: Tạo Ý Kiến Chỉ Đạo / Kết Luận Mới */}
       <Modal
-        title="Tạo Ý Kiến Chỉ Đạo &amp; Kết Luận Giao Ban Mới"
+        title="Tạo chỉ đạo và kết luận giao ban"
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => { if (savingKey !== 'create') setModalOpen(false); }}
         footer={null}
         width={680}
       >
@@ -376,62 +497,38 @@ export const DocumentNotesModule: React.FC = () => {
           form={form}
           layout="vertical"
           onFinish={handleCreate}
-          initialValues={{
-            noteCode: `CĐ-2026/0${data.length + 1}`,
-            category: 'Ý kiến chỉ đạo BGĐ',
-            priority: 'Khẩn cấp P1',
-            author: 'Quản trị viên',
-            authorRole: 'Tổng Giám Đốc (CEO)',
-            assignedToDept: 'Khối Kỹ Thuật & IDC',
-            deadline: '2026-09-05',
-            isPinned: true,
-          }}
           style={{ marginTop: 14 }}
         >
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="noteCode" label="Mã chỉ đạo" rules={[{ required: true }]}>
-              <Input />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <Form.Item name="noteCode" label="Mã chỉ đạo" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập mã chỉ đạo.' }]}>
+              <Input maxLength={80} />
             </Form.Item>
-            <Form.Item name="category" label="Phân loại" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'Ý kiến chỉ đạo BGĐ', value: 'Ý kiến chỉ đạo BGĐ' },
-                  { label: 'Giao ban tuần & Tháng', value: 'Giao ban tuần & Tháng' },
-                  { label: 'Biên bản cuộc họp HĐQT', value: 'Biên bản cuộc họp HĐQT' },
-                  { label: 'Ghi nhớ dự án & Kỹ thuật', value: 'Ghi nhớ dự án & Kỹ thuật' },
-                  { label: 'Chỉ đạo đột xuất', value: 'Chỉ đạo đột xuất' },
-                ]}
-              />
+            <Form.Item name="category" label="Phân loại" rules={[{ required: true, message: 'Vui lòng chọn phân loại.' }]}>
+              <Select options={NOTE_CATEGORIES.map((category) => ({ label: category, value: category }))} />
             </Form.Item>
-            <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'Khẩn cấp P1', value: 'Khẩn cấp P1' },
-                  { label: 'Ưu tiên cao P2', value: 'Ưu tiên cao P2' },
-                  { label: 'Bình thường P3', value: 'Bình thường P3' },
-                ]}
-              />
+            <Form.Item name="priority" label="Mức độ ưu tiên" rules={[{ required: true, message: 'Vui lòng chọn mức độ ưu tiên.' }]}>
+              <Select options={NOTE_PRIORITIES.map((priority) => ({ label: priority, value: priority }))} />
             </Form.Item>
           </div>
 
-          <Form.Item name="title" label="Tiêu đề chỉ đạo điều hành" rules={[{ required: true, message: 'Nhập tiêu đề' }]}>
-            <Input placeholder="Ví dụ: Rà soát nâng cấp hạ tầng mạng Core Switch IDC" />
+          <Form.Item name="title" label="Tiêu đề chỉ đạo điều hành" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập tiêu đề.' }]}>
+            <Input maxLength={300} />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="author" label="Lãnh đạo chỉ đạo" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Văn Minh" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="author" label="Người chỉ đạo" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập người chỉ đạo.' }]}>
+              <Input maxLength={160} />
             </Form.Item>
-            <Form.Item name="authorRole" label="Chức danh" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Tổng Giám Đốc (CEO)" />
+            <Form.Item name="authorRole" label="Chức danh" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập chức danh.' }]}>
+              <Input maxLength={160} />
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="assignedToDept" label="Đơn vị thực thi" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Khối Kỹ Thuật & Mạng" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <Form.Item name="assignedToDept" label="Đơn vị thực thi" rules={[{ required: true, message: 'Vui lòng chọn đơn vị thực thi.' }]}>
+              <Select options={departmentOptions} />
             </Form.Item>
-            <Form.Item name="deadline" label="Hạn chót hoàn thành" rules={[{ required: true }]}>
+            <Form.Item name="deadline" label="Hạn chót hoàn thành" rules={[{ required: true, message: 'Vui lòng chọn hạn chót.' }]}>
               <Input type="date" />
             </Form.Item>
             <Form.Item name="isPinned" label="Ghim ưu tiên">
@@ -444,17 +541,17 @@ export const DocumentNotesModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="content" label="Nội dung chi tiết chỉ đạo" rules={[{ required: true, message: 'Nhập nội dung' }]}>
-            <Input.TextArea rows={3} placeholder="Nội dung chỉ đạo..." />
+          <Form.Item name="content" label="Nội dung chi tiết chỉ đạo" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập nội dung.' }]}>
+            <Input.TextArea rows={3} maxLength={4000} />
           </Form.Item>
 
-          <Form.Item name="rawActions" label="Các đầu việc cụ thể">
-            <Input.TextArea rows={3} placeholder="Ví dụ:&#10;Khảo sát cấu hình switch hiện tại&#10;Báo giá thiết bị Cisco Catalyst 9500&#10;Lập phương án bảo trì không gián đoạn dịch vụ" />
+          <Form.Item name="rawActions" label="Các đầu việc cụ thể" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập ít nhất một đầu việc.' }]}>
+            <Input.TextArea rows={3} maxLength={4000} />
           </Form.Item>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
+            <Button onClick={() => setModalOpen(false)} disabled={savingKey === 'create'}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={savingKey === 'create'} disabled={Boolean(savingKey)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Ban hành chỉ đạo
             </Button>
           </div>
@@ -469,7 +566,7 @@ export const DocumentNotesModule: React.FC = () => {
         width={640}
       >
         {selectedNote && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {/* Header Banner */}
             <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -479,7 +576,7 @@ export const DocumentNotesModule: React.FC = () => {
                     {selectedNote.title}
                   </div>
                 </div>
-                <Tag color={selectedNote.status === 'Đã hoàn thành' ? 'success' : 'processing'}>
+                <Tag color={selectedNote.status === 'Đã hoàn thành' ? 'success' : selectedNote.status === 'Quá hạn' ? 'error' : selectedNote.status === 'Cần đẩy nhanh' ? 'warning' : 'processing'}>
                   {selectedNote.status}
                 </Tag>
               </div>
@@ -495,12 +592,11 @@ export const DocumentNotesModule: React.FC = () => {
 
             {/* Meta Grid */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 12.5 }}>
                 <div>
                   <span style={{ color: '#64748B' }}>Người chỉ đạo:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>
-                    {selectedNote.author} ({selectedNote.authorRole})
-                  </div>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedNote.author}</div>
+                  <div style={{ color: '#64748B' }}>Chức danh: {selectedNote.authorRole}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Đơn vị chịu trách nhiệm:</span>
@@ -508,11 +604,11 @@ export const DocumentNotesModule: React.FC = () => {
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Ngày ban hành:</span>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedNote.createdDate}</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{formatNoteDate(selectedNote.createdDate)}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Hạn chót:</span>
-                  <div style={{ fontWeight: 700, color: '#DC2626' }}>{selectedNote.deadline}</div>
+                  <div style={{ fontWeight: 700, color: selectedNote.status === 'Quá hạn' ? '#DC2626' : '#0F172A' }}>{formatNoteDate(selectedNote.deadline)}</div>
                 </div>
               </div>
             </div>
@@ -529,22 +625,25 @@ export const DocumentNotesModule: React.FC = () => {
                 <div style={{ fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <CheckSquareOutlined style={{ color: '#009688' }} /> Danh Sách Đầu Việc Cần Thực Hiện:
                 </div>
-                <strong style={{ color: selectedNote.completionRate === 100 ? '#16A34A' : '#2563EB' }}>
-                  Tiến độ: {selectedNote.completionRate}%
+                <strong style={{ color: noteCompletionRate(selectedNote.actionItems || []) === 100 ? '#16A34A' : '#2563EB' }}>
+                  Tiến độ: {noteCompletionRate(selectedNote.actionItems || [])}%
                 </strong>
               </div>
 
               <Progress
-                percent={selectedNote.completionRate}
-                strokeColor={selectedNote.completionRate === 100 ? '#16A34A' : '#009688'}
+                percent={noteCompletionRate(selectedNote.actionItems || [])}
+                strokeColor={noteCompletionRate(selectedNote.actionItems || []) === 100 ? '#16A34A' : '#009688'}
                 style={{ marginBottom: 12 }}
               />
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {selectedNote.actionItems.map((act) => (
-                  <div
+                {(selectedNote.actionItems || []).map((act) => (
+                  <button
+                    type="button"
                     key={act.id}
-                    onClick={() => handleToggleActionItem(selectedNote.key, act.id)}
+                    onClick={() => void handleToggleActionItem(selectedNote, act.id)}
+                    disabled={Boolean(savingKey)}
+                    aria-pressed={act.done}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -555,6 +654,9 @@ export const DocumentNotesModule: React.FC = () => {
                       background: act.done ? '#F0FDF4' : '#F8FAFC',
                       cursor: 'pointer',
                       transition: 'background 0.15s ease',
+                      color: 'inherit',
+                      textAlign: 'left',
+                      width: '100%',
                     }}
                   >
                     {act.done ? (
@@ -572,27 +674,57 @@ export const DocumentNotesModule: React.FC = () => {
                     >
                       {act.text}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
 
+            {(selectedNote.reminderHistory || []).length > 0 && (
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+                <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Lịch sử nhắc việc nội bộ</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {(selectedNote.reminderHistory || []).map((entry, index) => (
+                    <div key={`${entry.at}-${index}`} style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, fontSize: 12.5 }}>
+                      <strong>{formatNoteTimestamp(entry.at)}</strong>
+                      <span>{entry.actor} đã gửi đến {entry.recipientCount} nhân sự</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(selectedNote.history || []).length > 0 && (
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+                <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Lịch sử xử lý</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {[...(selectedNote.history || [])].reverse().map((entry, index) => (
+                    <div key={`${entry.at}-${index}`} style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, fontSize: 12.5 }}>
+                      <strong>{formatNoteTimestamp(entry.at)}</strong>
+                      <span>{entry.actor}: {entry.action}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Action Buttons */}
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in phiếu chỉ đạo ${selectedNote.noteCode} (PDF)`)}
+                onClick={() => printNote({ ...selectedNote, status: noteStatus(selectedNote), completionRate: noteCompletionRate(selectedNote.actionItems || []) })}
                 style={{ flex: 1 }}
               >
-                In Phiếu Chỉ Đạo
+                In phiếu chỉ đạo
               </Button>
               <Button
                 type="primary"
                 icon={<BellOutlined />}
-                onClick={() => message.success(`Đã gửi cảnh báo nhắc nhở tiến độ đến ${selectedNote.assignedToDept} qua Slack`)}
+                onClick={() => void handleRemind(selectedNote)}
+                disabled={Boolean(savingKey) || selectedNote.status === 'Đã hoàn thành'}
+                loading={savingKey === selectedNote.key}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
-                Nhắc Nhở Thực Thi
+                Gửi nhắc việc nội bộ
               </Button>
             </div>
           </div>

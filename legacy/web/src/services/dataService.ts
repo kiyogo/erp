@@ -5,6 +5,7 @@
 
 import {
   collectionsApi,
+  documentNotesApi,
   attendanceApi,
   employeesApi,
   contractsApi,
@@ -756,6 +757,38 @@ class DataService {
     saveToStorage('tickets', updated);
     this.notify();
     return savedRecord;
+  }
+
+  public async updateDocumentNote(key: string, patch: Record<string, unknown>): Promise<Record<string, any>> {
+    const recordKey = String(key || '').trim();
+    if (!recordKey) throw new Error('Chỉ đạo thiếu mã để cập nhật.');
+    const response = await collectionsApi.update('doc_notes', recordKey, patch);
+    const savedRecord = response.data?.record;
+    if (!savedRecord || typeof savedRecord !== 'object') throw new Error('Máy chủ không trả về chỉ đạo đã cập nhật.');
+    this.replaceCachedRecord('doc_notes', recordKey, savedRecord);
+    return savedRecord;
+  }
+
+  public async remindDocumentNote(key: string): Promise<{ record: Record<string, any>; recipientCount: number }> {
+    const recordKey = String(key || '').trim();
+    if (!recordKey) throw new Error('Chỉ đạo thiếu mã để gửi nhắc việc.');
+    const response = await documentNotesApi.remind(recordKey);
+    const result = response.data;
+    if (!result?.record || !Number.isSafeInteger(result.recipientCount) || result.recipientCount < 1) {
+      throw new Error('Máy chủ không xác nhận người nhận nhắc việc.');
+    }
+    this.replaceCachedRecord('doc_notes', recordKey, result.record);
+    return result;
+  }
+
+  private replaceCachedRecord(scope: string, recordKey: string, record: Record<string, any>): void {
+    const rows = this.genericCache.get(scope) || [];
+    const updated = rows.some((item) => String(item.key ?? item.code ?? '') === recordKey)
+      ? rows.map((item) => String(item.key ?? item.code ?? '') === recordKey ? record : item)
+      : [record, ...rows];
+    this.genericCache.set(scope, updated);
+    saveToStorage(scope, updated);
+    this.notify();
   }
 
   public async deleteGenericRecord(scope: string, recordKey: string): Promise<void> {
