@@ -587,6 +587,12 @@ export const EMPLOYEE_PORTAL_MENU_ITEMS: MenuItem[] = [
     path: '/employee/proposals',
   },
   {
+    id: 'emp-finance-payments',
+    title: 'Đề nghị thanh toán',
+    icon: <DollarOutlined />,
+    path: '/employee/finance/payments',
+  },
+  {
     id: 'emp-workflow-requests',
     title: 'Yêu cầu phê duyệt',
     icon: <BranchesOutlined />,

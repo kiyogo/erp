@@ -92,6 +92,10 @@ export const PaymentsModule: React.FC = () => {
 
   const [statusFilter, setStatusFilter] = useState<string>(defaultStatusFilter);
 
+  useEffect(() => {
+    setStatusFilter(defaultStatusFilter);
+  }, [location.pathname, defaultStatusFilter]);
+
   const totalAmount = data.reduce((sum, item) => sum + item.amount, 0);
   const totalPending = data.filter((d) => d.status === 'Chờ duyệt').reduce((sum, item) => sum + item.amount, 0);
   const totalApproved = data.filter((d) => d.status === 'Đã phê duyệt' || d.status === 'Đã thanh toán').reduce((sum, item) => sum + item.amount, 0);
@@ -453,7 +457,7 @@ export const PaymentsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="amount" label="Số tiền thanh toán (VNĐ)" rules={[{ required: true }]}>
-              <Input type="number" min={1000} step={1000000} />
+              <Input type="number" min={1000} step={1} />
             </Form.Item>
             <Form.Item name="paymentMethod" label="Phương thức thanh toán" rules={[{ required: true }]}>
               <Select

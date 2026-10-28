@@ -218,6 +218,7 @@ export const GenericModulePage: React.FC = () => {
   if (currentPath === '/employee/payslip') return <EmployeePayslipModule />;
   if (currentPath === '/employee/contracts') return <EmployeeContractsModule />;
   if (currentPath === '/employee/proposals') return <EmployeeProposalsModule />;
+  if (currentPath === '/employee/finance/payments') return <PaymentsModule />;
   if (currentPath === '/employee/workflows/requests') return <WorkflowRequestsModule />;
   if (currentPath === '/employee/assets') return <EmployeeAssetsModule />;
   if (currentPath === '/employee/files') return <Files />;
