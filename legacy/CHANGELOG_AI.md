@@ -4,6 +4,14 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-28] - Trung tâm báo cáo công việc và kiểm tra luồng quy trình
+
+- TasksModule: thêm màn Báo cáo theo trạng thái, người thực hiện, dự án/đơn vị và tháng tạo; hiển thị tỷ trọng và tiến độ trung bình từ danh sách đã lọc; xuất XLSX từ đúng dữ liệu trên màn và báo rõ khi chỉ tải được cache cục bộ. Giữ danh sách, ma trận Eisenhower và các thao tác nhiệm vụ hiện có.
+- Thêm quy tắc tổng hợp có kiểm tra ngày tạo không hợp lệ, trường phân loại thiếu và tập dữ liệu rỗng; bổ sung test tổng hợp và xuất dữ liệu.
+- E2E trên SQLite tạm xác minh số đếm, tiến độ trung bình, nhóm chưa có dự án, báo cáo tháng và tải XLSX. Mở rộng E2E AMIS Quy trình kiểm tra cả yêu cầu bổ sung/gửi lại/phê duyệt lẫn từ chối có lý do.
+- Kiểm tra: API 119/119, web/domain 145/145, typecheck, production build và hai E2E nhiệm vụ/quy trình đạt. Bundle 5,032.44 kB; còn cảnh báo chunk trên 500 kB. PostgreSQL smoke gần nhất 72 checkpoint, không chạy lại trong lượt này.
+- Giới hạn: đã xác minh 5 mục báo cáo công việc (IDs 366, 383, 384, 388, 391) và một luồng quy trình (ID 982); báo cáo cộng tác viên, thời lượng, năng lực nguồn lực, việc giao cho tôi, hoãn hạn, Gantt, hoạt động dự án, chia sẻ/dashboard và phần lớn các mục khác của 29 ứng dụng vẫn chưa được nghiệm thu. Mốc sàn cập nhật 47/982 (4.8%), không phải tỷ lệ hoàn thành toàn web.
+
 ## [2026-10-28] - Quản trị thông báo hệ thống trong web cũ
 
 - Chuyển danh sách/thao tác broadcast khỏi cache trình duyệt sang API và bảng riêng trong SQLite/PostgreSQL; lưu tập người nhận thực từ user đang hoạt động, sender, kênh, trạng thái từng kênh và lượt đọc.
@@ -12,6 +20,7 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 - Giữ bản ghi từ cache/local collection cũ ở chế độ chỉ xem, đánh dấu chưa xác minh và loại khỏi thống kê cho tới khi có căn cứ xác nhận.
 - Kiểm tra: API 119/119, web/domain 143/143, E2E trình duyệt giữ và khóa bản ghi cũ + phát/đọc/phát lại/xóa, TypeScript, production build và PostgreSQL smoke 72 checkpoint đạt. Build còn cảnh báo chunk JavaScript khoảng 5.03 MB.
 - Giới hạn: SMTP trả tiếp nhận không chứng minh thư đã vào inbox; SMS chưa tích hợp; toàn bộ 982 mục trong video/checklist vẫn chưa được nghiệm thu.
+- Mở rộng kiểm tra `api/tests/workflow-browser.mjs` cho nhánh từ chối: người duyệt nhập lý do, lịch sử ghi actor/quyết định, người gửi thấy hồ sơ đã kết thúc sau khi tải lại. Checklist ID 982 được đánh dấu 1/1 đã xác minh; các màn và cấu hình Workflow khác vẫn còn trong phạm vi cần đối chiếu.
 
 ## [2026-10-26, tiếp tục] - Tệp gốc, quản trị, hồ sơ công ty và đánh giá
 

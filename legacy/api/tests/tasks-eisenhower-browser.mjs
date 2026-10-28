@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,6 +12,7 @@ const apiDir = fileURLToPath(new URL('..', import.meta.url));
 const webDir = path.resolve(apiDir, '..', 'web');
 const directory = mkdtempSync(path.join(tmpdir(), 'kiyovn-task-eisenhower-'));
 mkdirSync(path.join(directory, 'files'));
+mkdirSync(path.join(directory, 'downloads'));
 
 async function freePort() {
   const server = createServer();
@@ -90,8 +91,8 @@ try {
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
   const today = vietnamDateOffset(0);
   const cases = [
-    { title: 'Ma trận cần làm ngay', priority: 'Khẩn cấp', dueDate: vietnamDateOffset(20), quadrant: 'do-now' },
-    { title: 'Ma trận lên lịch', priority: 'Cao', dueDate: vietnamDateOffset(20), quadrant: 'schedule' },
+    { title: 'Ma trận cần làm ngay', priority: 'Khẩn cấp', dueDate: vietnamDateOffset(20), quadrant: 'do-now', projectName: 'Dự án ERP' },
+    { title: 'Ma trận lên lịch', priority: 'Cao', dueDate: vietnamDateOffset(20), quadrant: 'schedule', projectName: 'Dự án ERP' },
     { title: 'Ma trận cần giao', priority: 'Trung bình', dueDate: today, quadrant: 'delegate' },
     { title: 'Ma trận ít ưu tiên', priority: 'Thấp', dueDate: vietnamDateOffset(20), quadrant: 'low-priority' },
     { title: 'Ma trận đã hoàn thành', priority: 'Khẩn cấp', dueDate: today, completed: true },
@@ -99,7 +100,7 @@ try {
   for (const item of cases) {
     const response = await fetch(`${apiUrl}/tasks`, {
       method: 'POST', headers,
-      body: JSON.stringify({ taskTitle: item.title, priority: item.priority, dueDate: item.dueDate, assigneeId: admin.user.id }),
+      body: JSON.stringify({ taskTitle: item.title, priority: item.priority, dueDate: item.dueDate, assigneeId: admin.user.id, projectName: item.projectName }),
     });
     const result = await response.json();
     assert.equal(response.status, 201, JSON.stringify(result));
@@ -142,9 +143,46 @@ try {
 
   await page.evaluate(() => document.querySelector('[data-testid="eisenhower-quadrant-do-now"] button')?.click());
   await page.waitForFunction(() => document.body.innerText.includes('Chi tiết nhiệm vụ') && document.body.innerText.includes('Ma trận cần làm ngay'), { timeout: 10000 });
+
+  await page.goto(`${webUrl}/admin/tasks`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(() => document.body.innerText.includes('Tổng nhiệm vụ'), { timeout: 20000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Báo cáo')?.click());
+  await page.waitForSelector('[data-testid="task-reports"]', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('[data-testid="task-reports"]')?.innerText.includes('Chưa bắt đầu'), { timeout: 10000 });
+  let reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.match(reportText, /Chưa bắt đầu\s+4\s+80%/);
+  assert.match(reportText, /Hoàn thành\s+1\s+20%/);
+
+  const chooseReport = async label => {
+    await page.evaluate(() => document.querySelector('[data-testid="task-reports"] .ant-select')?.click());
+    await page.waitForFunction(text => [...document.querySelectorAll('.ant-select-item')].some(item => item.textContent.includes(text)), { timeout: 10000 }, label);
+    await page.evaluate(text => [...document.querySelectorAll('.ant-select-item')].find(item => item.textContent.includes(text))?.click(), label);
+    await page.waitForFunction(text => document.querySelector('[data-testid="task-reports"]')?.innerText.includes(text), { timeout: 10000 }, label);
+  };
+  await chooseReport('Theo người thực hiện');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.ok(reportText.includes(admin.user.name), 'Assignee report must use the real task assignee.');
+  assert.match(reportText, /5\s+100%/);
+  await chooseReport('Theo dự án / đơn vị');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.match(reportText, /Dự án ERP\s+2\s+40%\s+0%/);
+  assert.match(reportText, /Chưa thuộc dự án \/ đơn vị\s+3\s+60%\s+33%/);
+  await chooseReport('Nhiệm vụ tạo theo tháng');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.ok(reportText.includes(today.slice(0, 7)), 'Creation trend must group real task creation dates by month.');
+
+  const cdp = await page.createCDPSession();
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: path.join(directory, 'downloads') });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('Xuất Excel'))?.click());
+  let downloaded = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (readdirSync(path.join(directory, 'downloads')).some(name => name.endsWith('.xlsx'))) { downloaded = true; break; }
+    await delay(100);
+  }
+  assert.ok(downloaded, 'Report export must download a real XLSX file.');
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(taskApiErrors, []);
-  console.log(JSON.stringify({ checks: 'real task data in all four Eisenhower quadrants, Vietnam-date urgency, completed-task exclusion, task detail opening', quadrants: Object.keys(quadrants).length }));
+  console.log(JSON.stringify({ checks: 'real task data in all four Eisenhower quadrants, Vietnam-date urgency, completed-task exclusion, task detail opening, status/assignee/project/month reports and XLSX download', quadrants: Object.keys(quadrants).length }));
 } catch (error) {
   console.error(`${error.stack || error}\n${logs}`);
   process.exitCode = 1;

@@ -323,10 +323,45 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('Tất cả hồ sơ'), { timeout: 30000 });
   await clickButton('Tất cả hồ sơ');
   await page.waitForFunction(code => document.body.innerText.includes(code) && document.body.innerText.includes('Đã phê duyệt'), { timeout: 30000 }, requestCode);
+
+  await clickButton('Tạo hồ sơ xin phê duyệt');
+  await page.waitForSelector('.ant-modal-root form');
+  const rejectedRequestCode = await page.evaluate(() => [...document.querySelectorAll('.ant-modal-root .ant-form-item')]
+    .find(item => item.querySelector('label')?.textContent.includes('Mã hồ sơ trình ký'))?.querySelector('input')?.value || '');
+  assert.match(rejectedRequestCode, /^REQ-/);
+  await fillForm('Tiêu đề đề xuất', 'Đề xuất cần từ chối trong kiểm thử');
+  await fillForm('Nội dung chi tiết', 'Hồ sơ dùng để xác minh nhánh từ chối.');
+  await fillForm('Mã tham chiếu nghiệp vụ', 'REF-REJECT-01');
+  await fillForm('Đơn vị / Phòng ban', 'Phòng kiểm thử');
+  await (await page.$('#workflow-request-attachments')).uploadFile(pdfPath);
+  await clickButton('Trình duyệt hồ sơ', true);
+  await page.waitForFunction(code => !document.querySelector('.ant-modal-root') && document.body.innerText.includes(`Đã gửi hồ sơ ${code}`), { timeout: 30000 }, rejectedRequestCode);
+
+  await useSession(approver, '/employee/workflows/requests');
+  await page.waitForFunction(code => document.body.innerText.includes(code) && document.body.innerText.includes('Từ chối'), { timeout: 30000 }, rejectedRequestCode);
+  await clickButton('Từ chối');
+  await page.waitForFunction(() => document.body.innerText.includes('Từ Chối Phê Duyệt Hồ Sơ'), { timeout: 10000 });
+  await fillModalTextarea('Hồ sơ không đáp ứng điều kiện áp dụng trong kiểm thử.');
+  await clickButton('Xác nhận từ chối', true);
+  await page.waitForFunction(code => document.body.innerText.includes(`Đã ghi nhận quyết định “Từ chối” cho hồ sơ ${code}.`), { timeout: 20000 }, rejectedRequestCode);
+  const rejected = await waitForRecord('workflow_requests', rejectedRequestCode, requester, item => item.status === 'Đã từ chối', 'Rejection should persist after leaving the approver queue');
+  assert.equal(rejected.status, 'Đã từ chối');
+  assert.equal(rejected.approvalHistory.length, 1);
+  assert.equal(rejected.approvalHistory[0].decision, 'Từ chối');
+  assert.equal(rejected.approvalHistory[0].approverId, approver.user.id);
+  assert.equal(rejected.approvalHistory[0].comments, 'Hồ sơ không đáp ứng điều kiện áp dụng trong kiểm thử.');
+
+  await useSession(requester, '/employee/workflows/requests');
+  await page.waitForFunction(() => document.body.innerText.includes('Tất cả hồ sơ'), { timeout: 30000 });
+  await clickButton('Tất cả hồ sơ');
+  await page.waitForFunction(code => {
+    const row = [...document.querySelectorAll('tbody tr')].find(item => item.innerText.includes(code));
+    return row?.innerText.includes('Đã từ chối') && row.innerText.includes('Đã hoàn tất') && !row.innerText.includes('Nộp bổ sung');
+  }, { timeout: 30000 }, rejectedRequestCode);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({
-    checks: 'workflow UI creator, required custom fields and PDF, requester submission, assigned approver supplement, requester resubmission, file retention, internal approval and reload persistence',
-    requestCode, workflowCode, database: directory,
+    checks: 'workflow UI creator, required custom fields and PDF, requester submission, assigned approver supplement, requester resubmission, file retention, internal approval, rejection with reason, terminal requester view and reload persistence',
+    requestCode, rejectedRequestCode, workflowCode, database: directory,
   }));
 } catch (error) {
   if (page) console.error((await page.$eval('body', node => node.innerText).catch(() => '')).slice(-4000));

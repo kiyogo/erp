@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
+  BarChartOutlined,
   CheckCircleOutlined,
   CheckSquareOutlined,
   ClockCircleOutlined,
@@ -8,6 +9,7 @@ import {
   DownloadOutlined,
   EditOutlined,
   EyeOutlined,
+  FileExcelOutlined,
   FileTextOutlined,
   PaperClipOutlined,
   PlusOutlined,
@@ -24,6 +26,8 @@ import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { formatFileSize, getFileBlob, storeFileBlob } from '../../utils/fileStorage';
 import { buildEisenhowerMatrix, vietnamCalendarDate, type EisenhowerQuadrantKey } from './taskEisenhowerRules';
+import { buildTaskReport, TASK_REPORT_OPTIONS, taskReportExportRows, type TaskReportKind } from './taskReportRules';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 const priorityColor = (priority: TaskPriority) => (
   priority === 'Khẩn cấp' ? 'error' : priority === 'Cao' ? 'warning' : priority === 'Trung bình' ? 'processing' : 'default'
@@ -141,9 +145,11 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
   const [tasks, setTasks] = useState<EnterpriseTask[]>([]);
   const [assignees, setAssignees] = useState<TaskAssignee[]>([]);
   const [loading, setLoading] = useState(true);
+  const [taskDataSource, setTaskDataSource] = useState<'loading' | 'server' | 'cache'>('loading');
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState('all');
-  const [viewMode, setViewMode] = useState<'list' | 'eisenhower'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'eisenhower' | 'reports'>('list');
+  const [taskReportKind, setTaskReportKind] = useState<TaskReportKind>('status');
   const [modalOpen, setModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -241,6 +247,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
 
   const loadData = async () => {
     setLoading(true);
+    setTaskDataSource('loading');
     let employeeRows: any[] = [];
     try {
       const employeeResponse = await employeesApi.getAll();
@@ -307,11 +314,14 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       const taskResponse = await tasksApi.getAll();
       if (Array.isArray(taskResponse?.data?.data)) {
         setTasks(taskResponse.data.data);
+        setTaskDataSource('server');
       } else {
         setTasks(dataService.getEnterpriseTasks());
+        setTaskDataSource('cache');
       }
     } catch {
       setTasks(dataService.getEnterpriseTasks());
+      setTaskDataSource('cache');
     }
 
     try {
@@ -1013,6 +1023,12 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
     () => buildEisenhowerMatrix(filteredTasks, matrixToday),
     [filteredTasks, matrixToday],
   );
+  const taskReportRows = useMemo(() => buildTaskReport(filteredTasks, taskReportKind), [filteredTasks, taskReportKind]);
+  const exportTaskReport = () => {
+    const reportName = TASK_REPORT_OPTIONS.find(option => option.value === taskReportKind)?.label || 'Báo cáo nhiệm vụ';
+    downloadFile(`bao-cao-nhiem-vu-${taskReportKind}.xlsx`, generateValidXlsxBlob(taskReportExportRows(taskReportKind, taskReportRows)));
+    message.success(`Đã xuất ${reportName.toLocaleLowerCase('vi')} thành công.`);
+  };
 
   const columns = [
     { title: 'Mã & hạn xử lý', key: 'code', width: 150, render: (_: unknown, task: EnterpriseTask) => <div><div style={{ fontWeight: 500, color: '#009688', display: 'flex', gap: 6, alignItems: 'center' }}><CheckSquareOutlined /> {task.taskCode}</div><div style={{ marginTop: 3, fontSize: 12, color: task.dueDate < new Date().toISOString().slice(0, 10) && task.status !== 'Hoàn thành' ? '#DC2626' : '#64748B' }}>Hạn: {task.dueDate}</div></div> },
@@ -1050,6 +1066,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
           {[['all', 'Tất cả'], ['urgent', 'Khẩn cấp'], ['in-progress', 'Đang thực hiện'], ['waiting-review', 'Chờ nghiệm thu'], ['completed', 'Hoàn thành']].map(([key, label]) => <Button key={key} size="small" onClick={() => { setFilterTab(key); setViewMode('list'); }} style={{ background: viewMode === 'list' && filterTab === key ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'list' && filterTab === key ? '#009688' : '#CBD5E1', color: viewMode === 'list' && filterTab === key ? '#00796B' : '#475569', fontWeight: viewMode === 'list' && filterTab === key ? 700 : 500 }}>{label}</Button>)}
           <Button size="small" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')} style={{ background: viewMode === 'list' ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'list' ? '#009688' : '#CBD5E1', color: viewMode === 'list' ? '#00796B' : '#475569' }}>Danh sách</Button>
           <Button size="small" aria-pressed={viewMode === 'eisenhower'} onClick={() => { setFilterTab('all'); setViewMode('eisenhower'); }} style={{ background: viewMode === 'eisenhower' ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'eisenhower' ? '#009688' : '#CBD5E1', color: viewMode === 'eisenhower' ? '#00796B' : '#475569', fontWeight: viewMode === 'eisenhower' ? 700 : 500 }}>Ma trận Eisenhower</Button>
+          <Button size="small" aria-pressed={viewMode === 'reports'} icon={<BarChartOutlined />} onClick={() => { setFilterTab('all'); setViewMode('reports'); }} style={{ background: viewMode === 'reports' ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'reports' ? '#009688' : '#CBD5E1', color: viewMode === 'reports' ? '#00796B' : '#475569', fontWeight: viewMode === 'reports' ? 700 : 500 }}>Báo cáo</Button>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><Input prefix={<SearchOutlined style={{ color: '#94A3B8' }} />} placeholder="Mã, tên việc, đơn vị, người làm..." value={searchText} onChange={(event) => setSearchText(event.target.value)} allowClear style={{ width: 270 }} /><Button icon={<ReloadOutlined />} onClick={() => void loadData()}>Tải lại</Button>{canCreateTask && <Button type="primary" icon={<PlusOutlined />} onClick={openCreateTask} style={{ background: '#009688', borderColor: '#009688' }}>Thêm nhiệm vụ</Button>}</div>
       </div>
@@ -1057,7 +1074,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       <Spin spinning={loading} tip="Đang tải nhiệm vụ...">
         {viewMode === 'list' ? (
           <div className="transparent-table-card"><KTable dataSource={filteredTasks} columns={columns} pagination={{ pageSize: 8 }} /></div>
-        ) : (
+        ) : viewMode === 'eisenhower' ? (
           <section data-testid="eisenhower-matrix" aria-label="Ma trận Eisenhower" style={{ width: '100%' }}>
             <div style={{ color: '#64748B', fontSize: 12.5, margin: '0 0 12px' }}>
               Phân loại theo dữ liệu nhiệm vụ: ưu tiên Cao/Khẩn cấp là quan trọng; ưu tiên Khẩn cấp hoặc hạn đến hôm nay/quá hạn là khẩn cấp. Nhiệm vụ đã hoàn thành được ẩn. Ngày tính theo múi giờ Việt Nam.
@@ -1091,6 +1108,33 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
                 );
               })}
             </div>
+          </section>
+        ) : (
+          <section data-testid="task-reports" aria-label="Báo cáo nhiệm vụ" style={{ background: '#FFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#0F172A', fontWeight: 700, fontSize: 16 }}><BarChartOutlined style={{ color: '#009688' }} />Báo cáo nhiệm vụ</div>
+                <div style={{ color: '#64748B', fontSize: 12.5, marginTop: 4 }}>Thống kê từ {filteredTasks.length} nhiệm vụ phù hợp với bộ lọc tìm kiếm.</div>
+                {taskDataSource === 'cache' && <div role="alert" style={{ color: '#9A3412', background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6, padding: '7px 9px', marginTop: 8, fontSize: 12.5 }}>Không tải được danh sách từ máy chủ. Báo cáo đang dùng dữ liệu lưu tạm và có thể chưa đồng bộ.</div>}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Select aria-label="Loại báo cáo nhiệm vụ" value={taskReportKind} onChange={(value) => setTaskReportKind(value as TaskReportKind)} options={TASK_REPORT_OPTIONS.map(option => ({ label: option.label, value: option.value }))} style={{ minWidth: 220 }} />
+                <Button icon={<FileExcelOutlined />} onClick={exportTaskReport} disabled={!taskReportRows.length}>Xuất Excel</Button>
+              </div>
+            </div>
+            {taskReportRows.length ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+                  <thead><tr>{['Nhóm thống kê', 'Số nhiệm vụ', 'Tỷ trọng', 'Tiến độ trung bình'].map(label => <th key={label} scope="col" style={{ textAlign: label === 'Nhóm thống kê' ? 'left' : 'right', padding: '10px 12px', color: '#64748B', fontSize: 12, borderBottom: '1px solid #E2E8F0' }}>{label}</th>)}</tr></thead>
+                  <tbody>{taskReportRows.map(row => <tr key={row.label}>
+                    <th scope="row" style={{ textAlign: 'left', padding: '11px 12px', fontWeight: 600, color: '#1E293B', borderBottom: '1px solid #F1F5F9' }}>{row.label}</th>
+                    <td style={{ textAlign: 'right', padding: '11px 12px', color: '#334155', borderBottom: '1px solid #F1F5F9' }}>{row.count}</td>
+                    <td style={{ textAlign: 'right', padding: '11px 12px', color: '#334155', borderBottom: '1px solid #F1F5F9' }}>{row.percentage}%</td>
+                    <td style={{ textAlign: 'right', padding: '11px 12px', color: '#334155', borderBottom: '1px solid #F1F5F9' }}>{row.averageProgress === null ? '—' : `${row.averageProgress}%`}</td>
+                  </tr>)}</tbody>
+                </table>
+              </div>
+            ) : <div style={{ padding: '28px 12px', textAlign: 'center', color: '#64748B' }}>Chưa có nhiệm vụ để lập báo cáo.</div>}
           </section>
         )}
       </Spin>
