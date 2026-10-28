@@ -68,6 +68,14 @@ export function monthDayCount(month: string): number {
   return new Date(Date.UTC(year, number, 0)).getUTCDate();
 }
 
+export function isDuplicateAttendanceRawStatus(status: string | null | undefined): boolean {
+  return status === 'Bản ghi trùng lặp' || status === 'Bản ghi trùng lặp (Đã lọc)';
+}
+
+export function attendanceRawStatusLabel(status: string): string {
+  return isDuplicateAttendanceRawStatus(status) ? 'Bản ghi trùng lặp' : status;
+}
+
 export function attendanceDaySummary(employee: { key: string; code: string }, date: string, timesheets: Record<string, any>[], rawLogs: Record<string, any>[], leaves: Record<string, any>[], overtime: Record<string, any>[]) {
   const belongs = (item: Record<string, any>) => item.employeeId === employee.key || item.ownerId === employee.key || item.empCode === employee.code || item.employeeCode === employee.code;
   const leave = leaves.find((item) => belongs(item) && item.status === 'Đã duyệt' && (item.startDate || item.fromDate) <= date && (item.endDate || item.toDate) >= date);

@@ -1,6 +1,7 @@
 import { dataService } from '../../services/dataService';
 import { collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { attendanceRawStatusLabel, isDuplicateAttendanceRawStatus } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
 import {
   SearchOutlined,
@@ -36,7 +37,7 @@ export interface EnterpriseRawLogItem {
   temperature?: string;
   gpsCoordinates?: string;
   rawPayload?: string;
-  status: 'Dữ liệu hợp lệ' | 'Bản ghi trùng lặp' | 'Cần kiểm tra';
+  status: 'Dữ liệu hợp lệ' | 'Bản ghi trùng lặp' | 'Bản ghi trùng lặp (Đã lọc)' | 'Cần kiểm tra';
 }
 
 const INITIAL_RAW_LOGS: EnterpriseRawLogItem[] = [];
@@ -63,7 +64,7 @@ export const TimesheetRawDataModule: React.FC = () => {
   const [selectedLog, setSelectedLog] = useState<EnterpriseRawLogItem | null>(null);
 
   const validCount = data.filter((d) => d.status === 'Dữ liệu hợp lệ').length;
-  const duplicateCount = data.filter((d) => d.status === 'Bản ghi trùng lặp').length;
+  const duplicateCount = data.filter((d) => isDuplicateAttendanceRawStatus(d.status)).length;
 
   const handleSync = async () => {
     try {
@@ -76,7 +77,7 @@ export const TimesheetRawDataModule: React.FC = () => {
     if (saving) return;
     setSaving(true);
     try {
-      if (record.status === 'Bản ghi trùng lặp') throw new Error('Không thể ghi nhận công cho bản ghi trùng lặp.');
+      if (isDuplicateAttendanceRawStatus(record.status)) throw new Error('Không thể ghi nhận công cho bản ghi trùng lặp.');
       await collectionsApi.update('attendance_raw_data', record.key, { status: 'Dữ liệu hợp lệ' });
       await dataService.refreshGenericData('attendance_raw_data');
       message.success('Đã xác nhận bản ghi hợp lệ trên hệ thống.'); setDrawerOpen(false);
@@ -145,7 +146,7 @@ export const TimesheetRawDataModule: React.FC = () => {
             {record.verifyMode}
           </div>
           <div style={{ fontSize: 11, color: '#16A34A', fontWeight: 600 }}>
-            Khớp: {record.matchScore}% {record.temperature && `· Nhiệt độ: ${record.temperature}`}
+            Điểm khớp ghi nhận: {record.matchScore}% {record.temperature && `· Nhiệt độ: ${record.temperature}`}
           </div>
         </div>
       ),
@@ -158,9 +159,9 @@ export const TimesheetRawDataModule: React.FC = () => {
       render: (status: string) => {
         let color = 'default';
         if (status === 'Dữ liệu hợp lệ') color = 'success';
-        if (status === 'Bản ghi trùng lặp') color = 'default';
+        if (isDuplicateAttendanceRawStatus(status)) color = 'default';
         if (status === 'Cần kiểm tra') color = 'warning';
-        return <Tag color={color}>{status}</Tag>;
+        return <Tag color={color}>{attendanceRawStatusLabel(status)}</Tag>;
       },
     },
     {
@@ -187,19 +188,19 @@ export const TimesheetRawDataModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng bản ghi nhận diện thu thập</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng bản ghi chấm công thô</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {data.length} Bản ghi
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Trích xuất trực tiếp từ các cổng kiểm soát</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo dữ liệu đã lưu trong hệ thống</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bản ghi hợp lệ đã ghi nhận công</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Bản ghi đã xác nhận hợp lệ</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {validCount} Lượt điểm danh
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Bản ghi đã được xác nhận hợp lệ</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã đưa vào dữ liệu đối soát chấm công</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -207,7 +208,7 @@ export const TimesheetRawDataModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#64748B', marginTop: 4 }}>
             {duplicateCount} Bản ghi
           </div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Loại bỏ quẹt liên tiếp dưới 15 giây</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Các log đã được đánh dấu trùng lặp</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -264,7 +265,7 @@ export const TimesheetRawDataModule: React.FC = () => {
             onClick={handleSync}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
-            Đồng bộ máy quét IoT
+            Tải lại log đã lưu
           </Button>
         </div>
       </div>
@@ -274,9 +275,8 @@ export const TimesheetRawDataModule: React.FC = () => {
         <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
       </div>
 
-      {/* DRAWER: Phân Tích Raw Payload & AI Match Inspection */}
       <Drawer
-        title="Gói Dữ Liệu Raw Log IoT &amp; AI Inspection"
+        title="Chi Tiết Bản Ghi Chấm Công Thô"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={560}
@@ -291,8 +291,8 @@ export const TimesheetRawDataModule: React.FC = () => {
                     {selectedLog.employeeName}
                   </div>
                 </div>
-                <Tag color={selectedLog.status === 'Dữ liệu hợp lệ' ? 'success' : 'default'}>
-                  {selectedLog.status}
+                <Tag color={selectedLog.status === 'Dữ liệu hợp lệ' ? 'success' : isDuplicateAttendanceRawStatus(selectedLog.status) ? 'default' : 'warning'}>
+                  {attendanceRawStatusLabel(selectedLog.status)}
                 </Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
@@ -323,7 +323,7 @@ export const TimesheetRawDataModule: React.FC = () => {
                   <code>{selectedLog.cardUid}</code>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748B' }}>Độ khớp AI Match Score:</span>
+                  <span style={{ color: '#64748B' }}>Điểm khớp được ghi nhận:</span>
                   <strong style={{ color: '#16A34A' }}>{selectedLog.matchScore}%</strong>
                 </div>
                 {selectedLog.gpsCoordinates && (
@@ -338,7 +338,7 @@ export const TimesheetRawDataModule: React.FC = () => {
             {/* Raw JSON Payload */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#0F172A', color: '#F8FAFC' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#38BDF8', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <CodeOutlined /> RAW JSON GỐC TỪ THIẾT BỊ IOT:
+                <CodeOutlined /> Payload lưu kèm bản ghi:
               </div>
               <pre style={{ margin: 0, fontSize: 11.5, color: '#A5F3FC', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace' }}>
                 {selectedLog.rawPayload || '{}'}
@@ -350,8 +350,9 @@ export const TimesheetRawDataModule: React.FC = () => {
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               onClick={() => handleValidate(selectedLog)}
               loading={saving}
+              disabled={isDuplicateAttendanceRawStatus(selectedLog.status) || selectedLog.status === 'Dữ liệu hợp lệ'}
             >
-              Ép Đồng Bộ Vào Bảng Chấm Công
+              {isDuplicateAttendanceRawStatus(selectedLog.status) ? 'Log trùng lặp không được tính công' : selectedLog.status === 'Dữ liệu hợp lệ' ? 'Đã xác nhận hợp lệ' : 'Xác nhận hợp lệ để đối soát'}
             </Button>
           </div>
         )}

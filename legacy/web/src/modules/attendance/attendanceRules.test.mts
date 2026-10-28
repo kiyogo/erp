@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attendanceDate, attendanceDaySummary, attendanceNumber, dateRangeDays, leaveBalance, leaveDays, monthDayCount, timeRangeDetails } from './attendanceRules.ts';
+import { attendanceDate, attendanceDaySummary, attendanceNumber, attendanceRawStatusLabel, dateRangeDays, isDuplicateAttendanceRawStatus, leaveBalance, leaveDays, monthDayCount, timeRangeDetails } from './attendanceRules.ts';
 
 test('leave requests reject impossible dates, backwards dates and excess/invalid day counts', () => {
   assert.equal(attendanceDate(new Date(2026, 9, 25, 0, 15)), '2026-10-25');
@@ -47,4 +47,11 @@ test('timesheet calendar and employee cells never invent attendance or credit OT
   assert.equal(attendanceDaySummary(employee, date, [], [], [], [{ empCode: 'NV01', otDate: date, totalHours: 3, status: 'Chờ duyệt' }]).code, '—');
   assert.equal(attendanceDaySummary(employee, date, [], [{ employeeCode: 'NV01', timestamp: `${date}T08:00:00`, status: 'Dữ liệu hợp lệ' }], [], []).days, 0);
   assert.equal(attendanceDaySummary(employee, date, [], [8, 17].map((hour) => ({ employeeCode: 'NV01', timestamp: `${date}T${hour}:00:00`, status: 'Dữ liệu hợp lệ' })), [], []).days, 0);
+});
+
+test('legacy filtered-duplicate attendance logs remain excluded and display the same duplicate status', () => {
+  assert.equal(isDuplicateAttendanceRawStatus('Bản ghi trùng lặp'), true);
+  assert.equal(isDuplicateAttendanceRawStatus('Bản ghi trùng lặp (Đã lọc)'), true);
+  assert.equal(isDuplicateAttendanceRawStatus('Cần kiểm tra'), false);
+  assert.equal(attendanceRawStatusLabel('Bản ghi trùng lặp (Đã lọc)'), 'Bản ghi trùng lặp');
 });

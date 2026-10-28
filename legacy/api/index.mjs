@@ -3164,7 +3164,12 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record.reviewedBy = actor.name; record.reviewedAt = now();
     }
   }
-  if (scope === 'attendance_raw_data') record.status = oneOf(record.status || 'Cần kiểm tra', 'Trạng thái dữ liệu chấm công', ['Dữ liệu hợp lệ', 'Bản ghi trùng lặp (Đã lọc)', 'Cần kiểm tra']);
+  if (scope === 'attendance_raw_data') {
+    record.status = oneOf(record.status || 'Cần kiểm tra', 'Trạng thái dữ liệu chấm công', ['Dữ liệu hợp lệ', 'Bản ghi trùng lặp', 'Bản ghi trùng lặp (Đã lọc)', 'Cần kiểm tra']);
+    if (current && ['Bản ghi trùng lặp', 'Bản ghi trùng lặp (Đã lọc)'].includes(current.status) && record.status === 'Dữ liệu hợp lệ') {
+      throw new HttpError(422, 'Bản ghi trùng lặp không thể được xác nhận hợp lệ để tính công.');
+    }
+  }
   if (scope === 'attendance_shifts') {
     record.shiftCode = requiredText(record.shiftCode, 'Mã ca', 160);
     record.shiftName = requiredText(record.shiftName, 'Tên ca', 160);
