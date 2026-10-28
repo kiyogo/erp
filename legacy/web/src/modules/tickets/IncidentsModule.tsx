@@ -1,5 +1,13 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import {
+  calculateIncidentDowntimeMinutes,
+  formatIncidentTimestamp,
+  getIncidentMetrics,
+  incidentExportRows,
+} from './incidentRules';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -7,17 +15,14 @@ import {
   AlertOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
-  ThunderboltOutlined,
   PrinterOutlined,
   EyeOutlined,
   AuditOutlined,
-  SafetyCertificateOutlined,
-  WarningOutlined,
   CloseCircleOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Checkbox } from '../../custom-ui';
 
 export interface EnterpriseIncidentRecord {
   key: string;
@@ -30,24 +35,42 @@ export interface EnterpriseIncidentRecord {
   handler: string;
   downtimeMinutes: number;
   rootCause: string;
+  resolutionSummary?: string;
+  reportedBy?: string;
+  reportedById?: string;
   timeline: { time: string; action: string }[];
-  actionItems: { task: string; owner: string; deadline: string; status: 'Hoàn tất' | 'Đang triển khai' }[];
+  actionItems: { task: string; owner: string; deadline?: string; status: 'Hoàn tất' | 'Đang triển khai' }[];
   status: 'Đã xử lý & Hoàn tất RCA' | 'Đang xử lý khẩn cấp';
 }
 
 const INITIAL_INCIDENTS: EnterpriseIncidentRecord[] = [];
 
 export const IncidentsModule: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<EnterpriseIncidentRecord[]>(INITIAL_INCIDENTS);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   useEffect(() => {
     const list = dataService.getGenericData('ticket_incidents');
     setData(Array.isArray(list) ? list : []);
+    let mounted = true;
+    setLoading(true);
+    void dataService.refreshGenericData('ticket_incidents')
+      .then((records) => { if (mounted) setData(Array.isArray(records) ? records : []); })
+      .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được hồ sơ sự cố.'); })
+      .finally(() => { if (mounted) setLoading(false); });
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('ticket_incidents');
-      setData(Array.isArray(updated) ? updated : []);
+      if (mounted) setData(Array.isArray(updated) ? updated : []);
     });
-    return unsub;
+    return () => { mounted = false; unsub(); };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -55,64 +78,139 @@ export const IncidentsModule: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [resolutionForm] = Form.useForm();
+  const [resolutionModalOpen, setResolutionModalOpen] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState<EnterpriseIncidentRecord | null>(null);
 
-  const totalDowntime = data.reduce((sum, item) => sum + item.downtimeMinutes, 0);
-  const p1Count = data.filter((d) => d.severity.startsWith('P1')).length;
-  const p2Count = data.filter((d) => d.severity.startsWith('P2')).length;
-  const resolvedCount = data.filter((d) => d.status === 'Đã xử lý & Hoàn tất RCA').length;
+  const metrics = getIncidentMetrics(data, new Date(nowMs).getFullYear(), nowMs);
 
-  const handleCreate = (values: any) => {
-    const newInc: EnterpriseIncidentRecord = {
-      ...values,
-      key: String(Date.now()),
-      occurredAt: values.occurredAt || new Date().toISOString().replace('T', ' ').substring(0, 16),
-      resolvedAt: 'Đang theo dõi',
-      downtimeMinutes: 0,
-      timeline: [
-        {
-          time: new Date().toISOString().substring(11, 16),
-          action: `Phát cảnh báo sự cố: ${values.incidentTitle}`,
-        },
-      ],
-      actionItems: [
-        {
-          task: 'Khẩn trương cô lập và phục hồi dịch vụ',
-          owner: values.handler || 'Đội ứng cứu NOC',
-          deadline: 'Trong 30 phút',
-          status: 'Đang triển khai',
-        },
-      ],
-      status: 'Đang xử lý khẩn cấp',
-    };
-    const nextItems = [newInc, ...data]; setData(nextItems); dataService.saveGenericData('ticket_incidents', nextItems);
-    message.success(`Đã phát cảnh báo sự cố IT khẩn cấp: ${values.incidentTitle}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    const occurredAtDate = values.occurredAt ? new Date(values.occurredAt) : new Date();
+    if (!Number.isFinite(occurredAtDate.getTime())) {
+      message.error('Thời điểm xảy ra sự cố không hợp lệ.');
+      return;
+    }
+    const code = String(values.code || '').trim().toLocaleUpperCase();
+    const incidentTitle = String(values.incidentTitle || '').trim();
+    const affectedSystem = String(values.affectedSystem || '').trim();
+    const handler = String(values.handler || '').trim();
+    if (!code || !incidentTitle || !affectedSystem || !handler || !['P1 - Khẩn cấp', 'P2 - Cao', 'P3 - Trung bình'].includes(values.severity)) {
+      message.error('Vui lòng nhập đủ mã, mức độ, mô tả, hệ thống ảnh hưởng và người phụ trách.');
+      return;
+    }
+    if (data.some((item) => item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase())) {
+      message.error('Mã sự cố đã tồn tại. Vui lòng tạo mã khác.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const occurredAt = occurredAtDate.toISOString();
+      const timeline = [{ time: occurredAt, action: `Ghi nhận sự cố: ${incidentTitle}` }];
+      const actionItems = String(values.actionPlan || '').split(/\r?\n/).map((task: string) => task.trim()).filter(Boolean)
+        .map((task: string) => ({ task, owner: handler, status: 'Đang triển khai' as const }));
+      const record = {
+        key: code,
+        code,
+        severity: values.severity,
+        incidentTitle,
+        affectedSystem,
+        occurredAt,
+        resolvedAt: '',
+        handler,
+        downtimeMinutes: 0,
+        rootCause: String(values.rootCause || '').trim(),
+        timeline,
+        actionItems,
+        reportedBy: user?.name || '',
+        reportedById: user?.id || '',
+        status: 'Đang xử lý khẩn cấp' as const,
+      };
+      const saved = await dataService.createGenericRecord('ticket_incidents', record) as EnterpriseIncidentRecord;
+      setSelectedIncident(saved);
+      message.success(`Đã ghi nhận sự cố ${saved.code}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu sự cố. Vui lòng thử lại.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleResolve = (record: EnterpriseIncidentRecord) => {
-    const updated = data.map((d) =>
-      d.key === record.key
-        ? {
-            ...d,
-            resolvedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-            status: 'Đã xử lý & Hoàn tất RCA' as const,
-          }
-        : d
-    );
-    setData(updated);
-    message.success(`Đã hoàn tất xử lý sự cố: ${record.code}`);
-    if (selectedIncident && selectedIncident.key === record.key) {
-      setSelectedIncident({
-        ...selectedIncident,
-        resolvedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        status: 'Đã xử lý & Hoàn tất RCA',
-      });
+    setSelectedIncident(record);
+    resolutionForm.setFieldsValue({ rootCause: record.rootCause || '', resolutionSummary: '' });
+    setResolutionModalOpen(true);
+  };
+
+  const submitResolution = async (values: { rootCause: string; resolutionSummary: string }) => {
+    if (!selectedIncident || selectedIncident.status !== 'Đang xử lý khẩn cấp') return;
+    const resolvedAt = new Date().toISOString();
+    const downtimeMinutes = calculateIncidentDowntimeMinutes(selectedIncident.occurredAt, resolvedAt);
+    const updated = {
+      ...selectedIncident,
+      rootCause: values.rootCause.trim(),
+      resolutionSummary: values.resolutionSummary.trim(),
+      resolvedAt,
+      downtimeMinutes: downtimeMinutes ?? selectedIncident.downtimeMinutes,
+      timeline: [...(selectedIncident.timeline || []), { time: resolvedAt, action: `Khắc phục hoàn tất: ${values.resolutionSummary.trim()}` }],
+      status: 'Đã xử lý & Hoàn tất RCA' as const,
+    };
+    setSaving(true);
+    try {
+      const saved = await dataService.updateGenericRecord('ticket_incidents', updated) as EnterpriseIncidentRecord;
+      setSelectedIncident(saved);
+      setResolutionModalOpen(false);
+      resolutionForm.resetFields();
+      message.success(`Đã lưu kết quả xử lý và RCA của sự cố ${saved.code}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu kết quả xử lý sự cố. Vui lòng thử lại.');
+    } finally {
+      setSaving(false);
     }
   };
+
+  const toggleActionItem = async (record: EnterpriseIncidentRecord, index: number) => {
+    const actionItems = (record.actionItems || []).map((item, itemIndex) => itemIndex === index
+      ? { ...item, status: item.status === 'Hoàn tất' ? 'Đang triển khai' as const : 'Hoàn tất' as const }
+      : item);
+    setSaving(true);
+    try {
+      const saved = await dataService.updateGenericRecord('ticket_incidents', { ...record, actionItems }) as EnterpriseIncidentRecord;
+      if (selectedIncident?.key === saved.key) setSelectedIncident(saved);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể cập nhật kế hoạch hành động.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportReport = () => {
+    if (!filteredData.length) {
+      message.info('Không có sự cố phù hợp để xuất báo cáo.');
+      return;
+    }
+    downloadFile('Bao_cao_su_co_va_RCA.xlsx', generateValidXlsxBlob(incidentExportRows(filteredData)));
+  };
+
+  const printIncident = (record: EnterpriseIncidentRecord) => downloadFile(
+    `${record.code.replace(/[^a-z0-9_-]/gi, '_')}_bao_cao_RCA.pdf`,
+    generateValidPdfBlob('BIEN BAN SU CO VA PHAN TICH RCA', `${record.code} | ${record.incidentTitle}`, [
+      `Thoi diem xay ra: ${formatIncidentTimestamp(record.occurredAt)}`,
+      `Thoi diem khac phuc: ${formatIncidentTimestamp(record.resolvedAt, 'Dang xu ly')}`,
+      `He thong anh huong: ${record.affectedSystem}`,
+      `Muc do: ${record.severity}`,
+      `Nguoi phu trach: ${record.handler}`,
+      `Gian doan: ${incidentDowntime(record)} phut${record.status === 'Đang xử lý khẩn cấp' ? ' - dang theo doi' : ''}`,
+      `Trang thai: ${record.status}`,
+      `Nguyen nhan goc: ${record.rootCause || 'Chua ghi nhan'}`,
+      `Ket qua xu ly: ${record.resolutionSummary || 'Chua ghi nhan'}`,
+      'Nhat ky dien bien:', ...(record.timeline || []).map((item) => `${formatIncidentTimestamp(item.time)} - ${item.action}`),
+      'Ke hoach hanh dong:', ...(record.actionItems || []).map((item) => `${item.task} | ${item.owner} | ${item.deadline || 'Chua dat han'} | ${item.status}`),
+    ]),
+  );
 
   const filteredData = data.filter((item) => {
     const matchSev =
@@ -131,6 +229,10 @@ export const IncidentsModule: React.FC = () => {
     return matchSev && matchSearch;
   });
 
+  const incidentDowntime = (record: EnterpriseIncidentRecord) => record.status === 'Đang xử lý khẩn cấp'
+    ? calculateIncidentDowntimeMinutes(record.occurredAt, new Date(nowMs).toISOString()) ?? record.downtimeMinutes
+    : calculateIncidentDowntimeMinutes(record.occurredAt, record.resolvedAt) ?? record.downtimeMinutes ?? 0;
+
   const columns = [
     {
       title: 'Mã sự cố',
@@ -140,7 +242,7 @@ export const IncidentsModule: React.FC = () => {
           <div style={{ fontWeight: 700, color: '#DC2626', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
             <AlertOutlined /> {record.code}
           </div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{record.occurredAt}</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{formatIncidentTimestamp(record.occurredAt)}</div>
         </div>
       ),
     },
@@ -172,12 +274,15 @@ export const IncidentsModule: React.FC = () => {
       dataIndex: 'downtimeMinutes',
       key: 'downtimeMinutes',
       width: 150,
-      render: (min: number) => (
-        <span style={{ fontWeight: 800, color: min > 0 ? '#DC2626' : '#16A34A', fontSize: 13.5 }}>
-          {min > 0 ? `${min} phút gián đoạn` : '0 phút'}
+      render: (_: number, record: EnterpriseIncidentRecord) => {
+        const minutes = incidentDowntime(record);
+        return (
+        <span style={{ fontWeight: 800, color: minutes > 0 ? '#DC2626' : '#16A34A', fontSize: 13.5 }}>
+          {minutes > 0 ? `${minutes} phút gián đoạn` : '0 phút'}
         </span>
-      ),
-      sorter: (a: EnterpriseIncidentRecord, b: EnterpriseIncidentRecord) => a.downtimeMinutes - b.downtimeMinutes,
+        );
+      },
+      sorter: (a: EnterpriseIncidentRecord, b: EnterpriseIncidentRecord) => incidentDowntime(a) - incidentDowntime(b),
     },
     {
       title: 'Chỉ huy ứng cứu',
@@ -231,35 +336,35 @@ export const IncidentsModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cam kết Uptime hệ sinh thái</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Khả dụng ước tính từ sự cố năm {metrics.year}</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            99.98% SLA
+            {metrics.availabilityPercent === null ? 'Chưa đủ dữ liệu' : `${metrics.availabilityPercent.toFixed(3)}%`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đạt tiêu chuẩn IDC Tier 3 Quốc tế</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Ước tính theo thời lượng sự cố đã ghi nhận</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phục hồi bình quân (MTTR)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian khắc phục bình quân</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            11.4 phút
+            {metrics.averageRepairMinutes === null ? 'Chưa đủ dữ liệu' : `${metrics.averageRepairMinutes.toFixed(1)} phút`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Mục tiêu cam kết ≤ 15 phút</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Tính từ hồ sơ đã khắc phục</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng thời gian Downtime lũy kế</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian gián đoạn đã ghi nhận năm {metrics.year}</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
-            {totalDowntime} phút / năm
+            {metrics.totalDowntime === null ? 'Chưa đủ dữ liệu' : `${metrics.totalDowntime} phút`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Hạn mức cho phép ≤ 52 phút / năm</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{metrics.openCount} sự cố đang được theo dõi</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ hoàn tất phân tích RCA</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {Math.round((resolvedCount / (data.length || 1)) * 100)}%
+            {metrics.completionPercent === null ? 'Chưa có dữ liệu' : `${metrics.completionPercent}%`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{resolvedCount} / {data.length} Báo cáo Post-Mortem hoàn tất</div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{metrics.resolvedCount} / {data.length} hồ sơ hoàn tất RCA</div>
         </div>
       </div>
 
@@ -299,7 +404,7 @@ export const IncidentsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo sự cố và RCA')}>
+          <Button icon={<DownloadOutlined />} onClick={exportReport} disabled={loading || filteredData.length === 0}>
             Xuất Báo Cáo
           </Button>
 
@@ -309,12 +414,14 @@ export const IncidentsModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               form.setFieldsValue({
-                code: `INC-2026-${String(Date.now()).slice(-3)}`,
+                code: `INC-${new Date(nowMs).getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
                 severity: 'P2 - Cao',
-                handler: 'Trần Tuấn Anh (CTO)',
+                handler: user?.name || '',
+                occurredAt: new Date(nowMs - new Date(nowMs).getTimezoneOffset() * 60_000).toISOString().slice(0, 16),
               });
               setModalOpen(true);
             }}
+            disabled={loading}
             style={{ backgroundColor: '#DC2626', borderColor: '#DC2626' }}
           >
             Báo cáo sự cố khẩn cấp
@@ -336,41 +443,49 @@ export const IncidentsModule: React.FC = () => {
         width={640}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã sự cố" rules={[{ required: true }]}>
-              <Input />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 14 }}>
+            <Form.Item name="code" label="Mã sự cố" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập mã sự cố.' }]}>
+              <Input maxLength={80} />
             </Form.Item>
-            <Form.Item name="severity" label="Mức độ nghiêm trọng" rules={[{ required: true }]}>
+            <Form.Item name="severity" label="Mức độ nghiêm trọng" rules={[{ required: true, message: 'Vui lòng chọn mức độ.' }]}>
               <Select
                 options={[
-                  { label: 'P1 - Khẩn cấp', value: 'P1 - Khẩn cấp (Toàn hệ thống)' },
-                  { label: 'P2 - Cao', value: 'P2 - Cao (Ảnh hưởng dịch vụ)' },
+                  { label: 'P1 - Khẩn cấp', value: 'P1 - Khẩn cấp' },
+                  { label: 'P2 - Cao', value: 'P2 - Cao' },
                   { label: 'P3 - Trung bình', value: 'P3 - Trung bình' },
                 ]}
               />
             </Form.Item>
           </div>
 
-          <Form.Item name="incidentTitle" label="Mô tả tóm tắt sự cố" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Lỗi xác thực tài khoản qua OAuth2 Gateway" />
-          </Form.Item>
-
-          <Form.Item name="affectedSystem" label="Hệ thống / Dịch vụ bị gián đoạn" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Cụm máy chủ xác thực Auth Cluster" />
-          </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="handler" label="Chỉ huy ứng cứu" rules={[{ required: true }]}>
-              <Input />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="occurredAt" label="Thời điểm xảy ra" rules={[{ required: true, message: 'Vui lòng nhập thời điểm xảy ra.' }]}>
+              <Input type="datetime-local" />
             </Form.Item>
-            <Form.Item name="rootCause" label="Nguyên nhân sơ bộ" initialValue="Đang tiến hành phân tích log">
-              <Input />
+            <Form.Item name="handler" label="Chỉ huy ứng cứu" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập người phụ trách.' }]}>
+              <Input maxLength={160} />
             </Form.Item>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <Form.Item name="incidentTitle" label="Mô tả tóm tắt sự cố" rules={[{ required: true, whitespace: true, message: 'Vui lòng mô tả sự cố.' }]}>
+            <Input maxLength={500} placeholder="Mô tả sự cố đã xảy ra" />
+          </Form.Item>
+
+          <Form.Item name="affectedSystem" label="Hệ thống / Dịch vụ bị ảnh hưởng" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập hệ thống bị ảnh hưởng.' }]}>
+            <Input maxLength={200} placeholder="Tên hệ thống hoặc dịch vụ" />
+          </Form.Item>
+
+          <Form.Item name="rootCause" label="Nguyên nhân sơ bộ" extra="Để trống nếu chưa có kết luận xác thực.">
+            <Input.TextArea rows={2} maxLength={2000} placeholder="Nhập nguyên nhân đã xác minh sơ bộ" />
+          </Form.Item>
+
+          <Form.Item name="actionPlan" label="Kế hoạch hành động" extra="Mỗi dòng là một việc; không nhập việc mẫu nếu chưa xác định.">
+            <Input.TextArea rows={3} maxLength={4000} placeholder={'Ví dụ:\nKhôi phục dịch vụ bị ảnh hưởng\nRà soát nguyên nhân và bổ sung biện pháp phòng ngừa'} />
+          </Form.Item>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#DC2626', borderColor: '#DC2626' }}>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving} style={{ backgroundColor: '#DC2626', borderColor: '#DC2626' }}>
               Phát cảnh báo NOC
             </Button>
           </div>
@@ -409,9 +524,9 @@ export const IncidentsModule: React.FC = () => {
                 Chỉ Số Thời Gian &amp; Mức Độ Gián Đoạn:
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12.5 }}>
-                <div>Thời điểm xảy ra: <strong>{selectedIncident.occurredAt}</strong></div>
-                <div>Thời điểm khắc phục: <strong>{selectedIncident.resolvedAt}</strong></div>
-                <div>Thời gian gián đoạn: <strong style={{ color: '#DC2626' }}>{selectedIncident.downtimeMinutes} phút</strong></div>
+                <div>Thời điểm xảy ra: <strong>{formatIncidentTimestamp(selectedIncident.occurredAt)}</strong></div>
+                <div>Thời điểm khắc phục: <strong>{formatIncidentTimestamp(selectedIncident.resolvedAt, 'Đang xử lý')}</strong></div>
+                <div>Thời gian gián đoạn: <strong style={{ color: '#DC2626' }}>{incidentDowntime(selectedIncident)} phút{selectedIncident.status === 'Đang xử lý khẩn cấp' ? ' · Đang theo dõi' : ''}</strong></div>
                 <div>Chỉ huy xử lý: <strong style={{ color: '#009688' }}>{selectedIncident.handler}</strong></div>
               </div>
             </div>
@@ -422,8 +537,13 @@ export const IncidentsModule: React.FC = () => {
                 <AuditOutlined /> Phân Tích Nguyên Nhân Gốc Rễ:
               </div>
               <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
-                {selectedIncident.rootCause}
+                {selectedIncident.rootCause || 'Chưa ghi nhận.'}
               </div>
+              {selectedIncident.resolutionSummary && (
+                <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6, marginTop: 8 }}>
+                  <strong>Kết quả khắc phục:</strong> {selectedIncident.resolutionSummary}
+                </div>
+              )}
             </div>
 
             {/* Incident Timeline */}
@@ -434,7 +554,7 @@ export const IncidentsModule: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {selectedIncident.timeline?.map((item, idx) => (
                   <div key={idx} style={{ display: 'flex', gap: 10, fontSize: 12.5 }}>
-                    <span style={{ fontWeight: 700, color: '#009688', minWidth: 45 }}>{item.time}</span>
+                    <span style={{ fontWeight: 700, color: '#009688', minWidth: 125 }}>{formatIncidentTimestamp(item.time)}</span>
                     <span style={{ color: '#334155' }}>{item.action}</span>
                   </div>
                 ))}
@@ -447,10 +567,14 @@ export const IncidentsModule: React.FC = () => {
                 <CheckCircleOutlined /> Kế Hoạch Hành Động Khắc Phục Phòng Ngừa:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(selectedIncident.actionItems || []).length === 0 && <div style={{ color: '#64748B', fontSize: 12.5 }}>Chưa có kế hoạch hành động được ghi nhận.</div>}
                 {selectedIncident.actionItems?.map((act, idx) => (
-                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, padding: '4px 0', borderBottom: '1px dashed #DCFCE7' }}>
-                    <span style={{ color: '#14532D' }}>• {act.task} (Phụ trách: <strong>{act.owner}</strong>)</span>
-                    <Tag color="green">{act.status}</Tag>
+                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, fontSize: 12.5, padding: '4px 0', borderBottom: '1px dashed #DCFCE7' }}>
+                    <div style={{ color: '#14532D' }}>
+                      <div>{act.task}</div>
+                      <div style={{ color: '#64748B', fontSize: 11.5 }}>Phụ trách: {act.owner}{act.deadline ? ` · Hạn: ${act.deadline}` : ''}</div>
+                    </div>
+                    <Checkbox checked={act.status === 'Hoàn tất'} disabled={saving} onChange={() => void toggleActionItem(selectedIncident, idx)}>{act.status}</Checkbox>
                   </div>
                 ))}
               </div>
@@ -463,19 +587,41 @@ export const IncidentsModule: React.FC = () => {
                   style={{ flex: 1, backgroundColor: '#10B981', borderColor: '#10B981' }}
                   onClick={() => handleResolve(selectedIncident)}
                 >
-                  Xác Nhận Khắc Phục Hoàn Tất &amp; Khép Hồ Sơ
+                  Ghi kết quả khắc phục và hoàn tất RCA
                 </Button>
               )}
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in biên bản RCA sự cố ${selectedIncident.code}`)}
+                onClick={() => printIncident(selectedIncident)}
               >
-                In Báo Cáo Post-Mortem (A4)
+                In Báo Cáo Post-Mortem A4
               </Button>
             </div>
           </div>
         )}
       </Drawer>
+      <Modal
+        title={`Kết quả xử lý sự cố ${selectedIncident?.code || ''}`}
+        open={resolutionModalOpen}
+        onCancel={() => setResolutionModalOpen(false)}
+        footer={null}
+        width={620}
+      >
+        <Form form={resolutionForm} layout="vertical" onFinish={submitResolution} style={{ marginTop: 14 }}>
+          <Form.Item name="rootCause" label="Nguyên nhân gốc rễ" rules={[{ required: true, whitespace: true, message: 'Vui lòng ghi nguyên nhân gốc rễ đã xác minh.' }]}>
+            <Input.TextArea rows={4} maxLength={4000} placeholder="Ghi nguyên nhân đã xác minh và bằng chứng liên quan" />
+          </Form.Item>
+          <Form.Item name="resolutionSummary" label="Kết quả khắc phục" rules={[{ required: true, whitespace: true, message: 'Vui lòng ghi kết quả khắc phục.' }]}>
+            <Input.TextArea rows={4} maxLength={4000} placeholder="Ghi biện pháp xử lý và kết quả xác nhận" />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => setResolutionModalOpen(false)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving} style={{ backgroundColor: '#10B981', borderColor: '#10B981' }}>
+              Lưu kết quả và khép hồ sơ
+            </Button>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 };
