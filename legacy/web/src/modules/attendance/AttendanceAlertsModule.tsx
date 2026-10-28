@@ -38,26 +38,55 @@ export interface EnterpriseAlertItem {
   status: 'Chờ nhân viên giải trình' | 'Đã giải trình hợp lệ' | 'Đã trừ phạt chuyên cần';
 }
 
+interface AttendanceExplanation {
+  key: string;
+  employeeName: string;
+  date: string;
+  reason: string;
+  note?: string;
+  status: 'Chờ duyệt' | 'Đã duyệt' | 'Từ chối';
+  createdAt?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
 const INITIAL_ALERTS: EnterpriseAlertItem[] = [];
 
 export const AttendanceAlertsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseAlertItem[]>(INITIAL_ALERTS);
+  const [explanations, setExplanations] = useState<AttendanceExplanation[]>([]);
+  const [explanationsLoading, setExplanationsLoading] = useState(true);
+  const [reviewingExplanationKey, setReviewingExplanationKey] = useState('');
   const [employees, setEmployees] = useState(dataService.getEmployees());
   const [saving, setSaving] = useState(false);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
 
   useEffect(() => {
-    void dataService.refreshGenericData('attendance_alerts').catch(() => message.error('Không thể tải dữ liệu từ máy chủ.'));
-    const list = dataService.getGenericData('attendance_alerts');
-    setData(Array.isArray(list) ? list : []);
-    dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
-    const unsub = dataService.subscribe(() => {
-      setEmployees(dataService.getEmployees());
-      const updated = dataService.getGenericData('attendance_alerts');
-      setData(Array.isArray(updated) ? updated : []);
-      dataService.fetchOrgUnitsList().then((units) => setDepartmentOptions(units.map((u) => ({ label: u, value: u }))));
-    });
-    return unsub;
+    let active = true;
+    let unsubscribe = () => {};
+    void dataService.fetchOrgUnitsList()
+      .then((units) => { if (active) setDepartmentOptions(units.map((u) => ({ label: u, value: u }))); })
+      .catch(() => { if (active) message.error('Không thể tải danh sách phòng ban.'); });
+    void Promise.all([
+      dataService.refreshGenericData('attendance_alerts'),
+      dataService.refreshGenericData('attendance_explanations'),
+    ]).then(([alerts, submitted]) => {
+      if (!active) return;
+      setData(alerts);
+      setExplanations(submitted);
+      unsubscribe = dataService.subscribe(() => {
+        if (!active) return;
+        setEmployees(dataService.getEmployees());
+        setData(dataService.getGenericData('attendance_alerts'));
+        setExplanations(dataService.getGenericData('attendance_explanations'));
+        void dataService.fetchOrgUnitsList()
+          .then((units) => { if (active) setDepartmentOptions(units.map((u) => ({ label: u, value: u }))); })
+          .catch(() => { if (active) message.error('Không thể tải danh sách phòng ban.'); });
+      });
+    }).catch((error: any) => {
+      if (active) message.error(error?.response?.data?.message || 'Không thể tải dữ liệu từ máy chủ.');
+    }).finally(() => { if (active) setExplanationsLoading(false); });
+    return () => { active = false; unsubscribe(); };
   }, []);
 
   const [searchText, setSearchText] = useState('');
@@ -99,6 +128,18 @@ export const AttendanceAlertsModule: React.FC = () => {
   };
   const handleApproveExplanation = (record: EnterpriseAlertItem) => handleDecision(record, true);
   const handlePenalize = (record: EnterpriseAlertItem) => handleDecision(record, false);
+
+  const handleExplanationDecision = async (record: AttendanceExplanation, status: 'Đã duyệt' | 'Từ chối') => {
+    if (reviewingExplanationKey || record.status !== 'Chờ duyệt') return;
+    setReviewingExplanationKey(record.key);
+    try {
+      await collectionsApi.update('attendance_explanations', record.key, { status });
+      setExplanations(await dataService.refreshGenericData('attendance_explanations'));
+      message.success(status === 'Đã duyệt' ? 'Đã duyệt giải trình chấm công.' : 'Đã từ chối giải trình chấm công.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error.message || 'Không thể cập nhật giải trình.');
+    } finally { setReviewingExplanationKey(''); }
+  };
 
   const filteredData = data.filter((item) => {
     const matchStatus = statusFilter === 'all' || item.status === statusFilter;
@@ -183,6 +224,31 @@ export const AttendanceAlertsModule: React.FC = () => {
           Xử lý
         </Button>
       ),
+    },
+  ];
+
+  const explanationColumns = [
+    { title: 'Nhân viên', dataIndex: 'employeeName', key: 'employeeName', width: 180 },
+    { title: 'Ngày', dataIndex: 'date', key: 'date', width: 120 },
+    { title: 'Lý do', dataIndex: 'reason', key: 'reason', width: 200 },
+    { title: 'Ghi chú', dataIndex: 'note', key: 'note', render: (note: string) => note || '—' },
+    {
+      title: 'Trạng thái', dataIndex: 'status', key: 'explanationStatus', width: 120,
+      render: (status: AttendanceExplanation['status']) => <Tag color={status === 'Đã duyệt' ? 'success' : status === 'Từ chối' ? 'error' : 'warning'}>{status}</Tag>,
+    },
+    { title: 'Người duyệt', dataIndex: 'reviewedBy', key: 'reviewedBy', width: 150, render: (name: string) => name || '—' },
+    {
+      title: 'Thời điểm duyệt', dataIndex: 'reviewedAt', key: 'reviewedAt', width: 170,
+      render: (value: string) => value ? new Date(value).toLocaleString('vi-VN') : '—',
+    },
+    {
+      title: 'Thao tác', key: 'reviewActions', width: 175,
+      render: (_: unknown, record: AttendanceExplanation) => record.status === 'Chờ duyệt' ? (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <Button size="small" type="primary" disabled={Boolean(reviewingExplanationKey)} loading={reviewingExplanationKey === record.key} onClick={() => void handleExplanationDecision(record, 'Đã duyệt')}>Duyệt</Button>
+          <Button size="small" disabled={Boolean(reviewingExplanationKey)} onClick={() => void handleExplanationDecision(record, 'Từ chối')}>Từ chối</Button>
+        </div>
+      ) : '—',
     },
   ];
 
@@ -285,6 +351,26 @@ export const AttendanceAlertsModule: React.FC = () => {
       <div className="transparent-table-card">
         <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
       </div>
+
+      <section style={{ marginTop: 22 }}>
+        <div style={{ marginBottom: 10 }}>
+          <h3 style={{ margin: 0, color: '#0F172A', fontSize: 16 }}>Giải trình nhân viên gửi</h3>
+          <div style={{ marginTop: 4, color: '#64748B', fontSize: 12 }}>
+            {explanations.filter(item => item.status === 'Chờ duyệt').length} đơn đang chờ. Quyết định chỉ cập nhật trạng thái giải trình, không sửa dữ liệu giờ chấm công.
+          </div>
+        </div>
+        <div className="transparent-table-card">
+          <KTable
+            dataSource={[...explanations].sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))}
+            columns={explanationColumns}
+            rowKey="key"
+            loading={explanationsLoading}
+            pagination={{ pageSize: 8 }}
+            locale={{ emptyText: 'Chưa có giải trình nhân viên gửi.' }}
+            scroll={{ x: 'max-content' }}
+          />
+        </div>
+      </section>
 
       {/* MODAL: Thêm cảnh báo mới */}
       <Modal

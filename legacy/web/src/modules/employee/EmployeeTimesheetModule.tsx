@@ -25,6 +25,8 @@ import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 export const EmployeeTimesheetModule: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
+  const [explanations, setExplanations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString('vi-VN'));
   const [filterTab, setFilterTab] = useState<'all' | 'ontime' | 'late' | 'ot'>('all');
   const [searchText, setSearchText] = useState('');
@@ -34,17 +36,30 @@ export const EmployeeTimesheetModule: React.FC = () => {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
 
-  const loadData = () => {
-    setData(dataService.getEmployeeTimesheets());
-  };
-
   useEffect(() => {
-    loadData();
-    const unsubscribe = dataService.subscribe(loadData);
+    let active = true;
+    let unsubscribe = () => {};
+    setData([]);
+    setExplanations([]);
+    setLoading(true);
+    void Promise.all([
+      dataService.refreshGenericData('employee_timesheets'),
+      dataService.refreshGenericData('attendance_explanations'),
+    ]).then(([timesheets, submitted]) => {
+      if (!active) return;
+      setData(timesheets);
+      setExplanations(submitted);
+      unsubscribe = dataService.subscribe(() => {
+        setData(dataService.getGenericData('employee_timesheets'));
+        setExplanations(dataService.getGenericData('attendance_explanations'));
+      });
+    }).catch((error: any) => {
+      if (active) message.error(error?.response?.data?.message || 'Không thể tải dữ liệu chấm công từ máy chủ.');
+    }).finally(() => { if (active) setLoading(false); });
     const timer = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString('vi-VN'));
     }, 1000);
-    return () => { clearInterval(timer); unsubscribe(); };
+    return () => { active = false; clearInterval(timer); unsubscribe(); };
   }, []);
 
   const handleClock = async (type: 'in' | 'out') => {
@@ -59,13 +74,33 @@ export const EmployeeTimesheetModule: React.FC = () => {
   };
 
   const handleExplain = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
     try {
       await collectionsApi.create('attendance_explanations', { ...values, key: crypto.randomUUID(), status: 'Chờ duyệt' });
+      const submitted = await dataService.refreshGenericData('attendance_explanations');
+      setExplanations(submitted);
       message.success(`Đã lưu giải trình ngày ${values.date}.`);
       setModalOpen(false);
       form.resetFields();
     } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể gửi giải trình.'); }
+    finally { setSaving(false); }
   };
+
+  const explanationColumns = [
+    { title: 'Ngày cần giải trình', dataIndex: 'date', key: 'date', width: 150 },
+    { title: 'Lý do', dataIndex: 'reason', key: 'reason', width: 220 },
+    { title: 'Ghi chú', dataIndex: 'note', key: 'note', render: (note: string) => note || '—' },
+    {
+      title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 130,
+      render: (status: string) => <Tag color={status === 'Đã duyệt' ? 'success' : status === 'Từ chối' ? 'error' : 'warning'}>{status}</Tag>,
+    },
+    { title: 'Người duyệt', dataIndex: 'reviewedBy', key: 'reviewedBy', width: 150, render: (name: string) => name || '—' },
+    {
+      title: 'Thời điểm duyệt', dataIndex: 'reviewedAt', key: 'reviewedAt', width: 180,
+      render: (value: string) => value ? new Date(value).toLocaleString('vi-VN') : '—',
+    },
+  ];
 
   const filteredData = data.filter((item) => {
     let matchTab = true;
@@ -304,9 +339,34 @@ export const EmployeeTimesheetModule: React.FC = () => {
           dataSource={filteredData}
           columns={columns}
           rowKey="key"
+          loading={loading}
           pagination={{ pageSize: 10 }}
         />
       </div>
+
+      <section style={{ marginTop: 22 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ margin: 0, color: '#0F172A', fontSize: 16 }}>Đơn giải trình của tôi</h3>
+            <div style={{ marginTop: 4, color: '#64748B', fontSize: 12 }}>Theo dõi trạng thái và người xử lý đơn chấm công đã gửi.</div>
+          </div>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Giai_trinh_cham_cong.xlsx', generateValidXlsxBlob([
+            ['Ngày', 'Lý do', 'Ghi chú', 'Trạng thái', 'Người duyệt', 'Thời điểm duyệt'],
+            ...explanations.map(item => [item.date, item.reason, item.note || '', item.status, item.reviewedBy || '', item.reviewedAt || '']),
+          ]))}>Xuất giải trình</Button>
+        </div>
+        <div className="transparent-table-card">
+          <KTable
+            dataSource={[...explanations].sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))}
+            columns={explanationColumns}
+            rowKey="key"
+            loading={loading}
+            pagination={{ pageSize: 8 }}
+            locale={{ emptyText: 'Bạn chưa gửi đơn giải trình nào.' }}
+            scroll={{ x: 'max-content' }}
+          />
+        </div>
+      </section>
 
       {/* DRAWER: Chi tiết chấm công ngày */}
       <Drawer
@@ -372,6 +432,7 @@ export const EmployeeTimesheetModule: React.FC = () => {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
+        confirmLoading={saving}
         okText="Gửi đơn giải trình"
         cancelText="Hủy"
       >
@@ -390,8 +451,8 @@ export const EmployeeTimesheetModule: React.FC = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item name="note" label="Ghi chú chi tiết & Minh chứng">
-            <Input.TextArea rows={3} placeholder="Mô tả cụ thể thời gian vào/ra thực tế, người xác nhận..." />
+          <Form.Item name="note" label="Ghi chú chi tiết">
+            <Input.TextArea rows={3} maxLength={4000} showCount placeholder="Mô tả thời gian vào/ra thực tế hoặc thông tin cần đối chiếu..." />
           </Form.Item>
         </Form>
       </Modal>

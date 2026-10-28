@@ -1634,6 +1634,8 @@ async function requireCollectionActor(request, scope) {
   }
   if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary' && request.method !== 'GET') throw new HttpError(403, 'Chỉ quản trị viên được điều chỉnh số dư phép.');
   if (scope === 'employee_timesheets' && request.method !== 'GET') throw new HttpError(405, 'Vui lòng chấm công qua chức năng ghi nhận giờ vào/ra.');
+  if (scope === 'attendance_explanations' && request.method === 'PUT') throw new HttpError(405, 'Giải trình phải được gửi và xử lý theo từng bản ghi để giữ lịch sử duyệt.');
+  if (scope === 'attendance_explanations' && request.method === 'DELETE' && actor.role === 'ADMIN') throw new HttpError(409, 'Giải trình được lưu để bảo toàn lịch sử xử lý.');
   if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings'].includes(scope)) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
@@ -2589,13 +2591,27 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.contractSigned = Boolean(current?.contractSigned);
   }
   if (scope === 'attendance_explanations') {
+    if (!current && actor.role !== 'USER') throw new HttpError(403, 'Giải trình chấm công phải do tài khoản nhân viên gửi.');
+    if (current && current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể sửa.');
     record.date = requiredIsoDate(record.date, 'Ngày giải trình');
     record.reason = requiredText(record.reason, 'Lý do giải trình', 4000);
+    record.note = optionalText(record.note, 'Ghi chú', 4000) || '';
     record.employeeId = current?.employeeId || actor.id;
     record.employeeName = current?.employeeName || actor.name;
-    record.status = oneOf(record.status || 'Chờ duyệt', 'Trạng thái giải trình', ['Chờ duyệt', 'Đã duyệt', 'Từ chối']);
-    if (!current && record.status !== 'Chờ duyệt') throw new HttpError(422, 'Giải trình mới phải chờ duyệt.');
-    if (actor.role !== 'ADMIN' && record.status !== 'Chờ duyệt') throw new HttpError(403, 'Chỉ quản trị viên được duyệt giải trình.');
+    if (!current) {
+      if (record.status !== undefined && record.status !== 'Chờ duyệt') throw new HttpError(422, 'Giải trình mới phải chờ duyệt.');
+      record.status = 'Chờ duyệt';
+      delete record.reviewedBy;
+      delete record.reviewedAt;
+    } else if (actor.role === 'ADMIN') {
+      record.status = oneOf(record.status, 'Trạng thái giải trình', ['Đã duyệt', 'Từ chối']);
+      record.reviewedBy = actor.name;
+      record.reviewedAt = now();
+    } else {
+      record.status = 'Chờ duyệt';
+      delete record.reviewedBy;
+      delete record.reviewedAt;
+    }
     record.createdAt = current?.createdAt || now();
   }
   if (scope === 'finance_budgets') {
@@ -5472,6 +5488,18 @@ async function handleRequest(request, response) {
       const payload = await readJson(request, 256 * 1024);
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
+      if (scope === 'attendance_explanations') {
+        const current = publicCollectionRecord(existing);
+        if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể sửa.');
+        const fields = Object.keys(patch);
+        if (actor.role === 'ADMIN') {
+          if (fields.length !== 1 || fields[0] !== 'status' || !['Đã duyệt', 'Từ chối'].includes(patch.status)) {
+            throw new HttpError(422, 'Quản trị viên chỉ được duyệt hoặc từ chối giải trình đang chờ.');
+          }
+        } else if (!fields.length || fields.some((field) => !['date', 'reason', 'note'].includes(field))) {
+          throw new HttpError(403, 'Nhân viên chỉ được sửa ngày, lý do và ghi chú của giải trình đang chờ.');
+        }
+      }
       if (scope === 'room_bookings') {
         const fields = Object.keys(patch).filter((field) => field !== 'key');
         const current = publicCollectionRecord(existing);
@@ -5581,6 +5609,7 @@ async function handleRequest(request, response) {
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
         const current = publicCollectionRecord(fresh) || {};
+        if (scope === 'attendance_explanations' && current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý bởi một yêu cầu khác.');
         if (scope === 'finance_general_ledger' && (current.sourceModule === 'payroll' || String(current.sourceReference || '').startsWith('payroll:') || patch.sourceModule === 'payroll' || String(patch.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
         if (scope === 'room_bookings' && current.status !== 'Đã xác nhận') throw new HttpError(409, 'Lịch họp đã được hủy hoặc thay đổi bởi yêu cầu khác.');
         if (scope === 'crm_promotions') {
@@ -5676,6 +5705,7 @@ async function handleRequest(request, response) {
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
         if (scope === 'finance_general_ledger' && (publicCollectionRecord(fresh)?.sourceModule === 'payroll' || String(publicCollectionRecord(fresh)?.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
+        if (scope === 'attendance_explanations' && publicCollectionRecord(fresh)?.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể xóa.');
         if (scope === 'workflow_requests') {
           const current = publicCollectionRecord(fresh);
           if (current.status !== 'Chờ bạn ký duyệt' || current.approvalHistory?.length) throw new HttpError(422, 'Hồ sơ đã xử lý nên không thể xóa.');
