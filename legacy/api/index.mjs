@@ -1610,6 +1610,12 @@ async function canReadWorkflowAttachment(actor, fileId) {
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (['finance_inventory', 'finance_inventory_transactions', 'finance_inventory_warehouses', 'finance_inventory_settings'].includes(scope) && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được quản lý dữ liệu kho hàng.');
+  }
+  if (scope === 'finance_inventory_transactions' && request.method !== 'GET') {
+    throw new HttpError(405, 'Giao dịch kho phải được ghi qua luồng xử lý tồn kho.');
+  }
   if (['asset_disposals', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions'].includes(scope) && actor.role !== 'ADMIN') {
     if (scope === 'crm_feedback') throw new HttpError(403, 'Chỉ quản trị viên được quản lý phản ánh khách hàng.');
     if (scope === 'crm_supplier_evaluations') throw new HttpError(403, 'Chỉ quản trị viên được quản lý đánh giá nhà cung cấp.');
@@ -1637,7 +1643,7 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'asset_todos' && actor.role !== 'ADMIN' && ['POST', 'DELETE'].includes(request.method)) throw new HttpError(403, 'Nhân viên chỉ được cập nhật nhiệm vụ tài sản được giao.');
   if (scope === 'attendance_explanations' && request.method === 'PUT') throw new HttpError(405, 'Giải trình phải được gửi và xử lý theo từng bản ghi để giữ lịch sử duyệt.');
   if (scope === 'attendance_explanations' && request.method === 'DELETE' && actor.role === 'ADMIN') throw new HttpError(409, 'Giải trình được lưu để bảo toàn lịch sử xử lý.');
-  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings'].includes(scope)) {
+  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings'].includes(scope)) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
   return actor;
@@ -1647,7 +1653,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new HttpError(422, 'Bản ghi phải là một đối tượng JSON.');
   }
-  const record = { ...value };
+  let record = { ...value };
   if (scope === 'meeting_room_settings') {
     if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
     const maxDuration = Number(record.maxDuration);
@@ -2089,6 +2095,97 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         throw new HttpError(422, 'Hồ sơ đã được xử lý hoặc trạng thái chuyển tiếp không hợp lệ.');
       }
     }
+  }
+  if (scope === 'finance_inventory_settings') {
+    if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được cấu hình kho hàng.');
+    const editable = ['key', 'issueMethodMode', 'issueMethod', 'lotManagedDefault', 'barcodeManagedDefault', 'warehouseNames', 'categoryNames'];
+    const serverOwned = ['id', 'createdAt', 'createdBy', 'createdById', 'updatedAt', 'updatedBy', 'updatedById'];
+    const allowed = [...editable, ...serverOwned];
+    if (Object.keys(value).some((field) => !allowed.includes(field))) throw new HttpError(422, 'Cấu hình kho có trường không hỗ trợ.');
+    if (current && JSON.stringify(value.key) !== JSON.stringify(current.key)) throw new HttpError(422, 'Không thể thay đổi khóa cấu hình kho.');
+    record = current ? { ...current } : { key: 'global' };
+    for (const field of editable) if (value[field] !== undefined) record[field] = value[field];
+    record.issueMethodMode = oneOf(record.issueMethodMode || 'Mỗi mặt hàng', 'Chế độ tính giá xuất', ['Mỗi mặt hàng', 'Dùng chung']);
+    record.issueMethod = oneOf(record.issueMethod || 'FIFO', 'Phương pháp xuất kho chung', ['FIFO', 'LIFO', 'Bình quân']);
+    record.lotManagedDefault = Boolean(record.lotManagedDefault);
+    record.barcodeManagedDefault = Boolean(record.barcodeManagedDefault);
+    const warehouseNames = Array.isArray(record.warehouseNames) ? record.warehouseNames : ['Kho chính'];
+    record.warehouseNames = [...new Set(warehouseNames.map((name) => requiredText(name, 'Tên kho', 160)))];
+    if (!record.warehouseNames.length || record.warehouseNames.length > 100) throw new HttpError(422, 'Cần từ 1 đến 100 kho hàng.');
+    const categoryNames = Array.isArray(record.categoryNames) ? record.categoryNames : ['Hàng hóa'];
+    record.categoryNames = [...new Set(categoryNames.map((name) => requiredText(name, 'Tên nhóm hàng', 160)))];
+    if (!record.categoryNames.length || record.categoryNames.length > 300) throw new HttpError(422, 'Cần từ 1 đến 300 nhóm hàng.');
+    if (!current) { record.createdAt = now(); record.createdBy = actor.name; record.createdById = actor.id; }
+    record.updatedAt = now(); record.updatedBy = actor.name; record.updatedById = actor.id;
+  }
+  if (scope === 'finance_inventory') {
+    const editableFields = ['key', 'sku', 'name', 'category', 'unit', 'minQty', 'maxQty', 'unitPrice', 'warehouse', 'storageLocation', 'categoryType', 'barcode', 'lotManaged', 'barcodeManaged', 'issueMethod'];
+    const integerAmount = (input, field) => {
+      const amount = typeof input === 'number' ? input : Number(String(input ?? '').trim());
+      if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1_000_000_000_000) throw new HttpError(422, `${field} phải là số nguyên không âm hợp lệ.`);
+      return amount;
+    };
+    if (current) {
+      if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được sửa danh mục hàng hóa.');
+      const protectedFields = ['stockQty', 'lots', 'stockByWarehouse', 'status', 'createdAt', 'createdBy', 'createdById'];
+      if (protectedFields.some((field) => JSON.stringify(value[field]) !== JSON.stringify(current[field]))) {
+        throw new HttpError(422, 'Số lượng tồn, lô hàng và lịch sử chỉ được thay đổi qua giao dịch kho.');
+      }
+      Object.assign(record, current);
+      for (const field of editableFields) if (value[field] !== undefined) record[field] = value[field];
+    } else {
+      if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được tạo mặt hàng kho.');
+      const unsupported = Object.keys(value).filter((field) => ![...editableFields, 'stockQty', 'lots'].includes(field));
+      if (unsupported.length) throw new HttpError(422, 'Mặt hàng chứa trường không hỗ trợ.');
+      record.key = requiredText(record.key, 'Khóa mặt hàng', 160);
+      record.stockQty = 0;
+      record.lots = [];
+      record.stockByWarehouse = [];
+      record.createdAt = now(); record.createdBy = actor.name; record.createdById = actor.id;
+    }
+    record.sku = requiredText(record.sku || record.itemCode, 'Mã SKU', 80).toLocaleUpperCase('vi-VN');
+    record.name = requiredText(record.name, 'Tên hàng hóa', 255);
+    record.category = optionalText(record.category || 'Chưa phân loại', 'Nhóm hàng hóa', 160);
+    record.unit = requiredText(record.unit || 'Cái', 'Đơn vị tính', 80);
+    record.minQty = integerAmount(record.minQty ?? 0, 'Tồn tối thiểu');
+    record.maxQty = integerAmount(record.maxQty ?? 0, 'Tồn tối đa');
+    if (record.maxQty > 0 && record.maxQty < record.minQty) throw new HttpError(422, 'Tồn tối đa phải bằng hoặc lớn hơn tồn tối thiểu.');
+    record.unitPrice = optionalAmount(record.unitPrice, 'Đơn giá vốn');
+    record.warehouse = requiredText(record.warehouse || 'Kho chính', 'Kho mặc định', 160);
+    record.storageLocation = optionalText(record.storageLocation, 'Vị trí lưu trữ', 160);
+    record.categoryType = optionalText(record.categoryType || 'Hàng hóa', 'Loại hàng hóa', 80);
+    record.barcode = optionalText(record.barcode, 'Barcode / QR', 100).replace(/\s+/g, '').toLocaleUpperCase('vi-VN');
+    const inventorySettingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_settings' AND record_key = 'global' LIMIT 1").get();
+    const inventorySettings = inventorySettingsRow ? parseJsonObject(inventorySettingsRow.payload_json) : {};
+    record.lotManaged = Boolean(record.lotManaged ?? inventorySettings.lotManagedDefault);
+    record.barcodeManaged = Boolean(record.barcodeManaged ?? inventorySettings.barcodeManagedDefault);
+    if (record.barcodeManaged && !record.barcode) throw new HttpError(422, 'Mặt hàng bật quản lý Barcode/QR cần có mã quét.');
+    record.issueMethod = oneOf(record.issueMethod || 'FIFO', 'Phương pháp xuất kho', ['FIFO', 'LIFO', 'Bình quân']);
+    const duplicateSku = await db.prepare(`SELECT record_key FROM collection_records
+      WHERE scope = 'finance_inventory' AND LOWER(json_extract(payload_json, '$.sku')) = LOWER(?) AND record_key <> ? LIMIT 1`).get(record.sku, record.key);
+    if (duplicateSku) throw new HttpError(409, 'Mã SKU đã tồn tại.');
+    if (record.barcode) {
+      const duplicateBarcode = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'finance_inventory' AND LOWER(json_extract(payload_json, '$.barcode')) = LOWER(?) AND record_key <> ? LIMIT 1`).get(record.barcode, record.key);
+      if (duplicateBarcode) throw new HttpError(409, 'Barcode / QR đã thuộc mặt hàng khác.');
+    }
+    const lots = Array.isArray(record.lots) && (record.lots.length > 0 || Number(current?.stockQty || 0) <= 0)
+      ? record.lots
+      : Number(current?.stockQty || record.stockQty || 0) > 0 ? [{
+        lotCode: current?.lotManaged ? 'LEGACY' : '', warehouse: String(current?.warehouse || record.warehouse || 'Kho chính'),
+        quantity: Number(current?.stockQty ?? record.stockQty), expiryDate: '', receivedDate: String(current?.updatedAt || current?.createdAt || now()).slice(0, 10),
+        unitCost: Number(current?.unitPrice ?? record.unitPrice) || 0,
+      }] : [];
+    record.stockQty = lots.reduce((sum, lot) => sum + (Number(lot.quantity) || 0), 0);
+    record.stockByWarehouse = [...new Set(lots.map((lot) => String(lot.warehouse || '').trim()).filter(Boolean))]
+      .map((warehouse) => ({ warehouse, quantity: lots.filter((lot) => lot.warehouse === warehouse).reduce((sum, lot) => sum + (Number(lot.quantity) || 0), 0) }));
+    if (lots.length) {
+      const costQuantity = lots.reduce((sum, lot) => sum + (Number(lot.quantity) || 0), 0);
+      const totalCost = lots.reduce((sum, lot) => sum + (Number(lot.quantity) || 0) * (Number(lot.unitCost) || 0), 0);
+      if (costQuantity > 0) record.unitPrice = Math.round(totalCost / costQuantity);
+    }
+    record.status = record.stockQty < record.minQty ? 'Sắp hết hàng' : record.maxQty > 0 && record.stockQty > record.maxQty ? 'Vượt mức tối đa' : 'Đủ tồn kho';
+    if (current) { record.updatedAt = now(); record.updatedBy = actor.name; record.updatedById = actor.id; }
   }
   if (scope === 'asset_todos') {
     const categories = ['Cấp phát / Bàn giao', 'Thu hồi tài sản', 'Bảo dưỡng / Kiểm định', 'Sửa chữa & Thay thế', 'Kiểm kê đối soát', 'Thanh lý & Tiêu hủy', 'Đề xuất mua sắm'];
@@ -4585,6 +4682,201 @@ async function runAssetDepreciationBatch(request) {
   return { period, count: updated.length, totalAmount, records: updated };
 }
 
+function inventoryBusinessDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+function inventoryQuantity(value, field, allowZero = false) {
+  const quantity = typeof value === 'number' ? value : Number(String(value ?? '').trim());
+  if (!Number.isFinite(quantity) || quantity < (allowZero ? 0 : 0.001) || quantity > 1_000_000_000 || Math.round(quantity * 1000) !== quantity * 1000) {
+    throw new HttpError(422, `${field} phải có tối đa 3 chữ số thập phân${allowZero ? ' và không âm' : ' và lớn hơn 0'}.`);
+  }
+  return quantity;
+}
+
+function inventoryLots(product, date) {
+  if (Array.isArray(product.lots) && (product.lots.length > 0 || Number(product.stockQty || 0) <= 0)) return product.lots.map((lot) => ({
+    lotCode: String(lot.lotCode || ''), warehouse: String(lot.warehouse || product.warehouse || 'Kho chính'),
+    quantity: inventoryQuantity(lot.quantity ?? 0, 'Số lượng lô', true), expiryDate: String(lot.expiryDate || ''),
+    receivedDate: String(lot.receivedDate || date), receivedAt: String(lot.receivedAt || lot.receivedDate || date), unitCost: optionalAmount(lot.unitCost ?? product.unitPrice, 'Đơn giá lô'),
+  })).filter((lot) => lot.quantity > 0);
+  const quantity = inventoryQuantity(product.stockQty ?? 0, 'Số lượng tồn', true);
+  return quantity > 0 ? [{
+    lotCode: product.lotManaged ? 'LEGACY' : '', warehouse: String(product.warehouse || 'Kho chính'), quantity,
+    expiryDate: '', receivedDate: String(product.updatedAt || product.createdAt || date).slice(0, 10), receivedAt: String(product.updatedAt || product.createdAt || date),
+    unitCost: optionalAmount(product.unitPrice ?? 0, 'Đơn giá vốn'),
+  }] : [];
+}
+
+function inventorySummary(product, lots, actor, timestamp) {
+  const stockQty = Math.round(lots.reduce((sum, lot) => sum + lot.quantity, 0) * 1000) / 1000;
+  const byWarehouse = new Map();
+  for (const lot of lots) byWarehouse.set(lot.warehouse, (byWarehouse.get(lot.warehouse) || 0) + lot.quantity);
+  const unitPrice = stockQty ? Math.round(lots.reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0) / stockQty) : Number(product.unitPrice) || 0;
+  return {
+    ...product, lots: lots.filter((lot) => lot.quantity > 0), stockQty, unitPrice,
+    stockByWarehouse: [...byWarehouse.entries()].sort(([a], [b]) => a.localeCompare(b, 'vi')).map(([warehouse, quantity]) => ({ warehouse, quantity })),
+    status: stockQty < Number(product.minQty || 0) ? 'Sắp hết hàng' : Number(product.maxQty || 0) && stockQty > Number(product.maxQty) ? 'Vượt mức tối đa' : 'Đủ tồn kho',
+    updatedAt: timestamp, updatedBy: actor.name, updatedById: actor.id,
+  };
+}
+
+async function createInventoryTransaction(actor, input) {
+  const type = oneOf(input?.type, 'Loại giao dịch kho', ['Nhập kho', 'Xuất kho', 'Điều chuyển', 'Kiểm kê', 'Giao hàng', 'Lắp ráp', 'Tháo dỡ']);
+  const transactionCode = requiredText(input.transactionCode, 'Mã giao dịch', 100).toLocaleUpperCase('vi-VN');
+  const transactionDate = requiredIsoDate(input.transactionDate, 'Ngày giao dịch');
+  const linesInput = input.lines;
+  if (!Array.isArray(linesInput) || linesInput.length < 1 || linesInput.length > 100) throw new HttpError(422, 'Giao dịch cần từ 1 đến 100 dòng hàng hóa.');
+  const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  const timestamp = now();
+  let transaction;
+  let replayed = false;
+  await db.transaction(async () => {
+    if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_inventory'))");
+    const duplicate = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(transactionCode);
+    if (duplicate) {
+      transaction = publicCollectionRecord(duplicate);
+      if (transaction.requestFingerprint !== fingerprint) throw new HttpError(409, 'Mã giao dịch đã được dùng cho nội dung khác.');
+      replayed = true;
+      return;
+    }
+    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory'").all();
+    const items = new Map(rows.map((row) => {
+      const product = publicCollectionRecord(row);
+      return [row.record_key, { row, product, lots: inventoryLots(product, transactionDate) }];
+    }));
+    const changed = new Set();
+    const movements = [];
+    const settingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_settings' AND record_key = 'global' LIMIT 1").get();
+    const issueSettings = settingsRow ? parseJsonObject(settingsRow.payload_json) : {};
+    const resolveItem = (line) => {
+      const lookup = String(line?.productKey || line?.sku || line?.barcode || '').trim().toLocaleLowerCase('vi-VN');
+      if (!lookup) throw new HttpError(422, 'Chọn mặt hàng trong danh mục kho.');
+      const matches = [...items.entries()].filter(([key, item]) => [key, item.product.sku, item.product.barcode].some((value) => String(value || '').trim().toLocaleLowerCase('vi-VN') === lookup));
+      if (!matches.length) throw new HttpError(404, `Không tìm thấy mặt hàng ${lookup}.`);
+      if (matches.length > 1) throw new HttpError(409, `Mã mặt hàng ${lookup} bị trùng.`);
+      return matches[0];
+    };
+    const addStock = (item, warehouse, quantity, source, unitCost, preserveReceivedDate = false) => {
+      const lotCode = item.product.lotManaged ? requiredText(source.lotCode, 'Số lô', 80) : optionalText(source.lotCode, 'Số lô', 80);
+      const expiryDate = source.expiryDate ? requiredIsoDate(source.expiryDate, 'Hạn sử dụng') : '';
+      if (item.product.lotManaged && !expiryDate) throw new HttpError(422, 'Mặt hàng quản lý số lô cần hạn sử dụng cho mỗi lô nhập.');
+      const lot = item.lots.find((entry) => entry.warehouse === warehouse && entry.lotCode === lotCode);
+      if (lot) {
+        if (lot.expiryDate !== expiryDate) throw new HttpError(409, `Số lô ${lotCode || '(không mã)'} có hạn sử dụng khác.`);
+        const oldQty = lot.quantity;
+        lot.quantity = Math.round((lot.quantity + quantity) * 1000) / 1000;
+        lot.unitCost = Math.round((oldQty * lot.unitCost + quantity * unitCost) / lot.quantity);
+        if (preserveReceivedDate && source.receivedAt && source.receivedAt < lot.receivedAt) { lot.receivedAt = source.receivedAt; lot.receivedDate = source.receivedDate; }
+      } else item.lots.push({
+        lotCode, warehouse, quantity, expiryDate,
+        receivedDate: preserveReceivedDate ? source.receivedDate || transactionDate : transactionDate,
+        receivedAt: preserveReceivedDate ? source.receivedAt || source.receivedDate || timestamp : timestamp,
+        unitCost,
+      });
+      changed.add(item.product.key);
+    };
+    const removeStock = (item, warehouse, quantity, lotCode = '') => {
+      const eligible = item.lots.filter((lot) => lot.warehouse === warehouse && lot.quantity > 0 && (!lotCode || lot.lotCode.toLocaleLowerCase('vi-VN') === lotCode.toLocaleLowerCase('vi-VN')));
+      const method = issueSettings.issueMethodMode === 'Dùng chung' ? issueSettings.issueMethod || 'FIFO' : item.product.issueMethod || 'FIFO';
+      eligible.sort((a, b) => method === 'LIFO'
+        ? String(b.receivedAt || b.receivedDate).localeCompare(String(a.receivedAt || a.receivedDate)) || b.lotCode.localeCompare(a.lotCode)
+        : String(a.receivedAt || a.receivedDate).localeCompare(String(b.receivedAt || b.receivedDate)) || a.lotCode.localeCompare(b.lotCode));
+      const available = eligible.reduce((sum, lot) => sum + lot.quantity, 0);
+      if (available + 0.0001 < quantity) throw new HttpError(409, `${item.product.sku} tại ${warehouse} không đủ tồn. Còn ${available} ${item.product.unit}.`);
+      const averageIssueCost = method === 'Bình quân' ? Math.round(Number(item.product.unitPrice) || 0) : null;
+      let remaining = quantity;
+      const allocations = [];
+      for (const lot of eligible) {
+        if (remaining <= 0) break;
+        const moved = Math.min(remaining, lot.quantity);
+        lot.quantity = Math.round((lot.quantity - moved) * 1000) / 1000;
+        remaining = Math.round((remaining - moved) * 1000) / 1000;
+        allocations.push({ lotCode: lot.lotCode, expiryDate: lot.expiryDate, quantity: moved, unitCost: averageIssueCost ?? lot.unitCost, receivedDate: lot.receivedDate, receivedAt: lot.receivedAt });
+      }
+      changed.add(item.product.key);
+      return allocations;
+    };
+    const seen = new Set();
+    const assemblyLines = ['Lắp ráp', 'Tháo dỡ'].includes(type);
+    if (assemblyLines && !['Thành phần', 'Thành phẩm'].every((direction) => linesInput.some((line) => line.direction === direction))) {
+      throw new HttpError(422, 'Lắp ráp / tháo dỡ cần có cả hàng xuất và hàng nhận.');
+    }
+    const isAssemblyOutput = (line) => type === 'Lắp ráp' ? line.direction === 'Thành phẩm' : line.direction === 'Thành phần';
+    const orderedLines = assemblyLines
+      ? [...linesInput].sort((a, b) => Number(isAssemblyOutput(a)) - Number(isAssemblyOutput(b)))
+      : linesInput;
+    let assemblyCost = 0;
+    const assemblyOutputQty = assemblyLines
+      ? linesInput.filter(isAssemblyOutput).reduce((sum, line) => sum + inventoryQuantity(line.quantity, 'Số lượng thành phẩm'), 0)
+      : 0;
+    for (const line of orderedLines) {
+      const [key, item] = resolveItem(line);
+      const assemblyOutput = assemblyLines && isAssemblyOutput(line);
+      if (assemblyLines && !['Thành phần', 'Thành phẩm'].includes(line.direction)) throw new HttpError(422, 'Chiều luân chuyển của dòng lắp ráp không hợp lệ.');
+      const isReceipt = type === 'Nhập kho' || assemblyOutput;
+      const warehouse = requiredText(line.warehouse || (isReceipt ? input.destinationWarehouse : input.sourceWarehouse), isReceipt ? 'Kho nhận' : 'Kho xuất', 160);
+      const lotCode = optionalText(line.lotCode, 'Số lô', 80);
+      const identity = `${key}\u0000${warehouse}\u0000${lotCode.toLocaleLowerCase('vi-VN')}\u0000${line.direction || ''}`;
+      if (seen.has(identity)) throw new HttpError(422, 'Không ghép trùng mặt hàng, kho và lô trong cùng giao dịch.');
+      seen.add(identity);
+      if (isReceipt) {
+        const quantity = inventoryQuantity(line.quantity, 'Số lượng nhập');
+        const unitCost = assemblyLines
+          ? Math.round(assemblyCost / Math.max(assemblyOutputQty, 1))
+          : optionalAmount(line.unitCost ?? item.product.unitPrice, 'Đơn giá nhập');
+        addStock(item, warehouse, quantity, line, unitCost);
+        movements.push({ itemKey: key, sku: item.product.sku, name: item.product.name, unit: item.product.unit, operation: type, direction: assemblyLines ? line.direction : '', warehouse, lotCode, expiryDate: line.expiryDate || '', quantity, unitCost, amount: quantity * unitCost });
+      } else if (type === 'Kiểm kê') {
+        const actualQty = inventoryQuantity(line.actualQty, 'Số lượng thực tế', true);
+        const trackedLot = item.product.lotManaged ? requiredText(line.lotCode, 'Số lô kiểm kê', 80) : lotCode;
+        const physicalLots = item.lots.filter((entry) => entry.warehouse === warehouse && (!item.product.lotManaged || entry.lotCode === trackedLot));
+        const bookQty = physicalLots.reduce((sum, entry) => sum + entry.quantity, 0);
+        const difference = Math.round((actualQty - bookQty) * 1000) / 1000;
+        if (difference > 0) addStock(item, warehouse, difference, line, optionalAmount(line.unitCost ?? item.product.unitPrice, 'Đơn giá kiểm kê'));
+        if (difference < 0) removeStock(item, warehouse, -difference, trackedLot);
+        movements.push({ itemKey: key, sku: item.product.sku, name: item.product.name, unit: item.product.unit, operation: type, warehouse, lotCode: trackedLot, bookQty, actualQty, difference });
+      } else {
+        const quantity = inventoryQuantity(line.quantity, type === 'Điều chuyển' ? 'Số lượng điều chuyển' : 'Số lượng xuất');
+        const fromWarehouse = requiredText(line.fromWarehouse || input.sourceWarehouse || warehouse, 'Kho xuất', 160);
+        const allocations = removeStock(item, fromWarehouse, quantity, lotCode);
+        if (assemblyLines) assemblyCost += allocations.reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0);
+        if (type === 'Điều chuyển') {
+          const toWarehouse = requiredText(line.toWarehouse || input.destinationWarehouse, 'Kho nhận', 160);
+          if (fromWarehouse === toWarehouse) throw new HttpError(422, 'Kho xuất và kho nhận phải khác nhau.');
+          for (const allocation of allocations) addStock(item, toWarehouse, allocation.quantity, allocation, allocation.unitCost, true);
+        }
+        if (type === 'Giao hàng' && allocations.some((lot) => lot.expiryDate && lot.expiryDate < inventoryBusinessDate())) throw new HttpError(409, `${item.product.sku} có lô đã hết hạn và không thể giao.`);
+        movements.push({ itemKey: key, sku: item.product.sku, name: item.product.name, unit: item.product.unit, operation: type, direction: assemblyLines ? line.direction : '', warehouse: fromWarehouse, destinationWarehouse: type === 'Điều chuyển' ? line.toWarehouse || input.destinationWarehouse : '', lotCode, quantity, amount: allocations.reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0), allocatedLots: allocations });
+      }
+    }
+    if (['Xuất kho', 'Giao hàng'].includes(type)) requiredText(input.reason || input.recipient, 'Lý do xuất / người nhận', 255);
+    if (assemblyLines) requiredText(input.reason, 'Lý do lắp ráp / tháo dỡ', 255);
+    if (type === 'Điều chuyển' && !input.destinationWarehouse && linesInput.some((line) => !line.toWarehouse)) throw new HttpError(422, 'Chọn kho nhận cho phiếu điều chuyển.');
+    if (type === 'Giao hàng') requiredText(input.deliveryAddress, 'Địa chỉ giao hàng', 500);
+    for (const key of changed) {
+      const item = items.get(key);
+      const updated = inventorySummary(item.product, item.lots, actor, timestamp);
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updated), timestamp, item.row.id);
+    }
+    const totalQuantity = Math.round(movements.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0) * 1000) / 1000;
+    const amountMovements = assemblyLines ? movements.filter((line) => line.direction === (type === 'Lắp ráp' ? 'Thành phần' : 'Thành phẩm')) : movements;
+    const totalAmount = Math.round(amountMovements.reduce((sum, line) => sum + (Number(line.amount) || 0), 0));
+    transaction = {
+      key: transactionCode, transactionCode, type, transactionDate, sourceWarehouse: input.sourceWarehouse || '', destinationWarehouse: input.destinationWarehouse || '',
+      reason: optionalText(input.reason || input.recipient, 'Lý do / người nhận', 255), recipient: optionalText(input.recipient, 'Người nhận', 255),
+      deliveryAddress: optionalText(input.deliveryAddress, 'Địa chỉ giao hàng', 500), carrier: optionalText(input.carrier, 'Đơn vị vận chuyển', 160),
+      trackingNumber: optionalText(input.trackingNumber, 'Mã vận đơn', 120), shipmentStatus: type === 'Giao hàng' ? 'Chờ giao' : '', shipmentHistory: [],
+      lines: movements, totalQuantity, totalAmount, notes: optionalText(input.notes, 'Ghi chú', 2_000),
+      requestFingerprint: fingerprint, status: 'Đã ghi nhận', createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+    };
+    await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+      VALUES (?, 'finance_inventory_transactions', ?, ?, ?, ?, ?)`).run(randomUUID(), transactionCode, actor.id, JSON.stringify(transaction), timestamp, timestamp);
+    await recordAuditEvent(actor.id, 'inventory_transaction', 'finance_inventory_transactions', transactionCode, { type, totalQuantity, totalAmount });
+  });
+  return { transaction, replayed };
+}
+
 async function handleRequest(request, response) {
   allowOrigin(request, response);
   if (request.method === 'OPTIONS') {
@@ -5741,6 +6033,13 @@ async function handleRequest(request, response) {
         } else if (scope === 'asset_todos') {
           const current = publicCollectionRecord(fresh);
           if (current.status !== 'Chờ xử lý') throw new HttpError(422, 'Chỉ nhiệm vụ chưa bắt đầu mới có thể xóa.');
+        } else if (scope === 'finance_inventory') {
+          const current = publicCollectionRecord(fresh);
+          if (Number(current.stockQty || 0) !== 0) throw new HttpError(409, 'Không thể xóa mặt hàng còn tồn kho.');
+          const movements = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_transactions'").all();
+          if (movements.some((row) => (parseJsonObject(row.payload_json).lines || []).some((line) => line.itemKey === current.key))) {
+            throw new HttpError(409, 'Mặt hàng đã có lịch sử giao dịch kho và được giữ để đối chiếu.');
+          }
         } else if (scope === 'asset_maintenances') {
           const current = publicCollectionRecord(fresh);
           if (current.startedAt || (Array.isArray(current.maintenanceHistory) && current.maintenanceHistory.length)) throw new HttpError(422, 'Chỉ kế hoạch chưa bắt đầu mới có thể xóa.');
@@ -6464,6 +6763,38 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'cancel_internal_transfer', 'finance_internal_transfers', key, { reason });
     });
     sendJson(response, 200, { transfer });
+    return;
+  }
+
+  const inventoryShipmentStatus = /^\/finance\/inventory\/transactions\/([^/]+)\/shipment-status$/.exec(resource);
+  if (request.method === 'POST' && inventoryShipmentStatus) {
+    const actor = await requireAdmin(request);
+    const transactionCode = requiredText(decodeURIComponent(inventoryShipmentStatus[1]), 'Mã giao dịch', 100).toLocaleUpperCase('vi-VN');
+    const payload = await readJson(request, 64 * 1024);
+    const nextStatus = oneOf(payload.status, 'Trạng thái giao hàng', ['Đang giao', 'Đã giao', 'Giao thất bại']);
+    const result = await db.transaction(async () => {
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(transactionCode);
+      if (!row) throw new HttpError(404, 'Không tìm thấy giao dịch giao hàng.');
+      const transaction = publicCollectionRecord(row);
+      if (transaction.type !== 'Giao hàng') throw new HttpError(422, 'Giao dịch này không phải phiếu giao hàng.');
+      if (transaction.shipmentStatus === nextStatus) return transaction;
+      const allowed = transaction.shipmentStatus === 'Chờ giao' ? ['Đang giao'] : transaction.shipmentStatus === 'Đang giao' ? ['Đã giao', 'Giao thất bại'] : [];
+      if (!allowed.includes(nextStatus)) throw new HttpError(409, 'Trạng thái giao hàng không thể chuyển theo luồng này.');
+      const note = nextStatus === 'Giao thất bại' ? requiredText(payload.reason, 'Lý do giao thất bại', 500) : optionalText(payload.note, 'Ghi chú cập nhật', 500);
+      const timestamp = now();
+      const updated = { ...transaction, shipmentStatus: nextStatus, shipmentHistory: [...(Array.isArray(transaction.shipmentHistory) ? transaction.shipmentHistory : []), { from: transaction.shipmentStatus, to: nextStatus, at: timestamp, actor: actor.name, actorId: actor.id, note }] };
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updated), timestamp, row.id);
+      await recordAuditEvent(actor.id, 'inventory_shipment_status', 'finance_inventory_transactions', transactionCode, { from: transaction.shipmentStatus, to: nextStatus });
+      return updated;
+    });
+    sendJson(response, 200, { transaction: result });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/inventory/transactions') {
+    const actor = await requireAdmin(request);
+    const result = await createInventoryTransaction(actor, await readJson(request, 512 * 1024));
+    sendJson(response, result.replayed ? 200 : 201, result);
     return;
   }
 

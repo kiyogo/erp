@@ -853,6 +853,13 @@ export const collectionsApi = {
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
 };
 
+export const inventoryApi = {
+  createTransaction: (data: Record<string, unknown>) =>
+    api.post<{ transaction: Record<string, any>; replayed: boolean }>('/finance/inventory/transactions', data),
+  updateShipmentStatus: (transactionCode: string, status: string, reason?: string) =>
+    api.post<{ transaction: Record<string, any> }>(`/finance/inventory/transactions/${encodeURIComponent(transactionCode)}/shipment-status`, { status, reason }),
+};
+
 export const assetsApi = {
   runDepreciation: (period: string, entries: Array<{ depreciationKey: string; amount: number; productionUnits?: number }>) =>
     api.post<{ period: string; count: number; totalAmount: number; records: Record<string, unknown>[] }>('/assets/depreciation-runs', { period, entries }),

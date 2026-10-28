@@ -1124,6 +1124,110 @@ test('assigned employees can execute only their own asset tasks while admins ret
   assert.equal((await request('/collections/asset_todos', 'GET', undefined, 200, firstHeaders)).data[0].status, 'Đã hoàn thành');
 });
 
+test('inventory receipts, FIFO issues, transfers and counts persist batch stock atomically', async () => {
+  const itemKey = 'inventory-batch-api';
+  const item = (await request('/collections/finance_inventory', 'POST', { record: {
+    key: itemKey, sku: 'RAM-32-API', name: 'RAM máy chủ 32GB', category: 'Linh kiện', unit: 'Thanh',
+    stockQty: 700, minQty: 2, maxQty: 20, unitPrice: 1000, warehouse: 'Kho A', barcode: 'BC-RAM-API',
+    lotManaged: true, barcodeManaged: true, issueMethod: 'FIFO', lots: [{ lotCode: 'FORGED', warehouse: 'Kho A', quantity: 700, expiryDate: '2020-01-01' }],
+  } }, 201)).record;
+  assert.equal(item.stockQty, 0);
+  assert.deepEqual(item.lots, []);
+  assert.equal(item.status, 'Sắp hết hàng');
+  const newItem = (key, sku, barcode) => ({ key, sku, barcode, name: 'Hàng kiểm tra trùng', category: 'Linh kiện', unit: 'Thanh', warehouse: 'Kho A', lotManaged: true, barcodeManaged: true });
+  await request('/collections/finance_inventory', 'POST', { record: newItem('inventory-batch-duplicate', 'ram-32-api', 'BC-OTHER') }, 409);
+  await request('/collections/finance_inventory', 'POST', { record: newItem('inventory-barcode-duplicate', 'RAM-OTHER-API', 'bc -ram-api') }, 409);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const olderDate = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const receipt = { type: 'Nhập kho', transactionCode: 'NK-INV-API-01', transactionDate: olderDate, destinationWarehouse: 'Kho A', lines: [
+    { productKey: itemKey, quantity: 8, unitCost: 1300, lotCode: 'LOT-EARLY', expiryDate: '2027-04-01' },
+  ] };
+  const received = await request('/finance/inventory/transactions', 'POST', receipt, 201);
+  assert.equal(received.transaction.totalQuantity, 8);
+  const replay = await request('/finance/inventory/transactions', 'POST', receipt, 200);
+  assert.equal(replay.replayed, true);
+  await request('/finance/inventory/transactions', 'POST', { ...receipt, lines: [{ productKey: itemKey, quantity: 1, unitCost: 1, lotCode: 'LOT-X', expiryDate: '2027-01-01' }] }, 409);
+  await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-INV-API-02', transactionDate: today,
+    destinationWarehouse: 'Kho A', lines: [{ productKey: itemKey, quantity: 5, unitCost: 1100, lotCode: 'LOT-LATE', expiryDate: '2027-05-01' }] }, 201);
+  assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, 13);
+
+  const issue = await request('/finance/inventory/transactions', 'POST', { type: 'Xuất kho', transactionCode: 'XK-INV-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', reason: 'Cấp cho phòng kỹ thuật', lines: [{ productKey: itemKey, quantity: 6 }] }, 201);
+  assert.equal(issue.transaction.lines[0].allocatedLots[0].lotCode, 'LOT-EARLY');
+  assert.equal(issue.transaction.lines[0].allocatedLots[0].quantity, 6);
+  await request('/finance/inventory/transactions', 'POST', { type: 'Xuất kho', transactionCode: 'XK-INV-API-FAIL', transactionDate: today,
+    sourceWarehouse: 'Kho A', reason: 'Thiếu hàng', lines: [{ productKey: itemKey, quantity: 100 }] }, 409);
+  assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, 7);
+
+  const transfer = await request('/finance/inventory/transactions', 'POST', { type: 'Điều chuyển', transactionCode: 'DC-INV-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', destinationWarehouse: 'Kho B', lines: [{ productKey: itemKey, quantity: 3 }] }, 201);
+  assert.equal(transfer.transaction.lines[0].destinationWarehouse, 'Kho B');
+  const moved = (await request(`/collections/finance_inventory/${itemKey}`)).record;
+  assert.equal(moved.stockQty, 7);
+  assert.deepEqual(moved.stockByWarehouse, [{ warehouse: 'Kho A', quantity: 4 }, { warehouse: 'Kho B', quantity: 3 }]);
+
+  const audit = await request('/finance/inventory/transactions', 'POST', { type: 'Kiểm kê', transactionCode: 'KK-INV-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', lines: [{ productKey: itemKey, warehouse: 'Kho A', lotCode: 'LOT-EARLY', expiryDate: '2027-04-01', actualQty: 1 }] }, 201);
+  assert.equal(audit.transaction.lines[0].difference, 1);
+  assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, 8);
+
+  const assemblyProduct = (await request('/collections/finance_inventory', 'POST', { record: {
+    key: 'inventory-assembly-output-api', sku: 'KIT-API-01', name: 'Bộ kit kiểm thử', category: 'Bộ kit', unit: 'Bộ', warehouse: 'Kho B', unitPrice: 0,
+  } }, 201)).record;
+  const assembly = await request('/finance/inventory/transactions', 'POST', { type: 'Lắp ráp', transactionCode: 'LSX-INV-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', destinationWarehouse: 'Kho B', reason: 'Lắp bộ thiết bị', lines: [
+      { productKey: itemKey, direction: 'Thành phần', quantity: 1, warehouse: 'Kho A' },
+      { productKey: assemblyProduct.key, direction: 'Thành phẩm', quantity: 1, warehouse: 'Kho B' },
+    ] }, 201);
+  assert.equal(assembly.transaction.lines.find((line) => line.direction === 'Thành phẩm').unitCost,
+    assembly.transaction.lines.find((line) => line.direction === 'Thành phần').allocatedLots[0].unitCost);
+  assert.equal((await request(`/collections/finance_inventory/${assemblyProduct.key}`)).record.stockQty, 1);
+
+  const shipment = await request('/finance/inventory/transactions', 'POST', { type: 'Giao hàng', transactionCode: 'GH-INV-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', recipient: 'Phòng kỹ thuật', deliveryAddress: 'Hà Nội', lines: [{ productKey: itemKey, quantity: 1 }] }, 201);
+  assert.equal(shipment.transaction.shipmentStatus, 'Chờ giao');
+  await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Đang giao' }, 200);
+  const delivered = await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Đã giao' }, 200);
+  assert.equal(delivered.transaction.shipmentHistory.length, 2);
+  await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Đang giao' }, 409);
+
+  const commonMethodItem = (await request('/collections/finance_inventory', 'POST', { record: {
+    key: 'inventory-common-method-api', sku: 'COMMON-METHOD-API', name: 'Vật tư theo phương pháp chung', category: 'Linh kiện', unit: 'Cái', warehouse: 'Kho C',
+    lotManaged: true, issueMethod: 'FIFO',
+  } }, 201)).record;
+  await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-COMMON-API-01', transactionDate: olderDate,
+    destinationWarehouse: 'Kho C', lines: [{ productKey: commonMethodItem.key, quantity: 2, unitCost: 100, lotCode: 'COMMON-OLD', expiryDate: '2027-01-01' }] }, 201);
+  await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-COMMON-API-02', transactionDate: today,
+    destinationWarehouse: 'Kho C', lines: [{ productKey: commonMethodItem.key, quantity: 2, unitCost: 200, lotCode: 'COMMON-NEW', expiryDate: '2027-02-01' }] }, 201);
+  const config = await request('/collections/finance_inventory_settings', 'POST', { record: {
+    key: 'global', issueMethodMode: 'Dùng chung', issueMethod: 'LIFO', lotManagedDefault: false, barcodeManagedDefault: false,
+    warehouseNames: ['Kho A', 'Kho B', 'Kho C'], categoryNames: ['Linh kiện', 'Bộ kit'],
+  } }, 201);
+  assert.equal(config.record.key, 'global');
+  await request('/collections/finance_inventory_settings/global', 'PATCH', { patch: { issueMethodMode: 'Dùng chung', issueMethod: 'LIFO' } }, 200);
+  const commonIssue = await request('/finance/inventory/transactions', 'POST', { type: 'Xuất kho', transactionCode: 'XK-COMMON-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho C', reason: 'Kiểm tra phương pháp dùng chung', lines: [{ productKey: commonMethodItem.key, quantity: 1 }] }, 201);
+  assert.equal(commonIssue.transaction.lines[0].allocatedLots[0].lotCode, 'COMMON-NEW');
+
+  const beforeEdit = (await request(`/collections/finance_inventory/${itemKey}`)).record;
+  const edited = await request(`/collections/finance_inventory/${itemKey}`, 'PATCH', { patch: { category: 'Linh kiện cập nhật' } }, 200);
+  assert.equal(edited.record.category, 'Linh kiện cập nhật');
+  assert.equal(edited.record.stockQty, beforeEdit.stockQty);
+  await request(`/collections/finance_inventory/${itemKey}`, 'PATCH', { patch: { stockQty: 999 } }, 422);
+  await request(`/collections/finance_inventory/${itemKey}`, 'DELETE', undefined, 409);
+  await request('/collections/finance_inventory_transactions', 'PUT', { records: [] }, 405);
+  await request('/collections/finance_inventory_transactions', 'POST', { record: { key: 'forged' } }, 405);
+  await request('/collections/finance_inventory_transactions/GH-INV-API-01', 'PATCH', { patch: { shipmentStatus: 'Đã giao' } }, 405);
+
+  const employee = (await request('/users', 'POST', { email: 'inventory-user@example.test', name: 'Nhân viên kho', password: 'Inventory-User-26!Secure', employeeCode: 'INVENTORY-USER', role: 'USER' }, 201)).user;
+  const login = await request('/auth/login', 'POST', { email: employee.email, password: 'Inventory-User-26!Secure' });
+  const employeeHeaders = { ...headers, Authorization: `Bearer ${login.access_token || login.token}` };
+  await request('/collections/finance_inventory', 'GET', undefined, 403, employeeHeaders);
+  await request('/finance/inventory/transactions', 'POST', receipt, 403, employeeHeaders);
+  await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Giao thất bại', reason: 'Không liên hệ được' }, 403, employeeHeaders);
+});
+
 test('asset maintenance API binds real inventory and employee data and records the full maintenance cycle', async () => {
   const employee = (await request('/users', 'POST', { email: 'asset-maintenance-staff@example.test', name: 'Kỹ sư bảo trì', password: 'Asset-Maintenance-26!Secure', employeeCode: 'ASSET-MAINTENANCE', role: 'USER' }, 201)).user;
   await request('/collections/asset_items', 'POST', { record: {
