@@ -290,6 +290,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
         title: 'Mua hàng',
         path: '/admin/finance/purchasing',
         children: [
+          { id: 'fin-pur-requests', title: 'Yêu cầu mua sắm', path: '/admin/finance/purchasing/requests' },
           { id: 'fin-pur-orders', title: 'Đơn mua hàng', path: '/admin/finance/purchasing/orders' },
           { id: 'fin-pur-cont', title: 'Hợp đồng mua', path: '/admin/finance/purchasing/contracts' },
           { id: 'fin-pur-goods', title: 'Mua hàng hóa, dịch vụ', path: '/admin/finance/purchasing/goods' },

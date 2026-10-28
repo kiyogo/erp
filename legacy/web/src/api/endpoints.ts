@@ -606,6 +606,56 @@ export const crmContactsApi = {
   update: (key: string, patch: UpdateCrmContact) => api.patch<{ contact: CrmContact }>(`/crm/contacts/${encodeURIComponent(key)}`, { patch }),
 };
 
+export type FinancePurchaseRequestItem = {
+  lineNumber: number;
+  itemName: string;
+  unit: string;
+  quantity: number;
+  estimatedUnitPrice: number;
+  lineTotal: number;
+};
+
+export type FinancePurchaseRequest = {
+  key: string;
+  requestNumber: string;
+  departmentKey: string;
+  departmentName: string;
+  requester: string;
+  requesterId: string;
+  deliveryDeadline: string;
+  purpose: string;
+  notes: string;
+  items: FinancePurchaseRequestItem[];
+  estimatedTotal: number;
+  status: 'Chờ xác định nhà cung cấp' | 'Đã xác định nhà cung cấp';
+  requestDate: string;
+  requestedAt: string;
+  supplierKey: string;
+  supplierCode: string;
+  supplierName: string;
+  supplierSelectedAt?: string;
+  supplierSelectedBy?: string;
+  supplierSelectedById?: string;
+  createdBy: string;
+  createdById: string;
+  history: Array<{ action: string; actor: string; actorId: string; at: string; detail?: string }>;
+};
+
+export type CreateFinancePurchaseRequest = Pick<FinancePurchaseRequest,
+  'departmentKey' | 'deliveryDeadline' | 'purpose' | 'notes'
+> & {
+  items: Array<Pick<FinancePurchaseRequestItem, 'itemName' | 'unit' | 'quantity' | 'estimatedUnitPrice'>>;
+};
+
+export const financePurchaseRequestsApi = {
+  getAll: () => api.get<{ data: FinancePurchaseRequest[] }>('/collections/finance_purchase_requests', { params: { limit: 500, sort: 'updatedAt', order: 'desc' } }),
+  create: (record: CreateFinancePurchaseRequest) => api.post<{ record: FinancePurchaseRequest }>('/collections/finance_purchase_requests', { record }),
+  determineSupplier: (key: string, supplierKey: string) => api.patch<{ record: FinancePurchaseRequest }>(
+    `/collections/finance_purchase_requests/${encodeURIComponent(key)}`,
+    { patch: { supplierKey } },
+  ),
+};
+
 export type CrmPromotion = {
   key: string;
   code: string;

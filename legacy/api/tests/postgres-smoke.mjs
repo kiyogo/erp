@@ -653,7 +653,53 @@ try {
   await loginAs(noteEmployee.email, 'PG-Directive-User-26!Secure');
   await request('/collections/finance_costing', 'GET', undefined, 403);
   await request('/collections/finance_costing', 'POST', { record: {} }, 403);
+  await request('/collections/finance_purchase_requests', 'GET', undefined, 403);
+  await request('/collections/finance_purchase_requests', 'POST', { record: {} }, 403);
   token = adminToken; completed++;
+  await request('/collections/business_org_units', 'POST', { record: {
+    key: 'pg-purchase-department', name: 'PG purchasing department', status: 'Hoạt động', isActive: true,
+  } }, 201);
+  const pgPurchaseSupplier = (await request('/crm/contacts', 'POST', {
+    name: 'PG purchase supplier', type: 'supplier', status: 'Đang hợp tác',
+  }, 201)).contact;
+  const pgPurchaseRequest = (await request('/collections/finance_purchase_requests', 'POST', { record: {
+    requestNumber: 'FORGED', status: 'Đã xác định nhà cung cấp', requester: 'Forged', requesterId: 'forged',
+    departmentKey: 'pg-purchase-department', deliveryDeadline: '2031-01-01', purpose: 'PostgreSQL purchase request',
+    items: [{ itemName: 'PG device', unit: 'Cái', quantity: 2, estimatedUnitPrice: 125 }, { itemName: 'PG cable', unit: 'Sợi', quantity: 3, estimatedUnitPrice: 50 }],
+  } }, 201)).record;
+  assert.match(pgPurchaseRequest.requestNumber, /^YCMS-\d{4}-\d{4}$/);
+  assert.equal(pgPurchaseRequest.requesterId, login.user.id);
+  assert.equal(pgPurchaseRequest.status, 'Chờ xác định nhà cung cấp');
+  assert.equal(pgPurchaseRequest.estimatedTotal, 400);
+  await request('/collections/finance_purchase_requests', 'POST', { record: {
+    departmentKey: 'pg-missing-department', deliveryDeadline: '2031-01-01', purpose: 'Missing unit',
+    items: [{ itemName: 'Item', unit: 'Cái', quantity: 1, estimatedUnitPrice: 0 }],
+  } }, 422);
+  await request(`/collections/finance_purchase_requests/${pgPurchaseRequest.key}`, 'PATCH', { patch: { status: 'Đã xác định nhà cung cấp' } }, 422);
+  const pgAssignedPurchaseRequest = (await request(`/collections/finance_purchase_requests/${pgPurchaseRequest.key}`, 'PATCH', {
+    patch: { supplierKey: pgPurchaseSupplier.key },
+  })).record;
+  assert.equal(pgAssignedPurchaseRequest.supplierName, pgPurchaseSupplier.name);
+  assert.equal(pgAssignedPurchaseRequest.status, 'Đã xác định nhà cung cấp');
+  assert.equal(pgAssignedPurchaseRequest.history.at(-1).actorId, login.user.id);
+  await request(`/collections/finance_purchase_requests/${pgPurchaseRequest.key}`, 'PATCH', { patch: { supplierKey: pgPurchaseSupplier.key } }, 409);
+  await request('/collections/finance_purchase_requests', 'PUT', { records: [] }, 405);
+  await request(`/collections/finance_purchase_requests/${pgPurchaseRequest.key}`, 'DELETE', undefined, 409); completed++;
+  const pgPurchaseRaceRequest = (await request('/collections/finance_purchase_requests', 'POST', { record: {
+    departmentKey: 'pg-purchase-department', deliveryDeadline: '2031-01-01', purpose: 'PostgreSQL concurrent supplier choice',
+    items: [{ itemName: 'PG keyboard', unit: 'Cái', quantity: 1, estimatedUnitPrice: 25 }],
+  } }, 201)).record;
+  const purchaseAssignmentRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/collections/finance_purchase_requests/${pgPurchaseRaceRequest.key}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ patch: { supplierKey: pgPurchaseSupplier.key } }),
+    });
+    return response.status;
+  }));
+  assert.deepEqual(purchaseAssignmentRace.sort((a, b) => a - b), [200, 409]);
+  const pgPurchaseRaceSaved = (await request(`/collections/finance_purchase_requests/${pgPurchaseRaceRequest.key}`)).record;
+  assert.equal(pgPurchaseRaceSaved.status, 'Đã xác định nhà cung cấp');
+  assert.equal(pgPurchaseRaceSaved.history.length, 2); completed++;
   const sessions = await request('/admin/sessions');
   const current = sessions.data.find(item => item.current);
   assert.ok(current);

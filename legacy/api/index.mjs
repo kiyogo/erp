@@ -1610,6 +1610,12 @@ async function canReadWorkflowAttachment(actor, fileId) {
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'finance_purchase_requests' && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được quản lý yêu cầu mua sắm.');
+  }
+  if (scope === 'finance_purchase_requests' && !['GET', 'POST', 'PATCH'].includes(request.method)) {
+    throw new HttpError(request.method === 'DELETE' ? 409 : 405, 'Yêu cầu mua sắm phải được cập nhật theo luồng để giữ lịch sử xử lý.');
+  }
   if (scope === 'tickets' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý ticket hỗ trợ.');
   if (scope === 'tickets' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Ticket phải được tạo hoặc cập nhật từng hồ sơ để giữ lịch sử xử lý.');
   if (scope === 'doc_notes' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý sổ chỉ đạo.');
@@ -1876,6 +1882,109 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       createdById: actor.id,
     };
     return { record: saved, recordKey: code, serialized: JSON.stringify(saved) };
+  }
+  if (scope === 'finance_purchase_requests') {
+    const at = now();
+    if (current) {
+      if (current.status !== 'Chờ xác định nhà cung cấp' || current.supplierKey) {
+        throw new HttpError(409, 'Yêu cầu đã xác định nhà cung cấp và được lưu để bảo toàn lịch sử.');
+      }
+      const supplierKey = requiredText(record.supplierKey, 'Nhà cung cấp', 160);
+      const supplier = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'supplier'").get(supplierKey);
+      if (!supplier || /tạm|ngừng|dừng|không hoạt động|inactive/i.test(String(supplier.status || ''))) {
+        throw new HttpError(422, 'Nhà cung cấp không tồn tại hoặc đã tạm dừng.');
+      }
+      const updated = {
+        ...current,
+        supplierKey: supplier.id,
+        supplierCode: supplier.code,
+        supplierName: supplier.name,
+        status: 'Đã xác định nhà cung cấp',
+        supplierSelectedAt: at,
+        supplierSelectedBy: actor.name,
+        supplierSelectedById: actor.id,
+        history: [...(Array.isArray(current.history) ? current.history : []), {
+          action: 'Xác định nhà cung cấp',
+          actor: actor.name,
+          actorId: actor.id,
+          at,
+          detail: `${supplier.code} · ${supplier.name}`,
+        }],
+      };
+      return { record: updated, recordKey: current.key, serialized: JSON.stringify(updated) };
+    }
+
+    if (record.supplierKey) throw new HttpError(422, 'Nhà cung cấp chỉ được xác định sau khi tổng hợp yêu cầu.');
+    const departmentKey = requiredText(record.departmentKey, 'Đơn vị yêu cầu', 160);
+    const departmentRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'business_org_units' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(departmentKey);
+    if (!departmentRow) throw new HttpError(422, 'Đơn vị yêu cầu không tồn tại hoặc đã ngừng hoạt động.');
+    const department = parseJsonObject(departmentRow.payload_json);
+    if (department.isActive === false || /tạm|ngừng|dừng|không hoạt động|inactive/i.test(String(department.status || ''))) {
+      throw new HttpError(422, 'Đơn vị yêu cầu không tồn tại hoặc đã ngừng hoạt động.');
+    }
+
+    if (!Array.isArray(record.items) || record.items.length < 1 || record.items.length > 100) {
+      throw new HttpError(422, 'Yêu cầu cần có từ 1 đến 100 dòng hàng hóa hoặc dịch vụ.');
+    }
+    let estimatedTotal = 0;
+    const items = record.items.map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(422, `Dòng hàng ${index + 1} không hợp lệ.`);
+      const quantity = Number(item.quantity);
+      const estimatedUnitPrice = Number(item.estimatedUnitPrice);
+      if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > 1_000_000_000) {
+        throw new HttpError(422, `Số lượng dòng ${index + 1} phải là số nguyên dương hợp lệ.`);
+      }
+      if (!Number.isSafeInteger(estimatedUnitPrice) || estimatedUnitPrice < 0 || estimatedUnitPrice > 1_000_000_000_000) {
+        throw new HttpError(422, `Đơn giá dự kiến dòng ${index + 1} phải là số nguyên không âm hợp lệ.`);
+      }
+      const lineTotal = quantity * estimatedUnitPrice;
+      if (!Number.isSafeInteger(lineTotal) || !Number.isSafeInteger(estimatedTotal + lineTotal)) {
+        throw new HttpError(422, 'Tổng giá trị dự kiến vượt giới hạn số liệu an toàn.');
+      }
+      estimatedTotal += lineTotal;
+      return {
+        lineNumber: index + 1,
+        itemName: requiredText(item.itemName, `Tên hàng hóa/dịch vụ dòng ${index + 1}`, 300),
+        unit: requiredText(item.unit, `Đơn vị tính dòng ${index + 1}`, 40),
+        quantity,
+        estimatedUnitPrice,
+        lineTotal,
+      };
+    });
+
+    const date = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(at));
+    const year = date.slice(0, 4);
+    const existingCodes = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_purchase_requests' AND record_key LIKE ?").all(`YCMS-${year}-%`);
+    const sequence = existingCodes.reduce((maximum, row) => {
+      const match = new RegExp(`^YCMS-${year}-(\\d{4})$`).exec(row.record_key);
+      return match ? Math.max(maximum, Number(match[1])) : maximum;
+    }, 0) + 1;
+    const requestNumber = `YCMS-${year}-${String(sequence).padStart(4, '0')}`;
+    const saved = {
+      key: requestNumber,
+      requestNumber,
+      departmentKey,
+      departmentName: requiredText(department.name, 'Tên đơn vị yêu cầu', 160),
+      requester: actor.name,
+      requesterId: actor.id,
+      deliveryDeadline: requiredIsoDate(record.deliveryDeadline, 'Hạn giao hàng'),
+      purpose: requiredText(record.purpose, 'Mục đích mua sắm', 1_000),
+      notes: optionalText(record.notes, 'Ghi chú', 2_000),
+      items,
+      estimatedTotal,
+      status: 'Chờ xác định nhà cung cấp',
+      requestDate: date,
+      requestedAt: at,
+      supplierKey: '',
+      supplierCode: '',
+      supplierName: '',
+      createdBy: actor.name,
+      createdById: actor.id,
+      history: [{ action: 'Tạo yêu cầu mua sắm', actor: actor.name, actorId: actor.id, at }],
+    };
+    return { record: saved, recordKey: requestNumber, serialized: JSON.stringify(saved) };
   }
   if (scope === 'meeting_room_settings') {
     if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');
@@ -6246,6 +6355,9 @@ async function handleRequest(request, response) {
       const payload = await readJson(request, 256 * 1024);
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
+      if (scope === 'finance_purchase_requests' && (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'supplierKey'))) {
+        throw new HttpError(422, 'Yêu cầu mua sắm chỉ được cập nhật qua thao tác xác định nhà cung cấp.');
+      }
       if (scope === 'tickets') {
         const fields = Object.keys(patch).filter((field) => field !== 'key');
         if (fields.length !== 1 || fields[0] !== 'status' || !['Đang xử lý', 'Đã hoàn thành'].includes(patch.status)) {

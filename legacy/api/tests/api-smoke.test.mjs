@@ -59,6 +59,102 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
   return body;
 }
 
+test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
+  const departmentKey = `purchase-dept-${Date.now()}`;
+  await request('/collections/business_org_units', 'POST', {
+    record: { key: departmentKey, name: 'Đơn vị thử mua hàng', status: 'Hoạt động', isActive: true },
+  }, 201);
+  const supplier = (await request('/crm/contacts', 'POST', {
+    type: 'supplier', name: `Nhà cung cấp thử ${Date.now()}`, status: 'Đang hợp tác',
+  }, 201)).contact;
+
+  const created = (await request('/collections/finance_purchase_requests', 'POST', {
+    record: {
+      requestNumber: 'YEU-CAU-GIA-MAO', status: 'Đã xác định nhà cung cấp', requester: 'Người giả mạo', requesterId: 'forged',
+      departmentKey, deliveryDeadline: '2026-11-15', purpose: 'Mua thiết bị kiểm thử', notes: 'Đủ thông tin',
+      estimatedTotal: 0, supplierKey: '', history: [{ action: 'giả mạo' }],
+      items: [{ itemName: 'Máy tính', unit: 'Bộ', quantity: 2, estimatedUnitPrice: 12500000 }],
+    },
+  }, 201)).record;
+  assert.match(created.requestNumber, /^YCMS-\d{4}-\d{4}$/);
+  assert.equal(created.key, created.requestNumber);
+  assert.equal(created.status, 'Chờ xác định nhà cung cấp');
+  assert.equal(created.requesterId, session.user.id);
+  assert.notEqual(created.requester, 'Người giả mạo');
+  assert.equal(created.estimatedTotal, 25000000);
+  assert.equal(created.items[0].lineTotal, 25000000);
+  assert.equal(created.history.length, 1);
+  assert.equal(created.history[0].actorId, session.user.id);
+
+  await request('/collections/finance_purchase_requests', 'POST', { record: {
+    departmentKey: 'missing-department', deliveryDeadline: '2026-11-15', purpose: 'Sai đơn vị',
+    items: [{ itemName: 'Bút', unit: 'Cái', quantity: 1, estimatedUnitPrice: 0 }],
+  } }, 422);
+  const inactiveDepartmentKey = `purchase-inactive-dept-${Date.now()}`;
+  await request('/collections/business_org_units', 'POST', { record: {
+    key: inactiveDepartmentKey, name: 'Đơn vị đã tạm ngưng', status: 'Tạm ngưng', isActive: false,
+  } }, 201);
+  await request('/collections/finance_purchase_requests', 'POST', { record: {
+    departmentKey: inactiveDepartmentKey, deliveryDeadline: '2026-11-15', purpose: 'Đơn vị đã ngừng',
+    items: [{ itemName: 'Bút', unit: 'Cái', quantity: 1, estimatedUnitPrice: 0 }],
+  } }, 422);
+  await request('/collections/finance_purchase_requests', 'POST', { record: {
+    departmentKey, deliveryDeadline: '2026-11-15', purpose: 'Số lượng sai',
+    items: [{ itemName: 'Bút', unit: 'Cái', quantity: 1.5, estimatedUnitPrice: 0 }],
+  } }, 422);
+  await request(`/collections/finance_purchase_requests/${created.key}`, 'PATCH', { patch: { status: 'Đã xác định nhà cung cấp' } }, 422);
+  await request(`/collections/finance_purchase_requests/${created.key}`, 'PATCH', { patch: { supplierKey: 'supplier-not-found' } }, 422);
+  const inactiveSupplier = (await request('/crm/contacts', 'POST', {
+    type: 'supplier', name: `Nhà cung cấp tạm ngưng ${Date.now()}`, status: 'Tạm ngưng',
+  }, 201)).contact;
+  await request(`/collections/finance_purchase_requests/${created.key}`, 'PATCH', { patch: { supplierKey: inactiveSupplier.key } }, 422);
+  await request('/collections/finance_purchase_requests', 'PUT', { records: [] }, 405);
+  await request(`/collections/finance_purchase_requests/${created.key}`, 'DELETE', undefined, 409);
+
+  const assigned = (await request(`/collections/finance_purchase_requests/${created.key}`, 'PATCH', {
+    patch: { supplierKey: supplier.key },
+  })).record;
+  assert.equal(assigned.status, 'Đã xác định nhà cung cấp');
+  assert.equal(assigned.supplierKey, supplier.key);
+  assert.equal(assigned.supplierName, supplier.name);
+  assert.equal(assigned.supplierSelectedById, session.user.id);
+  assert.equal(assigned.history.length, 2);
+  assert.equal(assigned.history[1].action, 'Xác định nhà cung cấp');
+  await request(`/collections/finance_purchase_requests/${created.key}`, 'PATCH', { patch: { supplierKey: supplier.key } }, 409);
+
+  const raceRequest = (await request('/collections/finance_purchase_requests', 'POST', { record: {
+    departmentKey, deliveryDeadline: '2026-11-15', purpose: 'Kiểm tra hai lần chọn nhà cung cấp đồng thời',
+    items: [{ itemName: 'Màn hình', unit: 'Cái', quantity: 1, estimatedUnitPrice: 3000000 }],
+  } }, 201)).record;
+  const assignmentRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/collections/finance_purchase_requests/${raceRequest.key}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ patch: { supplierKey: supplier.key } }),
+    });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(assignmentRace.map((item) => item.status).sort((a, b) => a - b), [200, 409]);
+  const raceSaved = (await request(`/collections/finance_purchase_requests/${raceRequest.key}`)).record;
+  assert.equal(raceSaved.history.length, 2);
+  assert.equal(raceSaved.status, 'Đã xác định nhà cung cấp');
+
+  await request('/users', 'POST', {
+    email: `purchase-user-${Date.now()}@example.test`, name: 'Nhân viên thử mua hàng',
+    password: 'Purchase-User-26!Secure', employeeCode: `PUR-${Date.now()}`, role: 'USER',
+  }, 201);
+  const userEmail = (await request('/employees')).data.find((item) => item.name === 'Nhân viên thử mua hàng')?.email;
+  assert.ok(userEmail);
+  const userLogin = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: userEmail, password: 'Purchase-User-26!Secure' }),
+  });
+  const userSession = await userLogin.json();
+  assert.equal(userLogin.status, 200);
+  const userHeaders = { ...headers, Authorization: `Bearer ${userSession.access_token || userSession.token}` };
+  await request('/collections/finance_purchase_requests', 'GET', undefined, 403, userHeaders);
+  await request('/collections/finance_purchase_requests', 'POST', { record: {} }, 403, userHeaders);
+  await request(`/collections/finance_purchase_requests/${created.key}`, 'PATCH', { patch: { supplierKey: supplier.key } }, 403, userHeaders);
+});
+
 test('asset allocations and returns keep inventory and tickets atomic', async () => {
   await request('/users', 'POST', { email: 'asset-allocation-user@example.test', name: 'Nhân viên cấp phát', password: 'Asset-Allocation-26!Secure', employeeCode: 'ALLOCATION-USER', role: 'USER', department: 'Công nghệ', position: 'Kỹ sư' }, 201);
   const employees = await request('/employees');

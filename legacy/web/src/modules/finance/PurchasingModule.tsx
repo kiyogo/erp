@@ -11,6 +11,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
 import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
+import { PurchaseRequestsModule } from './PurchaseRequestsModule';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 
@@ -21,7 +22,7 @@ const purchaseStatusOptions = [
   { label: 'Đã hủy', value: 'Đã hủy' },
 ];
 
-export const PurchasingModule: React.FC = () => {
+const PurchasingDocumentsModule: React.FC = () => {
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
@@ -253,4 +254,11 @@ export const PurchasingModule: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+export const PurchasingModule: React.FC = () => {
+  const location = useLocation();
+  const currentPath = location.pathname.replace(/^\/admin/, '');
+  if (currentPath === '/finance/purchasing/requests') return <PurchaseRequestsModule />;
+  return <PurchasingDocumentsModule />;
 };
