@@ -7,6 +7,7 @@ export type DepreciationScheduleRow = {
   accumulatedAmount: number;
   remainingAmount: number;
   posted: boolean;
+  imported?: boolean;
   productionUnits?: number;
 };
 

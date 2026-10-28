@@ -496,6 +496,33 @@ try {
   assert.equal(postedAsset.accumulatedDepreciation, 1500000);
   assert.equal(postedAsset.netBookValue, 58500000);
   assert.equal((await request('/collections/finance_general_ledger')).data.filter((entry) => entry.sourceReference === `asset-depreciation:${depreciationPeriod}:${depreciationRecord.key}`).length, 1); completed++;
+  const shiftPeriod = (value, offset) => {
+    const date = new Date(`${value}-01T00:00:00.000Z`);
+    date.setUTCMonth(date.getUTCMonth() + offset);
+    return date.toISOString().slice(0, 7);
+  };
+  await request('/collections/asset_items', 'POST', { record: {
+    key: 'pg-depreciation-opening-asset', code: 'PG-AST-DEP-OPEN', name: 'PG opening balance asset',
+    originalPrice: 60000000, accumulatedDepreciation: 3000000, netBookValue: 57000000,
+    depreciationMonths: 36, status: 'Trong kho',
+  } }, 201);
+  const openingSetup = {
+    key: 'pg-depreciation-opening-record', assetKey: 'pg-depreciation-opening-asset',
+    residualValue: 6000000, startDate: `${shiftPeriod(depreciationPeriod, -2)}-01`, depreciationMethod: 'Đường thẳng',
+    costAccount: 'Nợ 6421 (CP Quản lý CNTT)', assetAccount: 'Có 2141 (Hao mòn TSCĐ hữu hình)', openingDepreciatedMonths: 2,
+  };
+  await request('/collections/asset_depreciations', 'POST', { record: { ...openingSetup, openingDepreciatedMonths: 1 } }, 422);
+  const openingRecord = (await request('/collections/asset_depreciations', 'POST', { record: openingSetup }, 201)).record;
+  assert.equal(openingRecord.depreciatedMonths, 2);
+  assert.equal(openingRecord.openingBalanceImport.throughPeriod, shiftPeriod(depreciationPeriod, -1));
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((entry) => entry.sourceReference?.endsWith(`:${openingRecord.key}`)).length, 0);
+  await request('/assets/depreciation-runs', 'POST', { period: depreciationPeriod, entries: [{ depreciationKey: openingRecord.key, amount: 1500000 }] });
+  const postedOpening = (await request(`/collections/asset_depreciations/${openingRecord.key}`)).record;
+  const postedOpeningAsset = (await request('/collections/asset_items/pg-depreciation-opening-asset')).record;
+  assert.equal(postedOpening.depreciatedMonths, 3);
+  assert.equal(postedOpening.accumulatedDeprec, 4500000);
+  assert.equal(postedOpeningAsset.netBookValue, 55500000);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((entry) => entry.sourceReference === `asset-depreciation:${depreciationPeriod}:${openingRecord.key}`).length, 1); completed++;
   const adminToken = token;
   const requester = (await request('/users', 'POST', { email: 'pg-workflow-requester@example.test', name: 'PG workflow requester', employeeCode: 'PG-WF-REQUESTER', password: 'PG-Workflow-Requester-26!Secure', role: 'USER' }, 201)).user;
   const firstApprover = (await request('/users', 'POST', { email: 'pg-workflow-first@example.test', name: 'PG workflow first', employeeCode: 'PG-WF-FIRST', password: 'PG-Workflow-First-26!Secure', role: 'USER' }, 201)).user;

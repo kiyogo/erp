@@ -70,11 +70,17 @@ try {
     timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
   const period = businessDate.slice(0, 7);
+  const shiftPeriod = (value, offset) => {
+    const date = new Date(`${value}-01T00:00:00.000Z`);
+    date.setUTCMonth(date.getUTCMonth() + offset);
+    return date.toISOString().slice(0, 7);
+  };
   const assets = [
     { suffix: 'STRAIGHT', method: 'Đường thẳng', residualValue: 7_000_000 },
     { suffix: 'DECLINING', method: 'Số dư giảm dần có điều chỉnh', residualValue: 5_000_000 },
     { suffix: 'PRODUCTION', method: 'Theo sản lượng / Công suất', residualValue: 4_000_000, productionCapacity: 1_000 },
-  ].map(({ suffix, ...details }) => ({
+    { suffix: 'OPENING', method: 'Đường thẳng', residualValue: 7_000_000, openingMonths: 1 },
+  ].map(({ suffix, openingMonths = 0, ...details }) => ({
     key: `depreciation-ui-${suffix.toLowerCase()}`,
     code: `AST-DEP-UI-${suffix}`,
     barcode: `BC-DEP-UI-${suffix}`,
@@ -82,16 +88,19 @@ try {
     category: 'Thiết bị IT',
     department: 'Phòng Hạ tầng',
     originalPrice: 60_000_000,
-    accumulatedDepreciation: 0,
-    netBookValue: 60_000_000,
+    accumulatedDepreciation: openingMonths ? 1_472_222 : 0,
+    netBookValue: openingMonths ? 58_527_778 : 60_000_000,
     depreciationMonths: 36,
     status: 'Trong kho',
-    purchaseDate: `${period}-01`,
+    purchaseDate: `${shiftPeriod(period, -openingMonths)}-01`,
     history: [],
+    openingMonths,
     ...details,
   }));
   for (const asset of assets) {
-    const response = await fetch(`${apiUrl}/collections/asset_items`, { method: 'POST', headers, body: JSON.stringify({ record: asset }) });
+    const inventoryRecord = { ...asset };
+    delete inventoryRecord.openingMonths;
+    const response = await fetch(`${apiUrl}/collections/asset_items`, { method: 'POST', headers, body: JSON.stringify({ record: inventoryRecord }) });
     assert.equal(response.status, 201, await response.text());
   }
 
@@ -121,6 +130,23 @@ try {
     assert.ok(button, `Missing enabled button: ${label}`);
     await button.click();
     await handle.dispose();
+  }
+  async function openRunModal() {
+    await page.evaluate(() => {
+      const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Chạy trích khấu hao tháng này');
+      if (!button) throw new Error('Missing depreciation run button.');
+      button.click();
+    });
+    await page.waitForFunction(text => document.body.innerText.includes(text), { timeout: 15000 }, `Kỳ khấu hao ${period}`);
+  }
+  async function openAssetPlan(assetCode) {
+    const opened = await page.evaluate(code => {
+      const row = [...document.querySelectorAll('tr, .ant-table-row')].find(item => item.innerText.includes(code));
+      const button = [...(row?.querySelectorAll('button') || [])].find(item => item.textContent.trim() === 'Kế hoạch');
+      button?.click();
+      return Boolean(button);
+    }, assetCode);
+    assert.ok(opened, `Missing depreciation plan action for ${assetCode}`);
   }
   async function fill(label, value) {
     const handle = await page.evaluateHandle(text => [...document.querySelectorAll('.ant-modal-root .ant-form-item')]
@@ -188,6 +214,7 @@ try {
     await choose('Tài sản trong danh mục', `${asset.code} — ${asset.name}`);
     await choose('Phương pháp trích khấu hao', asset.method);
     await fill('Giá trị thanh lý ước tính', String(asset.residualValue));
+    if (asset.openingMonths) await fill('Số tháng đã khấu hao đầu kỳ', String(asset.openingMonths));
     if (asset.method === 'Theo sản lượng / Công suất') {
       await fill('Tổng sản lượng dự kiến', String(asset.productionCapacity));
     }
@@ -202,14 +229,19 @@ try {
     assert.equal(saved.residualValue, asset.residualValue);
     assert.equal(saved.depreciationMethod, asset.method);
     assert.equal(saved.status, 'Đang trích khấu hao');
-    assert.equal(saved.scheduleList[0].period, period);
+    assert.equal(saved.scheduleList[asset.openingMonths].period, period);
+    if (asset.openingMonths) {
+      assert.equal(saved.depreciatedMonths, asset.openingMonths);
+      assert.equal(saved.openingBalanceImport.throughPeriod, shiftPeriod(period, -1));
+      assert.equal(saved.openingBalanceImport.accumulatedDepreciation, asset.accumulatedDepreciation);
+    }
     if (asset.productionCapacity) assert.equal(saved.productionCapacity, asset.productionCapacity);
   }
 
   const setups = await getCollection('asset_depreciations');
-  assert.equal(setups.length, 3);
-  await clickButton('Chạy trích khấu hao tháng này');
-  await page.waitForFunction(text => document.body.innerText.includes(text), { timeout: 15000 }, `Kỳ khấu hao ${period}`);
+  assert.equal(setups.length, 4);
+  assert.equal((await getCollection('finance_general_ledger')).filter(item => item.sourceModule === 'asset_depreciation').length, 0, 'Importing the opening balance must not create historic ledger entries.');
+  await openRunModal();
   const productionInput = await page.$('.ant-modal-root input[placeholder="Sản lượng kỳ này"]');
   assert.ok(productionInput, 'Production-based depreciation requires actual units for this period.');
   await productionInput.type('100');
@@ -217,20 +249,24 @@ try {
   await clickButton('Chấp nhận trích & Ghi sổ kế toán', true);
 
   let postedRecords;
+  const setupByKey = new Map(setups.map(item => [item.key, item]));
   for (let attempt = 0; attempt < 100; attempt++) {
     postedRecords = await getCollection('asset_depreciations');
-    if (postedRecords.every(item => item.depreciatedMonths === 1)) break;
+    if (postedRecords.every(item => item.depreciatedMonths === setupByKey.get(item.key).depreciatedMonths + 1)) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  assert.equal(postedRecords.length, 3);
-  assert.ok(postedRecords.every(item => item.depreciatedMonths === 1 && String(item.lastRunDate).startsWith(period)));
+  assert.equal(postedRecords.length, 4);
+  assert.ok(postedRecords.every(item => item.depreciatedMonths === setupByKey.get(item.key).depreciatedMonths + 1 && String(item.lastRunDate).startsWith(period)));
   const expectedTotal = setups.reduce((sum, item) => sum + (item.depreciationMethod === 'Theo sản lượng / Công suất'
     ? Math.round((item.originalCost - item.residualValue) * 100 / item.productionCapacity)
-    : item.scheduleList[0].monthlyAmount), 0);
-  const postedTotal = postedRecords.reduce((sum, item) => sum + item.accumulatedDeprec, 0);
+    : item.scheduleList.find(row => row.period === period).monthlyAmount), 0);
+  const postedTotal = postedRecords.reduce((sum, item) => sum + item.accumulatedDeprec - setupByKey.get(item.key).accumulatedDeprec, 0);
   assert.equal(postedTotal, expectedTotal);
   const productionRecord = postedRecords.find(item => item.depreciationMethod === 'Theo sản lượng / Công suất');
   assert.equal(productionRecord.productionByPeriod[period], 100);
+  const openingRecord = postedRecords.find(item => item.assetCode.endsWith('-OPENING'));
+  assert.equal(openingRecord.openingBalanceImport.throughPeriod, shiftPeriod(period, -1));
+  assert.equal(openingRecord.depreciatedMonths, 2);
 
   const inventory = await getCollection('asset_items');
   for (const depreciation of postedRecords) {
@@ -241,23 +277,25 @@ try {
     assert.ok(asset.history.some(entry => entry.action === 'Ghi nhận khấu hao tài sản'));
   }
   const ledger = (await getCollection('finance_general_ledger')).filter(item => item.sourceModule === 'asset_depreciation');
-  assert.equal(ledger.length, 3);
+  assert.equal(ledger.length, 4);
+  assert.ok(ledger.every(entry => String(entry.sourceReference).startsWith(`asset-depreciation:${period}:`)), 'Only the current period should create ledger entries.');
   assert.equal(ledger.reduce((sum, entry) => sum + Number(entry.amount), 0), expectedTotal);
   assert.ok(ledger.every(entry => entry.author === admin.user.name));
 
   await page.waitForFunction(() => !document.querySelector('.ant-modal-root'), { timeout: 20000 });
-  await clickButton('Chạy trích khấu hao tháng này');
+  await openRunModal();
   await clickButton('Chấp nhận trích & Ghi sổ kế toán', true);
   await new Promise(resolve => setTimeout(resolve, 500));
   const ledgerAfterRepeat = (await getCollection('finance_general_ledger')).filter(item => item.sourceModule === 'asset_depreciation');
-  assert.equal(ledgerAfterRepeat.length, 3, 'Running the same current period again must not duplicate ledger entries.');
+  assert.equal(ledgerAfterRepeat.length, 4, 'Running the same current period again must not duplicate ledger entries.');
   await clickButton('Hủy', true);
   await page.waitForFunction(() => !document.querySelector('.ant-modal-root'), { timeout: 20000 });
-  await clickButton('Kế hoạch');
-  await page.waitForFunction(() => document.body.innerText.includes('1 tháng đã ghi sổ'), { timeout: 15000 });
+  await openAssetPlan(openingRecord.assetCode);
+  await page.waitForFunction(() => document.body.innerText.includes('Số dư đầu kỳ'), { timeout: 15000 });
+  assert.ok((await page.$eval('body', node => node.innerText)).includes(`Đã nhập số dư đầu kỳ đến ${shiftPeriod(period, -1)}`));
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(depreciationApiErrors, []);
-  console.log(JSON.stringify({ checks: 'register three methods with server-sourced asset snapshots, validate arbitrary residual amount, run current period with actual production, verify inventory/history/ledger and replay, inspect posted schedule', period, totalPosted: expectedTotal, database: directory }));
+  console.log(JSON.stringify({ checks: 'register three methods and a verified opening balance, reject backdated ledger entries, run the current period with actual production, verify inventory/history/ledger and replay, inspect imported schedule rows', period, totalPosted: expectedTotal, database: directory }));
 } catch (error) {
   if (page) {
     console.error((await page.$eval('body', node => node.innerText).catch(() => '')).slice(-3000));

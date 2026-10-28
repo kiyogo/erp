@@ -1960,8 +1960,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (duplicateAsset) throw new HttpError(409, 'Tài sản đã có hồ sơ khấu hao.');
       const originalCost = optionalAmount(asset.originalPrice, 'Nguyên giá tài sản');
       const accumulatedDepreciation = optionalAmount(asset.accumulatedDepreciation, 'Khấu hao lũy kế');
-      if (originalCost <= 0 || accumulatedDepreciation !== 0) {
-        throw new HttpError(422, 'Chỉ lập hồ sơ mới khi tài sản có nguyên giá hợp lệ và chưa có khấu hao lũy kế.');
+      if (originalCost <= 0 || accumulatedDepreciation < 0 || accumulatedDepreciation > originalCost) {
+        throw new HttpError(422, 'Chỉ lập hồ sơ mới khi tài sản có nguyên giá hợp lệ và khấu hao lũy kế không vượt nguyên giá.');
       }
       const lifeMonths = Number(asset.depreciationMonths);
       if (!Number.isSafeInteger(lifeMonths) || lifeMonths < 1 || lifeMonths > 120) {
@@ -1981,10 +1981,75 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       const startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu khấu hao');
       const productionCapacity = record.depreciationMethod === 'Theo sản lượng / Công suất'
         ? requiredAmount(record.productionCapacity, 'Tổng sản lượng dự kiến') : 0;
+      const openingMonths = Number(record.openingDepreciatedMonths ?? 0);
+      if (!Number.isSafeInteger(openingMonths) || openingMonths < 0 || openingMonths > lifeMonths) {
+        throw new HttpError(422, 'Số tháng khấu hao đầu kỳ phải là số nguyên từ 0 đến thời gian khấu hao.');
+      }
+      const rawOpeningProduction = record.openingProductionByPeriod ?? {};
+      if (!rawOpeningProduction || typeof rawOpeningProduction !== 'object' || Array.isArray(rawOpeningProduction)) {
+        throw new HttpError(422, 'Lịch sản lượng đầu kỳ không hợp lệ.');
+      }
+      const openingProductionByPeriod = {};
+      for (const [period, quantity] of Object.entries(rawOpeningProduction)) {
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period) || !Number.isSafeInteger(Number(quantity)) || Number(quantity) < 0) {
+          throw new HttpError(422, `Sản lượng đầu kỳ ${period} phải là số nguyên không âm theo kỳ YYYY-MM.`);
+        }
+        openingProductionByPeriod[period] = Number(quantity);
+      }
+      if (record.depreciationMethod === 'Theo sản lượng / Công suất'
+        && Object.values(openingProductionByPeriod).reduce((sum, quantity) => sum + quantity, 0) > productionCapacity) {
+        throw new HttpError(422, 'Tổng sản lượng đầu kỳ vượt công suất dự kiến trong vòng đời tài sản.');
+      }
+      if (record.depreciationMethod !== 'Theo sản lượng / Công suất' && Object.keys(openingProductionByPeriod).length) {
+        throw new HttpError(422, 'Chỉ phương pháp theo sản lượng mới nhận lịch sản lượng đầu kỳ.');
+      }
       const scheduleList = buildAssetDepreciationSchedule({
-        originalCost, residualValue, lifeMonths, startDate, method: record.depreciationMethod,
-        productionCapacity, productionByPeriod: {},
+        originalCost, residualValue, lifeMonths, startDate, depreciatedMonths: openingMonths,
+        method: record.depreciationMethod, productionCapacity, productionByPeriod: openingProductionByPeriod,
       });
+      const expectedOpeningPeriods = scheduleList.slice(0, openingMonths).map((row) => row.period);
+      if (record.depreciationMethod === 'Theo sản lượng / Công suất') {
+        const suppliedPeriods = Object.keys(openingProductionByPeriod).sort();
+        if (JSON.stringify(suppliedPeriods) !== JSON.stringify([...expectedOpeningPeriods].sort())) {
+          throw new HttpError(422, 'Cần nhập sản lượng đầu kỳ cho đủ từng tháng đã khấu hao và không nhập kỳ ngoài khoảng này.');
+        }
+      } else if (Object.keys(openingProductionByPeriod).length) {
+        throw new HttpError(422, 'Lịch sản lượng đầu kỳ không khớp phương pháp khấu hao.');
+      }
+      const openingAccumulated = openingMonths ? Number(scheduleList[openingMonths - 1]?.accumulatedAmount || 0) : 0;
+      if (openingAccumulated !== accumulatedDepreciation) {
+        throw new HttpError(422, 'Số dư khấu hao trong danh mục không khớp thời gian, phương pháp và lịch đầu kỳ đã nhập.');
+      }
+      if (asset.netBookValue !== undefined && asset.netBookValue !== null && asset.netBookValue !== ''
+        && optionalAmount(asset.netBookValue, 'Giá trị còn lại tài sản') !== originalCost - accumulatedDepreciation) {
+        throw new HttpError(422, 'Giá trị còn lại trong danh mục không khớp nguyên giá trừ khấu hao lũy kế.');
+      }
+      if (openingMonths > 0) {
+        const businessPeriod = inventoryBusinessDate().slice(0, 7);
+        const priorPeriodDate = new Date(`${businessPeriod}-01T00:00:00.000Z`);
+        priorPeriodDate.setUTCMonth(priorPeriodDate.getUTCMonth() - 1);
+        const priorPeriod = priorPeriodDate.toISOString().slice(0, 7);
+        const throughPeriod = scheduleList[openingMonths - 1]?.period;
+        if (throughPeriod !== priorPeriod) {
+          throw new HttpError(422, `Số dư đầu kỳ phải khớp lịch đến hết kỳ gần nhất (${priorPeriod}).`);
+        }
+        const [year, month] = throughPeriod.split('-').map(Number);
+        const periodEndDate = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+        record.lastRunDate = periodEndDate;
+        record.openingBalanceImport = {
+          accumulatedDepreciation: openingAccumulated,
+          depreciatedMonths: openingMonths,
+          throughPeriod,
+          importedAt: now(),
+          importedBy: actor.name,
+          importedById: actor.id,
+        };
+      } else {
+        record.lastRunDate = 'Chưa trích';
+        delete record.openingBalanceImport;
+      }
+      delete record.openingDepreciatedMonths;
+      delete record.openingProductionByPeriod;
       const [endYear, endMonth] = scheduleList.at(-1).period.split('-').map(Number);
       record.assetKey = asset.key;
       record.assetCode = code;
@@ -1996,15 +2061,15 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record.lifeMonths = lifeMonths;
       record.startDate = startDate;
       record.productionCapacity = productionCapacity || undefined;
-      record.productionByPeriod = {};
-      record.depreciatedMonths = 0;
-      record.monthlyDeprec = scheduleList[0].monthlyAmount;
-      record.yearlyDeprec = scheduleList.filter((row) => row.period.startsWith(startDate.slice(0, 4))).reduce((sum, row) => sum + row.monthlyAmount, 0);
-      record.accumulatedDeprec = 0;
-      record.netBookValue = originalCost;
+      record.productionByPeriod = openingProductionByPeriod;
+      record.depreciatedMonths = openingMonths;
+      record.monthlyDeprec = scheduleList[openingMonths]?.monthlyAmount || 0;
+      const reportingYear = (openingMonths ? inventoryBusinessDate() : startDate).slice(0, 4);
+      record.yearlyDeprec = scheduleList.filter((row) => row.period.startsWith(`${reportingYear}-`)).reduce((sum, row) => sum + row.monthlyAmount, 0);
+      record.accumulatedDeprec = openingAccumulated;
+      record.netBookValue = originalCost - openingAccumulated;
       record.endDate = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
-      record.lastRunDate = 'Chưa trích';
-      record.status = 'Đang trích khấu hao';
+      record.status = openingMonths >= lifeMonths || record.netBookValue <= residualValue ? 'Đã trích hết 100%' : 'Đang trích khấu hao';
       record.notes = optionalText(record.notes, 'Ghi chú', 2_000);
       record.scheduleList = scheduleList;
       record.createdBy = actor.name;
@@ -5715,6 +5780,7 @@ async function handleRequest(request, response) {
       await db.transaction(async () => {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
         if (scope === 'asset_disposals' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
+        if (scope === 'asset_depreciations' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         item = await normalizeCollectionRecord(payload.record, scope, actor);
         if (scope === 'finance_general_ledger' && (item.record.sourceModule === 'payroll' || String(item.record.sourceReference || '').startsWith('payroll:') || item.recordKey.startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được tạo qua chức năng hạch toán lương.');
         if (['leave_requests', 'attendance_overtime', 'attendance_leave_summary'].includes(scope)) ownerId = item.record.employeeId;

@@ -971,11 +971,109 @@ test('asset depreciation setup links to inventory and rejects duplicate or misma
   assert.equal(staff.role, 'USER');
 });
 
+test('asset depreciation imports verified opening balances without creating backdated ledger entries', async () => {
+  const businessDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  const period = businessDate.slice(0, 7);
+  const shiftPeriod = (value, offset) => {
+    const date = new Date(`${value}-01T00:00:00.000Z`);
+    date.setUTCMonth(date.getUTCMonth() + offset);
+    return date.toISOString().slice(0, 7);
+  };
+  const periodEndDate = (value) => {
+    const [year, month] = value.split('-').map(Number);
+    return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  };
+  const addAsset = async (key, code, accumulatedDepreciation) => request('/collections/asset_items', 'POST', { record: {
+    key, code, name: code, originalPrice: 60000000, accumulatedDepreciation,
+    netBookValue: 60000000 - accumulatedDepreciation, depreciationMonths: 36, status: 'Trong kho',
+  } }, 201);
+  const setup = (key, assetKey, startDate, extra = {}) => ({
+    key, assetKey, residualValue: 6000000, startDate, depreciationMethod: 'Đường thẳng',
+    costAccount: 'Nợ 6421 (CP Quản lý CNTT)', assetAccount: 'Có 2141 (Hao mòn TSCĐ hữu hình)', ...extra,
+  });
+
+  const straightAssetKey = 'depreciation-opening-straight-asset';
+  await addAsset(straightAssetKey, 'AST-DEP-OPEN-STRAIGHT', 3000000);
+  const straightSetup = setup('depreciation-opening-straight', straightAssetKey, `${shiftPeriod(period, -2)}-01`, {
+    openingDepreciatedMonths: 2,
+  });
+  await request('/collections/asset_depreciations', 'POST', { record: { ...straightSetup, openingDepreciatedMonths: 1 } }, 422);
+  const straight = await request('/collections/asset_depreciations', 'POST', { record: {
+    ...straightSetup, openingDepreciatedMonths: 2, accumulatedDeprec: 999, netBookValue: 1, status: 'Đã trích hết 100%',
+  } }, 201);
+  assert.equal(straight.record.assetCode, 'AST-DEP-OPEN-STRAIGHT');
+  assert.equal(straight.record.depreciatedMonths, 2);
+  assert.equal(straight.record.accumulatedDeprec, 3000000);
+  assert.equal(straight.record.netBookValue, 57000000);
+  assert.equal(straight.record.lastRunDate, periodEndDate(shiftPeriod(period, -1)));
+  assert.equal(straight.record.openingBalanceImport.throughPeriod, shiftPeriod(period, -1));
+  assert.equal(straight.record.openingBalanceImport.accumulatedDepreciation, 3000000);
+  assert.equal(Object.hasOwn(straight.record, 'openingDepreciatedMonths'), false);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation').length, 0);
+
+  const productionAssetKey = 'depreciation-opening-production-asset';
+  await addAsset(productionAssetKey, 'AST-DEP-OPEN-PRODUCTION', 4050000);
+  const productionStart = shiftPeriod(period, -3);
+  const openingProductionByPeriod = Object.fromEntries([-3, -2, -1].map((offset) => [shiftPeriod(period, offset), 25]));
+  const productionSetup = {
+    ...setup('depreciation-opening-production', productionAssetKey, `${productionStart}-01`, {
+      depreciationMethod: 'Theo sản lượng / Công suất', productionCapacity: 1000, openingDepreciatedMonths: 3,
+    }),
+    openingProductionByPeriod,
+  };
+  await request('/collections/asset_depreciations', 'POST', { record: {
+    ...productionSetup, openingProductionByPeriod: { [shiftPeriod(period, -3)]: 25, [shiftPeriod(period, -2)]: 25 },
+  } }, 422);
+  await request('/collections/asset_depreciations', 'POST', { record: {
+    ...productionSetup, openingProductionByPeriod: Object.fromEntries([-3, -2, -1].map((offset) => [shiftPeriod(period, offset), 400])),
+  } }, 422);
+  const production = await request('/collections/asset_depreciations', 'POST', { record: productionSetup }, 201);
+  assert.equal(production.record.accumulatedDeprec, 4050000);
+  assert.deepEqual(production.record.productionByPeriod, openingProductionByPeriod);
+  assert.equal(production.record.openingBalanceImport.depreciatedMonths, 3);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation').length, 0);
+
+  const fullyDepreciatedAssetKey = 'depreciation-opening-fully-depreciated-asset';
+  await addAsset(fullyDepreciatedAssetKey, 'AST-DEP-OPEN-FULL', 60000000);
+  const fullyDepreciated = await request('/collections/asset_depreciations', 'POST', { record: setup(
+    'depreciation-opening-fully-depreciated', fullyDepreciatedAssetKey, `${shiftPeriod(period, -36)}-01`,
+    { residualValue: 0, openingDepreciatedMonths: 36 },
+  ) }, 201);
+  assert.equal(fullyDepreciated.record.status, 'Đã trích hết 100%');
+  assert.equal(fullyDepreciated.record.netBookValue, 0);
+  assert.equal(fullyDepreciated.record.depreciatedMonths, 36);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference?.endsWith(`:${fullyDepreciated.record.key}`)).length, 0);
+
+  const run = await request('/assets/depreciation-runs', 'POST', { period, entries: [
+    { depreciationKey: straight.record.key, amount: 1500000 },
+    { depreciationKey: production.record.key, amount: 1350000, productionUnits: 25 },
+  ] });
+  assert.equal(run.totalAmount, 2850000);
+  for (const [depreciationKey, assetKey, accumulated, months] of [
+    [straight.record.key, straightAssetKey, 4500000, 3],
+    [production.record.key, productionAssetKey, 5400000, 4],
+  ]) {
+    const depreciation = (await request(`/collections/asset_depreciations/${depreciationKey}`)).record;
+    const asset = (await request(`/collections/asset_items/${assetKey}`)).record;
+    assert.equal(depreciation.depreciatedMonths, months);
+    assert.equal(depreciation.accumulatedDeprec, accumulated);
+    assert.equal(depreciation.openingBalanceImport.throughPeriod, shiftPeriod(period, -1));
+    assert.equal(asset.accumulatedDepreciation, accumulated);
+    assert.equal(asset.netBookValue, 60000000 - accumulated);
+  }
+  const ledger = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation');
+  assert.equal(ledger.length, 2);
+  assert.ok(ledger.every((entry) => entry.sourceReference.startsWith(`asset-depreciation:${period}:`)));
+});
+
 test('asset depreciation posts inventory, schedule and ledger atomically and only once per period', async () => {
   const businessDate = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
   const period = businessDate.slice(0, 7);
+  const ledgerBefore = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation');
   const registration = async (suffix) => {
     const assetKey = `depreciation-batch-asset-${suffix}`;
     const depreciationKey = `depreciation-batch-record-${suffix}`;
@@ -999,7 +1097,7 @@ test('asset depreciation posts inventory, schedule and ledger atomically and onl
     assert.equal((await request(`/collections/asset_items/${assetKey}`)).record.accumulatedDepreciation, 0);
     assert.equal((await request(`/collections/asset_depreciations/${depreciationKey}`)).record.depreciatedMonths, 0);
   }
-  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation').length, 0);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation').length, ledgerBefore.length);
 
   const requests = await Promise.all([payload, payload].map((body) => fetch(`${base}/assets/depreciation-runs`, {
     method: 'POST', headers, body: JSON.stringify(body),
@@ -1018,8 +1116,10 @@ test('asset depreciation posts inventory, schedule and ledger atomically and onl
     assert.equal(depreciation.accumulatedDeprec, 1500000);
   }
   const ledger = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceModule === 'asset_depreciation');
-  assert.equal(ledger.length, 2);
-  assert.ok(ledger.every((entry) => entry.author === session.user.name && entry.amount === 1500000));
+  assert.equal(ledger.length, ledgerBefore.length + 2);
+  const batchLedger = ledger.filter((entry) => [first.depreciationKey, second.depreciationKey].some((key) => entry.sourceReference.endsWith(`:${key}`)));
+  assert.equal(batchLedger.length, 2);
+  assert.ok(batchLedger.every((entry) => entry.author === session.user.name && entry.amount === 1500000));
   await request(`/collections/asset_depreciations/${first.depreciationKey}`, 'PATCH', { patch: { accumulatedDeprec: 0 } }, 422);
   await request(`/collections/asset_depreciations/${first.depreciationKey}`, 'DELETE', undefined, 422);
   await request('/assets/depreciation-runs', 'POST', payload, 409);

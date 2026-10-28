@@ -36,10 +36,20 @@ export interface DepreciationItem {
   depreciationMethod: DepreciationMethod;
   productionCapacity?: number;
   productionByPeriod?: Record<string, number>;
+  openingDepreciatedMonths?: number;
+  openingProductionByPeriod?: Record<string, number>;
   originalCost: number;
   residualValue: number; // Giá trị thanh lý ước tính
   lifeMonths: number;
   depreciatedMonths: number;
+  openingBalanceImport?: {
+    accumulatedDepreciation: number;
+    depreciatedMonths: number;
+    throughPeriod: string;
+    importedAt: string;
+    importedBy: string;
+    importedById: string;
+  };
   monthlyDeprec: number;
   yearlyDeprec: number;
   accumulatedDeprec: number;
@@ -52,8 +62,19 @@ export interface DepreciationItem {
   scheduleList: DepreciationScheduleRow[];
 }
 
-const localDate = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const localDate = (date = new Date()) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(date);
 const localPeriod = (date = new Date()) => localDate(date).slice(0, 7);
+const previousPeriod = (period: string) => {
+  const date = new Date(`${period}-01T00:00:00.000Z`);
+  date.setUTCMonth(date.getUTCMonth() - 1);
+  return date.toISOString().slice(0, 7);
+};
+const periodEndDate = (period: string) => {
+  const [year, month] = period.split('-').map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+};
 const normalizeMethod = (value: unknown): DepreciationMethod => {
   if (value === 'Số dư giảm dần có điều chỉnh' || value === 'Theo sản lượng / Công suất') return value;
   return 'Đường thẳng';
@@ -73,8 +94,25 @@ const normalizeAsset = (item: any): DepreciationItem => {
       productionByPeriod: item.productionByPeriod || {},
     });
   } catch { /* Preserve a legacy schedule for records that still need accounting data corrected. */ }
+  const importedMonths = Number(item.openingBalanceImport?.depreciatedMonths || 0);
+  if (importedMonths > 0) scheduleList = scheduleList.map((row, index) => ({ ...row, imported: index < importedMonths }));
   return { ...item, key: item.key || item.id, depreciationMethod, scheduleList } as DepreciationItem;
 };
+
+function parseOpeningProductionHistory(value: unknown): Record<string, number> {
+  const history: Record<string, number> = {};
+  const lines = String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 120) throw new Error('Lịch sản lượng đầu kỳ không được quá 120 kỳ.');
+  for (const line of lines) {
+    const match = /^(\d{4}-(?:0[1-9]|1[0-2]))\s*:\s*(\d+)$/.exec(line);
+    if (!match) throw new Error(`Dòng sản lượng đầu kỳ không hợp lệ: ${line}. Dùng định dạng YYYY-MM: số lượng.`);
+    if (Object.prototype.hasOwnProperty.call(history, match[1])) throw new Error(`Kỳ ${match[1]} bị lặp trong lịch sản lượng đầu kỳ.`);
+    const units = Number(match[2]);
+    if (!Number.isSafeInteger(units)) throw new Error(`Sản lượng kỳ ${match[1]} phải là số nguyên hợp lệ.`);
+    history[match[1]] = units;
+  }
+  return history;
+}
 
 import { useEffect } from 'react';
 import { assetsApi, collectionsApi } from '../../api/endpoints';
@@ -95,6 +133,7 @@ export const AssetDepreciationModule: React.FC = () => {
   const [runProductionUnits, setRunProductionUnits] = useState<Record<string, string>>({});
   const [runInProgress, setRunInProgress] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<DepreciationMethod>('Đường thẳng');
+  const [selectedAssetForSetup, setSelectedAssetForSetup] = useState<any | null>(null);
   const [form] = Form.useForm();
 
   const loadData = async () => {
@@ -129,14 +168,17 @@ export const AssetDepreciationModule: React.FC = () => {
     return groups;
   }, {});
   const productionItemsToRun = currentRunPlan.filter((item) => item.depreciationMethod === 'Theo sản lượng / Công suất');
+  const selectedOpeningBalance = Number(selectedAssetForSetup?.accumulatedDepreciation || 0);
 
   const handleOpenCreate = () => {
     form.resetFields();
     setSelectedMethod('Đường thẳng');
+    setSelectedAssetForSetup(null);
     form.setFieldsValue({
       costAccount: 'Nợ 6421 (CP Quản lý CNTT)',
       assetAccount: 'Có 2141 (Hao mòn TSCĐ hữu hình)',
       depreciationMethod: 'Đường thẳng',
+      residualValue: 0,
     });
     setModalOpen(true);
   };
@@ -144,6 +186,7 @@ export const AssetDepreciationModule: React.FC = () => {
   const handleSelectAsset = (assetKey: string) => {
     const asset = eligibleAssets.find((item) => String(item.key || item.id) === String(assetKey));
     if (!asset) return;
+    setSelectedAssetForSetup(asset);
     form.setFieldsValue({
       assetKey: String(asset.key || asset.id),
       assetCode: String(asset.code || asset.assetCode),
@@ -153,6 +196,10 @@ export const AssetDepreciationModule: React.FC = () => {
       originalCost: Number(asset.originalPrice),
       lifeMonths: Number(asset.depreciationMonths),
       startDate: String(asset.purchaseDate || localDate()),
+      residualValue: 0,
+      openingAccumulatedDeprec: Number(asset.accumulatedDepreciation || 0),
+      openingDepreciatedMonths: Number(asset.accumulatedDepreciation || 0) > 0 ? undefined : 0,
+      openingProductionHistory: '',
     });
   };
 
@@ -166,24 +213,59 @@ export const AssetDepreciationModule: React.FC = () => {
     const months = Number(values.lifeMonths);
     const start = String(values.startDate || '');
     const method = normalizeMethod(values.depreciationMethod);
+    const sourceAsset = eligibleAssets.find((asset) => String(asset.key || asset.id) === String(values.assetKey));
+    if (!sourceAsset) {
+      message.error('Tài sản đã thay đổi hoặc không còn đủ điều kiện; hãy tải lại danh sách.');
+      return;
+    }
+    const openingAccumulated = Number(sourceAsset.accumulatedDepreciation || 0);
+    const openingMonths = Number(values.openingDepreciatedMonths || 0);
+    let productionByPeriod: Record<string, number> = {};
     let scheduleList: DepreciationScheduleRow[];
     try {
+      if (method === 'Theo sản lượng / Công suất' && openingMonths > 0) {
+        productionByPeriod = parseOpeningProductionHistory(values.openingProductionHistory);
+        if (Object.values(productionByPeriod).reduce((sum, units) => sum + units, 0) > Number(values.productionCapacity)) {
+          throw new Error('Tổng sản lượng đầu kỳ vượt công suất dự kiến trong vòng đời tài sản.');
+        }
+      }
       scheduleList = buildDepreciationSchedule({
         originalCost: orig,
         residualValue: residual,
         lifeMonths: months,
         startDate: start,
+        depreciatedMonths: openingMonths,
         method,
         productionCapacity: Number(values.productionCapacity),
+        productionByPeriod,
       });
+      if (method === 'Theo sản lượng / Công suất' && openingMonths > 0) {
+        const expectedPeriods = scheduleList.slice(0, openingMonths).map((row) => row.period).sort();
+        if (JSON.stringify(Object.keys(productionByPeriod).sort()) !== JSON.stringify(expectedPeriods)) {
+          throw new Error('Nhập sản lượng cho đúng từng tháng đã khấu hao đến hết kỳ trước.');
+        }
+      }
+      const calculatedOpening = openingMonths ? Number(scheduleList[openingMonths - 1]?.accumulatedAmount || 0) : 0;
+      if (calculatedOpening !== openingAccumulated) {
+        throw new Error(`Khấu hao theo lịch là ${calculatedOpening.toLocaleString('vi-VN')} ₫, còn danh mục ghi ${openingAccumulated.toLocaleString('vi-VN')} ₫. Kiểm tra thời gian, phương pháp và giá trị thu hồi.`);
+      }
+      if (openingMonths > 0 && scheduleList[openingMonths - 1]?.period !== previousPeriod(currentPeriod)) {
+        throw new Error(`Số dư đầu kỳ cần khớp lịch đến hết kỳ ${previousPeriod(currentPeriod)}.`);
+      }
     } catch (error: any) {
       message.error(error?.message || 'Thông tin thiết lập khấu hao không hợp lệ.');
       return;
     }
     const id = `deprec-${crypto.randomUUID()}`;
     const endPeriod = scheduleList[scheduleList.length - 1]?.period;
+    const openingPeriod = openingMonths ? scheduleList[openingMonths - 1]?.period : '';
+    const formValues = { ...values };
+    delete formValues.openingDepreciatedMonths;
+    delete formValues.openingAccumulatedDeprec;
+    delete formValues.openingProductionHistory;
+    const preparedSchedule = scheduleList.map((row, index) => ({ ...row, imported: index < openingMonths }));
     const newItem: DepreciationItem = {
-      ...values,
+      ...formValues,
       key: id,
       assetKey: String(values.assetKey),
       depreciationMethod: method,
@@ -191,24 +273,27 @@ export const AssetDepreciationModule: React.FC = () => {
       residualValue: residual,
       lifeMonths: months,
       productionCapacity: method === 'Theo sản lượng / Công suất' ? Number(values.productionCapacity) : undefined,
-      productionByPeriod: {},
-      depreciatedMonths: 0,
-      monthlyDeprec: scheduleList[0]?.monthlyAmount || 0,
-      yearlyDeprec: scheduleList.slice(0, 12).reduce((sum, row) => sum + row.monthlyAmount, 0),
-      accumulatedDeprec: 0,
-      netBookValue: orig,
+      productionByPeriod,
+      openingDepreciatedMonths: openingMonths,
+      openingProductionByPeriod: productionByPeriod,
+      depreciatedMonths: openingMonths,
+      monthlyDeprec: scheduleList[openingMonths]?.monthlyAmount || 0,
+      yearlyDeprec: scheduleList.filter((row) => row.period.startsWith(`${currentPeriod.slice(0, 4)}-`)).reduce((sum, row) => sum + row.monthlyAmount, 0),
+      accumulatedDeprec: openingAccumulated,
+      netBookValue: orig - openingAccumulated,
       startDate: start,
       endDate: endPeriod ? `${endPeriod}-01` : start,
-      lastRunDate: 'Chưa trích',
-      status: 'Đang trích khấu hao',
+      lastRunDate: openingPeriod ? periodEndDate(openingPeriod) : 'Chưa trích',
+      status: openingMonths >= months || orig - openingAccumulated <= residual ? 'Đã trích hết 100%' : 'Đang trích khấu hao',
       notes: String(values.notes || ''),
-      scheduleList,
+      scheduleList: preparedSchedule,
     };
     try {
       await collectionsApi.create('asset_depreciations', newItem, id);
       message.success(`Đã thiết lập trích khấu hao: ${values.assetCode} (${values.assetName})`);
       setModalOpen(false);
       form.resetFields();
+      setSelectedAssetForSetup(null);
       await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể thiết lập trích khấu hao.');
@@ -332,7 +417,7 @@ export const AssetDepreciationModule: React.FC = () => {
       ['Mã tài sản', item.assetCode], ['Tên tài sản', item.assetName], ['Kỳ bắt đầu', item.startDate],
       ['Nguyên giá', item.originalCost], ['Giá trị thu hồi', item.residualValue], ['Phương pháp', item.depreciationMethod],
       [], ['Kỳ', 'Tháng thứ', 'Mức khấu hao', 'Lũy kế', 'Giá trị còn lại', 'Trạng thái', 'Sản lượng'],
-      ...item.scheduleList.map((row) => [row.period, row.monthNumber, row.monthlyAmount, row.accumulatedAmount, row.remainingAmount, row.posted ? 'Đã ghi sổ' : 'Dự kiến', row.productionUnits ?? '']),
+      ...item.scheduleList.map((row) => [row.period, row.monthNumber, row.monthlyAmount, row.accumulatedAmount, row.remainingAmount, row.imported ? 'Số dư đầu kỳ' : row.posted ? 'Đã ghi sổ' : 'Dự kiến', row.productionUnits ?? '']),
     ];
     downloadFile(`khau_hao_${String(item.assetCode).replace(/[^a-z0-9_-]/gi, '_')}.xlsx`, generateValidXlsxBlob(rows));
     message.success(`Đã xuất lịch khấu hao ${item.assetCode}.`);
@@ -343,7 +428,7 @@ export const AssetDepreciationModule: React.FC = () => {
       `Ma tai san: ${item.assetCode} | ${item.assetName}`,
       `Nguyen gia: ${Number(item.originalCost).toLocaleString('vi-VN')} VND | Gia tri thu hoi: ${Number(item.residualValue).toLocaleString('vi-VN')} VND`,
       `Phuong phap: ${item.depreciationMethod} | Thoi gian: ${item.lifeMonths} thang | Don vi: ${item.department}`,
-      ...item.scheduleList.map((row) => `${row.period} | ${row.monthlyAmount.toLocaleString('vi-VN')} | Luy ke ${row.accumulatedAmount.toLocaleString('vi-VN')} | Con lai ${row.remainingAmount.toLocaleString('vi-VN')} | ${row.posted ? 'Da ghi so' : 'Du kien'}`),
+      ...item.scheduleList.map((row) => `${row.period} | ${row.monthlyAmount.toLocaleString('vi-VN')} | Luy ke ${row.accumulatedAmount.toLocaleString('vi-VN')} | Con lai ${row.remainingAmount.toLocaleString('vi-VN')} | ${row.imported ? 'So du dau ky' : row.posted ? 'Da ghi so' : 'Du kien'}`),
     ];
     downloadFile(`khau_hao_${String(item.assetCode).replace(/[^a-z0-9_-]/gi, '_')}.pdf`, generateValidPdfBlob(`Lich khau hao ${item.assetCode}`, item.assetName, lines));
   };
@@ -369,7 +454,7 @@ export const AssetDepreciationModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Khấu hao lũy kế đã trích</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Khấu hao lũy kế gồm số dư đầu kỳ</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {totalAccumulated.toLocaleString('vi-VN')} ₫
           </div>
@@ -584,13 +669,16 @@ export const AssetDepreciationModule: React.FC = () => {
         width={760}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          {!eligibleAssets.length && <Alert type="info" showIcon message="Không có tài sản đủ điều kiện để lập hồ sơ khấu hao." description="Danh sách chỉ gồm tài sản đang sử dụng hoặc trong kho, chưa có hồ sơ khấu hao, chưa ghi nhận hao mòn và có thời gian khấu hao hợp lệ." style={{ marginBottom: 14 }} />}
+          {!eligibleAssets.length && <Alert type="info" showIcon message="Không có tài sản đủ điều kiện để lập hồ sơ khấu hao." description="Danh sách gồm tài sản đang sử dụng hoặc trong kho, chưa có hồ sơ khấu hao, có nguyên giá, số dư sổ và thời gian khấu hao hợp lệ." style={{ marginBottom: 14 }} />}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 12 }}>
             <Form.Item name="assetKey" label="Tài sản trong danh mục" rules={[{ required: true }]}>
               <Select
                 showSearch
                 placeholder={eligibleAssets.length ? 'Chọn tài sản...' : 'Không có tài sản đủ điều kiện'}
-                options={eligibleAssets.map((asset) => ({ value: String(asset.key || asset.id), label: `${asset.code || asset.assetCode} — ${asset.name || asset.assetName}` }))}
+                options={eligibleAssets.map((asset) => ({
+                  value: String(asset.key || asset.id),
+                  label: `${asset.code || asset.assetCode} — ${asset.name || asset.assetName}${Number(asset.accumulatedDepreciation || 0) > 0 ? ` · Lũy kế ${Number(asset.accumulatedDepreciation).toLocaleString('vi-VN')} ₫` : ''}`,
+                }))}
                 onChange={handleSelectAsset}
               />
             </Form.Item>
@@ -653,6 +741,31 @@ export const AssetDepreciationModule: React.FC = () => {
               <Input disabled type="number" />
             </Form.Item>
           </div>
+
+          {selectedAssetForSetup && selectedOpeningBalance > 0 && (
+            <>
+              <Alert
+                type="warning"
+                showIcon
+                message="Tài sản có số dư khấu hao từ kỳ trước"
+                description={`Danh mục đang ghi lũy kế ${selectedOpeningBalance.toLocaleString('vi-VN')} ₫. Nhập số tháng đã trích đến hết ${previousPeriod(currentPeriod)}; hệ thống chỉ nhận khi phương pháp và lịch khớp chính xác. Số dư đầu kỳ được chuyển vào hồ sơ, không tạo lại bút toán các kỳ cũ.`}
+                style={{ marginBottom: 14 }}
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Form.Item name="openingDepreciatedMonths" label="Số tháng đã khấu hao đầu kỳ" rules={[{ required: true, message: 'Nhập số tháng đã khấu hao.' }]}>
+                  <Input type="number" min={1} max={selectedAssetForSetup.depreciationMonths} step={1} placeholder="Ví dụ: 12" />
+                </Form.Item>
+                <Form.Item name="openingAccumulatedDeprec" label="Khấu hao lũy kế trong danh mục">
+                  <Input type="number" disabled />
+                </Form.Item>
+              </div>
+              {selectedMethod === 'Theo sản lượng / Công suất' && (
+                <Form.Item name="openingProductionHistory" label="Sản lượng từng kỳ đã chốt đầu kỳ" rules={[{ required: true, message: 'Nhập sản lượng cho từng kỳ đã khấu hao.' }]}>
+                  <Input.TextArea rows={3} placeholder={'YYYY-MM: số lượng\nVí dụ: 2025-10: 120'} />
+                </Form.Item>
+              )}
+            </>
+          )}
 
           {selectedMethod === 'Theo sản lượng / Công suất' && (
             <Form.Item name="productionCapacity" label="Tổng sản lượng dự kiến trong vòng đời tài sản" rules={[{ required: true }]}>
@@ -733,11 +846,19 @@ export const AssetDepreciationModule: React.FC = () => {
                 - Thời gian phân bổ: Từ <strong>{detailItem.startDate}</strong> đến <strong>{detailItem.endDate}</strong> ({detailItem.lifeMonths} tháng)
               </div>
             </div>
+            {detailItem.openingBalanceImport && (
+              <Alert
+                type="info"
+                showIcon
+                message={`Đã nhập số dư đầu kỳ đến ${detailItem.openingBalanceImport.throughPeriod}`}
+                description={`${detailItem.openingBalanceImport.accumulatedDepreciation.toLocaleString('vi-VN')} ₫ · ${detailItem.openingBalanceImport.depreciatedMonths} tháng · Người nhập ${detailItem.openingBalanceImport.importedBy}. Bút toán các kỳ trước không được tạo lại.`}
+              />
+            )}
 
             {/* Monthly Schedule Table */}
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Lịch trình phân bổ {detailItem.lifeMonths} tháng ({detailItem.scheduleList?.filter((s) => s.posted).length || 0} tháng đã ghi sổ):
+                Lịch trình phân bổ {detailItem.lifeMonths} tháng ({detailItem.scheduleList?.filter((s) => s.posted).length || 0} tháng đã ghi hoặc nhập đầu kỳ):
               </div>
               <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid #E2E8F0', borderRadius: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -758,7 +879,7 @@ export const AssetDepreciationModule: React.FC = () => {
                         <td style={{ padding: '7px 10px', textAlign: 'right' }}>{row.accumulatedAmount.toLocaleString('vi-VN')} ₫</td>
                         <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: '#16A34A' }}>{row.remainingAmount.toLocaleString('vi-VN')} ₫</td>
                         <td style={{ padding: '7px 10px', textAlign: 'center' }}>
-                          {row.posted ? <Tag color="success">Đã ghi sổ</Tag> : <Tag color="default">Dự kiến</Tag>}
+                          {row.imported ? <Tag color="blue">Số dư đầu kỳ</Tag> : row.posted ? <Tag color="success">Đã ghi sổ</Tag> : <Tag color="default">Dự kiến</Tag>}
                         </td>
                       </tr>
                     ))}
