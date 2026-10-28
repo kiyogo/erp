@@ -23,6 +23,7 @@ import { EnterpriseTask, TaskAssignee, TaskPriority, TaskReportAttachment, tasks
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { formatFileSize, getFileBlob, storeFileBlob } from '../../utils/fileStorage';
+import { buildEisenhowerMatrix, vietnamCalendarDate, type EisenhowerQuadrantKey } from './taskEisenhowerRules';
 
 const priorityColor = (priority: TaskPriority) => (
   priority === 'Khẩn cấp' ? 'error' : priority === 'Cao' ? 'warning' : priority === 'Trung bình' ? 'processing' : 'default'
@@ -31,6 +32,13 @@ const priorityColor = (priority: TaskPriority) => (
 const statusColor = (status: EnterpriseTask['status']) => (
   status === 'Hoàn thành' ? 'success' : status === 'Chờ nghiệm thu' ? 'warning' : status === 'Đang thực hiện' ? 'processing' : status === 'Tạm dừng' ? 'error' : 'default'
 );
+
+const eisenhowerColors: Record<EisenhowerQuadrantKey, { background: string; border: string; accent: string }> = {
+  'do-now': { background: '#FFF7F7', border: '#FECACA', accent: '#B91C1C' },
+  schedule: { background: '#F5F8FF', border: '#BFDBFE', accent: '#1D4ED8' },
+  delegate: { background: '#FFFBF0', border: '#FDE68A', accent: '#B45309' },
+  'low-priority': { background: '#F8FAFC', border: '#CBD5E1', accent: '#475569' },
+};
 
 const cleanDashes = (value?: string): string => {
   if (!value) return '';
@@ -135,6 +143,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState('all');
+  const [viewMode, setViewMode] = useState<'list' | 'eisenhower'>('list');
   const [modalOpen, setModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -999,6 +1008,12 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
     });
   }, [tasks, searchText, filterTab]);
 
+  const matrixToday = vietnamCalendarDate();
+  const eisenhowerGroups = useMemo(
+    () => buildEisenhowerMatrix(filteredTasks, matrixToday),
+    [filteredTasks, matrixToday],
+  );
+
   const columns = [
     { title: 'Mã & hạn xử lý', key: 'code', width: 150, render: (_: unknown, task: EnterpriseTask) => <div><div style={{ fontWeight: 500, color: '#009688', display: 'flex', gap: 6, alignItems: 'center' }}><CheckSquareOutlined /> {task.taskCode}</div><div style={{ marginTop: 3, fontSize: 12, color: task.dueDate < new Date().toISOString().slice(0, 10) && task.status !== 'Hoàn thành' ? '#DC2626' : '#64748B' }}>Hạn: {task.dueDate}</div></div> },
     { title: 'Nhiệm vụ / đơn vị', key: 'title', render: (_: unknown, task: EnterpriseTask) => <div><div style={{ fontWeight: 500, color: '#0F172A' }}>{task.taskTitle}</div>{task.projectName && <div style={{ marginTop: 2, fontSize: 12, color: '#2563EB' }}>{task.projectName}</div>}</div> },
@@ -1031,11 +1046,54 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{[['all', 'Tất cả'], ['urgent', 'Khẩn cấp'], ['in-progress', 'Đang thực hiện'], ['waiting-review', 'Chờ nghiệm thu'], ['completed', 'Hoàn thành']].map(([key, label]) => <Button key={key} size="small" onClick={() => setFilterTab(key)} style={{ background: filterTab === key ? '#E0F2F1' : '#FFF', borderColor: filterTab === key ? '#009688' : '#CBD5E1', color: filterTab === key ? '#00796B' : '#475569', fontWeight: filterTab === key ? 700 : 500 }}>{label}</Button>)}</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {[['all', 'Tất cả'], ['urgent', 'Khẩn cấp'], ['in-progress', 'Đang thực hiện'], ['waiting-review', 'Chờ nghiệm thu'], ['completed', 'Hoàn thành']].map(([key, label]) => <Button key={key} size="small" onClick={() => { setFilterTab(key); setViewMode('list'); }} style={{ background: viewMode === 'list' && filterTab === key ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'list' && filterTab === key ? '#009688' : '#CBD5E1', color: viewMode === 'list' && filterTab === key ? '#00796B' : '#475569', fontWeight: viewMode === 'list' && filterTab === key ? 700 : 500 }}>{label}</Button>)}
+          <Button size="small" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')} style={{ background: viewMode === 'list' ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'list' ? '#009688' : '#CBD5E1', color: viewMode === 'list' ? '#00796B' : '#475569' }}>Danh sách</Button>
+          <Button size="small" aria-pressed={viewMode === 'eisenhower'} onClick={() => { setFilterTab('all'); setViewMode('eisenhower'); }} style={{ background: viewMode === 'eisenhower' ? '#E0F2F1' : '#FFF', borderColor: viewMode === 'eisenhower' ? '#009688' : '#CBD5E1', color: viewMode === 'eisenhower' ? '#00796B' : '#475569', fontWeight: viewMode === 'eisenhower' ? 700 : 500 }}>Ma trận Eisenhower</Button>
+        </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><Input prefix={<SearchOutlined style={{ color: '#94A3B8' }} />} placeholder="Mã, tên việc, đơn vị, người làm..." value={searchText} onChange={(event) => setSearchText(event.target.value)} allowClear style={{ width: 270 }} /><Button icon={<ReloadOutlined />} onClick={() => void loadData()}>Tải lại</Button>{canCreateTask && <Button type="primary" icon={<PlusOutlined />} onClick={openCreateTask} style={{ background: '#009688', borderColor: '#009688' }}>Thêm nhiệm vụ</Button>}</div>
       </div>
 
-      <Spin spinning={loading} tip="Đang tải nhiệm vụ..."><div className="transparent-table-card"><KTable dataSource={filteredTasks} columns={columns} pagination={{ pageSize: 8 }} /></div></Spin>
+      <Spin spinning={loading} tip="Đang tải nhiệm vụ...">
+        {viewMode === 'list' ? (
+          <div className="transparent-table-card"><KTable dataSource={filteredTasks} columns={columns} pagination={{ pageSize: 8 }} /></div>
+        ) : (
+          <section data-testid="eisenhower-matrix" aria-label="Ma trận Eisenhower" style={{ width: '100%' }}>
+            <div style={{ color: '#64748B', fontSize: 12.5, margin: '0 0 12px' }}>
+              Phân loại theo dữ liệu nhiệm vụ: ưu tiên Cao/Khẩn cấp là quan trọng; ưu tiên Khẩn cấp hoặc hạn đến hôm nay/quá hạn là khẩn cấp. Nhiệm vụ đã hoàn thành được ẩn. Ngày tính theo múi giờ Việt Nam.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 14 }}>
+              {eisenhowerGroups.map(group => {
+                const color = eisenhowerColors[group.key];
+                return (
+                  <section key={group.key} data-testid={`eisenhower-quadrant-${group.key}`} aria-label={group.title} style={{ minWidth: 0, border: `1px solid ${color.border}`, borderRadius: 8, background: color.background, padding: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <div style={{ color: color.accent, fontSize: 15, fontWeight: 700 }}>{group.title}</div>
+                        <div style={{ color: '#64748B', fontSize: 12, marginTop: 3 }}>{group.axis}</div>
+                      </div>
+                      <Tag color={group.tasks.length ? 'blue' : 'default'}>{group.tasks.length} nhiệm vụ</Tag>
+                    </div>
+                    {group.tasks.length ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {group.tasks.map(task => (
+                          <button key={task.key} type="button" onClick={() => void openTask(task.key)} style={{ width: '100%', textAlign: 'left', border: '1px solid #E2E8F0', borderRadius: 6, background: '#FFF', padding: '10px 11px', cursor: 'pointer', color: '#0F172A' }}>
+                            <span style={{ display: 'block', fontWeight: 600, overflowWrap: 'anywhere' }}>{task.taskTitle}</span>
+                            <span style={{ display: 'block', color: '#64748B', fontSize: 11.5, marginTop: 5, overflowWrap: 'anywhere' }}>{task.taskCode} · Hạn {task.dueDate || 'Chưa có hạn'}</span>
+                            <span style={{ display: 'block', color: '#475569', fontSize: 11.5, marginTop: 3 }}>{task.assignee || 'Chưa có người thực hiện'} · {task.priority}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: '#94A3B8', fontSize: 12.5, padding: '12px 4px' }}>Không có nhiệm vụ phù hợp.</div>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+          </section>
+        )}
+      </Spin>
 
       <Modal title={isEmployee ? 'Thêm nhiệm vụ' : 'Giao nhiệm vụ mới'} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={620}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
