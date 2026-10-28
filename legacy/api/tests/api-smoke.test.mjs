@@ -1085,6 +1085,45 @@ test('asset todo API persists checklist transitions and derives completion ident
   await request('/collections/asset_todos/asset-todo-api', 'DELETE', undefined, 422);
 });
 
+test('assigned employees can execute only their own asset tasks while admins retain approval', async () => {
+  const first = (await request('/users', 'POST', { email: 'asset-todo-owner@example.test', name: 'Nhân viên nhận việc', password: 'Asset-Todo-Owner-26!Secure', employeeCode: 'ASSET-TODO-OWNER', role: 'USER' }, 201)).user;
+  const second = (await request('/users', 'POST', { email: 'asset-todo-other@example.test', name: 'Nhân viên khác', password: 'Asset-Todo-Other-26!Secure', employeeCode: 'ASSET-TODO-OTHER', role: 'USER' }, 201)).user;
+  const createTask = (key, taskCode, assignedStaffId) => ({
+    key, taskCode, taskTitle: 'Kiểm tra tài sản được giao', taskCategory: 'Kiểm kê đối soát', priority: 'Trung bình (P3)',
+    deadline: '2026-11-20', assignedStaffId, requester: 'Phòng quản trị', relatedAssetCode: 'AST-EMP-01', location: 'Văn phòng',
+    estimatedHours: 2, actualHours: 0, status: 'Chờ xử lý', checklist: [{ item: 'Kiểm tra mã tài sản', done: false }], notes: '',
+  });
+  const ownTask = (await request('/collections/asset_todos', 'POST', { record: createTask('asset-todo-owner-task', 'CV-TS-EMP-01', first.id) }, 201)).record;
+  const otherTask = (await request('/collections/asset_todos', 'POST', { record: createTask('asset-todo-other-task', 'CV-TS-EMP-02', second.id) }, 201)).record;
+  const firstLogin = await request('/auth/login', 'POST', { email: first.email, password: 'Asset-Todo-Owner-26!Secure' });
+  const secondLogin = await request('/auth/login', 'POST', { email: second.email, password: 'Asset-Todo-Other-26!Secure' });
+  const firstHeaders = { ...headers, Authorization: `Bearer ${firstLogin.access_token || firstLogin.token}` };
+  const secondHeaders = { ...headers, Authorization: `Bearer ${secondLogin.access_token || secondLogin.token}` };
+
+  const firstList = await request('/collections/asset_todos', 'GET', undefined, 200, firstHeaders);
+  assert.deepEqual(firstList.data.map((item) => item.key), [ownTask.key]);
+  assert.equal((await request('/collections/asset_todos', 'GET', undefined, 200, secondHeaders)).data[0].key, otherTask.key);
+  await request(`/collections/asset_todos/${otherTask.key}`, 'GET', undefined, 404, firstHeaders);
+  await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', { patch: { status: 'Đã hoàn thành', actualHours: 1, resolutionResult: 'Giả mạo nghiệm thu' } }, 403, firstHeaders);
+  await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', { patch: { status: 'Đang thực hiện', assignedStaffId: second.id } }, 403, firstHeaders);
+  await request('/collections/asset_todos', 'POST', { record: createTask('asset-todo-forged-task', 'CV-TS-EMP-03', first.id) }, 403, firstHeaders);
+  await request(`/collections/asset_todos/${ownTask.key}`, 'DELETE', undefined, 403, firstHeaders);
+
+  const started = (await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', { patch: { status: 'Đang thực hiện' } }, 200, firstHeaders)).record;
+  assert.equal(started.updatedById, first.id);
+  const checklist = (await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', { patch: { checklist: [{ item: 'Kiểm tra mã tài sản', done: true }] } }, 200, firstHeaders)).record;
+  assert.equal(checklist.checklist[0].done, true);
+  await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', { patch: { status: 'Chờ phê duyệt cấp trên' } }, 200, firstHeaders);
+  await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', { patch: { status: 'Đã hoàn thành', actualHours: 1, resolutionResult: 'Nhân viên không thể tự nghiệm thu' } }, 403, firstHeaders);
+
+  const completed = (await request(`/collections/asset_todos/${ownTask.key}`, 'PATCH', {
+    patch: { status: 'Đã hoàn thành', actualHours: 1.5, resolutionResult: 'Đã đối chiếu mã và tình trạng tài sản.' },
+  }, 200)).record;
+  assert.equal(completed.status, 'Đã hoàn thành');
+  assert.equal(completed.completedById, session.user.id);
+  assert.equal((await request('/collections/asset_todos', 'GET', undefined, 200, firstHeaders)).data[0].status, 'Đã hoàn thành');
+});
+
 test('asset maintenance API binds real inventory and employee data and records the full maintenance cycle', async () => {
   const employee = (await request('/users', 'POST', { email: 'asset-maintenance-staff@example.test', name: 'Kỹ sư bảo trì', password: 'Asset-Maintenance-26!Secure', employeeCode: 'ASSET-MAINTENANCE', role: 'USER' }, 201)).user;
   await request('/collections/asset_items', 'POST', { record: {

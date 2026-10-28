@@ -1,6 +1,7 @@
 import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
 import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { deriveTaskSlaStatus, todoChecklistComplete, validateTodoCompletion } from './assetTodoRules';
 import {
@@ -58,7 +59,9 @@ export interface AssetTodoItem {
 const INITIAL_TODOS: AssetTodoItem[] = [];
 const checklistComplete = (item: AssetTodoItem) => todoChecklistComplete(item.checklist);
 
-export const AssetTodoModule: React.FC = () => {
+export const AssetTodoModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 'admin' }) => {
+  const isEmployee = mode === 'employee';
+  const { user } = useAuth();
   const [data, setData] = useState<AssetTodoItem[]>(INITIAL_TODOS);
   const [loading, setLoading] = useState(false);
   const [staffOptions, setStaffOptions] = useState<EnterpriseEmployee[]>([]);
@@ -67,25 +70,31 @@ export const AssetTodoModule: React.FC = () => {
   const [actingKey, setActingKey] = useState('');
 
   useEffect(() => {
-    const list = dataService.getGenericData('asset_todos');
-    setData(Array.isArray(list) ? list : []);
     let mounted = true;
+    let unsubscribe = () => {};
+    setData([]);
     setLoading(true);
-    setStaffLoading(true);
-    void Promise.all([dataService.refreshGenericData('asset_todos'), employeesApi.getAll()])
-      .then(([records, employees]) => {
+    setStaffLoading(!isEmployee);
+    const visibleRecords = (records: AssetTodoItem[]) => isEmployee
+      ? records.filter((record) => record.assignedStaffId === user?.id)
+      : records;
+    void Promise.all([
+      dataService.refreshGenericData('asset_todos'),
+      isEmployee ? Promise.resolve(null) : employeesApi.getAll(),
+    ])
+      .then(([records, employeeResponse]) => {
         if (!mounted) return;
-        setData(Array.isArray(records) ? records : []);
-        setStaffOptions((employees.data.data || []).filter((employee) => employee.isActive && employee.status !== 'Đã nghỉ việc'));
+        setData(visibleRecords(Array.isArray(records) ? records : []));
+        if (employeeResponse) setStaffOptions((employeeResponse.data.data || []).filter((employee) => employee.isActive && employee.status !== 'Đã nghỉ việc'));
+        unsubscribe = dataService.subscribe(() => {
+          if (!mounted) return;
+          setData(visibleRecords(dataService.getGenericData('asset_todos')));
+        });
       })
       .catch((error: any) => { if (mounted) message.error(error?.response?.data?.message || 'Không tải được danh sách nhiệm vụ hoặc nhân viên.'); })
       .finally(() => { if (mounted) { setLoading(false); setStaffLoading(false); } });
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('asset_todos');
-      if (mounted) setData(Array.isArray(updated) ? updated : []);
-    });
-    return () => { mounted = false; unsub(); };
-  }, []);
+    return () => { mounted = false; unsubscribe(); };
+  }, [isEmployee, user?.id]);
 
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -170,6 +179,7 @@ export const AssetTodoModule: React.FC = () => {
   };
 
   const handleOpenCompleteModal = (item: AssetTodoItem) => {
+    if (isEmployee) return;
     if (item.status !== 'Chờ phê duyệt cấp trên' || !item.checklist?.length || item.checklist.some((entry) => !entry.done)) {
       message.warning('Checklist phải hoàn thành và nhiệm vụ được gửi duyệt trước khi nghiệm thu.');
       return;
@@ -326,14 +336,14 @@ export const AssetTodoModule: React.FC = () => {
           <Button icon={<DownloadOutlined />} onClick={exportTasks} disabled={!filteredData.length}>
             Xuất Excel
           </Button>
-          <Button
+        {!isEmployee && <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={handleOpenCreate}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-          >
+        >
             Tạo nhiệm vụ mới
-          </Button>
+        </Button>}
         </div>
       </div>
 
@@ -466,7 +476,7 @@ export const AssetTodoModule: React.FC = () => {
                     ) : r.status === 'Đang thực hiện' ? (
                       <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!checklistComplete(r)} onClick={() => sendForApproval(r)} loading={actingKey === r.key}>Gửi duyệt</Button>
                     ) : r.status === 'Chờ phê duyệt cấp trên' ? (
-                      <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => handleOpenCompleteModal(r)} loading={actingKey === r.key}>Nghiệm thu</Button>
+                      isEmployee ? <Tag color="purple" style={{ margin: 0 }}>Chờ cấp trên nghiệm thu</Tag> : <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => handleOpenCompleteModal(r)} loading={actingKey === r.key}>Nghiệm thu</Button>
                     ) : (
                       <Tag color="success" style={{ margin: 0, height: 24, lineHeight: '22px' }}>
                         Hoàn tất
@@ -749,7 +759,7 @@ export const AssetTodoModule: React.FC = () => {
                 <Button type="primary" disabled={!checklistComplete(detailItem)} onClick={() => sendForApproval(detailItem)} loading={actingKey === detailItem.key} style={{ flex: 1 }}>Gửi duyệt nghiệm thu</Button>
               )}
               {detailItem.status === 'Chờ phê duyệt cấp trên' && (
-                <Button
+                isEmployee ? <Tag color="purple" style={{ alignSelf: 'center' }}>Đã gửi cấp trên nghiệm thu</Tag> : <Button
                   type="primary"
                   icon={<CheckOutlined />}
                   onClick={() => handleOpenCompleteModal(detailItem)}

@@ -1634,6 +1634,7 @@ async function requireCollectionActor(request, scope) {
   }
   if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary' && request.method !== 'GET') throw new HttpError(403, 'Chỉ quản trị viên được điều chỉnh số dư phép.');
   if (scope === 'employee_timesheets' && request.method !== 'GET') throw new HttpError(405, 'Vui lòng chấm công qua chức năng ghi nhận giờ vào/ra.');
+  if (scope === 'asset_todos' && actor.role !== 'ADMIN' && ['POST', 'DELETE'].includes(request.method)) throw new HttpError(403, 'Nhân viên chỉ được cập nhật nhiệm vụ tài sản được giao.');
   if (scope === 'attendance_explanations' && request.method === 'PUT') throw new HttpError(405, 'Giải trình phải được gửi và xử lý theo từng bản ghi để giữ lịch sử duyệt.');
   if (scope === 'attendance_explanations' && request.method === 'DELETE' && actor.role === 'ADMIN') throw new HttpError(409, 'Giải trình được lưu để bảo toàn lịch sử xử lý.');
   if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings'].includes(scope)) {
@@ -2117,6 +2118,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       return value;
     };
     if (!current) {
+      if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được tạo nhiệm vụ tài sản.');
       record.key = requiredText(record.key, 'Khóa nhiệm vụ', 160);
       record.taskCode = requiredText(record.taskCode, 'Mã nhiệm vụ', 80);
       const duplicateCode = await db.prepare(`SELECT record_key FROM collection_records
@@ -5345,6 +5347,9 @@ async function handleRequest(request, response) {
     if (actor.role !== 'ADMIN' && scope === 'attendance_leave_summary') {
       where.push("(owner_id = ? OR json_extract(payload_json, '$.employeeId') = ?)");
       parameters.push(actor.id, actor.id);
+    } else if (actor.role !== 'ADMIN' && scope === 'asset_todos') {
+      where.push("json_extract(payload_json, '$.assignedStaffId') = ?");
+      parameters.push(actor.id);
     } else if (actor.role !== 'ADMIN' && !SHARED_READ_SCOPES.has(scope) && (scope === 'business_travels' || (!scope.startsWith('business_') && !scope.startsWith('dropdown_')))) {
       where.push('owner_id = ?');
       parameters.push(actor.id);
@@ -5459,11 +5464,16 @@ async function handleRequest(request, response) {
     const businessTravelOwnerRead = scope === 'business_travels' && request.method === 'GET' && actor.role !== 'ADMIN';
     const sharedAccess = isShared && !businessTravelOwnerRead;
     const workflowRequestAccess = scope === 'workflow_requests' && request.method !== 'DELETE' && actor.role !== 'ADMIN';
-    const ownershipSql = sharedAccess || workflowRequestAccess ? '' : ' AND owner_id = ?';
-    const ownershipParams = sharedAccess || workflowRequestAccess ? [] : [actor.id];
+    const assignedAssetTodoAccess = scope === 'asset_todos' && actor.role !== 'ADMIN';
+    const ownershipSql = sharedAccess || workflowRequestAccess || assignedAssetTodoAccess ? '' : ' AND owner_id = ?';
+    const ownershipParams = sharedAccess || workflowRequestAccess || assignedAssetTodoAccess ? [] : [actor.id];
     const existing = await db.prepare(`SELECT * FROM collection_records WHERE scope = ? AND record_key = ?${ownershipSql} ORDER BY updated_at DESC LIMIT 1`)
       .get(scope, recordKey, ...ownershipParams);
     if (!existing) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+
+    if (assignedAssetTodoAccess && publicCollectionRecord(existing)?.assignedStaffId !== actor.id) {
+      throw new HttpError(404, 'Không tìm thấy bản ghi.');
+    }
 
     if (scope === 'workflow_requests' && actor.role !== 'ADMIN') {
       const current = publicCollectionRecord(existing);
@@ -5559,8 +5569,12 @@ async function handleRequest(request, response) {
         const statusOnly = fields.length === 1 && fields[0] === 'status';
         const checklistOnly = fields.length === 1 && fields[0] === 'checklist';
         const completion = fields.length === 3 && ['status', 'actualHours', 'resolutionResult'].every((field) => fields.includes(field)) && patch.status === 'Đã hoàn thành';
-        if (actor.role !== 'ADMIN' || (!statusOnly && !checklistOnly && !completion)) {
-          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Nhiệm vụ chỉ được cập nhật trạng thái, checklist hoặc nghiệm thu bằng thao tác cho phép.');
+        const current = publicCollectionRecord(existing);
+        const employeeStart = statusOnly && current.status === 'Chờ xử lý' && patch.status === 'Đang thực hiện';
+        const employeeSubmit = statusOnly && current.status === 'Đang thực hiện' && patch.status === 'Chờ phê duyệt cấp trên';
+        const employeeChecklist = checklistOnly && current.status === 'Đang thực hiện';
+        if (actor.role === 'ADMIN' ? (!statusOnly && !checklistOnly && !completion) : (!employeeStart && !employeeSubmit && !employeeChecklist)) {
+          throw new HttpError(actor.role === 'ADMIN' ? 422 : 403, 'Nhân viên chỉ được bắt đầu, cập nhật checklist hoặc gửi duyệt nhiệm vụ được giao.');
         }
       }
       if (scope === 'asset_maintenances') {
@@ -5609,6 +5623,9 @@ async function handleRequest(request, response) {
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
         const current = publicCollectionRecord(fresh) || {};
+        if (scope === 'asset_todos' && (fresh.updated_at !== existing.updated_at || fresh.payload_json !== existing.payload_json)) {
+          throw new HttpError(409, 'Nhiệm vụ vừa được cập nhật; vui lòng tải lại trước khi sửa.');
+        }
         if (scope === 'attendance_explanations' && current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý bởi một yêu cầu khác.');
         if (scope === 'finance_general_ledger' && (current.sourceModule === 'payroll' || String(current.sourceReference || '').startsWith('payroll:') || patch.sourceModule === 'payroll' || String(patch.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
         if (scope === 'room_bookings' && current.status !== 'Đã xác nhận') throw new HttpError(409, 'Lịch họp đã được hủy hoặc thay đổi bởi yêu cầu khác.');

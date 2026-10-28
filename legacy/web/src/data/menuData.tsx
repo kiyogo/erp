@@ -605,6 +605,12 @@ export const EMPLOYEE_PORTAL_MENU_ITEMS: MenuItem[] = [
     path: '/employee/assets',
   },
   {
+    id: 'emp-asset-tasks',
+    title: 'Nhiệm vụ tài sản',
+    icon: <CheckSquareOutlined />,
+    path: '/employee/assets/tasks',
+  },
+  {
     id: 'emp-files',
     title: 'Tài liệu',
     icon: <FolderOpenOutlined />,
