@@ -45,6 +45,8 @@ async function main() {
     'system_settings',
     'outbound_mail_log',
     'notifications',
+    'system_broadcasts',
+    'system_broadcast_recipients',
     'contracts',
     'collection_records',
     'trash_items',

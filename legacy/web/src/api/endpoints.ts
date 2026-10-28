@@ -119,6 +119,37 @@ export type ActivationEmailTemplate = {
   footer: string;
 };
 
+export interface SystemBroadcastRecord {
+  id: string;
+  title: string;
+  content: string;
+  type: 'info' | 'warning' | 'urgent' | 'cybersecurity' | 'maintenance' | 'regulation' | 'policy' | 'account_activation';
+  targetType: 'all' | 'employee' | 'unit';
+  targetIds: string[];
+  targetAudience: string;
+  sender: string;
+  createdAt: string;
+  updatedAt: string;
+  channels: string[];
+  readCount: number;
+  totalRecipients: number;
+  inAppSentCount: number;
+  emailSentCount: number;
+  emailFailedCount: number;
+  status: 'Đã gửi' | 'Gửi một phần' | 'Gửi thất bại' | 'Đang xử lý' | 'Nháp' | 'Chưa xác minh';
+  source?: 'legacy_local' | 'legacy_collection';
+}
+
+export interface SystemBroadcastInput {
+  title: string;
+  content: string;
+  type: SystemBroadcastRecord['type'];
+  sender: string;
+  targetType: SystemBroadcastRecord['targetType'];
+  targetIds: string[];
+  channels: string[];
+}
+
 export type MarketingProduct = 'email_marketing' | 'marketing_automation';
 export type MarketingGoal =
   | 'attract_customers'
@@ -149,6 +180,15 @@ export const systemApi = {
   sendEmail: (data: { to: string | string[]; subject: string; content?: string; text?: string; html?: string; category?: string }) => api.post<{ sent: true; count: number; total: number }>('/system/send-email', data),
   getActivationTemplate: () => api.get<{ template: ActivationEmailTemplate; emailConfigured: boolean }>('/system/notification-templates/account-activation'),
   saveActivationTemplate: (template: ActivationEmailTemplate) => api.put<{ template: ActivationEmailTemplate }>('/system/notification-templates/account-activation', template),
+};
+
+export const systemBroadcastsApi = {
+  getAll: () => api.get<{ data: SystemBroadcastRecord[] }>('/admin/system/broadcasts'),
+  create: (data: SystemBroadcastInput) => api.post<{ broadcast: SystemBroadcastRecord }>('/admin/system/broadcasts', data),
+  update: (id: string, data: Pick<SystemBroadcastInput, 'title' | 'content' | 'type' | 'sender'>) =>
+    api.patch<{ broadcast: SystemBroadcastRecord }>(`/admin/system/broadcasts/${encodeURIComponent(id)}`, data),
+  resend: (id: string) => api.post<{ broadcast: SystemBroadcastRecord }>(`/admin/system/broadcasts/${encodeURIComponent(id)}/resend`),
+  delete: (id: string) => api.delete<{ deleted: boolean }>(`/admin/system/broadcasts/${encodeURIComponent(id)}`),
 };
 
 export const marketingApi = {

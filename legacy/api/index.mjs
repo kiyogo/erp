@@ -583,6 +583,131 @@ async function logOutboundEmail(category, recipient, subject, status, errorMessa
     .run(randomUUID(), category, recipient, subject, status, errorMessage.slice(0, 1_000), now());
 }
 
+const SYSTEM_BROADCAST_TYPES = new Set(['info', 'warning', 'urgent', 'cybersecurity', 'maintenance', 'regulation', 'policy', 'account_activation']);
+const SYSTEM_BROADCAST_CHANNELS = new Set(['In-app', 'Email']);
+
+function publicSystemBroadcast(row) {
+  if (!row) return null;
+  let targetIds = [];
+  let channels = [];
+  try { targetIds = JSON.parse(row.target_ids_json || '[]'); } catch {}
+  try { channels = JSON.parse(row.channels_json || '[]'); } catch {}
+  return {
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    type: row.type,
+    targetType: row.target_type,
+    targetIds,
+    targetAudience: row.target_audience,
+    sender: row.sender_label,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    channels,
+    status: row.status,
+    totalRecipients: Number(row.total_recipients || 0),
+    readCount: Number(row.read_count || 0),
+    inAppSentCount: Number(row.in_app_sent_count || 0),
+    emailSentCount: Number(row.email_sent_count || 0),
+    emailFailedCount: Number(row.email_failed_count || 0),
+  };
+}
+
+async function getSystemBroadcastRows(id = null) {
+  const where = id ? 'WHERE b.id = ?' : '';
+  const params = id ? [id] : [];
+  return await db.prepare(`SELECT b.*,
+      COUNT(r.id) AS total_recipients,
+      SUM(CASE WHEN r.read_at IS NOT NULL THEN 1 ELSE 0 END) AS read_count,
+      SUM(CASE WHEN r.in_app_status = 'sent' THEN 1 ELSE 0 END) AS in_app_sent_count,
+      SUM(CASE WHEN r.email_status = 'sent' THEN 1 ELSE 0 END) AS email_sent_count,
+      SUM(CASE WHEN r.email_status = 'failed' THEN 1 ELSE 0 END) AS email_failed_count
+    FROM system_broadcasts b
+    LEFT JOIN system_broadcast_recipients r ON r.broadcast_id = b.id
+    ${where}
+    GROUP BY b.id
+    ORDER BY b.created_at DESC, b.id`).all(...params);
+}
+
+async function resolveSystemBroadcastRecipients(targetType, targetIds) {
+  const active = "u.role <> 'ADMIN' AND u.is_active = 1 AND COALESCE(p.employment_status, 'Chính thức') <> 'Đã nghỉ việc'";
+  if (targetType === 'all') {
+    return await db.prepare(`SELECT u.id, u.name, u.email, u.employee_code, COALESCE(p.department, '') AS department
+      FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+      WHERE ${active} ORDER BY u.name, u.id`).all();
+  }
+  if (!['employee', 'unit'].includes(targetType)) throw new HttpError(422, 'Đối tượng nhận thông báo không hợp lệ.');
+  if (targetIds.length === 0 || targetIds.length > 500) throw new HttpError(422, 'Vui lòng chọn ít nhất một người hoặc đơn vị nhận thông báo.');
+  const placeholders = targetIds.map(() => '?').join(', ');
+  const filter = targetType === 'employee' ? `u.id IN (${placeholders})` : `p.department IN (${placeholders})`;
+  const recipients = await db.prepare(`SELECT u.id, u.name, u.email, u.employee_code, COALESCE(p.department, '') AS department
+    FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+    WHERE ${active} AND ${filter} ORDER BY u.name, u.id`).all(...targetIds);
+  if (targetType === 'employee' && recipients.length !== targetIds.length) throw new HttpError(422, 'Danh sách có nhân sự không còn hoạt động hoặc không tồn tại.');
+  if (recipients.length === 0) throw new HttpError(422, 'Không tìm thấy nhân sự đang hoạt động trong đối tượng đã chọn.');
+  return recipients;
+}
+
+async function deliverSystemBroadcast(broadcastId, actorId) {
+  const broadcast = await db.prepare('SELECT * FROM system_broadcasts WHERE id = ?').get(broadcastId);
+  if (!broadcast) throw new HttpError(404, 'Không tìm thấy thông báo hệ thống.');
+  const channels = JSON.parse(broadcast.channels_json || '[]');
+  const recipients = await db.prepare('SELECT * FROM system_broadcast_recipients WHERE broadcast_id = ? ORDER BY recipient_name, id').all(broadcastId);
+  const timestamp = now();
+  const safeTitle = escapeHtml(broadcast.title);
+  const safeContent = escapeHtml(broadcast.content).replace(/\n/g, '<br/>');
+  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#f6f8fb;font:14px Arial,sans-serif;color:#1f2937"><main style="max-width:560px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:28px"><h2 style="font-size:18px;margin:0 0 16px;color:#0F172A">${safeTitle}</h2><div style="font-size:14px;line-height:1.6;color:#334155">${safeContent}</div><hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0"/><p style="font-size:12px;color:#94a3b8;margin:0">Thông báo tự động từ hệ thống KIYOVN Enterprise.</p></main></body></html>`;
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (const recipient of recipients) {
+    if (channels.includes('In-app')) {
+      try {
+        let notificationId = recipient.notification_id;
+        if (notificationId) {
+          const updated = await db.prepare(`UPDATE notifications SET title = ?, message = ?, type = ?, is_read = 0, created_at = ?
+            WHERE id = ? AND user_id = ?`).run(broadcast.title, broadcast.content, broadcast.type, timestamp, notificationId, recipient.user_id);
+          if (!updated.changes) notificationId = null;
+        }
+        if (!notificationId) {
+          notificationId = randomUUID();
+          await db.prepare(`INSERT INTO notifications (id, user_id, title, message, type, link, is_read, created_at)
+            VALUES (?, ?, ?, ?, ?, '/notifications', 0, ?)`).run(notificationId, recipient.user_id, broadcast.title, broadcast.content, broadcast.type, timestamp);
+        }
+        await db.prepare(`UPDATE system_broadcast_recipients SET in_app_status = 'sent', notification_id = ?, read_at = NULL
+          WHERE id = ?`).run(notificationId, recipient.id);
+        successCount++;
+      } catch {
+        await db.prepare("UPDATE system_broadcast_recipients SET in_app_status = 'failed' WHERE id = ?").run(recipient.id);
+        failureCount++;
+      }
+    }
+
+    if (channels.includes('Email')) {
+      const attemptedAt = now();
+      try {
+        if (!recipient.recipient_email) throw new HttpError(422, 'Nhân sự chưa có địa chỉ email.');
+        await sendSmtpEmail({ to: recipient.recipient_email, subject: broadcast.title, text: broadcast.content, html });
+        await logOutboundEmail('system_broadcast', recipient.recipient_email, broadcast.title, 'sent');
+        await db.prepare(`UPDATE system_broadcast_recipients SET email_status = 'sent', email_error = '', email_attempted_at = ?, email_sent_at = ? WHERE id = ?`)
+          .run(attemptedAt, now(), recipient.id);
+        successCount++;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Không thể gửi email.';
+        if (recipient.recipient_email) await logOutboundEmail('system_broadcast', recipient.recipient_email, broadcast.title, 'failed', errorMessage);
+        await db.prepare(`UPDATE system_broadcast_recipients SET email_status = 'failed', email_error = ?, email_attempted_at = ? WHERE id = ?`)
+          .run(errorMessage.slice(0, 1_000), attemptedAt, recipient.id);
+        failureCount++;
+      }
+    }
+  }
+
+  const finalStatus = successCount === 0 ? 'Gửi thất bại' : failureCount > 0 ? 'Gửi một phần' : 'Đã gửi';
+  await db.prepare('UPDATE system_broadcasts SET status = ?, updated_at = ? WHERE id = ?').run(finalStatus, now(), broadcastId);
+  await recordAuditEvent(actorId, 'send_system_broadcast', 'system_broadcasts', broadcastId, { status: finalStatus, recipientCount: recipients.length, successCount, failureCount, channels });
+  return publicSystemBroadcast((await getSystemBroadcastRows(broadcastId))[0]);
+}
+
 function smtpRead(socket) {
   return new Promise((resolve, reject) => {
     let buffer = '';
@@ -7179,6 +7304,94 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/admin/system/broadcasts') {
+    await requireAdmin(request);
+    const rows = await getSystemBroadcastRows();
+    sendJson(response, 200, { data: rows.map(publicSystemBroadcast) });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/admin/system/broadcasts') {
+    const actor = await requireAdmin(request);
+    const payload = await readJson(request, 64 * 1024);
+    const title = requiredText(payload.title, 'Tiêu đề thông báo', 255);
+    const content = requiredText(payload.content, 'Nội dung thông báo', 10_000);
+    const type = String(payload.type || 'info');
+    if (!SYSTEM_BROADCAST_TYPES.has(type)) throw new HttpError(422, 'Loại thông báo không hợp lệ.');
+    const targetType = String(payload.targetType || 'all');
+    const targetIds = [...new Set((Array.isArray(payload.targetIds) ? payload.targetIds : []).map((id) => String(id || '').trim()).filter(Boolean))];
+    const channels = [...new Set((Array.isArray(payload.channels) ? payload.channels : []).map((channel) => String(channel || '').trim()).filter(Boolean))];
+    if (channels.length === 0) throw new HttpError(422, 'Vui lòng chọn ít nhất một kênh phát hành.');
+    if (channels.includes('SMS')) throw new HttpError(422, 'Kênh SMS chưa được kết nối với cổng nhà cung cấp.');
+    if (channels.some((channel) => !SYSTEM_BROADCAST_CHANNELS.has(channel))) throw new HttpError(422, 'Kênh phát hành không hợp lệ.');
+    const recipients = await resolveSystemBroadcastRecipients(targetType, targetIds);
+    if (recipients.length === 0) throw new HttpError(422, 'Không có nhân sự đang hoạt động để nhận thông báo.');
+    const sender = optionalText(payload.sender, 'Người gửi', 255) || actor.name;
+    const targetAudience = targetType === 'all' ? 'Tất cả nhân sự'
+      : targetType === 'unit' ? targetIds.join(', ')
+        : recipients.map((item) => item.employee_code ? `${item.name} (${item.employee_code})` : item.name).join(', ');
+    const id = randomUUID();
+    const timestamp = now();
+    await db.transaction(async () => {
+      await db.prepare(`INSERT INTO system_broadcasts (id, title, content, type, target_type, target_ids_json, target_audience, channels_json, sender_label, created_by_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Đang xử lý', ?, ?)`).run(id, title, content, type, targetType, JSON.stringify(targetType === 'all' ? [] : targetIds), targetAudience, JSON.stringify(channels), sender, actor.id, timestamp, timestamp);
+      for (const recipient of recipients) {
+        await db.prepare(`INSERT INTO system_broadcast_recipients (id, broadcast_id, user_id, recipient_name, recipient_email, employee_code, department, in_app_status, email_status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), id, recipient.id, recipient.name || 'Nhân sự', recipient.email || '', recipient.employee_code || '', recipient.department || '', channels.includes('In-app') ? 'pending' : 'not_requested', channels.includes('Email') ? 'pending' : 'not_requested', timestamp);
+      }
+    });
+    const broadcast = await deliverSystemBroadcast(id, actor.id);
+    sendJson(response, 201, { broadcast });
+    return;
+  }
+
+  const systemBroadcastActionMatch = /^\/admin\/system\/broadcasts\/([^/]+)(?:\/(resend))?$/.exec(resource);
+  if (systemBroadcastActionMatch) {
+    const actor = await requireAdmin(request);
+    const id = decodeURIComponent(systemBroadcastActionMatch[1]);
+    const action = systemBroadcastActionMatch[2];
+    const existing = await db.prepare('SELECT * FROM system_broadcasts WHERE id = ?').get(id);
+    if (!existing) throw new HttpError(404, 'Không tìm thấy thông báo hệ thống.');
+
+    if (request.method === 'POST' && action === 'resend') {
+      const lock = await db.prepare("UPDATE system_broadcasts SET status = 'Đang xử lý', updated_at = ? WHERE id = ? AND status <> 'Đang xử lý'").run(now(), id);
+      if (!lock.changes) throw new HttpError(409, 'Thông báo này đang được phát hành.');
+      const broadcast = await deliverSystemBroadcast(id, actor.id);
+      sendJson(response, 200, { broadcast });
+      return;
+    }
+
+    if (request.method === 'PATCH' && !action) {
+      const payload = await readJson(request, 64 * 1024);
+      const title = requiredText(payload.title, 'Tiêu đề thông báo', 255);
+      const content = requiredText(payload.content, 'Nội dung thông báo', 10_000);
+      const type = String(payload.type || existing.type);
+      if (!SYSTEM_BROADCAST_TYPES.has(type)) throw new HttpError(422, 'Loại thông báo không hợp lệ.');
+      const sender = optionalText(payload.sender, 'Người gửi', 255) || existing.sender_label;
+      await db.transaction(async () => {
+        await db.prepare('UPDATE system_broadcasts SET title = ?, content = ?, type = ?, sender_label = ?, updated_at = ? WHERE id = ?')
+          .run(title, content, type, sender, now(), id);
+        await db.prepare(`UPDATE notifications SET title = ?, message = ?, type = ? WHERE id IN
+          (SELECT notification_id FROM system_broadcast_recipients WHERE broadcast_id = ? AND notification_id IS NOT NULL)`)
+          .run(title, content, type, id);
+        await recordAuditEvent(actor.id, 'update_system_broadcast', 'system_broadcasts', id, { title, contentUpdated: true });
+      });
+      const broadcast = publicSystemBroadcast((await getSystemBroadcastRows(id))[0]);
+      sendJson(response, 200, { broadcast });
+      return;
+    }
+
+    if (request.method === 'DELETE' && !action) {
+      await db.transaction(async () => {
+        await recordAuditEvent(actor.id, 'delete_system_broadcast', 'system_broadcasts', id, { title: existing.title });
+        await db.prepare('DELETE FROM system_broadcasts WHERE id = ?').run(id);
+      });
+      sendJson(response, 200, { deleted: true });
+      return;
+    }
+  }
+
   if (request.method === 'GET' && resource === '/notifications') {
     const actor = await requireUser(request);
     const rows = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').all(actor.id);
@@ -7210,6 +7423,8 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const id = decodeURIComponent(notifReadMatch[1]);
     await db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(id, actor.id);
+    await db.prepare('UPDATE system_broadcast_recipients SET read_at = COALESCE(read_at, ?) WHERE notification_id = ? AND user_id = ?')
+      .run(now(), id, actor.id);
     const updated = await db.prepare('SELECT * FROM notifications WHERE id = ?').get(id);
     sendJson(response, 200, { notification: publicNotification(updated) });
     return;
@@ -7218,6 +7433,8 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && resource === '/notifications/mark-all-read') {
     const actor = await requireUser(request);
     await db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').run(actor.id);
+    await db.prepare('UPDATE system_broadcast_recipients SET read_at = COALESCE(read_at, ?) WHERE user_id = ? AND notification_id IS NOT NULL')
+      .run(now(), actor.id);
     const rows = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').all(actor.id);
     sendJson(response, 200, { data: rows.map(publicNotification) });
     return;

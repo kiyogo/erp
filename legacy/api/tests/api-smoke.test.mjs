@@ -1857,3 +1857,55 @@ test('admin trash preserves deleted collection records and supports safe restore
   const viewerHeaders = { ...headers, Authorization: `Bearer ${viewerSession.access_token || viewerSession.token}` };
   await request('/admin/trash', 'GET', undefined, 403, viewerHeaders);
 });
+
+test('system broadcasts persist server-side and track real in-app recipients and reads', async () => {
+  const suffix = Date.now();
+  const employee = (await request('/users', 'POST', {
+    email: `broadcast-${suffix}@example.test`, name: 'Nhân viên nhận thông báo',
+    password: 'Broadcast-26!Secure', employeeCode: `BROADCAST-${suffix}`, role: 'USER', department: 'Công nghệ',
+  }, 201)).user;
+  const employeeSession = await request('/auth/login', 'POST', {
+    email: employee.email, password: 'Broadcast-26!Secure',
+  });
+  const employeeHeaders = { ...headers, Authorization: `Bearer ${employeeSession.access_token || employeeSession.token}` };
+
+  await request('/admin/system/broadcasts', 'GET', undefined, 403, employeeHeaders);
+  await request('/admin/system/broadcasts', 'POST', {
+    title: 'Thông báo SMS không hỗ trợ', content: 'Nội dung thử', type: 'info', sender: 'Quản trị viên',
+    targetType: 'employee', targetIds: [employee.id], channels: ['SMS'],
+  }, 422);
+
+  const created = (await request('/admin/system/broadcasts', 'POST', {
+    title: 'Thông báo kiểm thử', content: 'Nội dung được lưu cho đúng nhân sự.', type: 'info', sender: 'Quản trị viên',
+    targetType: 'employee', targetIds: [employee.id], channels: ['In-app', 'Email'],
+  }, 201)).broadcast;
+  assert.equal(created.status, 'Gửi một phần');
+  assert.equal(created.targetAudience, `${employee.name} (${employee.employeeCode})`);
+  assert.equal(created.totalRecipients, 1);
+  assert.equal(created.inAppSentCount, 1);
+  assert.equal(created.emailFailedCount, 1);
+  assert.equal(created.readCount, 0);
+
+  const notifications = await request('/notifications', 'GET', undefined, 200, employeeHeaders);
+  const delivered = notifications.data.find(item => item.title === created.title);
+  assert.ok(delivered);
+  assert.equal(delivered.message, created.content);
+  await request(`/notifications/${delivered.id}/read`, 'PATCH', {}, 200, employeeHeaders);
+  const readBroadcast = (await request('/admin/system/broadcasts')).data.find(item => item.id === created.id);
+  assert.equal(readBroadcast.readCount, 1);
+
+  const resent = (await request(`/admin/system/broadcasts/${created.id}/resend`, 'POST')).broadcast;
+  assert.equal(resent.status, 'Gửi một phần');
+  assert.equal(resent.totalRecipients, 1);
+  assert.equal(resent.readCount, 0);
+  assert.equal((await request('/notifications', 'GET', undefined, 200, employeeHeaders)).data.find(item => item.id === delivered.id).read, false);
+
+  await request(`/admin/system/broadcasts/${created.id}`, 'PATCH', {
+    title: 'Thông báo đã cập nhật', content: 'Nội dung cập nhật', type: 'warning', sender: 'Phòng hệ thống',
+  });
+  const updatedNotification = (await request('/notifications', 'GET', undefined, 200, employeeHeaders)).data.find(item => item.id === delivered.id);
+  assert.equal(updatedNotification.title, 'Thông báo đã cập nhật');
+  assert.equal(updatedNotification.message, 'Nội dung cập nhật');
+  await request(`/admin/system/broadcasts/${created.id}`, 'DELETE', undefined, 200);
+  assert.ok((await request('/notifications', 'GET', undefined, 200, employeeHeaders)).data.some(item => item.id === delivered.id));
+});

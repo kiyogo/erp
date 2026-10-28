@@ -277,21 +277,6 @@ export interface AppNotification {
   createdAt?: string;
 }
 
-export interface SystemBroadcastNotification {
-  id: string;
-  title: string;
-  content: string;
-  type: 'info' | 'warning' | 'urgent' | 'cybersecurity' | 'maintenance' | 'regulation' | 'policy' | 'account_activation';
-  targetAudience: string;
-  sender: string;
-  createdAt: string;
-  scheduledAt?: string;
-  channels: string[];
-  readCount: number;
-  totalRecipients: number;
-  status: 'Đã gửi' | 'Đang lên lịch' | 'Nháp' | string;
-}
-
 export interface EmployeeProfileUpdateRequest {
   id: string;
   employeeId: string;
@@ -1266,61 +1251,6 @@ class DataService {
       link: notif.link,
     }).then(() => this.notify()).catch(() => {});
     return [...this.data.notifications];
-  }
-
-  // 18b. System Broadcast Notifications
-  public getSystemBroadcasts(): SystemBroadcastNotification[] {
-    const list: SystemBroadcastNotification[] = this.getGenericData('system_broadcasts');
-    const employees = this.getEmployees();
-    const empCount = employees.length;
-    return list.map((item) => {
-      const totalRecipients = item.totalRecipients > 0 ? item.totalRecipients : empCount;
-      return {
-        ...item,
-        totalRecipients,
-        readCount: typeof item.readCount === 'number' ? item.readCount : 0,
-      };
-    });
-  }
-
-  public addSystemBroadcast(notif: Omit<SystemBroadcastNotification, 'id' | 'createdAt' | 'readCount' | 'totalRecipients'>): SystemBroadcastNotification[] {
-    const list = this.getSystemBroadcasts();
-    const employees = this.getEmployees();
-    let totalRecipients = employees.length;
-    if (notif.targetAudience && notif.targetAudience !== 'Tất cả nhân sự') {
-      const parts = notif.targetAudience.split(',').map((s) => s.trim()).filter(Boolean);
-      totalRecipients = Math.max(1, parts.length);
-    }
-    const newBroadcast: SystemBroadcastNotification = {
-      ...notif,
-      id: `SYS-NOTIF-${String(Date.now()).slice(-4)}`,
-      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      readCount: 1,
-      totalRecipients,
-    };
-    const updated = [newBroadcast, ...list];
-    this.saveGenericData('system_broadcasts', updated);
-    this.addNotification({
-      title: `[Hệ thống] ${notif.title}`,
-      message: notif.content,
-      type: notif.type === 'urgent' ? 'urgent' : notif.type === 'maintenance' ? 'system' : 'info',
-      link: '/admin/system/notifications',
-    });
-    return updated;
-  }
-
-  public deleteSystemBroadcast(id: string): SystemBroadcastNotification[] {
-    const list = this.getSystemBroadcasts();
-    const updated = list.filter((item) => item.id !== id);
-    this.saveGenericData('system_broadcasts', updated);
-    return updated;
-  }
-
-  public updateSystemBroadcast(id: string, updatedFields: Partial<SystemBroadcastNotification>): SystemBroadcastNotification[] {
-    const list = this.getSystemBroadcasts();
-    const updated = list.map((item) => (item.id === id ? { ...item, ...updatedFields } : item));
-    this.saveGenericData('system_broadcasts', updated);
-    return updated;
   }
 
   // 19. Contract Templates

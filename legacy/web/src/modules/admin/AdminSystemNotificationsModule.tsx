@@ -25,8 +25,44 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Card, Tooltip } from '../../custom-ui';
-import { dataService, SystemBroadcastNotification } from '../../services/dataService';
-import { ActivationEmailTemplate, employeesApi, systemApi } from '../../api/endpoints';
+import { ActivationEmailTemplate, collectionsApi, employeesApi, systemApi, systemBroadcastsApi, type SystemBroadcastInput, type SystemBroadcastRecord } from '../../api/endpoints';
+
+const broadcastTypes = new Set<SystemBroadcastRecord['type']>(['info', 'warning', 'urgent', 'cybersecurity', 'maintenance', 'regulation', 'policy', 'account_activation']);
+
+function mapLegacyBroadcast(record: any, source: NonNullable<SystemBroadcastRecord['source']>, index: number): SystemBroadcastRecord {
+  const legacyRecord = record && typeof record === 'object' ? record : {};
+  const createdAt = String(legacyRecord.createdAt || legacyRecord.created_at || '');
+  return {
+    id: String(legacyRecord.id || legacyRecord.key || `legacy-${index}`),
+    title: String(legacyRecord.title || 'Thông báo cũ'),
+    content: String(legacyRecord.content || legacyRecord.message || ''),
+    type: broadcastTypes.has(legacyRecord.type) ? legacyRecord.type : 'info',
+    targetType: 'all',
+    targetIds: [],
+    targetAudience: String(legacyRecord.targetAudience || 'Đối tượng cũ chưa xác minh'),
+    sender: String(legacyRecord.sender || 'Không rõ người gửi'),
+    createdAt,
+    updatedAt: createdAt,
+    channels: Array.isArray(legacyRecord.channels) ? legacyRecord.channels.map(String) : [],
+    readCount: 0,
+    totalRecipients: 0,
+    inAppSentCount: 0,
+    emailSentCount: 0,
+    emailFailedCount: 0,
+    status: 'Chưa xác minh',
+    source,
+  };
+}
+
+function getLegacyBroadcasts(): SystemBroadcastRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem('kiyovn_cache_system_broadcasts') || '[]');
+    return Array.isArray(parsed) ? parsed.map((record, index) => mapLegacyBroadcast(record, 'legacy_local', index)) : [];
+  } catch {
+    return [];
+  }
+}
 
 function sanitizeEmailHtml(rawHtml: string): string {
   if (!rawHtml) return '';
@@ -44,44 +80,22 @@ function sanitizeEmailHtml(rawHtml: string): string {
   return clean;
 }
 
-const getInitialEmployeeOptions = () => {
-  try {
-    const localList = dataService.getEmployees() || [];
-    return localList.map((emp: any) => {
-      const empName = emp.name || emp.fullName || 'Nhân sự';
-      const empCode = emp.code || emp.employeeCode || '';
-      const display = empCode ? `${empName} (${empCode})` : empName;
-      return { value: display, label: display };
-    });
-  } catch {
-    return [];
-  }
-};
-
-const getInitialUnitOptions = () => {
-  try {
-    const orgUnits = dataService.getOrgUnitsList() || [];
-    return orgUnits.map((u) => ({ value: u, label: u }));
-  } catch {
-    return [];
-  }
-};
-
 export const AdminSystemNotificationsModule: React.FC = () => {
   const navigate = useNavigate();
-  const [broadcasts, setBroadcasts] = useState<SystemBroadcastNotification[]>([]);
+  const [broadcasts, setBroadcasts] = useState<SystemBroadcastRecord[]>([]);
+  const [legacyBroadcasts] = useState<SystemBroadcastRecord[]>(getLegacyBroadcasts);
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [targetType, setTargetType] = useState<'all' | 'employee' | 'unit'>('all');
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
-  const [employeeOptions, setEmployeeOptions] = useState<Array<{ value: string; label: string }>>(getInitialEmployeeOptions);
-  const [unitOptions, setUnitOptions] = useState<Array<{ value: string; label: string }>>(getInitialUnitOptions);
+  const [employeeOptions, setEmployeeOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [unitOptions, setUnitOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [selectedBroadcast, setSelectedBroadcast] = useState<SystemBroadcastNotification | null>(null);
-  const [editingBroadcast, setEditingBroadcast] = useState<SystemBroadcastNotification | null>(null);
+  const [selectedBroadcast, setSelectedBroadcast] = useState<SystemBroadcastRecord | null>(null);
+  const [editingBroadcast, setEditingBroadcast] = useState<SystemBroadcastRecord | null>(null);
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
   const [templateForm] = Form.useForm();
@@ -94,46 +108,52 @@ export const AdminSystemNotificationsModule: React.FC = () => {
   const [editorTab, setEditorTab] = useState<'fields' | 'raw_html'>('fields');
   const [rawHtmlCode, setRawHtmlCode] = useState('');
 
-  const loadData = () => {
-    setBroadcasts(dataService.getSystemBroadcasts());
+  const loadData = async () => {
+    const [serverResult, legacyResult] = await Promise.allSettled([
+      systemBroadcastsApi.getAll(),
+      collectionsApi.get('system_broadcasts'),
+    ]);
+    const serverRecords = serverResult.status === 'fulfilled' && Array.isArray(serverResult.value.data.data)
+      ? serverResult.value.data.data
+      : [];
+    const serverIds = new Set(serverRecords.map((record) => record.id));
+    const legacyCollection = legacyResult.status === 'fulfilled' && Array.isArray(legacyResult.value.data.data)
+      ? legacyResult.value.data.data.map((record, index) => mapLegacyBroadcast(record, 'legacy_collection', index))
+      : [];
+    const legacyById = new Map<string, SystemBroadcastRecord>();
+    for (const record of [...legacyCollection, ...legacyBroadcasts]) {
+      if (!serverIds.has(record.id) && !legacyById.has(record.id)) legacyById.set(record.id, record);
+    }
+    setBroadcasts([...serverRecords, ...legacyById.values()]);
+    if (serverResult.status === 'rejected') {
+      const error: any = serverResult.reason;
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách thông báo hệ thống.');
+    }
   };
 
   const loadEmployeesAndUnits = async () => {
     try {
       const empRes = await employeesApi.getAll();
       const rawList = empRes.data?.data || [];
-      const isSuperAdmin = (item: any) =>
-        item?.role === 'ADMIN' ||
-        item?.role === 'Super Admin' ||
-        item?.code === 'ADMIN-001' ||
-        item?.employeeCode === 'ADMIN-001' ||
-        (item?.email && (item.email.toLowerCase().includes('admin') || item.email.toLowerCase() === 'tung@kiyovn.local'));
-
-      const filteredList = rawList.filter((item: any) => !isSuperAdmin(item));
-      const opts = (filteredList.length > 0 ? filteredList : rawList).map((emp: any) => {
+      const activeList = rawList.filter((item: any) => item.isActive !== false && item.status !== 'Đã nghỉ việc');
+      const opts = activeList.map((emp: any) => {
         const empName = emp.name || emp.fullName || 'Nhân sự';
         const empCode = emp.code || emp.employeeCode || '';
         const display = empCode ? `${empName} (${empCode})` : empName;
-        return { value: display, label: display };
-      });
-      if (opts.length > 0) {
-        setEmployeeOptions(opts);
-      }
-    } catch {
-      // Fallback already loaded from dataService
+        return { value: String(emp.id || emp.key || emp.employeeCode || emp.code || ''), label: display };
+      }).filter((item: { value: string }) => Boolean(item.value));
+      setEmployeeOptions(opts);
+      const departments = [...new Set(activeList.map((item: any) => String(item.department || '').trim()).filter(Boolean))].sort();
+      setUnitOptions(departments.map((department) => ({ value: department, label: department })));
+    } catch (error: any) {
+      setEmployeeOptions([]);
+      setUnitOptions([]);
+      message.error(error?.response?.data?.message || 'Không thể tải danh sách nhân sự và đơn vị.');
     }
-
-    try {
-      const orgUnits = dataService.getOrgUnitsList() || [];
-      if (orgUnits.length > 0) {
-        setUnitOptions(orgUnits.map((u) => ({ value: u, label: u })));
-      }
-    } catch {}
   };
 
   useEffect(() => {
-    loadData();
-    const unsub = dataService.subscribe(loadData);
+    void loadData();
     void (async () => {
       try {
         const [templateRes, emailRes] = await Promise.all([
@@ -147,7 +167,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
         setEmailConfigured(true);
       }
     })();
-    return unsub;
+    return undefined;
   }, []);
 
   const activationChannels = () => [
@@ -194,54 +214,12 @@ export const AdminSystemNotificationsModule: React.FC = () => {
     }
   };
 
-  const getRecipientEmails = async (target: 'all' | 'employee' | 'unit', empList: string[], unitList: string[]): Promise<string[]> => {
-    try {
-      const empRes = await employeesApi.getAll();
-      const allEmps = empRes.data?.data || dataService.getEmployees() || [];
-      if (target === 'all') {
-        const emails = allEmps.map((e: any) => e.email).filter(Boolean);
-        return Array.from(new Set(emails));
-      }
-      if (target === 'employee') {
-        const matched = allEmps.filter((e: any) => {
-          const display = (e.code || e.employeeCode) ? `${e.name || e.fullName} (${e.code || e.employeeCode})` : (e.name || e.fullName);
-          return empList.includes(display) || empList.includes(e.name) || empList.includes(e.code) || empList.includes(e.employeeCode);
-        });
-        const emails = matched.map((e: any) => e.email).filter(Boolean);
-        return Array.from(new Set(emails));
-      }
-      if (target === 'unit') {
-        const matched = allEmps.filter((e: any) => unitList.includes(e.department));
-        const emails = matched.map((e: any) => e.email).filter(Boolean);
-        return Array.from(new Set(emails));
-      }
-    } catch {
-      const allEmps = dataService.getEmployees() || [];
-      if (target === 'all') {
-        const emails = allEmps.map((e: any) => e.email).filter(Boolean);
-        return Array.from(new Set(emails));
-      }
-      if (target === 'employee') {
-        const matched = allEmps.filter((e: any) => {
-          const display = e.code ? `${e.name} (${e.code})` : e.name;
-          return empList.includes(display) || empList.includes(e.name) || empList.includes(e.code);
-        });
-        const emails = matched.map((e: any) => e.email).filter(Boolean);
-        return Array.from(new Set(emails));
-      }
-      if (target === 'unit') {
-        const matched = allEmps.filter((e: any) => unitList.includes(e.department));
-        const emails = matched.map((e: any) => e.email).filter(Boolean);
-        return Array.from(new Set(emails));
-      }
-    }
-    return [];
-  };
-
   const handleCreateBroadcast = (values: any) => {
     let targetAudience = 'Tất cả nhân sự';
     if (targetType === 'employee') {
-      targetAudience = selectedEmployees.length ? selectedEmployees.join(', ') : 'Nhân sự chọn lọc';
+      targetAudience = selectedEmployees.length
+        ? selectedEmployees.map((id) => employeeOptions.find((option) => option.value === id)?.label || id).join(', ')
+        : 'Nhân sự chọn lọc';
     } else if (targetType === 'unit') {
       targetAudience = selectedUnits.length ? selectedUnits.join(', ') : 'Đơn vị chọn lọc';
     }
@@ -267,59 +245,45 @@ export const AdminSystemNotificationsModule: React.FC = () => {
       okButtonProps: { style: { backgroundColor: '#009688', borderColor: '#009688' } },
       onOk: async () => {
         const key = 'creating_notification';
-        message.loading({ content: 'Đang kết nối cổng phát hành thông báo & gửi email...', key });
-
-        if (channelsList.includes('Email')) {
-          const recipientEmails = await getRecipientEmails(targetType, selectedEmployees, selectedUnits);
-          if (recipientEmails.length > 0) {
-            try {
-              await systemApi.sendEmail({
-                to: recipientEmails,
-                subject: titleText,
-                content: contentText,
-                category: values.type === 'account_activation' ? 'account_activation' : 'system_broadcast',
-              });
-            } catch (err: any) {
-              console.error('Send email broadcast error:', err);
-            }
-          }
-        }
-
-        dataService.addSystemBroadcast({
+        message.loading({ content: 'Đang phát hành thông báo...', key });
+        const payload: SystemBroadcastInput = {
           title: titleText,
           content: contentText,
           type: values.type || 'info',
-          targetAudience,
           sender: values.sender || 'Ban Quản Trị Hệ Thống',
+          targetType,
+          targetIds: targetType === 'employee' ? selectedEmployees : targetType === 'unit' ? selectedUnits : [],
           channels: channelsList,
-          status: 'Đã gửi',
-        });
-
-        message.success({ content: `Đã phát hành thông báo "${titleText}" thành công!`, key, duration: 3 });
-        setIsCreateModalOpen(false);
-        form.resetFields();
-        setTargetType('all');
-        setSelectedEmployees([]);
-        setSelectedUnits([]);
-        loadData();
+        };
+        try {
+          const response = await systemBroadcastsApi.create(payload);
+          const result = response.data.broadcast;
+          if (result.status === 'Đã gửi') {
+            message.success({ content: `Đã phát hành đến ${result.totalRecipients} nhân sự.`, key, duration: 3 });
+          } else {
+            message.warning({ content: `${result.status}: ${result.emailFailedCount} email chưa gửi được; ${result.inAppSentCount} thông báo ứng dụng đã tạo.`, key, duration: 5 });
+          }
+          setIsCreateModalOpen(false);
+          form.resetFields();
+          setTargetType('all');
+          setSelectedEmployees([]);
+          setSelectedUnits([]);
+          await loadData();
+        } catch (error: any) {
+          message.error({ content: error?.response?.data?.message || 'Không thể phát hành thông báo.', key, duration: 5 });
+        }
       },
     });
   };
 
-  const handleOpenEdit = (record: SystemBroadcastNotification, e?: React.MouseEvent) => {
+  const handleOpenEdit = (record: SystemBroadcastRecord, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (record.source) return;
+    void loadEmployeesAndUnits();
     setEditingBroadcast(record);
-    let targetTypeVal: 'all' | 'employee' | 'unit' = 'all';
-    if (record.targetAudience.includes('EMP-')) {
-      targetTypeVal = 'employee';
-      setSelectedEmployees(record.targetAudience.split(', '));
-    } else if (record.targetAudience.includes('Khối') || record.targetAudience.includes('Phòng') || record.targetAudience.includes('Ban')) {
-      targetTypeVal = 'unit';
-      setSelectedUnits(record.targetAudience.split(', '));
-    } else {
-      targetTypeVal = 'all';
-    }
-    setTargetType(targetTypeVal);
+    setTargetType(record.targetType);
+    setSelectedEmployees(record.targetType === 'employee' ? record.targetIds : []);
+    setSelectedUnits(record.targetType === 'unit' ? record.targetIds : []);
     setNotificationType(record.type || 'info');
     editForm.setFieldsValue({
       title: record.title,
@@ -331,49 +295,49 @@ export const AdminSystemNotificationsModule: React.FC = () => {
     setIsEditModalOpen(true);
   };
 
-  const handleUpdateBroadcast = (values: any) => {
+  const handleUpdateBroadcast = async (values: any) => {
     if (!editingBroadcast) return;
-    let targetAudience = 'Tất cả nhân sự';
-    if (targetType === 'employee') {
-      targetAudience = selectedEmployees.length ? selectedEmployees.join(', ') : 'Nhân sự chọn lọc';
-    } else if (targetType === 'unit') {
-      targetAudience = selectedUnits.length ? selectedUnits.join(', ') : 'Đơn vị chọn lọc';
-    }
-
     const titleText = (values?.title || '').trim() || (values?.type === 'account_activation' ? 'Kích hoạt tài khoản KIYOVN Enterprise' : 'Thông báo hệ thống');
-    dataService.updateSystemBroadcast(editingBroadcast.id, {
-      title: titleText,
-      content: values.content,
-      type: values.type,
-      targetAudience,
-      sender: values.sender,
-      channels: values.channels,
-    });
-
-    message.success(`Đã cập nhật thông báo "${titleText}" thành công!`);
-    setIsEditModalOpen(false);
-    setEditingBroadcast(null);
-    loadData();
+    try {
+      await systemBroadcastsApi.update(editingBroadcast.id, {
+        title: titleText,
+        content: values.content,
+        type: values.type,
+        sender: values.sender,
+      });
+      message.success(`Đã cập nhật thông báo "${titleText}". Email đã gửi trước đó không thể thu hồi.`);
+      setIsEditModalOpen(false);
+      setEditingBroadcast(null);
+      await loadData();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể cập nhật thông báo.');
+    }
   };
 
   const handleDelete = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (broadcasts.some((record) => record.id === id && record.source)) return;
     Modal.confirm({
       title: 'Xác nhận xóa thông báo hệ thống',
       content: 'Bạn có chắc chắn muốn xóa bản ghi thông báo này không? Thao tác không thể hoàn tác.',
       okText: 'Xóa vĩnh viễn',
       okType: 'danger',
       cancelText: 'Hủy',
-      onOk: () => {
-        const updated = dataService.deleteSystemBroadcast(id);
-        setBroadcasts(updated);
-        message.success('Đã xóa thông báo hệ thống thành công');
+      onOk: async () => {
+        try {
+          await systemBroadcastsApi.delete(id);
+          message.success('Đã xóa bản ghi thông báo. Thông báo đã gửi vẫn còn trong hộp thư người nhận.');
+          await loadData();
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể xóa bản ghi thông báo.');
+        }
       },
     });
   };
 
-  const handleResend = (record: SystemBroadcastNotification, e?: React.MouseEvent) => {
+  const handleResend = (record: SystemBroadcastRecord, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (record.source) return;
     Modal.confirm({
       title: 'Xác nhận phát lại thông báo',
       content: (
@@ -391,53 +355,19 @@ export const AdminSystemNotificationsModule: React.FC = () => {
       okButtonProps: { style: { backgroundColor: '#009688', borderColor: '#009688' } },
       onOk: async () => {
         const key = 'resending_notification';
-        message.loading({ content: 'Đang gửi thông báo qua hệ thống & cổng email doanh nghiệp...', key });
-
-        if (record.channels?.includes('Email') || record.type === 'account_activation') {
-          try {
-            let targetTypeVal: 'all' | 'employee' | 'unit' = 'all';
-            let emps: string[] = [];
-            let units: string[] = [];
-            if (record.targetAudience.includes('EMP-') || (record.targetAudience !== 'Tất cả nhân sự' && !record.targetAudience.includes('Khối') && !record.targetAudience.includes('Phòng'))) {
-              targetTypeVal = 'employee';
-              emps = record.targetAudience.split(', ');
-            } else if (record.targetAudience.includes('Khối') || record.targetAudience.includes('Phòng') || record.targetAudience.includes('Ban')) {
-              targetTypeVal = 'unit';
-              units = record.targetAudience.split(', ');
-            }
-            const recipientEmails = await getRecipientEmails(targetTypeVal, emps, units);
-            if (recipientEmails.length > 0) {
-              await systemApi.sendEmail({
-                to: recipientEmails,
-                subject: record.title || 'Thông báo từ KIYOVN Enterprise',
-                content: record.content || '',
-                category: 'system_broadcast_resend',
-              });
-            }
-          } catch (err) {
-            console.error('Resend email error:', err);
+        message.loading({ content: 'Đang phát lại thông báo đến danh sách người nhận đã lưu...', key });
+        try {
+          const response = await systemBroadcastsApi.resend(record.id);
+          const result = response.data.broadcast;
+          if (result.status === 'Đã gửi') {
+            message.success({ content: `Đã phát lại đến ${result.totalRecipients} nhân sự.`, key, duration: 3 });
+          } else {
+            message.warning({ content: `${result.status}: ${result.emailFailedCount} email chưa gửi được.`, key, duration: 5 });
           }
+          await loadData();
+        } catch (error: any) {
+          message.error({ content: error?.response?.data?.message || 'Không thể phát lại thông báo.', key, duration: 5 });
         }
-
-        dataService.addNotification({
-          title: `[Hệ thống - Gửi lại] ${record.title}`,
-          message: record.content,
-          type: record.type === 'urgent' ? 'urgent' : record.type === 'maintenance' ? 'system' : 'info',
-          link: '/admin/system/notifications',
-        });
-
-        const total = record.totalRecipients > 0 ? record.totalRecipients : 12;
-        const newReadCount = Math.min(total, Math.max(1, (record.readCount || 0) + 1));
-
-        dataService.updateSystemBroadcast(record.id, {
-          status: 'Đã gửi',
-          totalRecipients: total,
-          readCount: newReadCount,
-        });
-
-        const displayTitle = record.title || (record.type === 'account_activation' ? 'Kích hoạt tài khoản' : 'Thông báo hệ thống');
-        message.success({ content: `Đã phát lại thông báo "${displayTitle}" thành công!`, key, duration: 3 });
-        loadData();
       },
     });
   };
@@ -457,15 +387,14 @@ export const AdminSystemNotificationsModule: React.FC = () => {
   });
 
   // Calculate Metrics
-  const totalBroadcasts = broadcasts.length;
-  const urgentCount = broadcasts.filter((b) => b.type === 'urgent').length;
-  const maintenanceCount = broadcasts.filter((b) => b.type === 'maintenance').length;
-  const avgReadRate =
-    totalBroadcasts > 0
-      ? Math.round(
-          (broadcasts.reduce((sum, b) => sum + (b.readCount / (b.totalRecipients || 1)), 0) / totalBroadcasts) * 100
-        )
-      : 95;
+  const verifiedBroadcasts = broadcasts.filter((b) => !b.source);
+  const legacyBroadcastCount = broadcasts.length - verifiedBroadcasts.length;
+  const totalBroadcasts = verifiedBroadcasts.length;
+  const urgentCount = verifiedBroadcasts.filter((b) => b.type === 'urgent' || b.type === 'cybersecurity').length;
+  const maintenanceCount = verifiedBroadcasts.filter((b) => b.type === 'maintenance').length;
+  const totalInAppSent = verifiedBroadcasts.reduce((sum, b) => sum + b.inAppSentCount, 0);
+  const totalReads = verifiedBroadcasts.reduce((sum, b) => sum + b.readCount, 0);
+  const avgReadRate = totalInAppSent > 0 ? Math.round((totalReads / totalInAppSent) * 100) : null;
 
   const getTypeTag = (type: string) => {
     switch (type) {
@@ -488,12 +417,18 @@ export const AdminSystemNotificationsModule: React.FC = () => {
     }
   };
 
+  const getStatusTag = (status: string) => {
+    if (status === 'Chưa xác minh') return <Tag color="default" style={{ whiteSpace: 'nowrap' }}>Bản cũ · chưa xác minh</Tag>;
+    const color = status === 'Đã gửi' ? 'success' : status === 'Gửi một phần' ? 'warning' : status === 'Gửi thất bại' ? 'error' : 'default';
+    return <Tag color={color} style={{ whiteSpace: 'nowrap' }}>{status || 'Chưa có trạng thái'}</Tag>;
+  };
+
   const columns = [
     {
       title: 'Thông tin',
       key: 'title',
       width: 280,
-      render: (_: any, record: SystemBroadcastNotification) => (
+      render: (_: any, record: SystemBroadcastRecord) => (
         <div style={{ cursor: 'pointer', maxWidth: 280, overflow: 'hidden' }} onClick={() => { setSelectedBroadcast(record); setIsDetailModalOpen(true); }}>
           <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>{record.id}</div>
           <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 2, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={record.title}>
@@ -544,7 +479,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
       title: 'Thời gian phát hành',
       key: 'createdAt',
       width: 160,
-      render: (_: any, record: SystemBroadcastNotification) => (
+      render: (_: any, record: SystemBroadcastRecord) => (
         <div style={{ whiteSpace: 'nowrap' }}>
           <div style={{ fontWeight: 600, color: '#2563EB' }}>{record.createdAt}</div>
           <div style={{ fontSize: 11.5, color: '#64748B' }}>{record.sender}</div>
@@ -552,15 +487,23 @@ export const AdminSystemNotificationsModule: React.FC = () => {
       ),
     },
     {
+      title: 'Trạng thái',
+      dataIndex: 'status',
+      key: 'status',
+      width: 140,
+      render: (status: string) => getStatusTag(status),
+    },
+    {
       title: 'Lượt đã xem',
       key: 'readStats',
       width: 160,
-      render: (_: any, record: SystemBroadcastNotification) => {
-        const percent = Math.round((record.readCount / (record.totalRecipients || 1)) * 100);
+      render: (_: any, record: SystemBroadcastRecord) => {
+        if (record.source) return <Tag color="default">Chưa xác minh</Tag>;
+        const percent = record.inAppSentCount > 0 ? Math.round((record.readCount / record.inAppSentCount) * 100) : 0;
         return (
           <div style={{ whiteSpace: 'nowrap', minWidth: 120 }}>
             <div style={{ fontSize: 11.5, color: '#334155', fontWeight: 600, marginBottom: 2 }}>
-              {record.readCount} / {record.totalRecipients}
+              {record.inAppSentCount > 0 ? `${record.readCount} / ${record.inAppSentCount}` : 'Không gửi In-app'}
             </div>
             <Progress percent={percent} size="small" strokeColor="#009688" />
           </div>
@@ -571,7 +514,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
       title: 'Thao tác',
       key: 'actions',
       width: 170,
-      render: (_: any, record: SystemBroadcastNotification) => (
+      render: (_: any, record: SystemBroadcastRecord) => (
         <div style={{ display: 'flex', gap: 6, whiteSpace: 'nowrap' }}>
           <Tooltip title="Xem chi tiết">
             <Button
@@ -583,28 +526,31 @@ export const AdminSystemNotificationsModule: React.FC = () => {
               }}
             />
           </Tooltip>
-          <Tooltip title="Chỉnh sửa thông báo">
+          <Tooltip title={record.source ? 'Bản cũ chưa xác minh, chỉ xem được' : 'Chỉnh sửa thông báo'}>
             <Button
               size="small"
               icon={<EditOutlined />}
               onClick={(e) => handleOpenEdit(record, e)}
+              disabled={Boolean(record.source)}
               style={{ color: '#0078d4', borderColor: '#0078d4' }}
             />
           </Tooltip>
-          <Tooltip title="Phát lại thông báo này">
+          <Tooltip title={record.source ? 'Bản cũ chưa xác minh, không thể gửi lại' : 'Phát lại thông báo này'}>
             <Button
               size="small"
               icon={<SendOutlined />}
               onClick={(e) => handleResend(record, e)}
+              disabled={Boolean(record.source)}
               style={{ color: '#009688', borderColor: '#009688' }}
             />
           </Tooltip>
-          <Tooltip title="Xóa bản ghi">
+          <Tooltip title={record.source ? 'Bản cũ chưa xác minh, chỉ xem được' : 'Xóa bản ghi'}>
             <Button
               size="small"
               danger
               icon={<DeleteOutlined />}
               onClick={(e) => handleDelete(record.id, e)}
+              disabled={Boolean(record.source)}
             />
           </Tooltip>
         </div>
@@ -621,15 +567,15 @@ export const AdminSystemNotificationsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalBroadcasts} bản tin
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phát toàn diện đa kênh</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Số bản tin đã ghi nhận trên máy chủ</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ tiếp cận &amp; Đã đọc</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ đọc thông báo ứng dụng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            {avgReadRate}% Nhân viên
+            {avgReadRate === null ? 'Chưa có dữ liệu' : `${avgReadRate}%`}
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Đo lường thời gian thực trên các thiết bị</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tính trên thông báo ứng dụng đã ghi nhận</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -637,17 +583,23 @@ export const AdminSystemNotificationsModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
             {urgentCount} khẩn cấp
           </div>
-          <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Ưu tiên cao nhất, hiển thị Popup ngay lập tức</div>
+          <div style={{ fontSize: 11.5, color: '#DC2626', marginTop: 2 }}>Tổng tin khẩn cấp và an ninh mạng</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Kế hoạch bảo trì máy chủ IDC</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thông báo bảo trì hệ thống</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {maintenanceCount} lịch bảo trì
           </div>
-          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Tự động đồng bộ lịch với Ban Giám Đốc</div>
+          <div style={{ fontSize: 11.5, color: '#D97706', marginTop: 2 }}>Số bản tin có loại bảo trì</div>
         </div>
       </div>
+
+      {legacyBroadcastCount > 0 && (
+        <div role="status" style={{ marginBottom: 14, padding: '10px 12px', border: '1px solid #FDE68A', borderRadius: 8, background: '#FFFBEB', color: '#92400E', fontSize: 13 }}>
+          Có {legacyBroadcastCount} bản tin từ dữ liệu cũ. Bản tin được giữ để tra cứu; số người nhận, lượt đọc và trạng thái gửi chưa xác minh nên không tính vào thống kê và không thể sửa, gửi lại hoặc xóa.
+        </div>
+      )}
 
       {/* Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
@@ -837,6 +789,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
             </Form.Item>
           </div>
 
+
           <Form.Item
             name="content"
             label="Nội dung chi tiết thông báo"
@@ -921,7 +874,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
             <Form.Item label="Đối tượng" required>
               <Select
                 value={targetType}
-                onChange={(val) => setTargetType(val as any)}
+                disabled
                 options={[
                   { value: 'all', label: 'Tất cả nhân sự' },
                   { value: 'employee', label: 'Nhân sự' },
@@ -937,7 +890,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
                 mode="multiple"
                 placeholder="Chọn một hoặc nhiều nhân sự..."
                 value={selectedEmployees}
-                onChange={setSelectedEmployees}
+                disabled
                 options={employeeOptions}
               />
             </Form.Item>
@@ -949,7 +902,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
                 mode="multiple"
                 placeholder="Chọn một hoặc nhiều đơn vị..."
                 value={selectedUnits}
-                onChange={setSelectedUnits}
+                disabled
                 options={unitOptions}
               />
             </Form.Item>
@@ -983,6 +936,7 @@ export const AdminSystemNotificationsModule: React.FC = () => {
             >
               <Select
                 mode="multiple"
+                disabled
                 options={notificationType === 'account_activation' ? activationChannels() : [
                   { value: 'In-app', label: 'Thông báo ứng dụng' },
                   { value: 'Email', label: 'Email công vụ' },
@@ -990,6 +944,10 @@ export const AdminSystemNotificationsModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
+          </div>
+
+          <div style={{ marginTop: -8, marginBottom: 10, color: '#64748B', fontSize: 12 }}>
+            Đối tượng nhận và kênh phát hành được lưu theo lần gửi. Email đã gửi không thể thu hồi hoặc cập nhật.
           </div>
 
           <Form.Item
@@ -1050,11 +1008,23 @@ export const AdminSystemNotificationsModule: React.FC = () => {
               {selectedBroadcast.content}
             </div>
 
+            {selectedBroadcast.source ? (
+              <div role="note" style={{ padding: '10px 12px', border: '1px solid #FDE68A', borderRadius: 8, background: '#FFFBEB', color: '#92400E', fontSize: 12.5 }}>
+                Đây là bản ghi từ dữ liệu cũ. Số người nhận, lượt đọc và trạng thái gửi chưa được xác minh.
+              </div>
+            ) : null}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5, color: '#475569' }}>
               <div><strong>Đối tượng:</strong> {selectedBroadcast.targetAudience}</div>
               <div><strong>Người phát:</strong> {selectedBroadcast.sender}</div>
               <div><strong>Thời gian:</strong> {selectedBroadcast.createdAt}</div>
-              <div><strong>Lượt đọc:</strong> {selectedBroadcast.readCount} / {selectedBroadcast.totalRecipients} ({Math.round((selectedBroadcast.readCount / (selectedBroadcast.totalRecipients || 1)) * 100)}%)</div>
+              <div><strong>Trạng thái:</strong> {selectedBroadcast.status}</div>
+              {!selectedBroadcast.source && <div><strong>Người nhận:</strong> {selectedBroadcast.totalRecipients}</div>}
+              {!selectedBroadcast.source && <div><strong>In-app đã tạo:</strong> {selectedBroadcast.inAppSentCount}</div>}
+              {!selectedBroadcast.source && <div><strong>Lượt đọc In-app:</strong> {selectedBroadcast.readCount} / {selectedBroadcast.inAppSentCount}</div>}
+              {!selectedBroadcast.source && <div><strong>Email SMTP tiếp nhận:</strong> {selectedBroadcast.emailSentCount}</div>}
+              {!selectedBroadcast.source && <div><strong>Email lỗi:</strong> {selectedBroadcast.emailFailedCount}</div>}
+              <div><strong>Kênh đã chọn:</strong> {selectedBroadcast.channels.join(', ') || 'Chưa có'}</div>
             </div>
           </div>
         )}

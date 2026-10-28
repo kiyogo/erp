@@ -543,6 +543,45 @@ export async function initDatabaseSchema() {
     );
     CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications(user_id, is_read, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS system_broadcasts (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      type TEXT NOT NULL,
+      target_type TEXT NOT NULL CHECK (target_type IN ('all', 'employee', 'unit')),
+      target_ids_json TEXT NOT NULL DEFAULT '[]',
+      target_audience TEXT NOT NULL,
+      channels_json TEXT NOT NULL DEFAULT '[]',
+      sender_label TEXT NOT NULL,
+      created_by_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT NOT NULL CHECK (status IN ('Nháp', 'Đang xử lý', 'Đã gửi', 'Gửi một phần', 'Gửi thất bại')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS system_broadcasts_created_idx ON system_broadcasts(created_at DESC, id);
+    CREATE INDEX IF NOT EXISTS system_broadcasts_status_idx ON system_broadcasts(status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS system_broadcast_recipients (
+      id TEXT PRIMARY KEY,
+      broadcast_id TEXT NOT NULL REFERENCES system_broadcasts(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      recipient_name TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      employee_code TEXT NOT NULL DEFAULT '',
+      department TEXT NOT NULL DEFAULT '',
+      in_app_status TEXT NOT NULL DEFAULT 'not_requested',
+      email_status TEXT NOT NULL DEFAULT 'not_requested',
+      email_error TEXT NOT NULL DEFAULT '',
+      email_attempted_at TEXT,
+      email_sent_at TEXT,
+      notification_id TEXT REFERENCES notifications(id) ON DELETE SET NULL,
+      read_at TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(broadcast_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS system_broadcast_recipients_broadcast_idx ON system_broadcast_recipients(broadcast_id, recipient_name);
+    CREATE INDEX IF NOT EXISTS system_broadcast_recipients_user_idx ON system_broadcast_recipients(user_id, broadcast_id);
+
     CREATE TABLE IF NOT EXISTS contracts (
       id TEXT PRIMARY KEY,
       code TEXT NOT NULL UNIQUE,

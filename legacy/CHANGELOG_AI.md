@@ -4,6 +4,15 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-28] - Quản trị thông báo hệ thống trong web cũ
+
+- Chuyển danh sách/thao tác broadcast khỏi cache trình duyệt sang API và bảng riêng trong SQLite/PostgreSQL; lưu tập người nhận thực từ user đang hoạt động, sender, kênh, trạng thái từng kênh và lượt đọc.
+- In-app được tạo cho đúng người nhận. Sửa bản tin cập nhật thông báo trong ứng dụng đã phát, phát lại dùng snapshot người nhận đã lưu, xóa lịch sử không xóa tin đã tới hộp thư.
+- Email được gửi theo từng người và lưu trạng thái SMTP vào outbound mail log; API/UI báo gửi một phần hoặc thất bại khi có lỗi. Thống kê đọc chỉ dùng notification In-app thật. SMS báo chưa có nhà cung cấp.
+- Giữ bản ghi từ cache/local collection cũ ở chế độ chỉ xem, đánh dấu chưa xác minh và loại khỏi thống kê cho tới khi có căn cứ xác nhận.
+- Kiểm tra: API 119/119, web/domain 143/143, E2E trình duyệt giữ và khóa bản ghi cũ + phát/đọc/phát lại/xóa, TypeScript, production build và PostgreSQL smoke 72 checkpoint đạt. Build còn cảnh báo chunk JavaScript khoảng 5.03 MB.
+- Giới hạn: SMTP trả tiếp nhận không chứng minh thư đã vào inbox; SMS chưa tích hợp; toàn bộ 982 mục trong video/checklist vẫn chưa được nghiệm thu.
+
 ## [2026-10-26, tiếp tục] - Tệp gốc, quản trị, hồ sơ công ty và đánh giá
 
 - DocumentsModule/DocumentArchivesModule: CRUD từng bản ghi, tệp gốc thật, metadata/hash từ máy chủ, số văn thư theo sổ/năm chống trùng, chuyển xử lý/hoàn tất có lịch sử, XLSX/PDF/clipboard thật. Word upload/download vào kho máy chủ, lưu chờ callback; IndexedDB chờ commit và truyền lỗi lên editor, chặn save đồng thời. Giữ Canvas.
