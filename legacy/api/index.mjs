@@ -3065,7 +3065,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.department = requiredText(record.department, 'Phòng ban', 160);
     record.headcountNeeded = requiredAmount(record.headcountNeeded, 'Số lượng tuyển');
     record.deadline = requiredIsoDate(record.deadline, 'Hạn tuyển dụng');
-    record.status = oneOf(record.status || 'Đang tuyển dụng', 'Trạng thái tuyển dụng', ['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng (Đủ định biên)', 'Đã đủ chỉ tiêu']);
+    record.status = oneOf(record.status || 'Đang tuyển dụng', 'Trạng thái tuyển dụng', ['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng', 'Đã đóng (Đủ định biên)', 'Đã đủ chỉ tiêu']);
     record.createdAt = current?.createdAt || record.createdAt || now();
     const jobs = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_job_openings'").all();
     if (jobs.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).jobCode || '').toLowerCase() === record.jobCode.toLowerCase())) throw new HttpError(409, 'Mã tuyển dụng đã tồn tại.');

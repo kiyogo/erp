@@ -9,7 +9,7 @@ Giữ React/custom UI, Node HTTP, collections API, PostgreSQL/SQLite và Canvas 
 - Workbook audit liệt kê 29 ứng dụng trong video; audit source ban đầu thấy code liên quan ở 22 ứng dụng và chưa thấy app tương đương ở 7 ứng dụng. Đây là độ phủ source ban đầu, không phải tỷ lệ chức năng đã hoàn thành.
 - Sheet tổng quan ghi 973 gạch đầu dòng. Sheet chi tiết hiện đánh số liên tục 1–982 vì đã bổ sung 9 luồng; dùng 982 làm tổng checklist hiện có.
 - Chưa có phần trăm hoàn thành toàn web đáng tin cậy vì 982 mục chưa được đối chiếu lại từng mục bằng runtime evidence. Bảng tiến độ bên dưới theo dõi luồng, không thay thế checklist từng mục.
-- Mốc kiểm thử mới nhất ngày 2026-10-28: 107 API test, 117 web/domain test; 38 checkpoint PostgreSQL đạt ở lần chạy trước; typecheck, production build và API syntax check đạt. Trình duyệt đã chạy luồng cấp phát/xác nhận/thu hồi, sửa chữa/duyệt/chờ linh kiện/tiếp tục/nghiệm thu, bảo trì/checklist/nghiệm thu, điều chuyển, một luồng thanh lý bán, workflow bổ sung, thanh toán nhân viên → duyệt/ghi sổ/từ chối, khấu hao ba phương pháp, tạm ứng tạo/cấp/quyết toán và Phòng họp thiết lập/tạo phòng/đặt/hủy với dữ liệu thử riêng. Build hiện tại tạo bundle JavaScript 4,908.23 kB và vẫn cảnh báo chunk lớn hơn 500 kB.
+- Mốc kiểm thử mới nhất ngày 2026-10-28: 107 API test, 117 web/domain test; 38 checkpoint PostgreSQL đạt ở lần chạy trước; typecheck, production build và API syntax check đạt. Trình duyệt đã chạy luồng cấp phát/xác nhận/thu hồi, sửa chữa/duyệt/chờ linh kiện/tiếp tục/nghiệm thu, bảo trì/checklist/nghiệm thu, điều chuyển, một luồng thanh lý bán, workflow bổ sung, thanh toán nhân viên → duyệt/ghi sổ/từ chối, khấu hao ba phương pháp, tạm ứng tạo/cấp/quyết toán, Phòng họp thiết lập/tạo phòng/đặt/hủy và tuyển dụng mở tin qua liên kết nội bộ/đóng tin với dữ liệu thử riêng. Bộ test lại lượt này: API 107/107, web/domain 117/117, typecheck, production build và API syntax đạt. Bundle JavaScript là 4,908.27 kB, vẫn có cảnh báo chunk lớn hơn 500 kB.
 
 ## Đã sửa trong đợt hiện tại
 
@@ -58,7 +58,7 @@ Giữ React/custom UI, Node HTTP, collections API, PostgreSQL/SQLite và Canvas 
 | Biểu mẫu dùng chung | validateFields trả nguyên values; footer submit không tồn tại; ô chọn tags không thêm được mã tự nhập | Required/email/URL/độ dài/pattern/custom validator; initial values/reset/submit; lỗi ngay tại trường nhập; Enter thêm tag không gửi form hoặc thêm trùng | 4 ca FormStore + kiểm tra trình duyệt gửi trống và nhập mã hàng trong chương trình khuyến mại |
 | Hợp đồng | Tải gây vòng lặp đọc/ghi; lưu lỗi báo thành công; xóa local | API hợp đồng là nguồn dữ liệu; hiển thị lỗi, xóa DB; giữ mã hóa dữ liệu khi sửa | Browser + contract API CRUD |
 | Chuyển quỹ | Hai POST riêng hoặc chỉ metadata, số dư có thể lệch | API nguyên tử ghi hai vế/phí/audit, chống chi quá số dư/idempotency; hủy đảo cả hai vế; giữ lịch sử cũ | 10 ca finance, gồm lỗi chèn vế nhận và đồng thời |
-| Tuyển dụng | Đếm0 cố định; nút CV/export/copy chỉ toast | Ứng viên và CV thật, các vòng phỏng vấn/offer/nhận việc, lịch sử, thống kê, sửa/tạm dừng tin, XLSX/link nội bộ | 2 web + 1 API và API smoke |
+| Tuyển dụng | Đếm0 cố định; nút CV/export/copy chỉ toast; trạng thái “Đã đóng” trên giao diện bị API từ chối | Ứng viên và CV thật, các vòng phỏng vấn/offer/nhận việc, lịch sử, thống kê, sửa/tạm dừng tin, XLSX/link nội bộ; đồng bộ API cho trạng thái đóng và giữ giá trị trạng thái cũ | API regression; `api/tests/recruitment-browser.mjs` xác nhận mở tin bằng link nội bộ và đóng tin trên UI, không có lỗi API/trình duyệt; luồng CV và các giai đoạn đã có API test nhưng chưa E2E trên trình duyệt |
 | Onboarding | Checklist tĩnh, tiến độ/thao tác hoàn tất giả | Lưu từng xác nhận, tiến độ từ năm mục thật, nghiệm thu có ghi đánh giá; mở luồng hợp đồng riêng | 2 web + 1 API |
 | Lịch sử nhân sự | Chỉ React state | CRUD collection, chọn nhân viên thật kể cả đã nghỉ, lỗi lưu, xem chi tiết, lọc, XLSX | 2 web + API smoke |
 | Nghỉ phép/OT/phân ca | Mirror ghi cả danh sách, fake người/giờ/duyệt | Một nguồn chuẩn và một bản ghi mỗi thao tác; nhân viên gửi/Admin duyệt; thời gian/số ngày/phép/OT xác thực; đổi ca cập nhật hai người | 5 domain + API smoke |
@@ -120,6 +120,8 @@ Trong `legacy/api`: `node --check index.mjs`, `npm test`. `npm run test:postgres
 Thử ghi Sổ Cái lương với dữ liệu riêng: trong `legacy/api` chạy `node tests/payroll-ledger-browser.mjs`.
 
 Thử luồng bản quyền với dữ liệu riêng: trong `legacy/api` chạy `node tests/licenses-browser.mjs`.
+
+Thử mở tin tuyển dụng qua liên kết nội bộ và đóng tin trên trình duyệt, bằng API SQLite và dữ liệu riêng: trong `legacy/api` chạy `node tests/recruitment-browser.mjs`.
 
 Thử luồng cấp phát/thu hồi tài sản trên trình duyệt, kèm API SQLite và dữ liệu riêng: trong `legacy/api` chạy `node tests/asset-allocation-browser.mjs`.
 

@@ -51,6 +51,9 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   assert.equal(created.record.key, 'job-test');
   assert.notEqual(created.record.id, 'job-test', 'record key and physical row ID are distinct');
   await request('/collections/hr_job_openings/job-test', 'PATCH', { patch: { headcountNeeded: 0 } }, 422);
+  await request('/collections/hr_job_openings/job-test', 'PATCH', { patch: { status: 'Đã đóng' } });
+  assert.equal((await request('/collections/hr_job_openings')).data[0].status, 'Đã đóng', 'The close option shown in the UI must be accepted by the API.');
+  await request('/collections/hr_job_openings/job-test', 'PATCH', { patch: { status: 'Đang tuyển dụng' } });
   const workspace = await request('/files?scope=employee');
   const upload = await fetch(`${base}/files/upload`, { method: 'POST', headers: { Authorization: headers.Authorization, 'Content-Type': 'application/pdf', 'X-File-Name': 'test-cv.pdf', 'X-Origin-Module': 'hr_recruitment', 'X-Parent-Id': workspace.context.parentId }, body: 'isolated-test-cv-bytes' });
   assert.equal(upload.status, 201);

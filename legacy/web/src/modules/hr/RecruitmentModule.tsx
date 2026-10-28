@@ -40,7 +40,7 @@ export interface EnterpriseJobOpening {
   deadline: string;
   recruiter: string;
   experienceReq?: string;
-  status: 'Đang tuyển dụng' | 'Tạm dừng' | 'Đã đóng' | 'Đã đủ chỉ tiêu';
+  status: 'Đang tuyển dụng' | 'Tạm dừng' | 'Đã đóng' | 'Đã đóng (Đủ định biên)' | 'Đã đủ chỉ tiêu';
 }
 
 export const recruitmentStages = [
@@ -608,7 +608,7 @@ export const RecruitmentModule: React.FC = () => {
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 Phòng ban: <strong>{currentJob.department}</strong> · Cấp bậc: <Tag color="blue">{currentJob.level}</Tag>
               </div>
-              <div style={{ marginTop: 10 }}><Select value={currentJob.status} disabled={saving} onChange={(status) => void changeJobStatus(status)} options={['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng', 'Đã đủ chỉ tiêu'].map(status => ({ value: status, label: status }))} /></div>
+              <div style={{ marginTop: 10 }}><Select value={currentJob.status} disabled={saving} onChange={(status) => void changeJobStatus(status)} options={['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng', 'Đã đóng (Đủ định biên)', 'Đã đủ chỉ tiêu'].map(status => ({ value: status, label: status }))} /></div>
               <Button size="small" style={{ marginTop: 10 }} disabled={saving} onClick={() => { setEditingJob(currentJob); form.resetFields(); form.setFieldsValue(currentJob); setModalOpen(true); }}>Chỉnh sửa tin tuyển dụng</Button>
             </div>
 
