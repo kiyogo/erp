@@ -119,6 +119,25 @@ export type ActivationEmailTemplate = {
   footer: string;
 };
 
+export type MarketingProduct = 'email_marketing' | 'marketing_automation';
+export type MarketingGoal =
+  | 'attract_customers'
+  | 'nurture_leads'
+  | 'send_email_marketing'
+  | 'collect_leads'
+  | 'track_behavior'
+  | 'automate_customer_care'
+  | 'automate_marketing';
+export type MarketingOnboarding = {
+  key: 'primary-goals';
+  primaryProduct: MarketingProduct;
+  selectedGoals: MarketingGoal[];
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
 export const systemApi = {
   getCompanyProfile: () => api.get<{ profile: CompanyProfile }>('/system/company-profile'),
   saveCompanyProfile: (profile: CompanyProfile) => api.put<{ profile: CompanyProfile }>('/system/company-profile', profile),
@@ -130,6 +149,12 @@ export const systemApi = {
   sendEmail: (data: { to: string | string[]; subject: string; content?: string; text?: string; html?: string; category?: string }) => api.post<{ sent: true; count: number; total: number }>('/system/send-email', data),
   getActivationTemplate: () => api.get<{ template: ActivationEmailTemplate; emailConfigured: boolean }>('/system/notification-templates/account-activation'),
   saveActivationTemplate: (template: ActivationEmailTemplate) => api.put<{ template: ActivationEmailTemplate }>('/system/notification-templates/account-activation', template),
+};
+
+export const marketingApi = {
+  getOnboarding: () => api.get<{ onboarding: MarketingOnboarding | null }>('/marketing/onboarding'),
+  saveOnboarding: (data: { primaryProduct: MarketingProduct; selectedGoals: MarketingGoal[] }) =>
+    api.put<{ onboarding: MarketingOnboarding }>('/marketing/onboarding', data),
 };
 
 export type CompanyProfile = {

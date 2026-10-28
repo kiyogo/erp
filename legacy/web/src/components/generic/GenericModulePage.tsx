@@ -86,6 +86,7 @@ import { CustomerFeedbackModule } from '../../modules/crm/CustomerFeedbackModule
 import { PartnersModule } from '../../modules/crm/PartnersModule';
 import { PromotionsModule } from '../../modules/crm/PromotionsModule';
 import { LoyaltyModule } from '../../modules/crm/LoyaltyModule';
+import { AiMarketingModule } from '../../modules/crm/AiMarketingModule';
 import { InsuranceModule } from '../../modules/insurance/InsuranceModule';
 
 // Assets deep submodules
@@ -354,6 +355,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/crm/suppliers-eval') return <SupplierEvaluationModule />;
   if (p === '/crm/feedback' || p.startsWith('/crm/feedback')) return <CustomerFeedbackModule />;
   if (p === '/crm/partners' || p.startsWith('/crm/partners')) return <PartnersModule />;
+  if (p === '/crm/marketing') return <AiMarketingModule />;
   if (p.startsWith('/crm')) return <CRMModule />;
   if (p === '/insurance' || p === '/insurance/') return <Navigate to="/admin/insurance/overview" replace />;
   if (/^\/insurance\/(overview|labor|adjustments|regimes|card|voluntary|contributions|expenses)$/.test(p)) return <InsuranceModule />;

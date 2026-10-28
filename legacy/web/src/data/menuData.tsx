@@ -25,6 +25,7 @@ import {
   HomeOutlined,
   BellOutlined,
   CheckSquareOutlined,
+  MailOutlined,
 } from '@ant-design/icons';
 
 export const KIYOVN_MENU_ITEMS: MenuItem[] = [
@@ -168,6 +169,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
     icon: <SmileOutlined />,
     path: '/admin/crm',
     children: [
+      { id: 'crm-ai-marketing', title: 'aiMarketing', path: '/admin/crm/marketing', icon: <MailOutlined /> },
       { id: 'crm-customers', title: 'Khách hàng', path: '/admin/crm/customers' },
       { id: 'crm-suppliers', title: 'Nhà cung cấp', path: '/admin/crm/suppliers' },
       { id: 'crm-promotions', title: 'Khuyến mại', path: '/admin/crm/promotions' },

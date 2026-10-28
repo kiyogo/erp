@@ -1689,3 +1689,32 @@ test('Google settings persist on the server without a client secret and prevent 
   try { assert.ok(!storage.prepare('SELECT setting_value FROM system_settings WHERE setting_key = ?').get('google_sso_config').setting_value.includes(payload.clientSecret)); } finally { storage.close(); }
   await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
 });
+
+test('aiMarketing onboarding validates goals, persists the admin choice and rejects non-admin access', async () => {
+  const route = '/marketing/onboarding';
+  const anonymousHeaders = { 'Content-Type': 'application/json' };
+  await request(route, 'GET', undefined, 401, anonymousHeaders);
+  assert.equal((await request(route)).onboarding, null);
+  await request(route, 'PUT', { primaryProduct: 'email_marketing', selectedGoals: [] }, 422);
+  await request(route, 'PUT', { primaryProduct: 'email_marketing', selectedGoals: ['track_behavior'] }, 422);
+  await request(route, 'PUT', { primaryProduct: 'email_marketing', selectedGoals: ['attract_customers', 'attract_customers'] }, 422);
+
+  const employee = (await request('/users', 'POST', { email: 'marketing-staff@example.test', name: 'Marketing Staff', password: 'Marketing-Test-26!Secure', employeeCode: 'TEST-MARKETING', role: 'USER' }, 201)).user;
+  const employeeSession = await request('/auth/login', 'POST', { email: 'marketing-staff@example.test', password: 'Marketing-Test-26!Secure' });
+  const employeeHeaders = { ...headers, Authorization: `Bearer ${employeeSession.access_token || employeeSession.token}` };
+  await request(route, 'GET', undefined, 403, employeeHeaders);
+  await request(route, 'PUT', { primaryProduct: 'email_marketing', selectedGoals: ['attract_customers'] }, 403, employeeHeaders);
+
+  const saved = await request(route, 'PUT', { primaryProduct: 'marketing_automation', selectedGoals: ['collect_leads', 'track_behavior', 'automate_customer_care', 'automate_marketing'] });
+  assert.equal(saved.onboarding.key, 'primary-goals');
+  assert.equal(saved.onboarding.primaryProduct, 'marketing_automation');
+  assert.deepEqual(saved.onboarding.selectedGoals, ['collect_leads', 'track_behavior', 'automate_customer_care', 'automate_marketing']);
+  assert.equal(saved.onboarding.createdBy, session.user.name);
+  assert.ok(Number.isFinite(Date.parse(saved.onboarding.updatedAt)));
+  const loaded = await request(route);
+  assert.deepEqual(loaded.onboarding.selectedGoals, saved.onboarding.selectedGoals);
+  const updated = await request(route, 'PUT', { primaryProduct: 'email_marketing', selectedGoals: ['nurture_leads', 'send_email_marketing'] });
+  assert.equal(updated.onboarding.createdAt, saved.onboarding.createdAt);
+  assert.equal(updated.onboarding.primaryProduct, 'email_marketing');
+  assert.deepEqual((await request(route)).onboarding.selectedGoals, ['nurture_leads', 'send_email_marketing']);
+});

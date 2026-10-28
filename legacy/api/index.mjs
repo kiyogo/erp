@@ -8991,6 +8991,44 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (resource === '/marketing/onboarding' && ['GET', 'PUT'].includes(request.method)) {
+    const actor = await requireAdmin(request);
+    if (request.method === 'GET') {
+      const stored = await getSystemSetting('marketing_onboarding');
+      sendJson(response, 200, { onboarding: stored ? parseJsonObject(stored) : null });
+      return;
+    }
+
+    const payload = await readJson(request);
+    const primaryProduct = oneOf(payload.primaryProduct, 'Sản phẩm marketing', ['email_marketing', 'marketing_automation']);
+    const goalsByProduct = {
+      email_marketing: ['attract_customers', 'nurture_leads', 'send_email_marketing'],
+      marketing_automation: ['collect_leads', 'track_behavior', 'automate_customer_care', 'automate_marketing'],
+    };
+    if (!Array.isArray(payload.selectedGoals) || payload.selectedGoals.length < 1 || payload.selectedGoals.length > goalsByProduct[primaryProduct].length) {
+      throw new HttpError(422, 'Hãy chọn ít nhất một mục tiêu phù hợp với sản phẩm đã chọn.');
+    }
+    const selectedGoals = payload.selectedGoals.map((goal) => oneOf(goal, 'Mục tiêu marketing', goalsByProduct[primaryProduct]));
+    if (new Set(selectedGoals).size !== selectedGoals.length) throw new HttpError(422, 'Mục tiêu marketing không được chọn trùng.');
+
+    let onboarding;
+    await db.transaction(async () => {
+      if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('marketing-onboarding'))").get();
+      const stored = await getSystemSetting('marketing_onboarding');
+      const current = stored ? parseJsonObject(stored) : null;
+      const timestamp = now();
+      onboarding = {
+        key: 'primary-goals', primaryProduct, selectedGoals,
+        createdAt: current?.createdAt || timestamp, createdBy: current?.createdBy || actor.name,
+        updatedAt: timestamp, updatedBy: actor.name,
+      };
+      await setSystemSetting('marketing_onboarding', JSON.stringify(onboarding));
+      await recordAuditEvent(actor.id, 'save', 'marketing_onboarding', onboarding.key, { primaryProduct, selectedGoals });
+    });
+    sendJson(response, 200, { onboarding });
+    return;
+  }
+
   if (resource === '/system/company-profile' && ['GET', 'PUT'].includes(request.method)) {
     const actor = await requireAdmin(request);
     if (request.method === 'GET') { sendJson(response, 200, { profile: await getCompanyProfile() }); return; }
