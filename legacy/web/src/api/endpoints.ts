@@ -876,6 +876,34 @@ export const auditLogsApi = {
     api.post<{ recorded: boolean }>('/audit-events', data),
 };
 
+export type ApplicationUsageCategory = 'finance' | 'business' | 'hr' | 'digital_office';
+export type ApplicationUsagePeriod = 'this_week' | 'this_month' | 'this_quarter' | 'all_time';
+export type AdminApplicationUsage = {
+  userId: string;
+  name: string;
+  email: string;
+  employeeCode: string;
+  department: string;
+  loginCount: number;
+  operationCount: number;
+  lastUsedAt: string;
+};
+export type AdminApplicationUsageReport = {
+  application: ApplicationUsageCategory | 'all';
+  period: ApplicationUsagePeriod;
+  fromDate: string;
+  toDate: string;
+  summary: { loggedInPeople: number; operatedPeople: number; loginCount: number; operationCount: number };
+  data: AdminApplicationUsage[];
+};
+
+export const adminUsageApi = {
+  getReport: (application: ApplicationUsageCategory | 'all', period: ApplicationUsagePeriod) =>
+    api.get<AdminApplicationUsageReport>('/admin/usage', { params: { application, period } }),
+  recordVisit: (application: ApplicationUsageCategory) =>
+    api.post<{ recorded: boolean }>('/admin/usage/activity', { application }),
+};
+
 export type AdminSessionRecord = {
   key: string;
   userId: string;

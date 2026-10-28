@@ -510,6 +510,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'adm-permissions', title: 'Phân quyền chức năng', path: '/admin/permissions' },
       { id: 'adm-audit', title: 'Nhật ký kiểm toán', path: '/admin/audit-logs' },
       { id: 'adm-sessions', title: 'Phiên đăng nhập', path: '/admin/sessions' },
+      { id: 'adm-usage', title: 'Tình hình sử dụng', path: '/admin/system/usage', icon: <BarChartOutlined /> },
       { id: 'adm-backup', title: 'Sao lưu & phục hồi', path: '/admin/backup' },
       { id: 'adm-drop-menu', title: 'Cấu hình menu thả', path: '/admin/drop-menu' },
       { id: 'adm-system', title: 'Cấu hình hệ thống', path: '/admin/system' },

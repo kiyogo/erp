@@ -50,6 +50,16 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  const initialUsage = await request('/admin/usage?application=all&period=this_week');
+  assert.ok(initialUsage.data.some(item => item.userId === login.user.id && item.loginCount === 1));
+  const trackedUsage = await request('/admin/usage/activity', 'POST', { application: 'finance' }, 201);
+  assert.equal(trackedUsage.recorded, true);
+  const duplicateUsage = await request('/admin/usage/activity', 'POST', { application: 'finance' }, 201);
+  assert.equal(duplicateUsage.recorded, false);
+  const financeUsage = await request('/admin/usage?application=finance&period=this_week');
+  const financeUse = financeUsage.data.find(item => item.userId === login.user.id);
+  assert.ok(financeUse?.operationCount > 0 && financeUse.lastUsedAt);
+  completed += 4;
   const noteAdminToken = token;
   const noteDepartment = 'PG directive operations';
   await request('/collections/business_org_units', 'POST', { record: { key: 'pg-directive-department', name: noteDepartment, status: 'Hoạt động' } }, 201);

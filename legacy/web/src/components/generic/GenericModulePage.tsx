@@ -166,6 +166,7 @@ import { AdminRolesModule } from '../../modules/admin/AdminRolesModule';
 import { AdminPermissionsModule } from '../../modules/admin/AdminPermissionsModule';
 import { AdminAuditLogsModule } from '../../modules/admin/AdminAuditLogsModule';
 import { AdminSessionsModule } from '../../modules/admin/AdminSessionsModule';
+import { AdminUsageModule } from '../../modules/admin/AdminUsageModule';
 import { AdminBackupModule } from '../../modules/admin/AdminBackupModule';
 import { AdminDropMenuModule } from '../../modules/admin/AdminDropMenuModule';
 import { AdminSystemModule } from '../../modules/admin/AdminSystemModule';
@@ -250,6 +251,7 @@ export const GenericModulePage: React.FC = () => {
   if (currentPath === '/admin/sessions' || p === '/sessions') return <AdminSessionsModule />;
   if (currentPath === '/admin/backup' || p === '/backup') return <AdminBackupModule />;
   if (currentPath === '/admin/drop-menu' || p === '/drop-menu') return <AdminDropMenuModule />;
+  if (currentPath === '/admin/system/usage' || p === '/system/usage') return <AdminUsageModule />;
   if (currentPath === '/admin/system/notifications' || p === '/system/notifications') return <AdminSystemNotificationsModule />;
   if (currentPath === '/admin/system' || p === '/system') return <AdminSystemModule />;
 

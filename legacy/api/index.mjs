@@ -3796,6 +3796,56 @@ async function recordAuditEvent(actorId, action, scope, resourceId = '', details
     .run(randomUUID(), actorId || null, requiredText(action, 'Hành động', 120), normalizeCollectionScope(scope), String(resourceId || '').slice(0, 160), serialized.slice(0, 8_192), now());
 }
 
+function applicationCategoryForAudit(scope, resourceId = '') {
+  const value = String(scope || '').trim().toLowerCase();
+  if (value === 'application_usage') return ['finance', 'business', 'hr', 'digital_office'].includes(resourceId) ? resourceId : null;
+  if (/^finance_(sales|purchase|purchasing|inventory)/.test(value)) return 'business';
+  if (/^(finance|payroll|asset_)/.test(value)) return 'finance';
+  if (/^(crm|sales|purchase|business|inventory)/.test(value)) return 'business';
+  if (/^(hr|attendance|insurance|leave_requests|employee_timesheets)/.test(value)) return 'hr';
+  if (/^(workflow|doc|meeting|room_bookings|chat|channel|file|notification|task|enterprise_documents|digital_signature|admin_|system_|company_profile|audit)/.test(value)) return 'digital_office';
+  return null;
+}
+
+function usageDateKey(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function shiftUsageDateKey(dateKey, days) {
+  const date = new Date(`${dateKey}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getUsagePeriodRange(period) {
+  const today = usageDateKey(new Date());
+  let startDate = today;
+  let endDate = today;
+  if (period === 'this_week') {
+    const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
+    startDate = shiftUsageDateKey(today, -((weekday + 6) % 7));
+  } else if (period === 'this_month') {
+    startDate = `${today.slice(0, 7)}-01`;
+  } else if (period === 'this_quarter') {
+    const month = Number(today.slice(5, 7));
+    const quarterMonth = Math.floor((month - 1) / 3) * 3 + 1;
+    startDate = `${today.slice(0, 4)}-${String(quarterMonth).padStart(2, '0')}-01`;
+  } else if (period === 'all_time') {
+    startDate = '1970-01-01';
+  }
+  const nextDate = shiftUsageDateKey(endDate, 1);
+  return {
+    start: new Date(`${startDate}T00:00:00+07:00`).toISOString(),
+    end: new Date(`${nextDate}T00:00:00+07:00`).toISOString(),
+    fromDate: startDate,
+    toDate: endDate,
+  };
+}
+
 function loyaltyBalances(entries) {
   const balances = new Map();
   for (const entry of entries) {
@@ -5725,6 +5775,83 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     await db.transaction(() => revokeAuthSession(request.authSession.row, actor.id, 'Đăng xuất'));
     sendJson(response, 200, { loggedOut: true });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/admin/usage/activity') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 16 * 1024);
+    const application = oneOf(payload.application, 'Ứng dụng', ['finance', 'business', 'hr', 'digital_office']);
+    const cutoff = new Date(Date.now() - 60_000).toISOString();
+    let recorded = false;
+    await db.transaction(async () => {
+      if (db.pool) await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(`usage:${actor.id}:${application}`);
+      const recent = await db.prepare(`SELECT id FROM audit_events
+        WHERE actor_id = ? AND action = 'view_application' AND resource_scope = 'application_usage'
+          AND resource_id = ? AND created_at >= ? LIMIT 1`).get(actor.id, application, cutoff);
+      if (!recent) {
+        await recordAuditEvent(actor.id, 'view_application', 'application_usage', application);
+        recorded = true;
+      }
+    });
+    sendJson(response, 201, { recorded });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/admin/usage') {
+    await requireAdmin(request);
+    const application = oneOf(url.searchParams.get('application') || 'all', 'Ứng dụng', ['all', 'finance', 'business', 'hr', 'digital_office']);
+    const period = oneOf(url.searchParams.get('period') || 'this_week', 'Khoảng thời gian', ['this_week', 'this_month', 'this_quarter', 'all_time']);
+    const range = getUsagePeriodRange(period);
+    const [users, sessions, activities] = await Promise.all([
+      db.prepare(`SELECT u.id, u.name, u.email, u.employee_code AS employeeCode, p.department
+        FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id ORDER BY u.name, u.email`).all(),
+      db.prepare(`SELECT owner_id, created_at, payload_json FROM collection_records
+        WHERE scope = 'admin_sessions' AND created_at >= ? AND created_at < ?`).all(range.start, range.end),
+      db.prepare(`SELECT actor_id, resource_scope, resource_id, COUNT(*) AS event_count, MAX(created_at) AS last_used_at
+        FROM audit_events WHERE actor_id IS NOT NULL AND created_at >= ? AND created_at < ?
+        GROUP BY actor_id, resource_scope, resource_id`).all(range.start, range.end),
+    ]);
+    const aggregateByUser = new Map();
+    const aggregate = (userId) => {
+      if (!aggregateByUser.has(userId)) aggregateByUser.set(userId, { loginCount: 0, operationCount: 0, lastUsedAt: '' });
+      return aggregateByUser.get(userId);
+    };
+    for (const row of sessions) {
+      const session = parseJsonObject(row.payload_json);
+      if (session.kind !== 'auth_session') continue;
+      const item = aggregate(row.owner_id);
+      item.loginCount += 1;
+      if (application === 'all') {
+        const lastActive = String(session.lastActive || session.loginTime || row.created_at);
+        if (lastActive >= range.start && lastActive < range.end && lastActive > item.lastUsedAt) item.lastUsedAt = lastActive;
+      }
+    }
+    for (const row of activities) {
+      const category = applicationCategoryForAudit(row.resource_scope, row.resource_id);
+      if (application !== 'all' && category !== application) continue;
+      const item = aggregate(row.actor_id);
+      item.operationCount += Number(row.event_count) || 0;
+      if (row.last_used_at > item.lastUsedAt) item.lastUsedAt = row.last_used_at;
+    }
+    const data = users.map(user => {
+      const item = aggregateByUser.get(user.id);
+      return item ? {
+        userId: user.id, name: user.name, email: user.email, employeeCode: user.employeeCode || '',
+        department: user.department || '', loginCount: item.loginCount, operationCount: item.operationCount,
+        lastUsedAt: item.lastUsedAt,
+      } : null;
+    }).filter(Boolean).sort((left, right) => right.lastUsedAt.localeCompare(left.lastUsedAt) || left.name.localeCompare(right.name, 'vi'));
+    sendJson(response, 200, {
+      application, period, fromDate: range.fromDate, toDate: range.toDate,
+      summary: {
+        loggedInPeople: data.filter(item => item.loginCount > 0).length,
+        operatedPeople: data.filter(item => item.operationCount > 0).length,
+        loginCount: data.reduce((sum, item) => sum + item.loginCount, 0),
+        operationCount: data.reduce((sum, item) => sum + item.operationCount, 0),
+      },
+      data,
+    });
     return;
   }
 

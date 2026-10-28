@@ -1718,3 +1718,40 @@ test('aiMarketing onboarding validates goals, persists the admin choice and reje
   assert.equal(updated.onboarding.primaryProduct, 'email_marketing');
   assert.deepEqual((await request(route)).onboarding.selectedGoals, ['nurture_leads', 'send_email_marketing']);
 });
+
+test('application usage combines real login sessions and tracked visits with admin-only filtered reporting', async () => {
+  const reportRoute = '/admin/usage';
+  const visitRoute = '/admin/usage/activity';
+  const anonymousHeaders = { 'Content-Type': 'application/json' };
+  await request(reportRoute, 'GET', undefined, 401, anonymousHeaders);
+  await request(`${reportRoute}?application=invalid`, 'GET', undefined, 422, headers);
+  await request(`${reportRoute}?period=invalid`, 'GET', undefined, 422, headers);
+  const marketingSession = await request('/auth/login', 'POST', { email: 'marketing-staff@example.test', password: 'Marketing-Test-26!Secure' });
+  const marketingHeaders = { ...headers, Authorization: `Bearer ${marketingSession.access_token || marketingSession.token}` };
+  await request(reportRoute, 'GET', undefined, 403, marketingHeaders);
+  await request(visitRoute, 'POST', { application: 'unknown' }, 422);
+
+  const employee = (await request('/users', 'POST', { email: 'usage-staff@example.test', name: 'Usage Staff', password: 'Usage-Test-26!Secure', employeeCode: 'TEST-USAGE', role: 'USER' }, 201)).user;
+  const employeeSession = await request('/auth/login', 'POST', { email: 'usage-staff@example.test', password: 'Usage-Test-26!Secure' });
+  const employeeHeaders = { ...headers, Authorization: `Bearer ${employeeSession.access_token || employeeSession.token}` };
+  const firstVisit = await request(visitRoute, 'POST', { application: 'hr' }, 201, employeeHeaders);
+  assert.equal(firstVisit.recorded, true);
+  const duplicateVisit = await request(visitRoute, 'POST', { application: 'hr' }, 201, employeeHeaders);
+  assert.equal(duplicateVisit.recorded, false);
+
+  const report = await request(`${reportRoute}?application=hr&period=this_week`);
+  const usage = report.data.find(item => item.userId === employee.id);
+  assert.ok(usage);
+  assert.equal(usage.name, employee.name);
+  assert.equal(usage.email, employee.email);
+  assert.equal(usage.loginCount, 1);
+  assert.equal(usage.operationCount, 1);
+  assert.ok(Number.isFinite(Date.parse(usage.lastUsedAt)));
+  assert.equal(report.summary.loggedInPeople, report.data.filter(item => item.loginCount > 0).length);
+  assert.equal(report.summary.operatedPeople, report.data.filter(item => item.operationCount > 0).length);
+  assert.match(report.fromDate, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(report.toDate, /^\d{4}-\d{2}-\d{2}$/);
+  await request(`${reportRoute}?application=invalid&period=this_week`, 'GET', undefined, 422);
+  const allApplications = await request(`${reportRoute}?application=all&period=all_time`);
+  assert.ok(allApplications.data.some(item => item.userId === employee.id));
+});

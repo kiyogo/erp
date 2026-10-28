@@ -37,6 +37,8 @@ import { MobileBottomNav } from './components/navigation/MobileBottomNav';
 import { getEmployeeOnboardingStorage, isEmployeeOnboardingComplete } from './modules/employee/onboardingStorage';
 import { EmployeeProfileWizard } from './modules/employee/EmployeeProfileWizard';
 import { EkycService } from './modules/ekyc/services/ekycService';
+import { adminUsageApi } from './api/endpoints';
+import { applicationCategoryForPath } from './modules/admin/usageRules';
 
 export const isAdminUser = (user: { role?: string } | null | undefined): boolean => {
   if (!user || !user.role) return false;
@@ -166,6 +168,13 @@ const AppLayout: React.FC = () => {
       }
     }
   }, [user, isAdmin, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!user || (!isAdmin && location.pathname.startsWith('/admin')) || (isAdmin && location.pathname.startsWith('/employee'))) return;
+    const application = applicationCategoryForPath(location.pathname);
+    if (!application) return;
+    void adminUsageApi.recordVisit(application).catch(() => undefined);
+  }, [user?.id, isAdmin, location.pathname]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setLayoutReady(true));
