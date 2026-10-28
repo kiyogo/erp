@@ -73,7 +73,7 @@ const normalizeAsset = (item: any): DepreciationItem => {
       productionByPeriod: item.productionByPeriod || {},
     });
   } catch { /* Preserve a legacy schedule for records that still need accounting data corrected. */ }
-  return { ...item, key: item.id || item.key, depreciationMethod, scheduleList } as DepreciationItem;
+  return { ...item, key: item.key || item.id, depreciationMethod, scheduleList } as DepreciationItem;
 };
 
 import { useEffect } from 'react';
@@ -235,7 +235,7 @@ export const AssetDepreciationModule: React.FC = () => {
     try {
       const assetResponse = await collectionsApi.get<DepreciationItem>('asset_depreciations', { limit: 500 });
       const savedItems = assetResponse.data?.data || [];
-      const currentItems = savedItems.map((item: any) => ({ ...item, key: item.id || item.key, depreciationMethod: normalizeMethod(item.depreciationMethod) } as DepreciationItem));
+      const currentItems = savedItems.map((item: any) => ({ ...item, key: item.key || item.id, depreciationMethod: normalizeMethod(item.depreciationMethod) } as DepreciationItem));
       const candidates: Array<{ item: DepreciationItem; amount: number; productionUnits?: number }> = [];
       const skippedProduction: string[] = [];
 
@@ -647,7 +647,7 @@ export const AssetDepreciationModule: React.FC = () => {
               <Input disabled type="number" />
             </Form.Item>
             <Form.Item name="residualValue" label="Giá trị thanh lý ước tính (VNĐ)">
-              <Input type="number" min={0} step={5000000} placeholder="Ví dụ: 10000000" />
+              <Input type="number" min={0} step={1} placeholder="Ví dụ: 10000000" />
             </Form.Item>
             <Form.Item name="lifeMonths" label="Thời gian trích" rules={[{ required: true }]}>
               <Input disabled type="number" />
@@ -794,7 +794,7 @@ export const AssetDepreciationModule: React.FC = () => {
 
       {/* MODAL: Chạy trích khấu hao tự động tháng này */}
       <Modal
-        title="Chạy Trích Khấu Hao &amp; Tự Động Định Khoản Kế Toán"
+        title="Chạy Trích Khấu Hao & Tự Động Định Khoản Kế Toán"
         open={runModalOpen}
         onCancel={() => setRunModalOpen(false)}
         footer={null}
@@ -843,7 +843,7 @@ export const AssetDepreciationModule: React.FC = () => {
               disabled={runInProgress}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
-              {runInProgress ? 'Đang ghi sổ...' : 'Chấp nhận trích &amp; Ghi sổ kế toán'}
+              {runInProgress ? 'Đang ghi sổ...' : 'Chấp nhận trích & Ghi sổ kế toán'}
             </Button>
           </div>
         </div>
