@@ -9,7 +9,7 @@ Giữ React/custom UI, Node HTTP, collections API, PostgreSQL/SQLite và Canvas 
 - Workbook audit liệt kê 29 ứng dụng trong video; audit source ban đầu thấy code liên quan ở 22 ứng dụng và chưa thấy app tương đương ở 7 ứng dụng. Đây là độ phủ source ban đầu, không phải tỷ lệ chức năng đã hoàn thành.
 - Sheet tổng quan ghi 973 gạch đầu dòng. Sheet chi tiết hiện đánh số liên tục 1–982 vì đã bổ sung 9 luồng; dùng 982 làm tổng checklist hiện có.
 - Chưa có phần trăm hoàn thành toàn web đáng tin cậy vì 982 mục chưa được đối chiếu lại từng mục bằng runtime evidence. Bảng tiến độ bên dưới theo dõi luồng, không thay thế checklist từng mục.
-- Mốc kiểm thử mới nhất ngày 2026-10-28: 107 API test, 117 web/domain test; 38 checkpoint PostgreSQL đạt ở lần chạy trước; typecheck, production build và API syntax check đạt. Trình duyệt đã chạy luồng cấp phát/xác nhận/thu hồi, sửa chữa/duyệt/chờ linh kiện/tiếp tục/nghiệm thu, bảo trì/checklist/nghiệm thu, điều chuyển, một luồng thanh lý bán, workflow bổ sung, thanh toán nhân viên → duyệt/ghi sổ/từ chối, khấu hao ba phương pháp, tạm ứng tạo/cấp/quyết toán, Phòng họp thiết lập/tạo phòng/đặt/hủy và tuyển dụng mở tin qua liên kết nội bộ/đóng tin với dữ liệu thử riêng. Bộ test lại lượt này: API 107/107, web/domain 117/117, typecheck, production build và API syntax đạt. Bundle JavaScript là 4,908.27 kB, vẫn có cảnh báo chunk lớn hơn 500 kB.
+- Mốc kiểm thử mới nhất ngày 2026-10-28: 107 API test, 117 web/domain test; 38 checkpoint PostgreSQL đạt ở lần chạy trước; typecheck, production build và API syntax check đạt. Trình duyệt đã chạy luồng cấp phát/xác nhận/thu hồi, sửa chữa/duyệt/chờ linh kiện/tiếp tục/nghiệm thu, bảo trì/checklist/nghiệm thu, điều chuyển, một luồng thanh lý bán, workflow bổ sung, thanh toán nhân viên → duyệt/ghi sổ/từ chối, khấu hao ba phương pháp, tạm ứng tạo/cấp/quyết toán, Phòng họp thiết lập/tạo phòng/đặt/hủy, tuyển dụng mở/đóng tin và bảng công khóa/tải lại với dữ liệu thử riêng. Bộ test lượt gần nhất: API 107/107, web/domain 117/117, typecheck, production build và API syntax đạt. Bundle JavaScript là 4,908.44 kB, vẫn có cảnh báo chunk lớn hơn 500 kB.
 
 ## Đã sửa trong đợt hiện tại
 
@@ -63,7 +63,7 @@ Giữ React/custom UI, Node HTTP, collections API, PostgreSQL/SQLite và Canvas 
 | Lịch sử nhân sự | Chỉ React state | CRUD collection, chọn nhân viên thật kể cả đã nghỉ, lỗi lưu, xem chi tiết, lọc, XLSX | 2 web + API smoke |
 | Nghỉ phép/OT/phân ca | Mirror ghi cả danh sách, fake người/giờ/duyệt | Một nguồn chuẩn và một bản ghi mỗi thao tác; nhân viên gửi/Admin duyệt; thời gian/số ngày/phép/OT xác thực; đổi ca cập nhật hai người | 5 domain + API smoke |
 | Bảng công/điểm danh | Sinh lịch/giờ theo modulo, chấm công phía client và fake Geofence | Ma trận theo dữ liệu thật và số ngày của tháng; máy chủ ghi giờ vào/ra/danh tính, chống lặp; thiếu dữ liệu để trống | Domain calendar + API check-in |
-| Cảnh báo/tổng hợp công | Quyết định/khóa chỉ toast hoặc local | Ghi quyết định/giải trình/số tiền đề xuất, xác thực raw logs, điều chỉnh công và khóa lưu máy chủ; xuất file thật | Typecheck + API validation, chưa nghiệm thu đầy đủ UI thao tác |
+| Cảnh báo/tổng hợp công | Mẫu số 22 ngày, chú thích 31 ngày và lời khẳng định vắng mặt đặt cứng; ngày công chuẩn có thể vượt số ngày trong tháng trước khi gửi API | Bảng hiển thị theo ngày chuẩn đã lưu; kiểm tra ngày chuẩn theo đúng tháng; mô tả KPI bám số liệu thật; khóa công ghi actor/thời gian phía máy chủ | `api/tests/attendance-summary-browser.mjs` xác nhận tháng 2 từ chối 29 ngày chuẩn, hiển thị 19/20 ngày, khóa UI, actor/time và tải lại; các thao tác cảnh báo/giải trình trên UI vẫn chưa nghiệm thu |
 | Văn bản doanh nghiệp | Hồ sơ ghi cả danh sách; tệp PDF mẫu; hash/chữ ký tự điền; Word chỉ lưu trên trình duyệt | CRUD từng hồ sơ; tệp gốc/Word tải lên kho thật, tải đúng bytes, hash/size do máy chủ tính; Word chờ lưu từ xa trước khi báo thành công; XLSX/PDF từ bản ghi | API enterprise operations, 2 web documents + 5 editor/storage |
 | Sổ văn thư đến/đi | Số vào sổ đếm trên client, tệp scan/đã xác minh giả, chuyển xử lý chỉ báo thành công | Cấp số theo sổ/năm trong transaction; chống trùng; tùy chọn scan thật; chuyển xử lý/hoàn tất/lịch sử, giữ tệp khi xóa hồ sơ; XLSX/PDF/clipboard | 3 API archives + 1 luồng UI; cấp số đồng thời trên PostgreSQL |
 | Khen thưởng | Chữ ký/người nhận/điểm eNPS và trao thưởng không có kiểm chứng | Nhân viên thật; chờ duyệt → quyết định duyệt nội bộ → trao; actor/time máy chủ, giữ snapshot người nhận, chặn sửa/xóa quyết định đã duyệt; XLSX/PDF | 4 API rewards + 2 UI |
@@ -122,6 +122,8 @@ Thử ghi Sổ Cái lương với dữ liệu riêng: trong `legacy/api` chạy 
 Thử luồng bản quyền với dữ liệu riêng: trong `legacy/api` chạy `node tests/licenses-browser.mjs`.
 
 Thử mở tin tuyển dụng qua liên kết nội bộ và đóng tin trên trình duyệt, bằng API SQLite và dữ liệu riêng: trong `legacy/api` chạy `node tests/recruitment-browser.mjs`.
+
+Thử điều chỉnh/tổng hợp công, khóa số liệu và tải lại trên trình duyệt bằng API SQLite và dữ liệu riêng: trong `legacy/api` chạy `node tests/attendance-summary-browser.mjs`.
 
 Thử luồng cấp phát/thu hồi tài sản trên trình duyệt, kèm API SQLite và dữ liệu riêng: trong `legacy/api` chạy `node tests/asset-allocation-browser.mjs`.
 

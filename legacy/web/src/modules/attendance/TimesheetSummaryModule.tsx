@@ -86,6 +86,7 @@ export const TimesheetSummaryModule: React.FC = () => {
       const actualDays = attendanceNumber(values.actualDays, 'Công thực tế', 0, 31);
       const paidLeaveDays = attendanceNumber(values.paidLeaveDays ?? 0, 'Phép hưởng lương', 0, 31);
       const unpaidLeaveDays = attendanceNumber(values.unpaidLeaveDays ?? 0, 'Nghỉ không lương', 0, 31);
+      if (standardDays > monthDays) throw new Error(`Ngày công chuẩn không được vượt quá ${monthDays} ngày của tháng.`);
       if (actualDays + paidLeaveDays + unpaidLeaveDays > monthDays) throw new Error(`Tổng ngày công và nghỉ không được vượt quá ${monthDays} ngày của tháng.`);
       const existing = data.find((item) => item.employeeCode === employee.employeeCode && item.month === values.month);
       if (existing?.status === 'Đã khóa công') throw new Error('Bảng công đã khóa. Không thể điều chỉnh.');
@@ -183,7 +184,7 @@ export const TimesheetSummaryModule: React.FC = () => {
       render: (d: number, record: EnterpriseTimesheetSummaryItem) => (
         <div>
           <div style={{ fontWeight: 800, color: '#009688', fontSize: 14 }}>
-            {d} / 22 Công
+            {d} / {record.standardDays} Công
           </div>
           <div style={{ fontSize: 11, color: '#16A34A', fontWeight: 600 }}>
             {record.attendanceRate}% Chuyên cần
@@ -226,7 +227,7 @@ export const TimesheetSummaryModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalActual} Ngày công
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Được trích xuất từ 31 ngày chấm công chi tiết</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tổng hợp từ bảng công từng nhân viên</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -234,7 +235,7 @@ export const TimesheetSummaryModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {totalOT} Giờ OT
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Quy đổi hệ số x1.5 ngày thường, x2.0 cuối tuần</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Giờ làm thêm đã ghi nhận trong các bảng công</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -242,7 +243,7 @@ export const TimesheetSummaryModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {data.length ? Math.round(data.reduce((sum, item) => sum + item.attendanceRate, 0) / data.length) : 0}%
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Không có hiện tượng vắng mặt không lý do</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Tỷ lệ dựa trên ngày công hưởng lương so với ngày công chuẩn</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -398,7 +399,7 @@ export const TimesheetSummaryModule: React.FC = () => {
                     {selectedSummary.employeeName}
                   </div>
                 </div>
-                <Tag color="success">{selectedSummary.status}</Tag>
+                <Tag color={selectedSummary.status === 'Đã khóa công' ? 'success' : 'warning'}>{selectedSummary.status}</Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
                 {selectedSummary.position} · {selectedSummary.department}
@@ -429,7 +430,7 @@ export const TimesheetSummaryModule: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 8 }}>
                   <span style={{ color: '#0F172A', fontWeight: 700 }}>Tổng công thanh toán lương:</span>
-                  <strong style={{ color: '#009688', fontSize: 14 }}>{selectedSummary.totalPayDays} / 22 Công</strong>
+                  <strong style={{ color: '#009688', fontSize: 14 }}>{selectedSummary.totalPayDays} / {selectedSummary.standardDays} Công</strong>
                 </div>
               </div>
             </div>
