@@ -1,293 +1,247 @@
 import { dataService } from '../../services/dataService';
-import React, { useEffect, useState } from 'react';
-import {
-  useLocation } from 'react-router-dom';
-import {
-  PlusOutlined,
-  SearchOutlined,
-  DownloadOutlined,
-  CalculatorOutlined,
-  BuildOutlined,
-  CheckOutlined,
-} from '@ant-design/icons';
+import React, { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { PlusOutlined, SearchOutlined, DownloadOutlined, CalculatorOutlined, BuildOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag } from '../../custom-ui';
+import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { COSTING_CATEGORIES, COSTING_STATUSES, costingExportRows, costingMetrics, createCostingRecord, type CostingRecord } from './costingRules';
 
-interface CostItem {
-  key: string;
-  code: string;
-  projectName: string;
-  category: string;
-  directLabor: number;
-  infrastructureCost: number;
-  softwareLicense: number;
-  overheadCost: number;
-  totalCost: number;
-  revenue: number;
-  profitMargin: number;
-}
-
-const INITIAL_COSTING: CostItem[] = [];
+const CATEGORY_BY_PATH: Record<string, typeof COSTING_CATEGORIES[number]> = {
+  '/finance/costing/contracts': 'Hợp đồng kinh tế B2B',
+  '/finance/costing/orders': 'Đơn đặt hàng (Job-Order)',
+  '/finance/costing/construction': 'Công trình thi công',
+};
 
 export const CostingModule: React.FC = () => {
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
-
-  const isContracts = currentPath === '/finance/costing/contracts';
-  const isOrders = currentPath === '/finance/costing/orders';
-  const isConstruction = currentPath === '/finance/costing/construction';
-
-  const [data, setData] = useState<CostItem[]>(INITIAL_COSTING);
-
-  useEffect(() => {
-    const list = dataService.getGenericData('finance_costing');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('finance_costing');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
-  }, []);
-
+  const currentCategory = CATEGORY_BY_PATH[currentPath];
+  const isContracts = currentCategory === 'Hợp đồng kinh tế B2B';
+  const isOrders = currentCategory === 'Đơn đặt hàng (Job-Order)';
+  const isConstruction = currentCategory === 'Công trình thi công';
+  const mounted = useRef(false);
+  const [data, setData] = useState<CostingRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
 
-  const totalAllCost = data.reduce((sum, item) => sum + item.totalCost, 0);
-  const totalAllRevenue = data.reduce((sum, item) => sum + item.revenue, 0);
-  const avgMargin = Math.round(((totalAllRevenue - totalAllCost) / totalAllRevenue) * 1000) / 10;
-
-  const handleCreate = (values: any) => {
-    const labor = Number(values.directLabor) || 0;
-    const infra = Number(values.infrastructureCost) || 0;
-    const lic = Number(values.softwareLicense) || 0;
-    const over = 10000000;
-    const total = labor + infra + lic + over;
-    const rev = Number(values.revenue) || 0;
-    const margin = rev > 0 ? Math.round(((rev - total) / rev) * 1000) / 10 : 0;
-
-    const newItem: CostItem = {
-      ...values,
-      key: String(Date.now()),
-      directLabor: labor,
-      infrastructureCost: infra,
-      softwareLicense: lic,
-      overheadCost: over,
-      totalCost: total,
-      revenue: rev,
-      profitMargin: margin,
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_costing', nextItems);
-    message.success(`Đã tính giá thành cho: ${values.projectName}`);
-    setModalOpen(false);
-    form.resetFields();
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const records = await dataService.refreshGenericData('finance_costing');
+      if (mounted.current) setData(Array.isArray(records) ? records : []);
+    } catch (error: any) {
+      if (mounted.current) message.error(error?.response?.data?.message || 'Không tải được dữ liệu giá thành.');
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
   };
 
-  const filteredData = data.filter(
-    (item) =>
-      (item.code || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.projectName || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.category || '').toLowerCase().includes(searchText.toLowerCase())
-  );
+  useEffect(() => {
+    mounted.current = true;
+    const unsubscribe = dataService.subscribe(() => {
+      if (mounted.current) setData(dataService.getGenericData('finance_costing'));
+    });
+    void loadData();
+    return () => { mounted.current = false; unsubscribe(); };
+  }, []);
+
+  const metrics = costingMetrics(data);
+  const filteredData = data.filter((item) => {
+    const matchesCategory = currentCategory ? item.category === currentCategory : categoryFilter === 'all' || item.category === categoryFilter;
+    const query = searchText.trim().toLocaleLowerCase();
+    const matchesSearch = !query || [item.code, item.projectName, item.category, item.constructionSite || '']
+      .some((value) => String(value).toLocaleLowerCase().includes(query));
+    return matchesCategory && matchesSearch;
+  });
+
+  const openCreate = () => {
+    form.resetFields();
+    form.setFieldsValue({
+      code: `GT-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+      ...(currentCategory ? { category: currentCategory } : {}),
+    });
+    setModalOpen(true);
+  };
+
+  const handleCreate = async (values: Record<string, unknown>) => {
+    let record: Omit<CostingRecord, 'createdDate' | 'createdBy' | 'createdById'>;
+    try {
+      record = createCostingRecord(values as any, data.map((item) => item.code));
+    } catch (error: any) {
+      message.error(error?.message || 'Thông tin giá thành chưa hợp lệ.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const saved = await dataService.createGenericRecord('finance_costing', record) as CostingRecord;
+      setData((current) => [saved, ...current.filter((item) => item.key !== saved.key)]);
+      message.success(`Đã lưu hồ sơ giá thành ${saved.code}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được hồ sơ giá thành. Vui lòng kiểm tra lại dữ liệu.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportData = () => {
+    if (!filteredData.length) {
+      message.info('Không có hồ sơ giá thành phù hợp để xuất.');
+      return;
+    }
+    downloadFile('Bao_cao_gia_thanh.xlsx', generateValidXlsxBlob(costingExportRows(filteredData)));
+  };
+
+  const tableColumns = isContracts ? [
+    { title: 'Mã hợp đồng', dataIndex: 'code', key: 'code', render: (value: string) => <strong>{value}</strong> },
+    { title: 'Tên hợp đồng giải pháp', dataIndex: 'projectName', key: 'projectName' },
+    { title: 'Vật tư trực tiếp', dataIndex: 'materialCost', key: 'materialCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Nhân công trực tiếp', dataIndex: 'directLabor', key: 'directLabor', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Hạ tầng & Cloud', dataIndex: 'infrastructureCost', key: 'infrastructureCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'License phần mềm', dataIndex: 'softwareLicense', key: 'softwareLicense', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Chi phí chung khác', dataIndex: 'overheadCost', key: 'overheadCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Tổng giá thành', dataIndex: 'totalCost', key: 'totalCost', render: (value: number) => <strong style={{ color: '#DC2626' }}>{value.toLocaleString('vi-VN')} ₫</strong> },
+    { title: 'Giá trị hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (value: number) => <strong style={{ color: '#009688' }}>{value.toLocaleString('vi-VN')} ₫</strong> },
+    { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (value: number | null) => value === null ? 'Chưa có doanh thu' : <Tag color={value >= 0 ? 'success' : 'error'}>{value}%</Tag> },
+    { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (value: string) => <Tag color={value === 'Hoàn thành' ? 'success' : value === 'Tạm dừng' ? 'default' : 'processing'}>{value}</Tag> },
+  ] : isOrders ? [
+    { title: 'Mã Job đơn hàng', dataIndex: 'code', key: 'code', render: (value: string) => <strong>{value}</strong> },
+    { title: 'Quy cách sản phẩm / công việc', dataIndex: 'projectName', key: 'projectName' },
+    { title: 'Vật tư trực tiếp', dataIndex: 'materialCost', key: 'materialCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Nhân công kỹ thuật', dataIndex: 'directLabor', key: 'directLabor', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Hạ tầng, bản quyền và chi phí chung', key: 'otherCost', render: (_: unknown, item: CostingRecord) => `${(item.infrastructureCost + item.softwareLicense + item.overheadCost).toLocaleString('vi-VN')} ₫` },
+    { title: 'Giá thành Job', dataIndex: 'totalCost', key: 'totalCost', render: (value: number) => <strong style={{ color: '#DC2626' }}>{value.toLocaleString('vi-VN')} ₫</strong> },
+    { title: 'Giá bán đơn hàng', dataIndex: 'revenue', key: 'revenue', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (value: string) => <Tag color={value === 'Hoàn thành' ? 'success' : value === 'Tạm dừng' ? 'default' : 'processing'}>{value}</Tag> },
+  ] : isConstruction ? [
+    { title: 'Hạng mục thi công', dataIndex: 'projectName', key: 'projectName', render: (value: string) => <strong>{value}</strong> },
+    { title: 'Mã hồ sơ', dataIndex: 'code', key: 'code' },
+    { title: 'Địa điểm', dataIndex: 'constructionSite', key: 'constructionSite' },
+    { title: 'Vật tư thi công', dataIndex: 'materialCost', key: 'materialCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Nhân công lắp đặt', dataIndex: 'directLabor', key: 'directLabor', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Hạ tầng và Cloud', dataIndex: 'infrastructureCost', key: 'infrastructureCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Bản quyền phần mềm', dataIndex: 'softwareLicense', key: 'softwareLicense', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Chi phí chung khác', dataIndex: 'overheadCost', key: 'overheadCost', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Giá thành', dataIndex: 'totalCost', key: 'totalCost', render: (value: number) => <strong style={{ color: '#DC2626' }}>{value.toLocaleString('vi-VN')} ₫</strong> },
+    { title: 'Giá trị hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (value: number | null) => value === null ? 'Chưa có doanh thu' : <Tag color={value >= 0 ? 'success' : 'error'}>{value}%</Tag> },
+    { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (value: string) => <Tag color={value === 'Hoàn thành' ? 'success' : value === 'Tạm dừng' ? 'default' : 'processing'}>{value}</Tag> },
+  ] : [
+    { title: 'Mã giá thành', dataIndex: 'code', key: 'code', render: (value: string) => <span style={{ fontWeight: 700, color: '#009688' }}><CalculatorOutlined /> {value}</span> },
+    { title: 'Dự án / Sản phẩm', dataIndex: 'projectName', key: 'projectName', render: (value: string) => <strong style={{ color: '#1E293B' }}>{value}</strong> },
+    { title: 'Phân loại', dataIndex: 'category', key: 'category', render: (value: string) => <Tag color="blue">{value}</Tag> },
+    { title: 'Giá thành (VNĐ)', dataIndex: 'totalCost', key: 'totalCost', render: (value: number) => <strong style={{ color: '#DC2626' }}>{value.toLocaleString('vi-VN')} ₫</strong> },
+    { title: 'Doanh thu', dataIndex: 'revenue', key: 'revenue', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+    { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (value: number | null) => value === null ? 'Chưa có doanh thu' : <Tag color={value >= 0 ? 'success' : 'error'}>{value}%</Tag> },
+    { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (value: string) => <Tag color={value === 'Hoàn thành' ? 'success' : value === 'Tạm dừng' ? 'default' : 'processing'}>{value}</Tag> },
+  ];
+
+  const pageHeading = isContracts ? 'Tính giá thành theo hợp đồng kinh tế B2B' : isOrders ? 'Tính giá thành theo từng đơn đặt hàng' : isConstruction ? 'Tính giá thành hạng mục thi công' : 'Sổ tập hợp chi phí và giá thành';
+  const createLabel = isContracts ? 'Tập hợp chi phí hợp đồng' : isOrders ? 'Tạo thẻ tính giá thành đơn' : isConstruction ? 'Thêm hạng mục công trình' : 'Tính giá thành dự án';
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng giá thành tập hợp toàn bộ dự án</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
-            {totalAllCost.toLocaleString('vi-VN')} ₫
-          </div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng giá thành đã lưu</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>{metrics.totalCost.toLocaleString('vi-VN')} ₫</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng doanh thu dự án thực hiện</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {totalAllRevenue.toLocaleString('vi-VN')} ₫
-          </div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng doanh thu đã ghi nhận</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#009688', marginTop: 4 }}>{metrics.totalRevenue.toLocaleString('vi-VN')} ₫</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Biên lợi nhuận gộp bình quân</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            +{avgMargin}%
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Biên lợi nhuận gộp tổng hợp</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: metrics.grossMargin === null ? '#64748B' : metrics.grossMargin >= 0 ? '#16A34A' : '#DC2626', marginTop: 4 }}>
+            {metrics.grossMargin === null ? 'Chưa có doanh thu' : `${metrics.grossMargin}%`}
           </div>
         </div>
       </div>
 
-      {isContracts && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Theo Hợp Đồng Kinh Tế B2B</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Tập hợp chi phí Hợp đồng
-            </Button>
-          </div>
-          <div className="transparent-table-card">
-            <KTable
-              dataSource={data.filter((d) => d.category.includes('Hợp đồng'))}
-              columns={[
-                { title: 'Mã hợp đồng', dataIndex: 'code', key: 'code', render: (c: string) => <strong>{c}</strong> },
-                { title: 'Tên hợp đồng giải pháp', dataIndex: 'projectName', key: 'projectName', render: (p: string) => <strong style={{ color: '#2563EB' }}>{p}</strong> },
-                { title: 'Nhân công trực tiếp', dataIndex: 'directLabor', key: 'directLabor', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Hạ tầng & Cloud', dataIndex: 'infrastructureCost', key: 'infrastructureCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'License phần mềm', dataIndex: 'softwareLicense', key: 'softwareLicense', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Tổng giá thành', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Giá trị hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (m: number) => <Tag color="success">+{m}%</Tag> },
-              ]}
-            />
-          </div>
-        </div>
-      )}
-
-      {isOrders && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Theo Từng Đơn Đặt Hàng</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Tạo thẻ tính giá thành đơn
-            </Button>
-          </div>
-          <div className="transparent-table-card">
-            <KTable
-              dataSource={[
-                { id: '1', order: 'JOB-2026-081', desc: 'Lắp ráp 02 Máy Chủ Dell PowerEdge R760 Rack Server', rawCost: 195000000, laborCost: 15000000, overheadCost: 8000000, totalCost: 218000000, orderPrice: 280000000, status: 'Hoàn thành' },
-                { id: '2', order: 'JOB-2026-082', desc: 'Thiết lập cụm Cluster Firewall HA Fortinet 100F', rawCost: 120000000, laborCost: 12000000, overheadCost: 6000000, totalCost: 138000000, orderPrice: 175000000, status: 'Hoàn thành' },
-              ]}
-              columns={[
-                { title: 'Mã Job Đơn hàng', dataIndex: 'order', key: 'order', render: (o: string) => <strong>{o}</strong> },
-                { title: 'Quy cách sản phẩm', dataIndex: 'desc', key: 'desc' },
-                { title: 'Vật tư trực tiếp', dataIndex: 'rawCost', key: 'rawCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Nhân công kỹ thuật', dataIndex: 'laborCost', key: 'laborCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Sản xuất chung', dataIndex: 'overheadCost', key: 'overheadCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Giá thành Job', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Giá bán đơn hàng', dataIndex: 'orderPrice', key: 'orderPrice', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag icon={<CheckOutlined />} color="success">{s}</Tag> },
-              ]}
-            />
-          </div>
-        </div>
-      )}
-
-      {isConstruction && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Tính Giá Thành Hạng Mục Thi Công &amp; Phòng Server Data Center</h3>
-            <Button type="primary" icon={<BuildOutlined />} onClick={() => message.info('Mở lập dự toán công trình')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Thêm hạng mục công trình
-            </Button>
-          </div>
-          <div className="transparent-table-card">
-            <KTable
-              dataSource={[
-                { id: '1', name: 'Thi công hệ thống điện dự phòng UPS & Generator IDC', site: 'Phòng Máy Chủ Viettel IDC', rawCost: 180000000, laborCost: 45000000, totalCost: 225000000, revenue: 320000000, status: 'Đã nghiệm thu' },
-                { id: '2', name: 'Lắp đặt hệ thống cáp cấu trúc MPO 100G', site: 'Phòng Lab Trụ Sở HN', rawCost: 65000000, laborCost: 18000000, totalCost: 83000000, revenue: 125000000, status: 'Đang thi công' },
-              ]}
-              columns={[
-                { title: 'Hạng mục thi công', dataIndex: 'name', key: 'name', render: (n: string) => <strong>{n}</strong> },
-                { title: 'Địa điểm', dataIndex: 'site', key: 'site' },
-                { title: 'Vật tư thi công', dataIndex: 'rawCost', key: 'rawCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Nhân công lắp đặt', dataIndex: 'laborCost', key: 'laborCost', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Giá thành', dataIndex: 'totalCost', key: 'totalCost', render: (v: number) => <strong style={{ color: '#DC2626' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Giá trị hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s.includes('nghiệm thu') ? 'success' : 'processing'}>{s}</Tag> },
-              ]}
-            />
-          </div>
-        </div>
-      )}
-
-      {!isContracts && !isOrders && !isConstruction && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{pageHeading}</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {!currentCategory && (
+              <Select
+                value={categoryFilter}
+                onChange={(value) => setCategoryFilter(value)}
+                style={{ width: 210 }}
+                options={[{ label: 'Tất cả phân loại', value: 'all' }, ...COSTING_CATEGORIES.map((category) => ({ label: category, value: category }))]}
+              />
+            )}
             <Input
-              prefix={<SearchOutlined style={{ color: '#bbb' }} />}
-              placeholder="Tìm theo mã dự án, tên giải pháp..."
+              prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
+              placeholder="Tìm mã, dự án, phân loại, địa điểm..."
               value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              style={{ width: 340, borderRadius: 6 }}
+              onChange={(event) => setSearchText(event.target.value)}
+              style={{ width: 300 }}
               allowClear
             />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo giá thành ra Excel')}>
-                Xuất Báo Cáo
-              </Button>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  form.resetFields();
-                  setModalOpen(true);
-                }}
-                style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-              >
-                Tính giá thành dự án
-              </Button>
-            </div>
-          </div>
-
-          <div className="transparent-table-card">
-            <KTable
-              dataSource={filteredData}
-              columns={[
-                { title: 'Mã dự án', dataIndex: 'code', key: 'code', render: (c: string) => <span style={{ fontWeight: 700, color: '#009688' }}><CalculatorOutlined /> {c}</span> },
-                { title: 'Tên dự án / Sản phẩm', dataIndex: 'projectName', key: 'projectName', render: (p: string) => <strong style={{ color: '#1E293B' }}>{p}</strong> },
-                { title: 'Phân loại', dataIndex: 'category', key: 'category', render: (c: string) => <Tag color="blue">{c}</Tag> },
-                { title: 'Giá thành (VNĐ)', dataIndex: 'totalCost', key: 'totalCost', render: (val: number) => <strong style={{ color: '#DC2626' }}>{val.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Doanh thu hợp đồng', dataIndex: 'revenue', key: 'revenue', render: (val: number) => <strong style={{ color: '#009688' }}>{val.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Biên lãi gộp', dataIndex: 'profitMargin', key: 'profitMargin', render: (m: number) => <Tag color="success">+{m}%</Tag> },
-              ]}
-              pagination={{ pageSize: 10 }}
-            />
+            <Button icon={<DownloadOutlined />} onClick={exportData} disabled={loading || !filteredData.length}>Xuất báo cáo</Button>
+            <Button type="primary" icon={isConstruction ? <BuildOutlined /> : <PlusOutlined />} onClick={openCreate} disabled={loading || saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {createLabel}
+            </Button>
           </div>
         </div>
-      )}
 
-      <Modal
-        title="Tập hợp chi phí & Tính giá thành dự án mới"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        footer={null}
-        width={520}
-      >
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã dự án" initialValue={`GT-2026-00${data.length + 1}`} rules={[{ required: true }]}>
-              <Input />
+        <div className="transparent-table-card">
+          <KTable dataSource={filteredData} columns={tableColumns} pagination={{ pageSize: 8 }} loading={loading} />
+        </div>
+        <div style={{ fontSize: 12, color: '#64748B' }}>Chi phí và doanh thu được lưu theo hồ sơ nhập; cần đối chiếu với chứng từ nguồn trước khi sử dụng cho báo cáo kế toán.</div>
+      </div>
+
+      <Modal title="Tập hợp chi phí và tính giá thành" open={modalOpen} onCancel={() => { if (!saving) setModalOpen(false); }} footer={null} width={680}>
+        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="code" label="Mã giá thành" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập mã giá thành.' }]}>
+              <Input maxLength={80} />
             </Form.Item>
-            <Form.Item name="category" label="Phân loại" initialValue="Hợp đồng kinh tế B2B">
-              <Select
-                options={[
-                  { label: 'Hợp đồng kinh tế B2B', value: 'Hợp đồng kinh tế B2B' },
-                  { label: 'Đơn đặt hàng', value: 'Đơn đặt hàng (Job-Order)' },
-                  { label: 'Công trình thi công', value: 'Công trình thi công' },
-                  { label: 'Dịch vụ duy trì SLA', value: 'Dịch vụ duy trì SLA' },
-                ]}
-              />
+            <Form.Item name="category" label="Phân loại" rules={[{ required: true, message: 'Vui lòng chọn phân loại.' }]}>
+              <Select options={COSTING_CATEGORIES.map((category) => ({ label: category, value: category }))} />
             </Form.Item>
           </div>
-          <Form.Item name="projectName" label="Tên dự án / Hợp đồng" rules={[{ required: true, message: 'Nhập tên dự án' }]}>
-            <Input placeholder="Ví dụ: Nền tảng AI Chatbot cho Ngân Hàng" />
+          <Form.Item name="projectName" label="Tên dự án, hợp đồng hoặc công việc" rules={[{ required: true, whitespace: true, message: 'Vui lòng nhập tên hồ sơ.' }]}>
+            <Input maxLength={300} />
           </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="directLabor" label="Chi phí nhân sự trực tiếp (TK 622)" initialValue={200000000} rules={[{ required: true }]}>
-              <Input type="number" min={0} step={10000000} />
+          <Form.Item name="constructionSite" label="Địa điểm công trình (bắt buộc với hạng mục thi công)">
+            <Input maxLength={300} />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="materialCost" label="Chi phí vật tư trực tiếp (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền, nhập 0 nếu không phát sinh.' }]}>
+              <Input type="number" min={0} step={1} />
             </Form.Item>
-            <Form.Item name="infrastructureCost" label="Hạ tầng Cloud & Server (TK 627)" initialValue={50000000}>
-              <Input type="number" min={0} step={5000000} />
+            <Form.Item name="directLabor" label="Chi phí nhân công trực tiếp (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền, nhập 0 nếu không phát sinh.' }]}>
+              <Input type="number" min={0} step={1} />
+            </Form.Item>
+            <Form.Item name="infrastructureCost" label="Chi phí hạ tầng và Cloud (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền, nhập 0 nếu không phát sinh.' }]}>
+              <Input type="number" min={0} step={1} />
+            </Form.Item>
+            <Form.Item name="softwareLicense" label="Chi phí bản quyền phần mềm (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền, nhập 0 nếu không phát sinh.' }]}>
+              <Input type="number" min={0} step={1} />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="softwareLicense" label="Bản quyền License (TK 621)" initialValue={30000000}>
-              <Input type="number" min={0} step={5000000} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="overheadCost" label="Chi phí chung khác (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền, nhập 0 nếu không phát sinh.' }]}>
+              <Input type="number" min={0} step={1} />
             </Form.Item>
-            <Form.Item name="revenue" label="Doanh thu hợp đồng (VNĐ)" initialValue={500000000} rules={[{ required: true }]}>
-              <Input type="number" min={0} step={10000000} />
+            <Form.Item name="revenue" label="Doanh thu dự kiến hoặc đã xác nhận (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền, nhập 0 nếu chưa có doanh thu.' }]}>
+              <Input type="number" min={0} step={1} />
             </Form.Item>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xác nhận tính giá thành
+          <Form.Item name="status" label="Trạng thái hồ sơ" rules={[{ required: true, message: 'Vui lòng chọn trạng thái.' }]}>
+            <Select options={COSTING_STATUSES.map((status) => ({ label: status, value: status }))} />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
+            <Button onClick={() => setModalOpen(false)} disabled={saving}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Lưu hồ sơ giá thành
             </Button>
           </div>
         </Form>

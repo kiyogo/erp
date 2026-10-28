@@ -1614,6 +1614,8 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'tickets' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Ticket phải được tạo hoặc cập nhật từng hồ sơ để giữ lịch sử xử lý.');
   if (scope === 'doc_notes' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý sổ chỉ đạo.');
   if (scope === 'doc_notes' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Chỉ đạo phải được cập nhật từng hồ sơ để giữ lịch sử xử lý.');
+  if (scope === 'finance_costing' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý sổ giá thành.');
+  if (scope === 'finance_costing' && !['GET', 'POST'].includes(request.method)) throw new HttpError(405, 'Hồ sơ giá thành đã ghi chỉ được lưu mới để giữ dữ liệu đối chiếu.');
   if (['finance_inventory', 'finance_inventory_transactions', 'finance_inventory_warehouses', 'finance_inventory_settings'].includes(scope) && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý dữ liệu kho hàng.');
   }
@@ -1828,6 +1830,52 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       reminderHistory: [],
     };
     return { record, recordKey: noteCode, serialized: JSON.stringify(record) };
+  }
+  if (scope === 'finance_costing') {
+    if (current) throw new HttpError(405, 'Hồ sơ giá thành đã ghi không thể thay thế hoặc xóa trực tiếp.');
+    const code = requiredText(record.code || record.key, 'Mã giá thành', 80);
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_costing' AND LOWER(record_key) = LOWER(?) LIMIT 1").get(code);
+    if (duplicate) throw new HttpError(409, 'Mã giá thành đã tồn tại.');
+    const category = oneOf(record.category, 'Phân loại', ['Hợp đồng kinh tế B2B', 'Đơn đặt hàng (Job-Order)', 'Công trình thi công', 'Dịch vụ duy trì SLA']);
+    const requiredAmount = (value, label) => {
+      if (value === undefined || value === null || String(value).trim() === '') throw new HttpError(422, `Vui lòng nhập ${label}; nhập 0 nếu không phát sinh.`);
+      const amount = Number(value);
+      if (!Number.isSafeInteger(amount) || amount < 0) throw new HttpError(422, `${label} phải là số nguyên không âm hợp lệ.`);
+      return amount;
+    };
+    const materialCost = requiredAmount(record.materialCost, 'chi phí vật tư trực tiếp');
+    const directLabor = requiredAmount(record.directLabor, 'chi phí nhân công trực tiếp');
+    const infrastructureCost = requiredAmount(record.infrastructureCost, 'chi phí hạ tầng');
+    const softwareLicense = requiredAmount(record.softwareLicense, 'chi phí bản quyền phần mềm');
+    const overheadCost = requiredAmount(record.overheadCost, 'chi phí chung khác');
+    const revenue = requiredAmount(record.revenue, 'doanh thu');
+    const totalCost = materialCost + directLabor + infrastructureCost + softwareLicense + overheadCost;
+    if (!Number.isSafeInteger(totalCost)) throw new HttpError(422, 'Tổng chi phí vượt giới hạn số liệu an toàn.');
+    const constructionSite = category === 'Công trình thi công'
+      ? requiredText(record.constructionSite, 'Địa điểm công trình', 300)
+      : optionalText(record.constructionSite, 'Địa điểm công trình', 300);
+    const status = oneOf(record.status, 'Trạng thái hồ sơ', ['Đang thực hiện', 'Hoàn thành', 'Tạm dừng']);
+    const profitMargin = revenue > 0 ? Math.round(((revenue - totalCost) / revenue) * 1000) / 10 : null;
+    const saved = {
+      key: code,
+      code,
+      projectName: requiredText(record.projectName, 'Tên dự án', 300),
+      category,
+      ...(constructionSite ? { constructionSite } : {}),
+      materialCost,
+      directLabor,
+      infrastructureCost,
+      softwareLicense,
+      overheadCost,
+      totalCost,
+      revenue,
+      profitMargin,
+      status,
+      createdDate: now(),
+      createdBy: actor.name,
+      createdById: actor.id,
+    };
+    return { record: saved, recordKey: code, serialized: JSON.stringify(saved) };
   }
   if (scope === 'meeting_room_settings') {
     if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý quy định đặt phòng họp.');

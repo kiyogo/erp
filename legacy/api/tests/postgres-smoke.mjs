@@ -636,6 +636,24 @@ try {
   assert.equal(finalDecision.status, 'Đã phê duyệt');
   assert.equal(finalDecision.approvalHistory[1].approverId, finalApprover.id); completed++;
   token = adminToken;
+  const costing = (await request('/collections/finance_costing', 'POST', { record: {
+    key: 'pg-costing-contract', code: 'PG-COST-001', projectName: 'PG contract costing', category: 'Hợp đồng kinh tế B2B',
+    materialCost: 1, directLabor: 2, infrastructureCost: 3, softwareLicense: 4, overheadCost: 5, totalCost: 999999,
+    revenue: 25, profitMargin: 99, status: 'Đang thực hiện', createdBy: 'forged actor', createdById: 'forged-id',
+  } }, 201)).record;
+  assert.equal(costing.key, costing.code);
+  assert.equal(costing.totalCost, 15);
+  assert.equal(costing.profitMargin, 40);
+  assert.equal(costing.createdById, login.user.id);
+  await request('/collections/finance_costing', 'POST', { record: {
+    code: 'pg-cost-001', projectName: 'Duplicate code', category: 'Hợp đồng kinh tế B2B',
+    materialCost: 0, directLabor: 0, infrastructureCost: 0, softwareLicense: 0, overheadCost: 0, revenue: 0, status: 'Hoàn thành',
+  } }, 409);
+  await request('/collections/finance_costing/PG-COST-001', 'PATCH', { patch: { status: 'Hoàn thành' } }, 405);
+  await loginAs(noteEmployee.email, 'PG-Directive-User-26!Secure');
+  await request('/collections/finance_costing', 'GET', undefined, 403);
+  await request('/collections/finance_costing', 'POST', { record: {} }, 403);
+  token = adminToken; completed++;
   const sessions = await request('/admin/sessions');
   const current = sessions.data.find(item => item.current);
   assert.ok(current);
