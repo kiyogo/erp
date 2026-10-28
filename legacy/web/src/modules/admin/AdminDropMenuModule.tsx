@@ -48,7 +48,9 @@ const ENTERPRISE_PALETTE = [
   { name: 'Đen thanh lịch', hex: '#18181B' },
 ];
 
-export const AdminDropMenuModule: React.FC = () => {
+type AdminDropMenuModuleProps = { positionsOnly?: boolean };
+
+export const AdminDropMenuModule: React.FC<AdminDropMenuModuleProps> = ({ positionsOnly = false }) => {
   const groups: DropdownGroup[] = useMemo(() => dataService.getDropdownGroups(), []);
   const [selectedGroupKey, setSelectedGroupKey] = useState<string>('positions');
   const [searchText, setSearchText] = useState('');
@@ -65,6 +67,7 @@ export const AdminDropMenuModule: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<DropdownOptionItem | null>(null);
   const [selectedColor, setSelectedColor] = useState<string>('#009688');
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -73,7 +76,7 @@ export const AdminDropMenuModule: React.FC = () => {
     setOptions([...initialOptions]);
 
     dataService
-      .fetchDropdownOptions(selectedGroupKey)
+      .fetchDropdownOptions(selectedGroupKey, true)
       .then((rows) => {
         if (alive && rows && rows.length > 0) {
           setOptions([...rows]);
@@ -102,7 +105,10 @@ export const AdminDropMenuModule: React.FC = () => {
       (o) =>
         o.name.toLowerCase().includes(q) ||
         (o.code && o.code.toLowerCase().includes(q)) ||
-        (o.description && o.description.toLowerCase().includes(q))
+        (o.description && o.description.toLowerCase().includes(q)) ||
+        (o.department && o.department.toLowerCase().includes(q)) ||
+        (o.positionGroup && o.positionGroup.toLowerCase().includes(q)) ||
+        (o.title && o.title.toLowerCase().includes(q))
     );
   }, [options, searchText]);
 
@@ -114,9 +120,13 @@ export const AdminDropMenuModule: React.FC = () => {
     form.setFieldsValue({
       name: '',
       code: '',
+      positionCode: '',
       color: '#009688',
       order: nextOrder,
       description: '',
+      department: '',
+      positionGroup: '',
+      title: '',
       isActive: true,
     });
     setModalOpen(true);
@@ -130,9 +140,13 @@ export const AdminDropMenuModule: React.FC = () => {
     form.setFieldsValue({
       name: item.name,
       code: item.code || '',
+      positionCode: item.code || '',
       color: colorVal,
       order: item.order || 1,
       description: item.description || '',
+      department: item.department || '',
+      positionGroup: item.positionGroup || '',
+      title: item.title || '',
       isActive: item.isActive !== false,
     });
     setModalOpen(true);
@@ -143,31 +157,45 @@ export const AdminDropMenuModule: React.FC = () => {
     form.setFieldsValue({ color: newColor });
   };
 
-  const handleSave = (values: any) => {
+  const handleSave = async (values: any) => {
     const name = String(values.name || '').trim();
     if (!name) {
       message.error(selectedGroupKey === 'positions' ? 'Vui lòng nhập tên chức danh!' : 'Vui lòng nhập tên mục danh mục!');
       return;
     }
 
-    const code = values.code != null ? String(values.code).trim() : '';
+    if (saving) return;
+    const codeValue = selectedGroupKey === 'positions' ? values.positionCode : values.code;
+    const code = codeValue != null ? String(codeValue).trim() : '';
 
     const payload: DropdownOptionItem = {
-      id: editingItem ? editingItem.id : `opt-${selectedGroupKey}-${Date.now()}`,
+      id: editingItem ? editingItem.id : `opt-${selectedGroupKey}-${crypto.randomUUID()}`,
       name,
       code,
+      ...(selectedGroupKey === 'positions' ? {
+        department: String(values.department || '').trim(),
+        positionGroup: String(values.positionGroup || '').trim(),
+        title: String(values.title || '').trim(),
+      } : {}),
       color: selectedColor || values.color || '#009688',
       order: Number(values.order || 1),
       description: values.description ? String(values.description).trim() : '',
       isActive: values.isActive !== false,
     };
 
-    const updated = dataService.saveDropdownOption(selectedGroupKey, payload);
-    setOptions([...updated]);
-    message.success(`Đã lưu "${payload.name}" thành công!`);
-    setModalOpen(false);
-    setEditingItem(null);
-    form.resetFields();
+    setSaving(true);
+    try {
+      const updated = await dataService.saveDropdownOption(selectedGroupKey, payload);
+      setOptions([...updated]);
+      message.success(`Đã lưu "${payload.name}" thành công!`);
+      setModalOpen(false);
+      setEditingItem(null);
+      form.resetFields();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Không thể lưu danh mục. Vui lòng thử lại.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = (item: DropdownOptionItem) => {
@@ -177,10 +205,15 @@ export const AdminDropMenuModule: React.FC = () => {
       okText: 'Xóa',
       cancelText: 'Hủy',
       okButtonProps: { danger: true },
-      onOk: () => {
-        const updated = dataService.deleteDropdownOption(selectedGroupKey, item.id);
-        setOptions([...updated]);
-        message.success(`Đã xóa "${item.name}".`);
+      onOk: async () => {
+        try {
+          const updated = await dataService.deleteDropdownOption(selectedGroupKey, item.id);
+          setOptions([...updated]);
+          message.success(`Đã xóa "${item.name}".`);
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : 'Không thể xóa mục danh mục. Vui lòng thử lại.');
+          throw error;
+        }
       },
     });
   };
@@ -191,10 +224,15 @@ export const AdminDropMenuModule: React.FC = () => {
       content: `Toàn bộ danh mục "${currentGroup.title}" sẽ được đặt lại theo danh sách tiêu chuẩn ban đầu của hệ thống.`,
       okText: 'Khôi phục',
       cancelText: 'Hủy',
-      onOk: () => {
-        const defaults = dataService.resetDropdownDefaults(selectedGroupKey);
-        setOptions([...defaults]);
-        message.success(`Đã khôi phục danh mục "${currentGroup.title}" mặc định thành công.`);
+      onOk: async () => {
+        try {
+          const defaults = await dataService.resetDropdownDefaults(selectedGroupKey);
+          setOptions([...defaults]);
+          message.success(`Đã khôi phục danh mục "${currentGroup.title}" thành công.`);
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : 'Không thể khôi phục danh mục. Vui lòng thử lại.');
+          throw error;
+        }
       },
     });
   };
@@ -224,7 +262,7 @@ export const AdminDropMenuModule: React.FC = () => {
       ),
     },
     {
-      title: isPositionsGroup ? 'Tên chức danh' : 'Tên mục hiển thị',
+      title: isPositionsGroup ? 'Tên vị trí' : 'Tên mục hiển thị',
       dataIndex: 'name',
       key: 'name',
       render: (name: string, record: DropdownOptionItem) => (
@@ -244,7 +282,7 @@ export const AdminDropMenuModule: React.FC = () => {
       ),
     },
     {
-      title: isPositionsGroup ? 'Mã chức danh' : 'Mã định danh',
+      title: isPositionsGroup ? 'Mã vị trí' : 'Mã định danh',
       dataIndex: 'code',
       key: 'code',
       width: 150,
@@ -278,6 +316,11 @@ export const AdminDropMenuModule: React.FC = () => {
         <span style={{ fontWeight: 600, color: '#334155' }}>{order || index + 1}</span>
       ),
     },
+    ...(isPositionsGroup ? [
+      { title: 'Đơn vị công tác', dataIndex: 'department', key: 'department', render: (value: string) => value || <span style={{ color: '#94A3B8' }}>—</span> },
+      { title: 'Nhóm vị trí', dataIndex: 'positionGroup', key: 'positionGroup', render: (value: string) => value || <span style={{ color: '#94A3B8' }}>—</span> },
+      { title: 'Chức danh', dataIndex: 'title', key: 'title', render: (value: string) => value || <span style={{ color: '#94A3B8' }}>—</span> },
+    ] : []),
     {
       title: 'Trạng thái',
       dataIndex: 'isActive',
@@ -323,6 +366,7 @@ export const AdminDropMenuModule: React.FC = () => {
   return (
     <div style={{ padding: '20px 24px', width: '100%', boxSizing: 'border-box' }}>
       {/* Group Navigation Tabs */}
+      {!positionsOnly && (
       <div
         style={{
           display: 'flex',
@@ -365,6 +409,7 @@ export const AdminDropMenuModule: React.FC = () => {
           );
         })}
       </div>
+      )}
 
       {/* Top Header & Toolbar */}
       <div
@@ -395,8 +440,8 @@ export const AdminDropMenuModule: React.FC = () => {
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0F172A' }}>
-                {currentGroup.title}
+                <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0F172A' }}>
+                {positionsOnly ? 'Quản lý vị trí công việc' : currentGroup.title}
               </h1>
               <Tag color="cyan" style={{ margin: 0, fontWeight: 600 }}>
                 {options.length} {isPositionsGroup ? 'chức danh' : 'mục'}
@@ -412,7 +457,7 @@ export const AdminDropMenuModule: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Input
             prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
-            placeholder={isPositionsGroup ? 'Tìm theo tên chức danh, mã...' : 'Tìm theo tên, mã...'}
+            placeholder={isPositionsGroup ? 'Tìm theo mã, tên, đơn vị, nhóm, chức danh...' : 'Tìm theo tên, mã...'}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             style={{ width: 240 }}
@@ -456,28 +501,44 @@ export const AdminDropMenuModule: React.FC = () => {
       <Modal
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
-        title={editingItem ? `Chỉnh sửa: ${editingItem.name}` : `Thêm ${isPositionsGroup ? 'chức danh' : 'mục'} mới vào ${currentGroup.title}`}
-        width={580}
+        title={editingItem ? `${isPositionsGroup ? 'Chỉnh sửa vị trí' : 'Chỉnh sửa'}: ${editingItem.name}` : `Thêm ${isPositionsGroup ? 'vị trí công việc' : 'mục'} mới vào ${currentGroup.title}`}
+        width={positionsOnly ? 720 : 580}
         footer={null}
       >
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
           <Form.Item
             name="name"
-            label={isPositionsGroup ? 'Tên chức danh' : 'Tên mục hiển thị'}
-            rules={[{ required: true, message: `Vui lòng nhập ${isPositionsGroup ? 'tên chức danh' : 'tên mục'}` }]}
+            label={isPositionsGroup ? 'Tên vị trí' : 'Tên mục hiển thị'}
+            rules={[{ required: true, message: `Vui lòng nhập ${isPositionsGroup ? 'tên vị trí' : 'tên mục'}` }]}
           >
             <Input placeholder={isPositionsGroup ? 'Ví dụ: Kỹ sư Phần mềm, Trưởng Phòng Kinh Doanh...' : `Nhập tên cho ${currentGroup.title.toLowerCase()}...`} />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label={isPositionsGroup ? 'Mã chức danh' : 'Mã định danh'}>
-              <Input autoComplete="off" placeholder="Nhập mã..." allowClear />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name={isPositionsGroup ? 'positionCode' : 'code'} label={isPositionsGroup ? 'Mã vị trí' : 'Mã định danh'} rules={isPositionsGroup ? [{ required: true, message: 'Vui lòng nhập mã vị trí.' }] : []}>
+              <Input autoComplete="off" placeholder={isPositionsGroup ? 'Nhập mã vị trí...' : 'Nhập mã...'} allowClear />
             </Form.Item>
 
             <Form.Item name="order" label="Thứ tự hiển thị">
               <Input type="number" min={1} placeholder="1, 2, 3..." />
             </Form.Item>
           </div>
+
+          {isPositionsGroup && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                <Form.Item name="department" label="Đơn vị công tác" rules={[{ required: true, message: 'Vui lòng nhập đơn vị công tác.' }]}>
+                  <Input placeholder="Nhập đơn vị công tác..." />
+                </Form.Item>
+                <Form.Item name="positionGroup" label="Nhóm vị trí" rules={[{ required: true, message: 'Vui lòng nhập nhóm vị trí.' }]}>
+                  <Input placeholder="Nhập nhóm vị trí..." />
+                </Form.Item>
+              </div>
+              <Form.Item name="title" label="Chức danh" rules={[{ required: true, message: 'Vui lòng nhập chức danh.' }]}>
+                <Input placeholder="Nhập chức danh..." />
+              </Form.Item>
+            </>
+          )}
 
           {/* BẢNG CHỌN MÀU SẮC ĐẠI DIỆN TRỰC QUAN */}
           <div style={{ marginBottom: 16 }}>
@@ -598,14 +659,15 @@ export const AdminDropMenuModule: React.FC = () => {
             />
           </Form.Item>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24, paddingBottom: 4 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14, paddingBottom: 4 }}>
+            <Button disabled={saving} onClick={() => setModalOpen(false)}>Hủy</Button>
             <Button
               type="primary"
               htmlType="submit"
+              disabled={saving}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
-              {editingItem ? 'Lưu thay đổi' : 'Thêm mới'}
+              {isPositionsGroup ? (editingItem ? 'Lưu chỉnh sửa' : 'Lưu vị trí') : (editingItem ? 'Lưu thay đổi' : 'Thêm mới')}
             </Button>
           </div>
         </Form>

@@ -1610,6 +1610,9 @@ async function canReadWorkflowAttachment(actor, fileId) {
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope.startsWith('dropdown_') && !['GET', 'HEAD'].includes(request.method) && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được thay đổi danh mục dùng chung.');
+  }
   if (scope === 'finance_purchase_requests' && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý yêu cầu mua sắm.');
   }
@@ -3422,6 +3425,19 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Khóa bản ghi không hợp lệ.');
   }
   if (record.key === undefined) record.key = recordKey;
+  if (scope === 'dropdown_positions') {
+    record.name = requiredText(record.name, 'Tên vị trí', 160);
+    record.code = optionalText(record.code, 'Mã vị trí', 80).toUpperCase();
+    record.department = optionalText(record.department, 'Đơn vị công tác', 160);
+    record.positionGroup = optionalText(record.positionGroup, 'Nhóm vị trí', 160);
+    record.title = optionalText(record.title, 'Chức danh', 160);
+    if (record.code) {
+      const existingPositions = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'dropdown_positions'").all();
+      const duplicate = existingPositions.some((row) => row.record_key !== recordKey
+        && String(parseJsonObject(row.payload_json).code || '').trim().toUpperCase() === record.code);
+      if (duplicate) throw new HttpError(409, 'Mã vị trí đã được sử dụng.');
+    }
+  }
   if (scope === 'hr_performance_reviews') {
     const pending = 'Chờ phê duyệt điểm', completed = 'Đã hoàn tất đánh giá';
     record.status = oneOf(record.status || pending, 'Trạng thái đánh giá', [pending, completed]);
@@ -6364,6 +6380,10 @@ async function handleRequest(request, response) {
     const records = await Promise.all(payload.records.map(record => normalizeCollectionRecord(record, scope, actor)));
     if (new Set(records.map((item) => item.recordKey)).size !== records.length) {
       throw new HttpError(422, 'Danh sách có khóa bản ghi trùng lặp.');
+    }
+    if (scope === 'dropdown_positions') {
+      const codes = records.map((item) => String(item.record.code || '').trim().toUpperCase()).filter(Boolean);
+      if (new Set(codes).size !== codes.length) throw new HttpError(422, 'Danh sách có mã vị trí trùng lặp.');
     }
     const existingRows = actor.role === 'ADMIN'
       ? await db.prepare('SELECT record_key, created_at FROM collection_records WHERE scope = ?').all(scope)

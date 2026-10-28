@@ -26,6 +26,7 @@ import {
   BellOutlined,
   CheckSquareOutlined,
   MailOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 
 export const KIYOVN_MENU_ITEMS: MenuItem[] = [
@@ -506,6 +507,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
     children: [
       { id: 'adm-overview', title: 'Tổng quan quản trị', path: '/admin/overview' },
       { id: 'adm-users', title: 'Quản lý người dùng', path: '/admin/users' },
+      { id: 'adm-job-positions', title: 'Quản lý vị trí công việc', path: '/admin/system/job-positions', icon: <IdcardOutlined /> },
       { id: 'adm-roles', title: 'Nhóm quyền & vai trò', path: '/admin/roles' },
       { id: 'adm-permissions', title: 'Phân quyền chức năng', path: '/admin/permissions' },
       { id: 'adm-audit', title: 'Nhật ký kiểm toán', path: '/admin/audit-logs' },

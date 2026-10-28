@@ -84,6 +84,23 @@ try {
   assert.equal(directive.history[0].actorId, login.user.id);
   await request('/collections/doc_notes', 'POST', { record: { ...directive, key: 'duplicate-pg-key', noteCode: noteCode.toLowerCase() } }, 409);
   const noteEmployeeSession = await request('/auth/login', 'POST', { email: noteEmployee.email, password: 'PG-Directive-User-26!Secure' });
+  token = noteAdminToken;
+  const pgPosition = (await request('/collections/dropdown_positions', 'POST', { record: {
+    id: 'pg-job-position', code: 'POS-PG-01', name: 'PG QA engineer', department: noteDepartment,
+    positionGroup: 'Engineering', title: 'QA engineer',
+  } }, 201)).record;
+  assert.equal(pgPosition.code, 'POS-PG-01');
+  await request('/collections/dropdown_positions', 'POST', { record: {
+    id: 'pg-job-position-duplicate', code: 'pos-pg-01', name: 'Duplicate code',
+  } }, 409);
+  const pgPositionUpdate = (await request(`/collections/dropdown_positions/${pgPosition.key}`, 'PATCH', { patch: { title: 'QA lead' } })).record;
+  assert.equal(pgPositionUpdate.title, 'QA lead');
+  token = noteEmployeeSession.token;
+  await request('/collections/dropdown_positions', 'GET');
+  await request('/collections/dropdown_positions', 'POST', { record: { id: 'pg-forbidden-position', name: 'Forbidden' } }, 403);
+  token = noteAdminToken;
+  await request(`/collections/dropdown_positions/${pgPosition.key}`, 'DELETE');
+  completed += 6;
   token = noteEmployeeSession.token;
   await request('/collections/doc_notes', 'POST', { record: {} }, 403);
   token = noteAdminToken;

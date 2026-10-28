@@ -1755,3 +1755,40 @@ test('application usage combines real login sessions and tracked visits with adm
   const allApplications = await request(`${reportRoute}?application=all&period=all_time`);
   assert.ok(allApplications.data.some(item => item.userId === employee.id));
 });
+
+test('job position catalog validates fields, persists edits and restricts shared writes to admins', async () => {
+  const scope = '/collections/dropdown_positions';
+  const position = (await request(scope, 'POST', { record: {
+    id: 'position-qa-01', code: 'POS-QA-01', name: 'Kỹ sư đảm bảo chất lượng',
+    department: 'Khối Công nghệ', positionGroup: 'Chuyên môn', title: 'Kỹ sư QA',
+  } }, 201)).record;
+  assert.equal(position.key, 'position-qa-01');
+  assert.equal(position.code, 'POS-QA-01');
+  assert.equal(position.department, 'Khối Công nghệ');
+  assert.equal(position.positionGroup, 'Chuyên môn');
+  assert.equal(position.title, 'Kỹ sư QA');
+  await request(scope, 'POST', { record: {
+    id: 'position-duplicate-code', code: 'pos-qa-01', name: 'Vị trí trùng mã',
+  } }, 409);
+  const updated = (await request(`${scope}/${position.key}`, 'PATCH', { patch: {
+    department: 'Trung tâm Sản phẩm', positionGroup: 'Quản lý', title: 'Trưởng nhóm QA',
+  } })).record;
+  assert.equal(updated.department, 'Trung tâm Sản phẩm');
+  assert.equal(updated.positionGroup, 'Quản lý');
+  assert.equal(updated.title, 'Trưởng nhóm QA');
+  assert.equal((await request(scope)).data.find(item => item.key === position.key).title, 'Trưởng nhóm QA');
+
+  await request('/users', 'POST', {
+    email: 'position-catalog-staff@example.test', name: 'Nhân viên xem danh mục',
+    password: 'Position-Catalog-26!Secure', employeeCode: 'POSITION-STAFF', role: 'USER',
+  }, 201);
+  const employeeSession = await request('/auth/login', 'POST', {
+    email: 'position-catalog-staff@example.test', password: 'Position-Catalog-26!Secure',
+  });
+  const employeeHeaders = { ...headers, Authorization: `Bearer ${employeeSession.access_token || employeeSession.token}` };
+  assert.ok((await request(scope, 'GET', undefined, 200, employeeHeaders)).data.some(item => item.key === position.key));
+  await request(scope, 'POST', { record: { id: 'position-forbidden', name: 'Không được ghi' } }, 403, employeeHeaders);
+  await request(`${scope}/${position.key}`, 'PATCH', { patch: { title: 'Không được sửa' } }, 403, employeeHeaders);
+  await request(`${scope}/${position.key}`, 'DELETE', undefined, 403, employeeHeaders);
+  await request(`${scope}/${position.key}`, 'DELETE');
+});

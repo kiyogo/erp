@@ -250,6 +250,7 @@ export const GenericModulePage: React.FC = () => {
   if (currentPath === '/admin/audit-logs' || currentPath === '/admin/audit' || p === '/audit-logs' || p === '/audit') return <AdminAuditLogsModule />;
   if (currentPath === '/admin/sessions' || p === '/sessions') return <AdminSessionsModule />;
   if (currentPath === '/admin/backup' || p === '/backup') return <AdminBackupModule />;
+  if (currentPath === '/admin/system/job-positions' || p === '/system/job-positions') return <AdminDropMenuModule positionsOnly />;
   if (currentPath === '/admin/drop-menu' || p === '/drop-menu') return <AdminDropMenuModule />;
   if (currentPath === '/admin/system/usage' || p === '/system/usage') return <AdminUsageModule />;
   if (currentPath === '/admin/system/notifications' || p === '/system/notifications') return <AdminSystemNotificationsModule />;

@@ -1808,7 +1808,7 @@ class DataService {
     return raw.sort((a, b) => (a.order || 99) - (b.order || 99));
   }
 
-  public async fetchDropdownOptions(groupKey: string): Promise<DropdownOptionItem[]> {
+  public async fetchDropdownOptions(groupKey: string, seedDefaults = false): Promise<DropdownOptionItem[]> {
     const key = `dropdown_${groupKey}`;
     try {
       const response = await collectionsApi.get<DropdownOptionItem>(key, { limit: 500, sort: 'order', order: 'asc' });
@@ -1818,61 +1818,76 @@ class DataService {
         saveToStorage(key, rows);
         return rows;
       }
-    } catch {}
-
-    const cached = this.getGenericData(key);
-    if (cached && cached.length > 0) {
-      return cached;
+      const defaults = this.getDropdownDefaults(groupKey);
+      if (seedDefaults && defaults.length > 0) {
+        const saved = await collectionsApi.replace(key, defaults);
+        const initialized = saved.data?.data;
+        if (!Array.isArray(initialized)) throw new Error('Máy chủ không trả về danh mục đã khởi tạo.');
+        this.genericCache.set(key, initialized);
+        saveToStorage(key, initialized);
+        this.notify();
+        return initialized;
+      }
+      this.genericCache.set(key, defaults);
+      saveToStorage(key, defaults);
+      return defaults;
+    } catch (error) {
+      if (seedDefaults) throw error;
     }
 
+    const cached = this.getGenericData(key);
+    if (cached.length > 0) return cached;
     const defaults = this.getDropdownDefaults(groupKey);
     this.genericCache.set(key, defaults);
     saveToStorage(key, defaults);
-    this.saveGenericData(key, defaults);
     return defaults;
   }
 
-  public saveDropdownOption(groupKey: string, option: DropdownOptionItem): DropdownOptionItem[] {
+  public async saveDropdownOption(groupKey: string, option: DropdownOptionItem): Promise<DropdownOptionItem[]> {
     const key = `dropdown_${groupKey}`;
     const current = this.getDropdownOptions(groupKey);
     const existingIndex = current.findIndex((o) => o.id === option.id);
     const codeValue = option.code != null ? String(option.code).trim() : '';
-
+    const payload = { ...option, code: codeValue };
+    const response = existingIndex >= 0
+      ? await collectionsApi.update<DropdownOptionItem>(key, option.id, payload)
+      : await collectionsApi.create<DropdownOptionItem>(key, payload);
+    const saved = response.data?.record;
+    if (!saved || typeof saved !== 'object') throw new Error('Máy chủ không trả về mục danh mục đã lưu.');
     let updated: DropdownOptionItem[];
     if (existingIndex >= 0) {
       updated = [...current];
-      updated[existingIndex] = {
-        ...updated[existingIndex],
-        ...option,
-        code: codeValue,
-      };
+      updated[existingIndex] = saved;
     } else {
-      const newOption: DropdownOptionItem = {
-        ...option,
-        id: option.id || `opt-${groupKey}-${Date.now()}`,
-        code: codeValue,
-        order: option.order || current.length + 1,
-        isActive: option.isActive !== false,
-      };
-      updated = [...current, newOption];
+      updated = [...current, saved];
     }
-    this.saveGenericData(key, updated);
+    this.genericCache.set(key, updated);
+    saveToStorage(key, updated);
+    this.notify();
     return updated;
   }
 
-  public deleteDropdownOption(groupKey: string, id: string): DropdownOptionItem[] {
+  public async deleteDropdownOption(groupKey: string, id: string): Promise<DropdownOptionItem[]> {
     const key = `dropdown_${groupKey}`;
+    await collectionsApi.remove(key, id);
     const current = this.getDropdownOptions(groupKey);
     const updated = current.filter((o) => o.id !== id);
-    this.saveGenericData(key, updated);
+    this.genericCache.set(key, updated);
+    saveToStorage(key, updated);
+    this.notify();
     return updated;
   }
 
-  public resetDropdownDefaults(groupKey: string): DropdownOptionItem[] {
+  public async resetDropdownDefaults(groupKey: string): Promise<DropdownOptionItem[]> {
     const key = `dropdown_${groupKey}`;
     const defaults = this.getDropdownDefaults(groupKey);
-    this.saveGenericData(key, defaults);
-    return defaults;
+    const response = await collectionsApi.replace(key, defaults);
+    const saved = response.data?.data;
+    if (!Array.isArray(saved)) throw new Error('Máy chủ không xác nhận danh mục mặc định.');
+    this.genericCache.set(key, saved);
+    saveToStorage(key, saved);
+    this.notify();
+    return saved;
   }
 
   private getDropdownDefaults(groupKey: string): DropdownOptionItem[] {
@@ -1931,6 +1946,9 @@ export interface DropdownOptionItem {
   id: string;
   name: string;
   code?: string;
+  department?: string;
+  positionGroup?: string;
+  title?: string;
   color?: string;
   order?: number;
   description?: string;
