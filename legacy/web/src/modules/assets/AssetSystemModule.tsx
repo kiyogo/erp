@@ -134,7 +134,6 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
         budgetLimit,
         depreciationMonthsDefault,
       }) as SystemConfigItem;
-      setData((previous) => [newItem, ...previous]);
       message.success(`Đã lưu thiết lập ${newItem.code} lên máy chủ.`);
       setModalOpen(false);
       form.resetFields();
@@ -200,7 +199,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
     `Người phụ trách: ${item.responsiblePerson}`,
     `Nội dung: ${item.details}`,
     ...(item.notes ? [`Ghi chú: ${item.notes}`] : []),
-    'Quy tắc mã và khấu hao áp dụng khi khớp cấu hình đang hoạt động. Định mức, vị trí và nhà cung cấp chưa được nối vào quy trình tạo tài sản.',
+    'Quy tắc mã và khấu hao được áp dụng khi khớp cấu hình đang hoạt động. Vị trí và nhà cung cấp hiện được gợi ý trong hồ sơ tài sản; định mức được hiển thị khi lập phiếu cấp phát để đối chiếu ngoại lệ.',
   ]));
 
   return (
