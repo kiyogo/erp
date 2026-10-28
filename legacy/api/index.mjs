@@ -4942,6 +4942,173 @@ async function createInventoryTransaction(actor, input) {
   return { transaction, replayed };
 }
 
+async function receiveInventoryShipmentReturn(actor, shipmentCode, input) {
+  const returnCode = requiredText(input.returnCode, 'Mã phiếu nhận trả', 100).toLocaleUpperCase('vi-VN');
+  const receivedDate = requiredIsoDate(input.receivedDate, 'Ngày nhận hàng về');
+  const linesInput = input.lines;
+  if (!Array.isArray(linesInput) || linesInput.length < 1 || linesInput.length > 100) {
+    throw new HttpError(422, 'Chọn ít nhất một dòng hàng để nhận trả.');
+  }
+  const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  const timestamp = now();
+  let result;
+  await db.transaction(async () => {
+    if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_inventory'))");
+    const duplicate = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(returnCode);
+    if (duplicate) {
+      const receipt = publicCollectionRecord(duplicate);
+      if (receipt.shipmentReturnOf !== shipmentCode || receipt.requestFingerprint !== fingerprint) {
+        throw new HttpError(409, 'Mã phiếu nhận trả đã được dùng cho nội dung khác.');
+      }
+      const parentRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(shipmentCode);
+      result = { receipt, transaction: parentRow ? publicCollectionRecord(parentRow) : null, replayed: true };
+      return;
+    }
+
+    const shipmentRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(shipmentCode);
+    if (!shipmentRow) throw new HttpError(404, 'Không tìm thấy phiếu giao hàng.');
+    const shipment = publicCollectionRecord(shipmentRow);
+    if (shipment.type !== 'Giao hàng') throw new HttpError(422, 'Giao dịch này không phải phiếu giao hàng.');
+    if (shipment.shipmentStatus !== 'Giao thất bại') throw new HttpError(409, 'Chỉ nhận hàng về sau khi phiếu giao hàng được xác nhận thất bại.');
+    if (returnCode === shipmentCode) throw new HttpError(409, 'Mã phiếu nhận trả phải khác mã phiếu giao hàng.');
+    if (!Array.isArray(shipment.lines) || !shipment.lines.length) throw new HttpError(409, 'Phiếu giao hàng không có dòng hàng hợp lệ để đối chiếu.');
+
+    const previousReturns = Array.isArray(shipment.shipmentReturns) ? shipment.shipmentReturns : [];
+    const seenLines = new Set();
+    const productRows = new Map();
+    const changed = new Set();
+    const receiptLines = [];
+    const movements = [];
+    for (const entry of linesInput) {
+      const lineIndex = Number(entry?.lineIndex);
+      if (!Number.isSafeInteger(lineIndex) || lineIndex < 0 || lineIndex >= shipment.lines.length || seenLines.has(lineIndex)) {
+        throw new HttpError(422, 'Dòng hàng nhận trả không hợp lệ hoặc bị lặp.');
+      }
+      seenLines.add(lineIndex);
+      const requestedQty = inventoryQuantity(entry.quantity, 'Số lượng nhận lại');
+      const shipmentLine = shipment.lines[lineIndex];
+      if (!shipmentLine.itemKey) throw new HttpError(409, `Dòng ${shipmentLine.sku || lineIndex + 1} không còn mã mặt hàng để cộng tồn.`);
+      let item = productRows.get(shipmentLine.itemKey);
+      if (!item) {
+        const productRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory' AND record_key = ? ORDER BY created_at LIMIT 1").get(shipmentLine.itemKey);
+        if (!productRow) throw new HttpError(404, `Không tìm thấy mặt hàng ${shipmentLine.sku || shipmentLine.itemKey}.`);
+        const product = publicCollectionRecord(productRow);
+        item = { row: productRow, product, lots: inventoryLots(product, receivedDate) };
+        productRows.set(shipmentLine.itemKey, item);
+      }
+
+      const originLots = Array.isArray(shipmentLine.allocatedLots) && shipmentLine.allocatedLots.length
+        ? shipmentLine.allocatedLots
+        : [{
+          lotCode: shipmentLine.lotCode || (item.product.lotManaged ? 'LEGACY' : ''),
+          expiryDate: shipmentLine.expiryDate || '', quantity: shipmentLine.quantity,
+          unitCost: Number(shipmentLine.quantity) > 0 ? Number(shipmentLine.amount || 0) / Number(shipmentLine.quantity) : item.product.unitPrice,
+          receivedDate: shipment.transactionDate, receivedAt: shipment.transactionDate,
+        }];
+      const originalQty = inventoryQuantity(shipmentLine.quantity, 'Số lượng giao ban đầu');
+      const allocatedQty = originLots.reduce((sum, lot) => sum + inventoryQuantity(lot.quantity, 'Số lượng theo lô'), 0);
+      if (Math.abs(allocatedQty - originalQty) > 0.001) throw new HttpError(409, `Không đủ lịch sử lô của ${shipmentLine.sku} để nhận trả an toàn.`);
+
+      const returnedByOriginLot = new Map();
+      let returnedForLine = 0;
+      for (const receipt of previousReturns) {
+        for (const returnedLine of Array.isArray(receipt.lines) ? receipt.lines : []) {
+          if (Number(returnedLine.lineIndex) !== lineIndex) continue;
+          returnedForLine += Number(returnedLine.quantity) || 0;
+          for (const returnedLot of Array.isArray(returnedLine.allocatedLots) ? returnedLine.allocatedLots : []) {
+            const originIndex = Number(returnedLot.originLotIndex);
+            if (!Number.isSafeInteger(originIndex) || originIndex < 0) continue;
+            returnedByOriginLot.set(originIndex, (returnedByOriginLot.get(originIndex) || 0) + Number(returnedLot.quantity || 0));
+          }
+        }
+      }
+      const outstandingQty = Math.round((originalQty - returnedForLine) * 1000) / 1000;
+      if (requestedQty > outstandingQty + 0.0001) throw new HttpError(409, `${shipmentLine.sku} chỉ còn ${Math.max(0, outstandingQty)} ${item.product.unit} chưa nhận lại.`);
+
+      let remaining = requestedQty;
+      const returnedLots = [];
+      for (let originLotIndex = 0; originLotIndex < originLots.length && remaining > 0; originLotIndex += 1) {
+        const sourceLot = originLots[originLotIndex];
+        const available = Math.round((Number(sourceLot.quantity) - (returnedByOriginLot.get(originLotIndex) || 0)) * 1000) / 1000;
+        if (available <= 0) continue;
+        const quantity = Math.min(remaining, available);
+        const warehouse = requiredText(shipmentLine.warehouse || shipment.sourceWarehouse || 'Kho chính', 'Kho nhận hàng về', 160);
+        const lotCode = item.product.lotManaged
+          ? requiredText(sourceLot.lotCode, 'Số lô nhận lại', 80)
+          : optionalText(sourceLot.lotCode, 'Số lô nhận lại', 80);
+        const expiryDate = sourceLot.expiryDate ? requiredIsoDate(sourceLot.expiryDate, 'Hạn sử dụng lô nhận lại') : '';
+        if (item.product.lotManaged && !expiryDate) throw new HttpError(409, `${shipmentLine.sku} không có hạn sử dụng trong lịch sử lô giao; cần đối chiếu thủ công.`);
+        const unitCost = optionalAmount(sourceLot.unitCost ?? item.product.unitPrice, 'Giá vốn lô nhận lại');
+        const existingLot = item.lots.find((lot) => lot.warehouse === warehouse && lot.lotCode === lotCode);
+        if (existingLot) {
+          if (existingLot.expiryDate !== expiryDate) throw new HttpError(409, `Số lô ${lotCode || '(không mã)'} có hạn sử dụng khác tại ${warehouse}.`);
+          const nextQty = existingLot.quantity + quantity;
+          existingLot.unitCost = Math.round((existingLot.quantity * existingLot.unitCost + quantity * unitCost) / nextQty);
+          existingLot.quantity = Math.round(nextQty * 1000) / 1000;
+          const sourceReceivedAt = String(sourceLot.receivedAt || sourceLot.receivedDate || shipment.transactionDate);
+          if (sourceReceivedAt < String(existingLot.receivedAt || existingLot.receivedDate || receivedDate)) {
+            existingLot.receivedAt = sourceReceivedAt;
+            existingLot.receivedDate = String(sourceLot.receivedDate || sourceReceivedAt.slice(0, 10));
+          }
+        } else {
+          item.lots.push({
+            lotCode, warehouse, quantity, expiryDate, unitCost,
+            receivedDate: String(sourceLot.receivedDate || shipment.transactionDate),
+            receivedAt: String(sourceLot.receivedAt || sourceLot.receivedDate || shipment.transactionDate),
+          });
+        }
+        changed.add(shipmentLine.itemKey);
+        returnedLots.push({
+          originLotIndex, lotCode, warehouse, expiryDate, quantity, unitCost,
+          receivedDate: String(sourceLot.receivedDate || shipment.transactionDate),
+          receivedAt: String(sourceLot.receivedAt || sourceLot.receivedDate || shipment.transactionDate),
+        });
+        remaining = Math.round((remaining - quantity) * 1000) / 1000;
+      }
+      if (remaining > 0.0001) throw new HttpError(409, `${shipmentLine.sku} không đủ số lượng theo lô để nhận trả.`);
+      const amount = Math.round(returnedLots.reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0));
+      const lineAmount = Math.round(returnedLots.reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0) * 100) / 100;
+      const receiptLine = { lineIndex, itemKey: shipmentLine.itemKey, sku: shipmentLine.sku, name: shipmentLine.name, unit: item.product.unit, quantity: requestedQty, amount: lineAmount, allocatedLots: returnedLots };
+      receiptLines.push(receiptLine);
+      movements.push({
+        itemKey: shipmentLine.itemKey, sku: shipmentLine.sku, name: shipmentLine.name, unit: item.product.unit,
+        operation: 'Nhập kho', warehouse: returnedLots[0]?.warehouse || shipmentLine.warehouse || shipment.sourceWarehouse,
+        lotCode: returnedLots.length === 1 ? returnedLots[0].lotCode : '', quantity: requestedQty,
+        unitCost: requestedQty ? Math.round(amount / requestedQty) : 0, amount: lineAmount,
+        allocatedLots: returnedLots, shipmentCode, shipmentLineIndex: lineIndex,
+      });
+    }
+
+    const totalQuantity = Math.round(movements.reduce((sum, line) => sum + line.quantity, 0) * 1000) / 1000;
+    const totalAmount = Math.round(movements.reduce((sum, line) => sum + line.amount, 0));
+    const notes = optionalText(input.notes, 'Ghi chú nhận trả', 2_000);
+    const receipt = {
+      key: returnCode, transactionCode: returnCode, type: 'Nhập kho', transactionDate: receivedDate,
+      destinationWarehouse: shipment.sourceWarehouse || '', reason: `Nhận hàng giao thất bại ${shipmentCode}`,
+      notes, lines: movements, totalQuantity, totalAmount, status: 'Đã ghi nhận',
+      shipmentReturnOf: shipmentCode, shipmentReturnFingerprint: fingerprint,
+      requestFingerprint: fingerprint, createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+    };
+    const returnRecord = {
+      returnCode, transactionDate: receivedDate, actor: actor.name, actorId: actor.id,
+      notes, lines: receiptLines, totalQuantity, totalAmount,
+    };
+    for (const key of changed) {
+      const item = productRows.get(key);
+      const updated = inventorySummary(item.product, item.lots, actor, timestamp);
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updated), timestamp, item.row.id);
+    }
+    const updatedShipment = { ...shipment, shipmentReturns: [...previousReturns, returnRecord] };
+    await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedShipment), timestamp, shipmentRow.id);
+    await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+      VALUES (?, 'finance_inventory_transactions', ?, ?, ?, ?, ?)`).run(randomUUID(), returnCode, actor.id, JSON.stringify(receipt), timestamp, timestamp);
+    await recordAuditEvent(actor.id, 'inventory_shipment_return', 'finance_inventory_transactions', shipmentCode, { returnCode, totalQuantity, totalAmount });
+    await recordAuditEvent(actor.id, 'inventory_transaction', 'finance_inventory_transactions', returnCode, { type: 'Nhập kho', totalQuantity, totalAmount, shipmentCode });
+    result = { receipt, transaction: updatedShipment, replayed: false };
+  });
+  return result;
+}
+
 async function handleRequest(request, response) {
   allowOrigin(request, response);
   if (request.method === 'OPTIONS') {
@@ -6839,6 +7006,7 @@ async function handleRequest(request, response) {
     const payload = await readJson(request, 64 * 1024);
     const nextStatus = oneOf(payload.status, 'Trạng thái giao hàng', ['Đang giao', 'Đã giao', 'Giao thất bại']);
     const result = await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_inventory'))");
       const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(transactionCode);
       if (!row) throw new HttpError(404, 'Không tìm thấy giao dịch giao hàng.');
       const transaction = publicCollectionRecord(row);
@@ -6854,6 +7022,16 @@ async function handleRequest(request, response) {
       return updated;
     });
     sendJson(response, 200, { transaction: result });
+    return;
+  }
+
+  const inventoryShipmentReturn = /^\/finance\/inventory\/transactions\/([^/]+)\/returns$/.exec(resource);
+  if (request.method === 'POST' && inventoryShipmentReturn) {
+    const actor = await requireAdmin(request);
+    const transactionCode = requiredText(decodeURIComponent(inventoryShipmentReturn[1]), 'Mã giao dịch', 100).toLocaleUpperCase('vi-VN');
+    const payload = await readJson(request, 256 * 1024);
+    const result = await receiveInventoryShipmentReturn(actor, transactionCode, payload);
+    sendJson(response, result.replayed ? 200 : 201, result);
     return;
   }
 

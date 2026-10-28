@@ -75,6 +75,7 @@ type InventoryTransaction = {
   trackingNumber?: string;
   shipmentStatus?: string;
   shipmentHistory?: Array<{ from: string; to: string; at: string; actor: string; note?: string }>;
+  shipmentReturns?: Array<{ returnCode: string; transactionDate: string; actor: string; totalQuantity?: number; lines: Array<{ lineIndex: number; quantity: number }> }>;
   lines: InventoryLine[];
   totalQuantity: number;
   totalAmount: number;
@@ -125,6 +126,13 @@ const localDate = () => {
 };
 const money = (value: number) => `${Math.round(Number(value) || 0).toLocaleString('vi-VN')} ₫`;
 const newKey = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+const shipmentLineReturnedQty = (shipment: InventoryTransaction, lineIndex: number) => Math.round(
+  (shipment.shipmentReturns || []).reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + (line.lineIndex === lineIndex ? Number(line.quantity) || 0 : 0), 0), 0) * 1000,
+) / 1000;
+const shipmentLineRemainingQty = (shipment: InventoryTransaction, lineIndex: number) => Math.max(
+  0,
+  Math.round(((Number(shipment.lines?.[lineIndex]?.quantity) || 0) - shipmentLineReturnedQty(shipment, lineIndex)) * 1000) / 1000,
+);
 const newLine = (productKey = '', warehouse = 'Kho chính'): DraftLine => ({
   id: newKey(), productKey, quantity: '1', actualQty: '0', unitCost: '', lotCode: '', expiryDate: '',
   direction: 'Thành phần', warehouse,
@@ -151,6 +159,11 @@ export const InventoryModule: React.FC = () => {
   const [productDraft, setProductDraft] = useState<Record<string, any>>({});
   const [transactionDraft, setTransactionDraft] = useState<Record<string, any>>({});
   const [draftLines, setDraftLines] = useState<DraftLine[]>([]);
+  const [returnShipment, setReturnShipment] = useState<InventoryTransaction | null>(null);
+  const [returnCode, setReturnCode] = useState('');
+  const [returnDate, setReturnDate] = useState(localDate());
+  const [returnQuantities, setReturnQuantities] = useState<Record<number, string>>({});
+  const [returnNotes, setReturnNotes] = useState('');
 
   const refresh = async () => {
     setLoadError('');
@@ -377,6 +390,37 @@ export const InventoryModule: React.FC = () => {
     } finally { setSaving(false); }
   };
 
+  const openShipmentReturn = (transaction: InventoryTransaction) => {
+    setReturnShipment(transaction);
+    setReturnCode(`TH-${Date.now().toString(36).toUpperCase()}-${newKey().slice(0, 8).toUpperCase()}`);
+    setReturnDate(localDate());
+    setReturnQuantities(Object.fromEntries((transaction.lines || []).map((_, index) => [index, '0'])));
+    setReturnNotes('');
+  };
+
+  const submitShipmentReturn = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!returnShipment) return;
+    const lines = Object.entries(returnQuantities)
+      .map(([lineIndex, quantity]) => ({ lineIndex: Number(lineIndex), quantity: Number(quantity) || 0 }))
+      .filter((line) => line.quantity > 0);
+    if (!lines.length) {
+      message.error('Nhập số lượng hàng thực nhận và còn dùng được.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await inventoryApi.receiveShipmentReturn(returnShipment.transactionCode, {
+        returnCode, receivedDate: returnDate, notes: returnNotes, lines,
+      });
+      await refresh();
+      setReturnShipment(null);
+      message.success(result.data?.replayed ? 'Phiếu nhận trả đã được ghi nhận trước đó; không cộng trùng tồn kho.' : `Đã ghi nhận phiếu nhận trả ${result.data?.receipt?.transactionCode || returnCode}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không ghi nhận được hàng nhận trả.');
+    } finally { setSaving(false); }
+  };
+
   const removeProduct = async (item: InventoryItem) => {
     if (!window.confirm(`Xóa mặt hàng ${item.sku} khỏi danh mục? Chỉ xóa được khi không còn tồn và chưa có giao dịch.`)) return;
     try {
@@ -547,8 +591,9 @@ export const InventoryModule: React.FC = () => {
         { title: 'Đơn vị vận chuyển', dataIndex: 'carrier', key: 'carrier' },
         { title: 'Mã vận đơn', dataIndex: 'trackingNumber', key: 'tracking' },
         { title: 'Hàng giao', dataIndex: 'lines', key: 'lines', render: (lines: InventoryLine[] = []) => lines.map((line) => `${line.sku} × ${line.quantity}`).join(', ') },
+        { title: 'Đã nhận trả', key: 'returns', render: (_: unknown, item: InventoryTransaction) => (item.shipmentReturns || []).length ? `${(item.shipmentReturns || []).reduce((sum, receipt) => sum + Number(receipt.totalQuantity || receipt.lines?.reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0) || 0), 0)} · ${(item.shipmentReturns || []).length} phiếu` : '—' },
         { title: 'Trạng thái', dataIndex: 'shipmentStatus', key: 'shipmentStatus', render: (status: string) => <Tag color={status === 'Đã giao' ? 'success' : status === 'Giao thất bại' ? 'error' : 'processing'}>{status}</Tag> },
-        { title: 'Cập nhật', key: 'actions', render: (_: unknown, item: InventoryTransaction) => item.shipmentStatus === 'Chờ giao' ? <Button size="small" loading={saving} onClick={() => void updateShipment(item, 'Đang giao')}>Bắt đầu giao</Button> : item.shipmentStatus === 'Đang giao' ? <div style={{ display: 'flex', gap: 6 }}><Button size="small" type="primary" onClick={() => void updateShipment(item, 'Đã giao')}>Đã giao</Button><Button size="small" danger onClick={() => void updateShipment(item, 'Giao thất bại')}>Thất bại</Button></div> : '—' },
+        { title: 'Cập nhật', key: 'actions', render: (_: unknown, item: InventoryTransaction) => item.shipmentStatus === 'Chờ giao' ? <Button size="small" loading={saving} onClick={() => void updateShipment(item, 'Đang giao')}>Bắt đầu giao</Button> : item.shipmentStatus === 'Đang giao' ? <div style={{ display: 'flex', gap: 6 }}><Button size="small" type="primary" onClick={() => void updateShipment(item, 'Đã giao')}>Đã giao</Button><Button size="small" danger onClick={() => void updateShipment(item, 'Giao thất bại')}>Thất bại</Button></div> : item.shipmentStatus === 'Giao thất bại' && item.lines.some((_, index) => shipmentLineRemainingQty(item, index) > 0) ? <Button size="small" type="primary" loading={saving} onClick={() => openShipmentReturn(item)}>Nhận hàng về</Button> : item.shipmentStatus === 'Giao thất bại' ? 'Đã nhận đủ' : '—' },
       ]} /></Card>}
 
       {isCosting && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
@@ -658,6 +703,29 @@ export const InventoryModule: React.FC = () => {
           {isDelivery && <Field label="Ghi chú giao hàng"><textarea style={{ ...fieldStyle, minHeight: 60 }} value={transactionDraft.notes} onChange={(event) => updateTransaction('notes', event.target.value)} /></Field>}
           {isAssembly && <div style={{ color: '#64748B', fontSize: 12 }}>Chi phí thành phẩm được tính từ giá vốn thực tế của các dòng thành phần đã xuất.</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={() => setModalOpen(false)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Ghi nhận phiếu</Button></div>
+        </form>}
+      </Modal>
+      <Modal open={Boolean(returnShipment)} onCancel={() => { if (!saving) setReturnShipment(null); }} footer={null} width={720} title="Nhận hàng giao thất bại về kho">
+        {returnShipment && <form onSubmit={submitShipmentReturn} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 10 }}>
+          <div style={{ padding: 10, borderRadius: 8, background: '#FFF7ED', color: '#9A3412', fontSize: 12 }}>
+            Chỉ nhập số lượng đã nhận thực tế và còn dùng được. Hệ thống trả hàng về kho xuất ban đầu, giữ lô và giá vốn đã giao; hàng hỏng hoặc thiếu không được cộng vào tồn.
+          </div>
+          <div style={gridStyle}>
+            <Field label="Mã phiếu nhận trả"><input disabled style={fieldStyle} value={returnCode} /></Field>
+            <Field label="Ngày thực nhận"><input required type="date" style={fieldStyle} value={returnDate} onChange={(event) => setReturnDate(event.target.value)} /></Field>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(returnShipment.lines || []).map((line, index) => {
+              const returned = shipmentLineReturnedQty(returnShipment, index);
+              const remaining = shipmentLineRemainingQty(returnShipment, index);
+              return <div key={`${line.itemKey}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(180px, 260px)', gap: 12, alignItems: 'center', padding: 10, border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                <div><strong>{line.sku} · {line.name}</strong><div style={{ marginTop: 4, color: '#64748B', fontSize: 12 }}>Đã giao {line.quantity} {line.unit} · Đã nhận {returned} · Còn có thể nhận {remaining} · Kho {line.warehouse || returnShipment.sourceWarehouse}</div></div>
+                <Field label={`SL nhận lại dùng được (tối đa ${remaining})`}><input type="number" min={0} max={remaining} step="0.001" disabled={remaining <= 0} style={fieldStyle} value={returnQuantities[index] ?? '0'} onChange={(event) => setReturnQuantities((current) => ({ ...current, [index]: event.target.value }))} /></Field>
+              </div>;
+            })}
+          </div>
+          <Field label="Ghi chú hàng hỏng / thiếu hoặc đối chiếu"><textarea maxLength={2000} style={{ ...fieldStyle, minHeight: 64 }} value={returnNotes} onChange={(event) => setReturnNotes(event.target.value)} /></Field>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button disabled={saving} onClick={() => setReturnShipment(null)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Ghi nhận hàng về kho</Button></div>
         </form>}
       </Modal>
     </div>

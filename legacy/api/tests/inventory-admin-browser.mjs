@@ -72,6 +72,7 @@ try {
   const sku = `BROWSER-${suffix}`;
   const receiptCode = `PNK-BROWSER-${suffix}`;
   const deliveryCode = `GH-BROWSER-${suffix}`;
+  const failedDeliveryCode = `GH-FAIL-BROWSER-${suffix}`;
 
   const chrome = process.env.TEST_CHROME_PATH || (existsSync('C:/Program Files/Google/Chrome/Application/chrome.exe')
     ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : await puppeteer.executablePath());
@@ -121,6 +122,13 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     throw new Error(`Timed out waiting for ${label}: ${JSON.stringify(last)}`);
+  }
+  async function waitForShipmentAction(code, label) {
+    await page.waitForFunction(([shipmentCode, actionText]) => {
+      const row = [...document.querySelectorAll('tr')].find((item) => item.innerText.includes(shipmentCode));
+      const button = [...(row?.querySelectorAll('button') || [])].find((item) => item.textContent.trim() === actionText);
+      return Boolean(button && !button.disabled);
+    }, { timeout: 15000 }, [code, label]);
   }
 
   await page.goto(`${webUrl}/admin/finance/inventory`, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -193,6 +201,67 @@ try {
   assert.equal(finalProduct.body.record.stockQty, 4);
   assert.equal(finalShipment.shipmentHistory.length, 2);
 
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Tạo phiếu')?.click());
+  await page.waitForSelector('.ant-modal form');
+  await setModalField('Mã phiếu', failedDeliveryCode);
+  await setModalField('Người nhận', 'Người nhận vắng mặt');
+  await setModalField('Địa chỉ giao hàng', 'Hà Nội');
+  await setModalField('Mặt hàng', product.key);
+  await setModalField('Số lượng', '2');
+  await clickModalButton('Ghi nhận phiếu');
+  const failedShipment = await waitForInventory(async () => {
+    const result = await request(`/collections/finance_inventory_transactions/${encodeURIComponent(failedDeliveryCode)}`, token);
+    return result.status === 200 && result.body.record.shipmentStatus === 'Chờ giao' ? result.body.record : null;
+  }, 'failed delivery shipment creation');
+  await waitForShipmentAction(failedDeliveryCode, 'Bắt đầu giao');
+  await page.evaluate((code) => {
+    const row = [...document.querySelectorAll('tr')].find((item) => item.innerText.includes(code));
+    [...(row?.querySelectorAll('button') || [])].find((button) => button.textContent.trim() === 'Bắt đầu giao')?.click();
+  }, failedDeliveryCode);
+  await waitForInventory(async () => {
+    const result = await request(`/collections/finance_inventory_transactions/${encodeURIComponent(failedDeliveryCode)}`, token);
+    return result.status === 200 && result.body.record.shipmentStatus === 'Đang giao' ? result.body.record : null;
+  }, 'failed delivery in-transit state');
+  await waitForShipmentAction(failedDeliveryCode, 'Thất bại');
+  page.once('dialog', (dialog) => dialog.accept('Người nhận vắng mặt'));
+  await page.evaluate((code) => {
+    const row = [...document.querySelectorAll('tr')].find((item) => item.innerText.includes(code));
+    [...(row?.querySelectorAll('button') || [])].find((button) => button.textContent.trim() === 'Thất bại')?.click();
+  }, failedDeliveryCode);
+  const failedShipmentRecord = await waitForInventory(async () => {
+    const result = await request(`/collections/finance_inventory_transactions/${encodeURIComponent(failedDeliveryCode)}`, token);
+    return result.status === 200 && result.body.record.shipmentStatus === 'Giao thất bại' ? result.body.record : null;
+  }, 'failed delivery state');
+  const stockBeforeReturn = (await request(`/collections/finance_inventory/${encodeURIComponent(product.key)}`, token)).body.record.stockQty;
+  let completedShipmentAfterReturn = failedShipmentRecord;
+  for (const expectedReceiptCount of [1, 2]) {
+    await waitForShipmentAction(failedDeliveryCode, 'Nhận hàng về');
+    await page.evaluate((code) => {
+      const row = [...document.querySelectorAll('tr')].find((item) => item.innerText.includes(code));
+      [...(row?.querySelectorAll('button') || [])].find((button) => button.textContent.trim() === 'Nhận hàng về')?.click();
+    }, failedDeliveryCode);
+    await page.waitForFunction(() => document.body.innerText.includes('Nhận hàng giao thất bại về kho'), { timeout: 10000 });
+    await setModalField('SL nhận lại dùng được', '1');
+    await clickModalButton('Ghi nhận hàng về kho');
+    completedShipmentAfterReturn = await waitForInventory(async () => {
+      const result = await request(`/collections/finance_inventory_transactions/${encodeURIComponent(failedDeliveryCode)}`, token);
+      return result.status === 200 && result.body.record.shipmentReturns?.length === expectedReceiptCount ? result.body.record : null;
+    }, `shipment return ${expectedReceiptCount}`);
+    const returnedProduct = await waitForInventory(async () => {
+      const result = await request(`/collections/finance_inventory/${encodeURIComponent(product.key)}`, token);
+      return result.status === 200 && result.body.record.stockQty === stockBeforeReturn + expectedReceiptCount ? result.body.record : null;
+    }, `stock increase after shipment return ${expectedReceiptCount}`);
+    assert.equal(returnedProduct.stockQty, stockBeforeReturn + expectedReceiptCount);
+  }
+  await page.waitForFunction((code) => {
+    const row = [...document.querySelectorAll('tr')].find((item) => item.innerText.includes(code));
+    return row?.innerText.includes('Đã nhận đủ');
+  }, { timeout: 15000 }, failedDeliveryCode);
+  await page.waitForFunction(() => !document.body.innerText.includes('Nhận hàng giao thất bại về kho'), { timeout: 10000 });
+  assert.equal(failedShipment.lines[0].quantity, 2);
+  assert.equal(completedShipmentAfterReturn.shipmentStatus, 'Giao thất bại');
+  assert.equal(completedShipmentAfterReturn.shipmentReturns.length, 2);
+
   await page.goto(`${webUrl}/admin/finance/inventory/reports`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => document.body.innerText.includes('Báo cáo giao dịch kho'), { timeout: 20000 });
   await page.waitForFunction((code) => document.body.innerText.includes(code), { timeout: 15000 }, receiptCode);
@@ -207,7 +276,7 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('Luân chuyển hàng 12 tháng'), { timeout: 20000 });
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(inventoryApiErrors, []);
-  console.log(JSON.stringify({ checks: 'legacy web product creation; persisted receipt; shipment creation and status transitions; stock and delivery history; no page or inventory API errors', sku, receiptCode, deliveryCode, database: directory }));
+  console.log(JSON.stringify({ checks: 'legacy web product creation; persisted receipt; shipment creation and status transitions; partial failed-shipment returns; stock and delivery history; no page or inventory API errors', sku, receiptCode, deliveryCode, failedDeliveryCode, database: directory }));
 } catch (error) {
   if (page) {
     console.error('Browser page:', (await page.$eval('body', (node) => node.innerText).catch(() => '')).slice(-3000));

@@ -858,6 +858,8 @@ export const inventoryApi = {
     api.post<{ transaction: Record<string, any>; replayed: boolean }>('/finance/inventory/transactions', data),
   updateShipmentStatus: (transactionCode: string, status: string, reason?: string) =>
     api.post<{ transaction: Record<string, any> }>(`/finance/inventory/transactions/${encodeURIComponent(transactionCode)}/shipment-status`, { status, reason }),
+  receiveShipmentReturn: (transactionCode: string, data: { returnCode: string; receivedDate: string; notes?: string; lines: Array<{ lineIndex: number; quantity: number }> }) =>
+    api.post<{ receipt: Record<string, any>; transaction: Record<string, any>; replayed: boolean }>(`/finance/inventory/transactions/${encodeURIComponent(transactionCode)}/returns`, data),
 };
 
 export const assetsApi = {

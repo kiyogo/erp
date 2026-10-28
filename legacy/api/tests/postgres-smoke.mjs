@@ -50,6 +50,34 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  const inventoryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  await request('/collections/finance_inventory', 'POST', { record: {
+    key: 'pg-inventory-return', sku: 'PG-RETURN-01', name: 'PostgreSQL return test', category: 'Test', unit: 'Cái', warehouse: 'Kho A',
+    unitPrice: 1000, lotManaged: true, lots: [],
+  } }, 201);
+  await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-PG-RETURN-01', transactionDate: inventoryDate,
+    destinationWarehouse: 'Kho A', lines: [{ productKey: 'pg-inventory-return', quantity: 2, unitCost: 1000, lotCode: 'PG-LOT-01', expiryDate: '2032-01-01' }] }, 201);
+  const failedInventoryShipment = (await request('/finance/inventory/transactions', 'POST', { type: 'Giao hàng', transactionCode: 'GH-PG-RETURN-01', transactionDate: inventoryDate,
+    sourceWarehouse: 'Kho A', recipient: 'PG recipient', deliveryAddress: 'PostgreSQL test', lines: [{ productKey: 'pg-inventory-return', quantity: 2 }] }, 201)).transaction;
+  await request('/finance/inventory/transactions/GH-PG-RETURN-01/shipment-status', 'POST', { status: 'Đang giao' });
+  await request('/finance/inventory/transactions/GH-PG-RETURN-01/shipment-status', 'POST', { status: 'Giao thất bại', reason: 'PG return test' });
+  const pgReturnPayload = { returnCode: 'TH-PG-RETURN-01', receivedDate: inventoryDate, lines: [{ lineIndex: 0, quantity: 1 }] };
+  const pgReturnRace = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/inventory/transactions/GH-PG-RETURN-01/returns`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(pgReturnPayload),
+    });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(pgReturnRace.map(item => item.status).sort((a, b) => a - b), [200, 201]);
+  assert.equal(pgReturnRace.filter(item => item.body.replayed).length, 1);
+  assert.equal((await request('/collections/finance_inventory/pg-inventory-return')).record.stockQty, 1);
+  await request('/finance/inventory/transactions/GH-PG-RETURN-01/returns', 'POST', { ...pgReturnPayload, returnCode: 'TH-PG-RETURN-02' }, 201);
+  const pgReturnedShipment = (await request('/collections/finance_inventory_transactions/GH-PG-RETURN-01')).record;
+  const pgReturnedProduct = (await request('/collections/finance_inventory/pg-inventory-return')).record;
+  assert.equal(pgReturnedShipment.shipmentReturns.length, 2);
+  assert.equal(pgReturnedProduct.stockQty, 2);
+  assert.equal(pgReturnedProduct.lots.find(item => item.lotCode === 'PG-LOT-01').quantity, 2);
+  assert.equal(pgReturnedProduct.lots.find(item => item.lotCode === 'PG-LOT-01').unitCost, 1000); completed++;
   await request('/collections/asset_items', 'POST', { record: { key: 'pg-transfer-asset', code: 'PG-TRANSFER-ASSET', name: 'PG asset', status: 'Đang sử dụng', location: 'PG A', department: 'IT', assignedTo: 'PG A', originalPrice: 1000, netBookValue: 700, history: [] } }, 201);
   const pgAssetTransfer = (await request('/assets/transfers', 'POST', { transferCode: 'PG-TRANSFER-01', assetCode: 'PG-TRANSFER-ASSET', toLocation: 'PG B', toDepartment: 'Sales', toCustodian: 'PG B', carrierName: 'Carrier', shippingCost: 0, transferDate: '2030-01-01', expectedDeliveryDate: '2030-01-02', reason: 'PG transfer' }, 201)).transfer;
   await request(`/assets/transfers/${pgAssetTransfer.key}/approve`, 'POST', {});

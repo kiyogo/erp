@@ -1291,6 +1291,33 @@ test('inventory receipts, FIFO issues, transfers and counts persist batch stock 
   const delivered = await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Đã giao' }, 200);
   assert.equal(delivered.transaction.shipmentHistory.length, 2);
   await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Đang giao' }, 409);
+  await request('/finance/inventory/transactions/GH-INV-API-01/returns', 'POST', { returnCode: 'TH-DELIVERED-API-01', receivedDate: today, lines: [{ lineIndex: 0, quantity: 1 }] }, 409);
+
+  const failedShipment = await request('/finance/inventory/transactions', 'POST', { type: 'Giao hàng', transactionCode: 'GH-INV-API-RETURN-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', recipient: 'Phòng kỹ thuật', deliveryAddress: 'Hà Nội', lines: [{ productKey: itemKey, quantity: 2 }] }, 201);
+  await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/shipment-status', 'POST', { status: 'Đang giao' }, 200);
+  await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/shipment-status', 'POST', { status: 'Giao thất bại', reason: 'Người nhận không có mặt' }, 200);
+  await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/shipment-status', 'POST', { status: 'Đã giao' }, 409);
+  const beforeReturn = (await request(`/collections/finance_inventory/${itemKey}`)).record;
+  const returnPayload = { returnCode: 'TH-INV-API-RETURN-01', receivedDate: today, notes: 'Nhận một phần hàng còn nguyên', lines: [{ lineIndex: 0, quantity: 1 }] };
+  const invalidReturn = await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', { ...returnPayload, returnCode: 'TH-INV-API-INVALID', lines: [{ lineIndex: 99, quantity: 1 }] }, 422);
+  assert.equal(invalidReturn.message, 'Dòng hàng nhận trả không hợp lệ hoặc bị lặp.');
+  const returnOne = await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', returnPayload, 201);
+  assert.equal(returnOne.replayed, false);
+  assert.equal(returnOne.receipt.type, 'Nhập kho');
+  assert.equal(returnOne.receipt.shipmentReturnOf, 'GH-INV-API-RETURN-01');
+  assert.equal(returnOne.receipt.lines[0].allocatedLots[0].lotCode, failedShipment.transaction.lines[0].allocatedLots[0].lotCode);
+  assert.equal(returnOne.receipt.lines[0].allocatedLots[0].unitCost, failedShipment.transaction.lines[0].allocatedLots[0].unitCost);
+  assert.equal(returnOne.receipt.lines[0].allocatedLots[0].warehouse, 'Kho A');
+  assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, beforeReturn.stockQty + 1);
+  const replayedReturn = await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', returnPayload, 200);
+  assert.equal(replayedReturn.replayed, true);
+  assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, beforeReturn.stockQty + 1);
+  await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', { ...returnPayload, returnCode: 'TH-INV-API-TOO-MANY', lines: [{ lineIndex: 0, quantity: 2 }] }, 409);
+  const returnTwo = await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', { ...returnPayload, returnCode: 'TH-INV-API-RETURN-02', lines: [{ lineIndex: 0, quantity: 1 }] }, 201);
+  assert.equal(returnTwo.transaction.shipmentReturns.length, 2);
+  assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, beforeReturn.stockQty + 2);
+  assert.equal((await request('/collections/finance_inventory_transactions/TH-INV-API-RETURN-01')).record.shipmentReturnOf, 'GH-INV-API-RETURN-01');
 
   const commonMethodItem = (await request('/collections/finance_inventory', 'POST', { record: {
     key: 'inventory-common-method-api', sku: 'COMMON-METHOD-API', name: 'Vật tư theo phương pháp chung', category: 'Linh kiện', unit: 'Cái', warehouse: 'Kho C',
@@ -1326,6 +1353,7 @@ test('inventory receipts, FIFO issues, transfers and counts persist batch stock 
   await request('/collections/finance_inventory', 'GET', undefined, 403, employeeHeaders);
   await request('/finance/inventory/transactions', 'POST', receipt, 403, employeeHeaders);
   await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Giao thất bại', reason: 'Không liên hệ được' }, 403, employeeHeaders);
+  await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', returnPayload, 403, employeeHeaders);
 });
 
 test('asset maintenance API binds real inventory and employee data and records the full maintenance cycle', async () => {
