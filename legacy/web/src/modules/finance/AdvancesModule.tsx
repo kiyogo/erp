@@ -83,7 +83,7 @@ export const AdvancesModule: React.FC = () => {
       ]);
       setData((res.data?.data || []).map((item: any) => ({
         ...item,
-        key: item.id || item.key,
+        key: item.key || item.id,
         advancedAmount: Number(item.advancedAmount) || 0,
         issuedAmount: Number(item.issuedAmount ?? (item.status === 'Chờ cấp tạm ứng' ? 0 : item.advancedAmount)) || 0,
         spentAmount: Number(item.spentAmount) || 0,
@@ -98,6 +98,12 @@ export const AdvancesModule: React.FC = () => {
 
   const handleCreate = async (values: any) => {
     const adv = Number(values.advancedAmount);
+    const { employeeNumber, ...advanceValues } = values;
+    const empCode = String(employeeNumber || '').trim();
+    if (!empCode) {
+      message.error('Nhập mã nhân viên đã được cấp.');
+      return;
+    }
     if (!Number.isFinite(adv) || adv <= 0) {
       message.error('Số tiền tạm ứng phải lớn hơn 0.');
       return;
@@ -112,7 +118,8 @@ export const AdvancesModule: React.FC = () => {
       return;
     }
     const newItem: EnterpriseAdvanceItem = {
-      ...values,
+      ...advanceValues,
+      empCode,
       key: `advance-${crypto.randomUUID()}`,
       advancedAmount: adv,
       spentAmount: 0,
@@ -458,7 +465,7 @@ export const AdvancesModule: React.FC = () => {
             <Form.Item name="employeeName" label="Họ tên nhân viên tạm ứng" rules={[{ required: true }]}>
               <Input placeholder="Nhập tên nhân viên" />
             </Form.Item>
-            <Form.Item name="empCode" label="Mã nhân viên" rules={[{ required: true }]}><Input placeholder="Nhập mã đã cấp" /></Form.Item>
+            <Form.Item name="employeeNumber" label="Mã nhân viên" rules={[{ required: true }]}><Input placeholder="Nhập mã đã cấp" /></Form.Item>
             <Form.Item name="department" label="Phòng ban" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
               <Select
                 placeholder="Chọn phòng ban..."
@@ -473,7 +480,7 @@ export const AdvancesModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="advancedAmount" label="Số tiền tạm ứng (VNĐ)" rules={[{ required: true }]}>
-              <Input type="number" min={0} step={1000000} />
+              <Input type="number" min={0} step={1} />
             </Form.Item>
             <Form.Item name="settleDeadline" label="Hạn hoàn ứng / Nộp hóa đơn" rules={[{ required: true }]}>
               <Input type="date" />
