@@ -319,6 +319,15 @@ export const RecruitmentModule: React.FC = () => {
     } catch { message.error('Trình duyệt chưa cho phép sao chép. Mở vị trí rồi sao chép địa chỉ trên thanh trình duyệt.'); }
   };
 
+  const copyPublicRecruitmentLink = async () => {
+    if (!currentJob || currentJob.status !== 'Đang tuyển dụng') return;
+    const url = new URL(`/careers/${encodeURIComponent(currentJob.key)}`, window.location.origin);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      message.success('Đã sao chép liên kết ứng tuyển công khai.');
+    } catch { message.error('Trình duyệt chưa cho phép sao chép liên kết ứng tuyển.'); }
+  };
+
   const closeJob = () => {
     setDrawerOpen(false); setCandidateListOpen(false);
     if (searchParams.has('job')) { const next = new URLSearchParams(searchParams); next.delete('job'); setSearchParams(next, { replace: true }); }
@@ -717,16 +726,19 @@ export const RecruitmentModule: React.FC = () => {
             </div>
 
             {/* Action Buttons */}
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Button
-                style={{ flex: 1 }}
+                style={{ flex: 1, minWidth: 150 }}
                 onClick={() => void copyJobLink()}
               >
-                Copy Link Nội Bộ
+                Sao chép liên kết nội bộ
+              </Button>
+              <Button style={{ flex: 1, minWidth: 175 }} disabled={currentJob.status !== 'Đang tuyển dụng'} onClick={() => void copyPublicRecruitmentLink()}>
+                Sao chép liên kết ứng tuyển
               </Button>
               <Button
                 type="primary"
-                style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
+                style={{ flex: 1, minWidth: 170, backgroundColor: '#009688', borderColor: '#009688' }}
                 onClick={() => setCandidateListOpen(true)}
               >
                 Xem Hồ Sơ Ứng Viên ({currentJob.candidatesApplied})

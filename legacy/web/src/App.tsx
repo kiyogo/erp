@@ -39,6 +39,7 @@ import { EmployeeProfileWizard } from './modules/employee/EmployeeProfileWizard'
 import { EkycService } from './modules/ekyc/services/ekycService';
 import { adminUsageApi } from './api/endpoints';
 import { applicationCategoryForPath } from './modules/admin/usageRules';
+import PublicRecruitmentPage from './modules/hr/PublicRecruitmentPage';
 
 export const isAdminUser = (user: { role?: string } | null | undefined): boolean => {
   if (!user || !user.role) return false;
@@ -1130,6 +1131,8 @@ const App: React.FC = () => {
         <Route path="/activate-account" element={<ActivateAccount />} />
         <Route path="/files/document/:type/*" element={<DocumentEditorPage />} />
         <Route path="/files/document/*" element={<DocumentEditorPage />} />
+        <Route path="/careers" element={<PublicRecruitmentPage />} />
+        <Route path="/careers/:jobKey" element={<PublicRecruitmentPage />} />
         <Route path="/*" element={<AuthGuardRoute />} />
       </Routes>
     </Router>

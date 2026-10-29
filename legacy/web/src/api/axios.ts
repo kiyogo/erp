@@ -25,6 +25,8 @@ const isPublicPath = (pathname: string) => {
     path.startsWith('/login') ||
     path === '/activate-account' ||
     path.startsWith('/activate-account') ||
+    path === '/careers' ||
+    path.startsWith('/careers/') ||
     path.includes('/employee/identity/verification') ||
     path.startsWith('/files/document')
   );

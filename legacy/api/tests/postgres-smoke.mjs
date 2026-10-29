@@ -539,6 +539,24 @@ try {
   } }, 201)).record;
   assert.deepEqual([pgCandidate.region, pgCandidate.country, pgCandidate.province, pgCandidate.ward, pgCandidate.personalAccount, pgCandidate.source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/pg-candidate', 'Website tuyển dụng']);
   assert.equal(pgCandidate.talentPool, true);
+  const publicJobs = await fetch(`${base}/public/recruitment/jobs`);
+  assert.equal(publicJobs.status, 200);
+  assert.equal((await publicJobs.json()).data.some(item => item.key === pgRecruitmentJobKey), true);
+  const publicCv = Buffer.from('%PDF-1.4\nPostgreSQL public recruitment CV\n%%EOF\n');
+  const publicApplicationResponse = await fetch(`${base}/public/recruitment/jobs/${encodeURIComponent(pgRecruitmentJobKey)}/applications`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      name: 'PostgreSQL Public Applicant', email: `${randomUUID()}@example.test`, phone: '0900000000',
+      cv: { name: 'pg-public-cv.pdf', contentBase64: publicCv.toString('base64') },
+    }),
+  });
+  assert.equal(publicApplicationResponse.status, 201);
+  const publicApplication = await publicApplicationResponse.json();
+  const persistedPublicCandidate = (await request('/collections/hr_recruitment_candidates')).data.find(item => item.key === publicApplication.applicationCode);
+  assert.equal(persistedPublicCandidate.source, 'Website tuyển dụng');
+  assert.ok(persistedPublicCandidate.cvFileId);
+  const publicCvDownload = await fetch(`${base}/files/${persistedPublicCandidate.cvFileId}/download`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(publicCvDownload.status, 200);
+  assert.deepEqual(Buffer.from(await publicCvDownload.arrayBuffer()), publicCv);
   await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE', undefined, 409);
   await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'PATCH', { patch: { status: 'rejected' } });
   const pgCandidateDeletion = await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE');

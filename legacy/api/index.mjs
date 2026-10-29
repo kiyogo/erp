@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, verify as verifySignature } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import net from 'node:net';
@@ -40,8 +40,11 @@ const backupManager = createBackupManager({ db, filesDir: FILES_DIR, dataDir: DA
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LIMIT = 8;
+const PUBLIC_APPLICATION_WINDOW_MS = 10 * 60 * 1000;
+const PUBLIC_APPLICATION_LIMIT = 20;
 const TOKEN_TTL_SECONDS = 12 * 60 * 60;
 const loginAttempts = new Map();
+const publicApplicationAttempts = new Map();
 const ekycSessions = new Map();
 
 function cleanOldEkycSessions() {
@@ -5443,6 +5446,36 @@ function clearLoginFailures(key) {
   loginAttempts.delete(key);
 }
 
+function enforcePublicApplicationLimit(request) {
+  const timestamp = Date.now();
+  const key = String(request.socket.remoteAddress || 'unknown');
+  for (const [address, entry] of publicApplicationAttempts) {
+    if (timestamp - entry.windowStart >= PUBLIC_APPLICATION_WINDOW_MS) publicApplicationAttempts.delete(address);
+  }
+  const entry = publicApplicationAttempts.get(key);
+  if (entry && timestamp - entry.windowStart < PUBLIC_APPLICATION_WINDOW_MS && entry.count >= PUBLIC_APPLICATION_LIMIT) {
+    throw new HttpError(429, 'Bạn đã gửi quá nhiều hồ sơ trong thời gian ngắn. Vui lòng thử lại sau.');
+  }
+  if (!entry || timestamp - entry.windowStart >= PUBLIC_APPLICATION_WINDOW_MS) publicApplicationAttempts.set(key, { windowStart: timestamp, count: 1 });
+  else entry.count += 1;
+}
+
+async function ensurePublicRecruitmentFolder(ownerId) {
+  const root = await ensureStaffRoot();
+  const name = 'Hồ sơ ứng tuyển trực tuyến';
+  let folder = await db.prepare("SELECT * FROM file_nodes WHERE parent_id = ? AND LOWER(name) = LOWER(?) AND node_type = 'dir' AND deleted_at IS NULL LIMIT 1").get(root.id, name);
+  if (folder) return folder;
+  const timestamp = now();
+  const id = randomUUID();
+  await db.prepare(`INSERT INTO file_nodes (
+    id, parent_id, employee_id, owner_id, name, node_type, mime_type, size, storage_key,
+    origin_module, is_hidden, is_system, is_protected, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, 'dir', '', 0, NULL, 'hr_recruitment', 0, 0, 0, ?, ?)`)
+    .run(id, root.id, ownerId, ownerId, name, timestamp, timestamp);
+  folder = await db.prepare('SELECT * FROM file_nodes WHERE id = ?').get(id);
+  return folder;
+}
+
 function allowOrigin(request, response) {
   const origin = request.headers.origin;
   if (!origin) return;
@@ -6003,6 +6036,114 @@ async function handleRequest(request, response) {
   }
   if (resource.length > 1 && resource.endsWith('/')) {
     resource = resource.slice(0, -1);
+  }
+  if (request.method === 'GET' && resource === '/public/recruitment/jobs') {
+    const today = usageDateKey(new Date());
+    const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_job_openings' ORDER BY updated_at DESC, record_key ASC").all();
+    const jobs = rows.map(row => ({ key: row.record_key, ...parseJsonObject(row.payload_json) }))
+      .filter(job => job.status === 'Đang tuyển dụng' && job.deadline >= today)
+      .map(job => ({ key: job.key, jobCode: job.jobCode, title: job.title, department: job.department, level: job.level, salaryRange: job.salaryRange || '', deadline: job.deadline, experienceReq: job.experienceReq || '' }));
+    response.setHeader('Cache-Control', 'public, max-age=60');
+    sendJson(response, 200, { data: jobs });
+    return;
+  }
+  const publicRecruitmentJobMatch = /^\/public\/recruitment\/jobs\/([^/]+)$/.exec(resource);
+  if (request.method === 'GET' && publicRecruitmentJobMatch) {
+    const key = decodeURIComponent(publicRecruitmentJobMatch[1]);
+    const row = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_job_openings' AND record_key = ?").get(key);
+    const job = row && parseJsonObject(row.payload_json);
+    if (!job || job.status !== 'Đang tuyển dụng' || job.deadline < usageDateKey(new Date())) throw new HttpError(404, 'Tin tuyển dụng không còn nhận hồ sơ.');
+    response.setHeader('Cache-Control', 'public, max-age=60');
+    sendJson(response, 200, { job: { key, jobCode: job.jobCode, title: job.title, department: job.department, level: job.level, salaryRange: job.salaryRange || '', deadline: job.deadline, experienceReq: job.experienceReq || '' } });
+    return;
+  }
+  const publicRecruitmentApplicationMatch = /^\/public\/recruitment\/jobs\/([^/]+)\/applications$/.exec(resource);
+  if (request.method === 'POST' && publicRecruitmentApplicationMatch) {
+    enforcePublicApplicationLimit(request);
+    const jobKey = decodeURIComponent(publicRecruitmentApplicationMatch[1]);
+    const payload = await readJson(request, 15 * 1024 * 1024);
+    if (String(payload.website || '').trim()) { sendJson(response, 202, { submitted: true }); return; }
+    const existingJob = await db.prepare("SELECT * FROM collection_records WHERE scope = 'hr_job_openings' AND record_key = ?").get(jobKey);
+    const initialJob = existingJob && parseJsonObject(existingJob.payload_json);
+    if (!initialJob || initialJob.status !== 'Đang tuyển dụng' || initialJob.deadline < usageDateKey(new Date())) throw new HttpError(409, 'Tin tuyển dụng đã đóng hoặc hết hạn nhận hồ sơ.');
+    const owner = await getUserById(existingJob.owner_id);
+    if (!owner || owner.role !== 'ADMIN') throw new HttpError(409, 'Không thể tiếp nhận hồ sơ cho tin tuyển dụng này.');
+    const email = normalizeEmail(payload.email);
+    const candidateKey = `candidate-${randomUUID()}`;
+    const timestamp = now();
+    const appliedAt = usageDateKey(new Date(timestamp));
+    const candidate = {
+      key: candidateKey, jobKey, name: requiredText(payload.name, 'Họ tên', 160), email,
+      phone: optionalText(payload.phone, 'Điện thoại', 40), region: optionalText(payload.region, 'Khu vực', 160),
+      country: optionalText(payload.country, 'Quốc gia', 100), province: optionalText(payload.province, 'Tỉnh/Thành phố', 160),
+      ward: optionalText(payload.ward, 'Phường/Xã', 160), personalAccount: optionalText(payload.personalAccount, 'Tài khoản cá nhân', 500),
+      source: 'Website tuyển dụng', talentPool: false, status: 'applied', appliedAt,
+      interviewAt: '', interviewer: '', offerDate: '', hiredDate: '', notes: optionalText(payload.message, 'Lời nhắn', 5000),
+      cvFileId: '', cvFileName: '', history: [], createdAt: timestamp,
+    };
+
+    let cv = null;
+    if (payload.cv !== undefined && payload.cv !== null) {
+      if (!payload.cv || typeof payload.cv !== 'object' || Array.isArray(payload.cv)) throw new HttpError(422, 'Tệp CV không hợp lệ.');
+      const originalName = normalizeFileName(payload.cv.name, 'Tên tệp CV');
+      const extension = path.extname(originalName).toLowerCase();
+      if (!['.pdf', '.doc', '.docx'].includes(extension)) throw new HttpError(422, 'CV phải là tệp PDF, DOC hoặc DOCX.');
+      const encoded = String(payload.cv.contentBase64 || '');
+      if (!encoded || encoded.length > Math.ceil(10 * 1024 * 1024 / 3) * 4 + 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) throw new HttpError(422, 'Dữ liệu tệp CV không hợp lệ.');
+      const bytes = Buffer.from(encoded, 'base64');
+      if (!bytes.length || bytes.length > 10 * 1024 * 1024 || bytes.toString('base64') !== encoded) throw new HttpError(422, 'Tệp CV phải nhỏ hơn hoặc bằng 10 MB.');
+      const signatureValid = extension === '.pdf'
+        ? bytes.subarray(0, 5).toString('ascii') === '%PDF-'
+        : extension === '.docx'
+          ? bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))
+          : bytes.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+      if (!signatureValid) throw new HttpError(422, 'Nội dung tệp không khớp với định dạng CV đã chọn.');
+      const baseName = path.basename(originalName, extension).slice(0, 120) || 'CV';
+      const fileName = normalizeFileName(`${candidateKey}-${baseName}${extension}`, 'Tên tệp CV');
+      const mimeType = extension === '.pdf' ? 'application/pdf' : extension === '.docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword';
+      cv = { id: randomUUID(), name: fileName, mimeType, bytes, storageKey: `${randomUUID()}.bin` };
+      candidate.cvFileId = cv.id;
+      candidate.cvFileName = fileName;
+    }
+
+    let application;
+    try {
+      await db.transaction(async () => {
+        if (db.pool) {
+          await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get('hr_recruitment_candidates');
+          await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get('public-recruitment-files');
+        }
+        const jobRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'hr_job_openings' AND record_key = ?").get(jobKey);
+        const job = jobRow && parseJsonObject(jobRow.payload_json);
+        if (!jobRow || job.status !== 'Đang tuyển dụng' || job.deadline < usageDateKey(new Date())) throw new HttpError(409, 'Tin tuyển dụng đã đóng hoặc hết hạn nhận hồ sơ.');
+        const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'hr_recruitment_candidates' AND owner_id = ? AND LOWER(json_extract(payload_json, '$.jobKey')) = LOWER(?) AND LOWER(json_extract(payload_json, '$.email')) = LOWER(?) LIMIT 1").get(jobRow.owner_id, jobKey, email);
+        if (duplicate) throw new HttpError(409, 'Email này đã có hồ sơ cho vị trí tuyển dụng.');
+        if (cv) {
+          const folder = await ensurePublicRecruitmentFolder(jobRow.owner_id);
+          await writeFile(fileStoragePath(cv.storageKey), cv.bytes, { flag: 'wx' });
+          await db.prepare(`INSERT INTO file_nodes (
+            id, parent_id, employee_id, owner_id, name, node_type, mime_type, size, storage_key,
+            origin_module, is_hidden, is_system, is_protected, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'file', ?, ?, ?, 'hr_recruitment', 0, 0, 0, ?, ?)`)
+            .run(cv.id, folder.id, jobRow.owner_id, jobRow.owner_id, cv.name, cv.mimeType, cv.bytes.length, cv.storageKey, timestamp, timestamp);
+        }
+        const normalized = await normalizeCollectionRecord(candidate, 'hr_recruitment_candidates', owner);
+        normalized.record.history = [{ status: 'applied', at: timestamp, actor: 'Website tuyển dụng' }];
+        normalized.record.createdAt = timestamp;
+        normalized.serialized = JSON.stringify(normalized.record);
+        await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, 'hr_recruitment_candidates', ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), candidateKey, jobRow.owner_id, normalized.serialized, timestamp, timestamp);
+        await recordAuditEvent(null, 'public_application', 'hr_recruitment_candidates', candidateKey, { jobKey });
+        application = normalized.record;
+      });
+    } catch (error) {
+      if (cv) await unlink(fileStoragePath(cv.storageKey)).catch(() => {});
+      if (String(error?.message || '').includes('UNIQUE')) throw new HttpError(409, 'Email này đã có hồ sơ cho vị trí tuyển dụng.');
+      throw error;
+    }
+    sendJson(response, 201, { submitted: true, applicationCode: application.key });
+    return;
   }
   if (resource === '/assets/depreciation-runs' && request.method === 'POST') {
     sendJson(response, 200, await runAssetDepreciationBatch(request));
