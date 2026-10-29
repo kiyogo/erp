@@ -54,6 +54,7 @@ import { LeavePlansModule } from '../../modules/attendance/LeavePlansModule';
 import { CashTransactionsModule } from '../../modules/finance/CashTransactionsModule';
 import { BankAccountsModule } from '../../modules/finance/BankAccountsModule';
 import { CashFlowModule } from '../../modules/finance/CashFlowModule';
+import { CashCountModule } from '../../modules/finance/CashCountModule';
 import { PettyCashModule } from '../../modules/finance/PettyCashModule';
 import { LoansModule } from '../../modules/finance/LoansModule';
 import { CashForecastModule } from '../../modules/finance/CashForecastModule';
@@ -319,6 +320,8 @@ export const GenericModulePage: React.FC = () => {
   // 7. Finance
   if (p === '/finance/overview' || p === '/finance/analysis') return <FinanceOverviewModule />;
   if (p === '/finance/cash/flow') return <CashFlowModule />;
+  if (p === '/finance/cash/audit') return <CashCountModule />;
+  if (p === '/finance/cash/audit') return <CashCountModule />;
   if (p === '/finance/cash/petty') return <PettyCashModule />;
   if (p.startsWith('/finance/cash/loans')) return <LoansModule />;
   if (p === '/finance/cash/forecast') return <CashForecastModule />;
