@@ -1,10 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import {
-  AlertOutlined, ArrowDownOutlined, ArrowUpOutlined, BarChartOutlined, BarcodeOutlined,
-  BuildOutlined, CalculatorOutlined, CheckOutlined, CheckSquareOutlined, DownloadOutlined,
-  EnvironmentOutlined, InboxOutlined, PlusOutlined, SearchOutlined, SwapOutlined,
-} from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { inventoryApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
@@ -550,23 +546,6 @@ export const InventoryModule: React.FC = () => {
     ...(editingProduct?.stockByWarehouse || []).filter((entry) => Number(entry.quantity) > 0).map((entry) => entry.warehouse),
     ...(Array.isArray(productDraft.storageAssignments) ? productDraft.storageAssignments.map((entry: { warehouse: string }) => entry.warehouse) : []),
   ])].filter((warehouse) => warehouse && warehouse !== productDraft.warehouse);
-  const navItems = [
-    { label: 'Tổng quan', path: '/admin/finance/inventory', icon: <InboxOutlined /> },
-    { label: 'Danh mục', path: '/admin/finance/inventory/catalog', icon: <BarcodeOutlined /> },
-    { label: 'Sơ đồ kho', path: '/admin/finance/inventory/map', icon: <EnvironmentOutlined /> },
-    { label: 'Nhập kho', path: '/admin/finance/inventory/import', icon: <ArrowDownOutlined /> },
-    { label: 'Xuất kho', path: '/admin/finance/inventory/export', icon: <ArrowUpOutlined /> },
-    { label: 'Điều chuyển', path: '/admin/finance/inventory/transfer', icon: <SwapOutlined /> },
-    { label: 'Giao hàng', path: '/admin/finance/inventory/delivery', icon: <CheckOutlined /> },
-    { label: 'Lắp ráp', path: '/admin/finance/inventory/assembly', icon: <BuildOutlined /> },
-    { label: 'Kiểm kê', path: '/admin/finance/inventory/audit', icon: <CheckSquareOutlined /> },
-    { label: 'Tính giá', path: '/admin/finance/inventory/costing', icon: <CalculatorOutlined /> },
-    { label: 'Biểu đồ', path: '/admin/finance/inventory/charts', icon: <BarChartOutlined /> },
-    { label: 'Báo cáo', path: '/admin/finance/inventory/reports', icon: <CalculatorOutlined /> },
-    { label: 'Danh mục nhóm', path: '/admin/finance/inventory/categories', icon: <BarcodeOutlined /> },
-    { label: 'Cấu hình', path: '/admin/finance/inventory/settings', icon: <AlertOutlined /> },
-  ];
-
   const title = isImport ? 'Phiếu nhập kho' : isExport ? 'Phiếu xuất kho' : isTransfer ? 'Điều chuyển kho' : isAssembly ? 'Lắp ráp, tháo dỡ và lệnh sản xuất' : isAudit ? 'Kiểm kê tồn kho' : isCosting ? 'Tính giá xuất kho' : isCharts ? 'Phân tích kho hàng' : isDelivery ? 'Quản lý giao hàng' : isCategories ? 'Danh mục nhóm hàng' : isSettings ? 'Cấu hình kho hàng' : isCatalog ? 'Danh mục hàng hóa' : isReports ? 'Báo cáo giao dịch kho' : isWarehouseMap ? 'Sơ đồ kho' : 'Tổng quan kho hàng';
   const canCreateTransaction = isImport || isExport || isTransfer || isAssembly || isAudit || isDelivery;
 
@@ -618,10 +597,6 @@ export const InventoryModule: React.FC = () => {
           {isReports && <Button icon={<DownloadOutlined />} onClick={() => exportReport(reportTransactions)}>Xuất báo cáo CSV</Button>}
           <Button icon={<SearchOutlined />} onClick={() => void refresh()} loading={loading}>Làm mới</Button>
         </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-        {navItems.map((item) => <Link key={item.path} to={item.path} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 10px', border: '1px solid #E2E8F0', borderRadius: 6, background: currentPath === item.path.replace('/admin', '') ? '#E6FFFB' : '#fff', color: '#334155', textDecoration: 'none', fontSize: 12 }}>{item.icon}{item.label}</Link>)}
       </div>
 
       {loadError && <div role="alert" style={{ marginBottom: 12, padding: 10, border: '1px solid #FECACA', borderRadius: 6, color: '#B91C1C', background: '#FEF2F2' }}>{loadError}<Button size="small" onClick={() => void refresh()} style={{ marginLeft: 8 }}>Thử lại</Button></div>}

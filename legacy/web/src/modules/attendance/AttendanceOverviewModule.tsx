@@ -3,9 +3,8 @@ import {
   ClockCircleOutlined,
   ReloadOutlined,
   SettingOutlined,
-  DownOutlined,
 } from '@ant-design/icons';
-import { message } from '../../custom-ui';
+import { message, Select } from '../../custom-ui';
 import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
 import { dataService, type LeaveRequest } from '../../services/dataService';
 import { attendanceDate } from './attendanceRules';
@@ -81,40 +80,13 @@ const InlinePeriodSelect: React.FC<{
   onChange: (val: string) => void;
 }> = ({ value, options, onChange }) => {
   return (
-    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          appearance: 'none',
-          WebkitAppearance: 'none',
-          MozAppearance: 'none',
-          background: 'transparent',
-          border: 'none',
-          outline: 'none',
-          cursor: 'pointer',
-          paddingRight: '16px',
-          fontSize: '12px',
-          color: '#334155',
-          fontWeight: 400,
-        }}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-      <DownOutlined
-        style={{
-          position: 'absolute',
-          right: 0,
-          pointerEvents: 'none',
-          fontSize: 9,
-          color: '#64748B',
-        }}
-      />
-    </div>
+    <Select
+      size="small"
+      value={value}
+      options={options}
+      onChange={onChange}
+      style={{ width: 110, fontSize: 12 }}
+    />
   );
 };
 

@@ -59,6 +59,8 @@ export interface WorkShiftItem {
   status: 'Đang sử dụng' | 'Tạm ngưng';
 }
 
+export type EnterpriseWorkShift = WorkShiftItem;
+
 const DEFAULT_SHIFT: WorkShiftItem = {
   key: 'shift-hc-default',
   shiftCode: 'HC',
