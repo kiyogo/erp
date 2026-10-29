@@ -728,17 +728,21 @@ function accountingProfileMissing(profile) {
   const missing = ACCOUNTING_PROFILE_FIELDS.filter(([field]) => profile[field] === '' || profile[field] === null || profile[field] === undefined)
     .map(([, label]) => label);
   const allowedValues = new Map([
-    ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'other']],
-    ['companySize', ['micro', 'small', 'medium', 'large']],
-    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'other']],
+    ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'state_owned_enterprise', 'public_company', 'foreign_invested', 'nonprofit_organization', 'public_unit', 'foreign_representative_office', 'other']],
+    ['companySize', ['micro', 'small', 'medium', 'large', 'not_applicable']],
+    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', 'other']],
     ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
   ]);
   for (const [field, allowed] of allowedValues) {
     const [, label] = ACCOUNTING_PROFILE_FIELDS.find(([name]) => name === field) || [field, field];
     if (profile[field] && !allowed.includes(profile[field]) && !missing.includes(label)) missing.push(label);
   }
+  if (profile.accountingRegime && profile.legalForm && profile.companySize && !allowedAccountingRegimes(profile).includes(profile.accountingRegime)) {
+    missing.push('Chế độ kế toán không phù hợp với loại hình hoặc quy mô đã chọn');
+  }
   if (profile.legalForm === 'other' && !profile.legalFormOther) missing.push('Mô tả loại hình pháp nhân');
   if (profile.accountingRegime === 'other' && !profile.accountingRegimeOther) missing.push('Mô tả chế độ kế toán');
+  if (profile.legalForm === 'cooperative' && profile.accountingRegime === 'TT133' && profile.cooperativeUsesTT133 !== true) missing.push('Xác nhận điều kiện HTX quy mô lớn áp dụng TT133');
   if (profile.vatMethod === 'other' && !profile.vatMethodOther) missing.push('Mô tả phương pháp thuế GTGT');
   const month = Number(profile.fiscalYearStartMonth);
   const day = Number(profile.fiscalYearStartDay);
@@ -749,13 +753,25 @@ function accountingProfileMissing(profile) {
   return missing;
 }
 
+function allowedAccountingRegimes(profile) {
+  const specialRegime = ['other'];
+  if (profile.legalForm === 'household_business') return ['TT152', ...specialRegime];
+  if (profile.legalForm === 'cooperative') return ['TT24', ...(profile.companySize === 'large' ? ['TT133'] : []), ...specialRegime];
+  if (['state_owned_enterprise', 'public_company'].includes(profile.legalForm)) return ['TT99', ...specialRegime];
+  if (['nonprofit_organization', 'public_unit', 'foreign_representative_office'].includes(profile.legalForm)) return specialRegime;
+  if (profile.legalForm === 'branch' || profile.legalForm === 'other') return ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', ...specialRegime];
+  if (profile.companySize === 'micro') return ['TT99', 'TT133', 'TT132', ...specialRegime];
+  if (['small', 'medium'].includes(profile.companySize)) return ['TT99', 'TT133', ...specialRegime];
+  return ['TT99', ...specialRegime];
+}
+
 async function getCompanyProfile() {
   const row = await db.prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'company_profile'").get();
   const profile = {
     companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '',
     establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '',
     address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '',
-    legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '',
+    legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false,
     fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '',
     ...parseJsonObject(row?.setting_value),
   };
@@ -10666,13 +10682,18 @@ async function handleRequest(request, response) {
       profile = {};
       for (const field of ['companyName', 'fullName', 'shortName', 'companyCode', 'taxCode', 'businessType', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'address', 'phone', 'fax', 'email', 'website', 'domain', 'bankAccountId', 'legalFormOther', 'industry', 'accountingRegimeOther', 'vatMethodOther']) profile[field] = optionalText(payload[field], 'Thông tin công ty', field === 'address' ? 1000 : 300);
       for (const [field, allowed] of [
-        ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'other']],
-        ['companySize', ['micro', 'small', 'medium', 'large']],
-        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'other']],
+        ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'state_owned_enterprise', 'public_company', 'foreign_invested', 'nonprofit_organization', 'public_unit', 'foreign_representative_office', 'other']],
+        ['companySize', ['micro', 'small', 'medium', 'large', 'not_applicable']],
+        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', 'other']],
         ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
       ]) {
         const raw = payload[field];
         profile[field] = raw ? oneOf(raw, field, allowed) : '';
+      }
+      if (payload.cooperativeUsesTT133 !== undefined && typeof payload.cooperativeUsesTT133 !== 'boolean') throw new HttpError(422, 'Xác nhận điều kiện áp dụng TT133 phải là giá trị đúng hoặc sai.');
+      profile.cooperativeUsesTT133 = profile.legalForm === 'cooperative' && profile.accountingRegime === 'TT133' && payload.cooperativeUsesTT133 === true;
+      if (profile.accountingRegime && profile.legalForm && profile.companySize && !allowedAccountingRegimes(profile).includes(profile.accountingRegime)) {
+        throw new HttpError(422, 'Chế độ kế toán không phù hợp với loại hình hoặc quy mô đã chọn. Hãy xác nhận lại chế độ áp dụng.');
       }
       for (const field of ['fiscalYearStartMonth', 'fiscalYearStartDay']) {
         const raw = payload[field];
@@ -10706,7 +10727,7 @@ async function handleRequest(request, response) {
       if (profile.legalForm !== 'other') profile.legalFormOther = '';
       if (profile.accountingRegime !== 'other') profile.accountingRegimeOther = '';
       if (profile.vatMethod !== 'other') profile.vatMethodOther = '';
-      const accountingFields = ['legalForm', 'legalFormOther', 'companySize', 'industry', 'accountingRegime', 'accountingRegimeOther', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'vatMethodOther'];
+      const accountingFields = ['legalForm', 'legalFormOther', 'companySize', 'industry', 'accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'vatMethodOther'];
       const accountingProfileChanged = accountingFields.some(field => JSON.stringify(profile[field] ?? null) !== JSON.stringify(current[field] ?? null));
       if (current.accountingProfileComplete && accountingProfileChanged) {
         const existingLedgerEntry = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' LIMIT 1").get();

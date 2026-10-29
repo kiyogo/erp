@@ -17,7 +17,7 @@ import api from '../../api/axios';
 import { downloadFile, generateValidPdfBlob } from '../../utils/fileExporter';
 
 export const SystemSettingsModule: React.FC = () => {
-  const [profile, setProfile] = useState<CompanyProfile>({ companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '' });
+  const [profile, setProfile] = useState<CompanyProfile>({ companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false, fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '' });
   const [emailConfig, setEmailConfig] = useState<EmailGatewayConfig>({ host: '', port: 587, username: '', senderEmail: '', senderName: '', security: 'STARTTLS', portalUrl: '', enabled: false, passwordConfigured: false, configured: false });
   const [bankAccounts, setBankAccounts] = useState<FinanceBankAccount[]>([]);
   const [activeTab, setActiveTab] = useState<'legal' | 'accounting' | 'network' | 'smtp' | 'payment'>('legal');
@@ -28,6 +28,29 @@ export const SystemSettingsModule: React.FC = () => {
   const [latency, setLatency] = useState<number | null>(null);
 
   const changeProfile = <K extends keyof CompanyProfile>(field: K, value: CompanyProfile[K]) => setProfile(previous => ({ ...previous, [field]: value }));
+  const changeAccountingBasis = <K extends 'legalForm' | 'companySize'>(field: K, value: CompanyProfile[K]) => setProfile(previous => ({ ...previous, [field]: value, accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false }));
+  const changeAccountingRegime = (value: CompanyProfile['accountingRegime']) => setProfile(previous => ({ ...previous, accountingRegime: value, accountingRegimeOther: '', cooperativeUsesTT133: false }));
+  const regimeChoices = (() => {
+    const all = ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', 'other'] as const;
+    const labels = {
+      TT99: 'Thông tư 99/2025/TT-BTC',
+      TT133: 'Thông tư 133/2016/TT-BTC',
+      TT132: 'Thông tư 132/2018/TT-BTC (doanh nghiệp siêu nhỏ)',
+      TT24: 'Thông tư 24/2017/TT-BTC (hợp tác xã)',
+      TT152: 'Thông tư 152/2025/TT-BTC (hộ kinh doanh, cá nhân kinh doanh)',
+      other: 'Chế độ khác / đặc thù',
+    };
+    let values: readonly (typeof all[number])[];
+    if (profile.legalForm === 'household_business') values = ['TT152', 'other'];
+    else if (profile.legalForm === 'cooperative') values = ['TT24', ...(profile.companySize === 'large' ? ['TT133' as const] : []), 'other'];
+    else if (['state_owned_enterprise', 'public_company'].includes(profile.legalForm)) values = ['TT99', 'other'];
+    else if (['nonprofit_organization', 'public_unit', 'foreign_representative_office'].includes(profile.legalForm)) values = ['other'];
+    else if (['branch', 'other'].includes(profile.legalForm)) values = all;
+    else if (profile.companySize === 'micro') values = ['TT99', 'TT133', 'TT132', 'other'];
+    else if (['small', 'medium'].includes(profile.companySize)) values = ['TT99', 'TT133', 'other'];
+    else values = ['TT99', 'other'];
+    return values.map(value => ({ value, label: labels[value] }));
+  })();
   const load = async () => {
     setLoading(true);
     const started = performance.now();
@@ -174,26 +197,29 @@ export const SystemSettingsModule: React.FC = () => {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Loại hình pháp nhân
-                <Select aria-label="Loại hình pháp nhân" value={profile.legalForm || undefined} onChange={value => changeProfile('legalForm', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={[
+                <Select aria-label="Loại hình pháp nhân" value={profile.legalForm || undefined} onChange={value => changeAccountingBasis('legalForm', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={[
                   { value: 'private_enterprise', label: 'Doanh nghiệp tư nhân' }, { value: 'llc_single', label: 'Công ty TNHH một thành viên' },
                   { value: 'llc_multiple', label: 'Công ty TNHH từ hai thành viên' }, { value: 'joint_stock', label: 'Công ty cổ phần' },
-                  { value: 'partnership', label: 'Công ty hợp danh' }, { value: 'household_business', label: 'Hộ kinh doanh' },
-                  { value: 'cooperative', label: 'Hợp tác xã / Liên hiệp hợp tác xã' }, { value: 'branch', label: 'Chi nhánh / đơn vị phụ thuộc' }, { value: 'other', label: 'Loại hình khác' },
+                  { value: 'partnership', label: 'Công ty hợp danh' }, { value: 'state_owned_enterprise', label: 'Doanh nghiệp nhà nước' },
+                  { value: 'public_company', label: 'Công ty đại chúng' }, { value: 'foreign_invested', label: 'Doanh nghiệp có vốn đầu tư nước ngoài' },
+                  { value: 'household_business', label: 'Hộ kinh doanh / cá nhân kinh doanh' },
+                  { value: 'cooperative', label: 'Hợp tác xã / Liên hiệp hợp tác xã' }, { value: 'branch', label: 'Chi nhánh / đơn vị phụ thuộc' },
+                  { value: 'nonprofit_organization', label: 'Tổ chức xã hội / phi lợi nhuận' }, { value: 'public_unit', label: 'Đơn vị sự nghiệp / đơn vị công' },
+                  { value: 'foreign_representative_office', label: 'Văn phòng đại diện nước ngoài' }, { value: 'other', label: 'Loại hình khác' },
                 ]} />
               </label>
               {profile.legalForm === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả loại hình<Input aria-label="Mô tả loại hình pháp nhân khác" value={profile.legalFormOther} onChange={event => changeProfile('legalFormOther', event.target.value)} /></label>}
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Quy mô doanh nghiệp
-                <Select aria-label="Quy mô doanh nghiệp" value={profile.companySize || undefined} onChange={value => changeProfile('companySize', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={[
+                <Select aria-label="Quy mô doanh nghiệp" value={profile.companySize || undefined} onChange={value => changeAccountingBasis('companySize', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={[
                   { value: 'micro', label: 'Siêu nhỏ' }, { value: 'small', label: 'Nhỏ' }, { value: 'medium', label: 'Vừa' }, { value: 'large', label: 'Lớn' },
+                  { value: 'not_applicable', label: 'Không áp dụng quy mô doanh nghiệp nhỏ và vừa' },
                 ]} />
               </label>
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Ngành nghề chính<Input aria-label="Ngành nghề chính" value={profile.industry} onChange={event => changeProfile('industry', event.target.value)} placeholder="Khai báo theo hoạt động thực tế" /></label>
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Chế độ kế toán
-                <Select aria-label="Chế độ kế toán" value={profile.accountingRegime || undefined} onChange={value => changeProfile('accountingRegime', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={[
-                  { value: 'TT99', label: 'Thông tư 99/2025/TT-BTC' }, { value: 'TT133', label: 'Thông tư 133/2016/TT-BTC' },
-                  { value: 'TT132', label: 'Thông tư 132/2018/TT-BTC' }, { value: 'other', label: 'Chế độ khác / đặc thù' },
-                ]} />
+                <Select aria-label="Chế độ kế toán" value={profile.accountingRegime || undefined} onChange={changeAccountingRegime} style={{ display: 'block', width: '100%', marginTop: 6 }} options={regimeChoices} />
               </label>
+              {profile.legalForm === 'cooperative' && profile.companySize === 'large' && profile.accountingRegime === 'TT133' && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: '#334155' }}><input aria-label="Xác nhận điều kiện hợp tác xã áp dụng TT133" type="checkbox" checked={profile.cooperativeUsesTT133} onChange={event => changeProfile('cooperativeUsesTT133', event.target.checked)} />Hợp tác xã có quy mô lớn, có nhiều giao dịch mà Thông tư 24 chưa quy định và xác nhận áp dụng Thông tư 133 cho các giao dịch đó.</label>}
               {profile.accountingRegime === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả chế độ kế toán<Input aria-label="Mô tả chế độ kế toán khác" value={profile.accountingRegimeOther} onChange={event => changeProfile('accountingRegimeOther', event.target.value)} /></label>}
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Tháng bắt đầu năm tài chính
                 <Select aria-label="Tháng bắt đầu năm tài chính" value={profile.fiscalYearStartMonth ?? undefined} onChange={value => changeProfile('fiscalYearStartMonth', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={Array.from({ length: 12 }, (_, index) => ({ value: index + 1, label: `Tháng ${index + 1}` }))} />
@@ -209,7 +235,7 @@ export const SystemSettingsModule: React.FC = () => {
               </label>
               {profile.vatMethod === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả phương pháp GTGT<Input aria-label="Mô tả phương pháp GTGT khác" value={profile.vatMethodOther} onChange={event => changeProfile('vatMethodOther', event.target.value)} /></label>}
             </div>
-            <div style={{ color: '#64748B', fontSize: 12 }}>Quy mô và chế độ phải được xác nhận theo hồ sơ doanh nghiệp và ngành nghề. Hệ thống không tự suy luận chế độ kế toán hay phương pháp thuế.</div>
+            <div style={{ color: '#64748B', fontSize: 12 }}>Hộ kinh doanh chọn TT152. Hợp tác xã chọn TT24; chỉ hợp tác xã quy mô lớn mới được chọn TT133 khi có nhiều giao dịch mà TT24 chưa quy định. TT132 chỉ dành cho doanh nghiệp siêu nhỏ; TT133 chỉ dành cho doanh nghiệp nhỏ và vừa đủ điều kiện. Xác nhận theo hồ sơ pháp lý trước khi ghi sổ.</div>
           </div>
         )}
         {activeTab === 'legal' && (
