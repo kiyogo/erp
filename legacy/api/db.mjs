@@ -280,6 +280,7 @@ export async function initDatabaseSchema() {
       account_name TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('Đã hoàn thành', 'Chờ duyệt', 'Đã hủy')),
       note TEXT NOT NULL DEFAULT '',
+      journal_lines_json TEXT NOT NULL DEFAULT '[]',
       department TEXT,
       employee_code TEXT,
       created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -731,6 +732,7 @@ export async function initDatabaseSchema() {
     ['source_account_id', 'TEXT'],
     ['counterparty_type', "TEXT NOT NULL DEFAULT 'other'"],
     ['counterparty_contact_id', 'TEXT'],
+    ['journal_lines_json', "TEXT NOT NULL DEFAULT '[]'"],
   ]) {
     if (cashColumns.has(name)) continue;
     await exec(`ALTER TABLE finance_cash_transactions ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}${name} ${definition}`);

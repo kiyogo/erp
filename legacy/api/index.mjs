@@ -1448,6 +1448,7 @@ function publicCashTransaction(row) {
     account: row.account_name,
     status: row.status,
     note: row.note,
+    journalLines: (() => { try { const value = JSON.parse(row.journal_lines_json || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } })(),
     department: row.department || '',
     employeeCode: row.employee_code || '',
     sourceAccountId: row.source_account_id || '',
@@ -4814,12 +4815,32 @@ function validateCashCategory(input) {
 }
 
 function validateCashTransaction(input) {
+  const amount = requiredAmount(input.amount, 'Số tiền');
+  const journalLines = input.journalLines === undefined ? [] : input.journalLines;
+  if (!Array.isArray(journalLines) || journalLines.length > 100) throw new HttpError(422, 'Dòng hạch toán phải là danh sách tối đa 100 dòng.');
+  const normalizedJournalLines = journalLines.map((line, index) => {
+    const debitAccount = requiredText(line?.debitAccount, `Tài khoản Nợ dòng ${index + 1}`, 24);
+    const creditAccount = requiredText(line?.creditAccount, `Tài khoản Có dòng ${index + 1}`, 24);
+    const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
+    if (!accountPattern.test(debitAccount) || !accountPattern.test(creditAccount)) throw new HttpError(422, `Mã tài khoản dòng ${index + 1} phải có dạng số.`);
+    if (debitAccount.replace(/\s+/g, '').toUpperCase() === creditAccount.replace(/\s+/g, '').toUpperCase()) throw new HttpError(422, `Tài khoản Nợ và Có dòng ${index + 1} phải khác nhau.`);
+    return {
+      description: requiredText(line?.description, `Diễn giải dòng ${index + 1}`, 500),
+      debitAccount,
+      creditAccount,
+      amount: requiredAmount(line?.amount, `Số tiền dòng ${index + 1}`),
+    };
+  });
+  if (normalizedJournalLines.length && normalizedJournalLines.reduce((sum, line) => sum + line.amount, 0) !== amount) {
+    throw new HttpError(422, 'Tổng tiền các dòng hạch toán phải bằng số tiền phiếu.');
+  }
   return {
     code: '',
     type: oneOf(input.type, 'Loại chứng từ', ['Thu', 'Chi']),
     source: oneOf(input.source || 'bank', 'Nguồn tiền', ['bank', 'petty']),
     category: requiredText(input.category, 'Nội dung thu chi', 500),
-    amount: requiredAmount(input.amount, 'Số tiền'),
+    amount,
+    journalLines: normalizedJournalLines,
     date: requiredIsoDate(input.date, 'Ngày hạch toán'),
     recipientOrPayer: requiredText(input.recipientOrPayer, 'Đối tác hoặc người nhận', 200),
     account: requiredText(input.account, 'Tài khoản hoặc quỹ tiền', 200),
@@ -8975,13 +8996,13 @@ async function handleRequest(request, response) {
     const timestamp = now();
     await db.prepare(`INSERT INTO finance_cash_transactions (
       id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-      account_name, status, note, department, employee_code, source_account_id, counterparty_type,
+      account_name, status, note, journal_lines_json, department, employee_code, source_account_id, counterparty_type,
       counterparty_contact_id, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(
         id, transaction.code, transaction.type, transaction.source, transaction.category,
         transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
-        transaction.status, transaction.note, transaction.department || null, transaction.employeeCode || null,
+        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), transaction.department || null, transaction.employeeCode || null,
         transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
         actor.id, timestamp, timestamp,
       );
@@ -9019,15 +9040,17 @@ async function handleRequest(request, response) {
         date: current.transaction_date, recipientOrPayer: current.counterparty, account: current.account_name,
         status: current.status, note: current.note, department: current.department || '', employeeCode: current.employee_code || '',
         sourceAccountId: current.source_account_id || '', counterpartyType: current.counterparty_type || 'other',
-        counterpartyContactId: current.counterparty_contact_id || '', ...payload,
+        counterpartyContactId: current.counterparty_contact_id || '',
+        journalLines: (() => { try { return JSON.parse(current.journal_lines_json || '[]'); } catch { return []; } })(), ...payload,
       }));
       const result = await db.prepare(`UPDATE finance_cash_transactions SET
         source = ?, category = ?, amount = ?, transaction_date = ?, counterparty = ?, account_name = ?, note = ?,
-        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, updated_at = ?
+        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, journal_lines_json = ?, updated_at = ?
         WHERE id = ? AND status = 'Chờ duyệt'`)
         .run(transaction.source, transaction.category, transaction.amount, transaction.date, transaction.recipientOrPayer,
           transaction.account, transaction.note, transaction.department || null, transaction.employeeCode || null,
-          transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null, timestamp, id);
+          transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
+          JSON.stringify(transaction.journalLines), timestamp, id);
       if (!result.changes) throw new HttpError(409, 'Phiếu đã được cập nhật ở nơi khác. Hãy tải lại danh sách rồi thử lại.');
       await recordAuditEvent(actor.id, 'update_cash_transaction', 'finance_cash_transactions', id, {
         code: current.code, amount: transaction.amount, source: transaction.source,

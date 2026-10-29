@@ -16,8 +16,6 @@ import {
   RocketOutlined,
   WarningOutlined,
   CloseOutlined,
-  ExpandOutlined,
-  CompressOutlined,
   FilterOutlined,
   PushpinOutlined,
   PaperClipOutlined,
@@ -63,6 +61,27 @@ export const ONBOARDING_WORK_TYPES = [
   'Thực hiện trên ứng dụng',
   'Thực hiện bên ngoài',
 ] as const;
+
+const SAMPLE_CANDIDATE_EMPLOYEES: EnterpriseEmployee[] = [
+  {
+    id: 'emp-sample-1',
+    userId: 'emp-sample-1',
+    employeeCode: 'NV000001',
+    code: 'NV000001',
+    name: 'Nguyễn MI SA NGU',
+    fullName: 'Nguyễn MI SA NGU',
+    department: 'CÔNG TY TNHH XÂY DỰNG KINH SỞ',
+    position: '-',
+    joinDate: '-',
+    status: 'Thử việc',
+    role: 'USER',
+    isActive: true,
+    activationStatus: 'active',
+    salaryBase: 0,
+    createdAt: '',
+    updatedAt: '',
+  },
+];
 
 type OnboardingStep = { key: typeof onboardingSteps[number]['key']; completed: boolean; completedAt?: string; completedBy?: string };
 
@@ -127,7 +146,6 @@ export const OnboardingModule: React.FC = () => {
 
   // Dialog Thêm nhân viên hội nhập (Ảnh 1)
   const [modalOpen, setModalOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [candidateSearch, setCandidateSearch] = useState('');
   const [candidateDept, setCandidateDept] = useState('');
   const [selectedEmpKeys, setSelectedEmpKeys] = useState<string[]>([]);
@@ -164,12 +182,14 @@ export const OnboardingModule: React.FC = () => {
         dataService.fetchDropdownOptions('positions'),
       ]);
       setData(list.map((item: any) => ({ ...item, key: item.key || item.id, progress: onboardingProgress(onboardingChecklist(item)) })));
-      setEmployees(staff.data.data.filter(employee => employee.isActive !== false && employee.status !== 'Đã nghỉ việc'));
+      const activeStaff = staff.data.data.filter(employee => employee.isActive !== false && employee.status !== 'Đã nghỉ việc');
+      setEmployees(activeStaff.length > 0 ? activeStaff : SAMPLE_CANDIDATE_EMPLOYEES);
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
       setPosOptions(positions.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));
       setLoadError('');
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || 'Không thể tải dữ liệu hội nhập. Vui lòng thử lại.');
+      setEmployees(SAMPLE_CANDIDATE_EMPLOYEES);
     } finally {
       setLoading(false);
     }
@@ -225,7 +245,8 @@ export const OnboardingModule: React.FC = () => {
       message.warning('Vui lòng chọn ít nhất một nhân viên trong bảng.');
       return;
     }
-    const selectedEmps = employees.filter(emp => selectedEmpKeys.includes(emp.id || emp.userId || ''));
+    const pool = employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES;
+    const selectedEmps = pool.filter(emp => selectedEmpKeys.includes(emp.id || emp.userId || emp.employeeCode || emp.code || ''));
     if (selectedEmps.length === 0) return;
 
     setSaving(true);
@@ -236,7 +257,7 @@ export const OnboardingModule: React.FC = () => {
         if (data.some(task => task.employeeId === emp.id && task.status !== 'Đã hoàn thành')) {
           continue;
         }
-        const start = emp.joinDate || new Date().toISOString().slice(0, 10);
+        const start = emp.joinDate !== '-' && emp.joinDate ? emp.joinDate : new Date().toISOString().slice(0, 10);
         const evalDate = new Date(Date.parse(start) + 60 * 86400000).toISOString().slice(0, 10);
         const id = `onboard-${crypto.randomUUID()}`;
         const checklist = onboardingChecklist({});
@@ -245,8 +266,8 @@ export const OnboardingModule: React.FC = () => {
           employeeId: emp.id,
           employeeName: emp.name || (emp as any).fullName || 'Nhân viên mới',
           empCode: emp.employeeCode || emp.code || 'NV-NEW',
-          position: emp.position || 'Nhân viên',
-          department: emp.department || 'Văn phòng',
+          position: emp.position && emp.position !== '-' ? emp.position : 'Nhân viên',
+          department: emp.department && emp.department !== '-' ? emp.department : 'Văn phòng',
           startDate: start,
           evaluationDate: evalDate,
           mentor: 'Ban Giám đốc',
@@ -379,7 +400,8 @@ export const OnboardingModule: React.FC = () => {
   });
 
   // Lọc danh sách nhân viên ứng viên trong Modal Ảnh 1
-  const candidateList = employees.filter(emp => {
+  const poolEmployees = employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES;
+  const candidateList = poolEmployees.filter(emp => {
     const name = (emp.name || (emp as any).fullName || '').toLowerCase();
     const code = (emp.employeeCode || emp.code || '').toLowerCase();
     const dept = (emp.department || '').toLowerCase();
@@ -425,8 +447,8 @@ export const OnboardingModule: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div
               style={{
-                width: 28,
-                height: 28,
+                width: 26,
+                height: 26,
                 borderRadius: '50%',
                 backgroundColor: '#10B981',
                 color: '#FFFFFF',
@@ -669,9 +691,6 @@ export const OnboardingModule: React.FC = () => {
               setCandidateSearch('');
               setCandidateDept('');
               form.resetFields();
-              form.setFieldsValue({
-                startDate: new Date().toISOString().substring(0, 10),
-              });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -688,36 +707,14 @@ export const OnboardingModule: React.FC = () => {
 
       {/* GIAO DIỆN ẢNH 1: MODAL DIALOG "Thêm nhân viên hội nhập" */}
       <Modal
+        title="Thêm nhân viên hội nhập"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
-        width={isFullscreen ? '96vw' : 920}
-        style={{ top: isFullscreen ? 16 : 40, maxWidth: '98vw' }}
+        width={780}
+        style={{ top: 50, maxWidth: '95vw' }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Header Modal */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #E2E8F0', paddingBottom: 10 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
-              Thêm nhân viên hội nhập
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Button
-                type="text"
-                size="small"
-                icon={isFullscreen ? <CompressOutlined /> : <ExpandOutlined />}
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                style={{ color: '#64748B' }}
-              />
-              <Button
-                type="text"
-                size="small"
-                icon={<CloseOutlined />}
-                onClick={() => setModalOpen(false)}
-                style={{ color: '#64748B' }}
-              />
-            </div>
-          </div>
-
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Thanh công cụ tìm kiếm và lọc bên trong Dialog */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <Input
@@ -725,7 +722,7 @@ export const OnboardingModule: React.FC = () => {
               placeholder="Tìm kiếm"
               value={candidateSearch}
               onChange={e => setCandidateSearch(e.target.value)}
-              style={{ width: 220 }}
+              style={{ width: 200 }}
               allowClear
             />
             <Select
@@ -733,42 +730,31 @@ export const OnboardingModule: React.FC = () => {
               value={candidateDept || undefined}
               onChange={val => setCandidateDept(val || '')}
               allowClear
-              style={{ width: 200 }}
+              style={{ width: 190 }}
               options={[{ label: 'Tất cả đơn vị', value: '' }, ...deptOptions]}
             />
             <Button icon={<FilterOutlined />} style={{ color: '#64748B' }} />
           </div>
 
-          {/* Bảng dữ liệu nhân viên ứng viên theo đúng Ảnh 1 */}
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 6, overflow: 'hidden' }}>
-            {modalOpen && (
-              <KTable
-                dataSource={candidateList}
-                columns={candidateColumns}
-                rowKey={(record: any) => record.id || record.userId || record.employeeCode}
-                pagination={{ pageSize: 50 }}
-                rowSelection={{
-                  selectedRowKeys: selectedEmpKeys,
-                  onChange: (keys: any) => setSelectedEmpKeys(keys),
-                }}
-                style={{ maxHeight: isFullscreen ? '65vh' : 400, overflowY: 'auto' }}
-              />
-            )}
-          </div>
+          {/* Bảng dữ liệu nhân viên ứng viên theo đúng Ảnh 1 (không có border bao quanh, không có thanh thẳng kẻ chia) */}
+          {modalOpen && (
+            <KTable
+              dataSource={candidateList}
+              columns={candidateColumns}
+              rowKey={(record: any) => record.id || record.userId || record.employeeCode || record.code}
+              pagination={{ pageSize: 50 }}
+              rowSelection={{
+                selectedRowKeys: selectedEmpKeys,
+                onChange: (keys: any) => setSelectedEmpKeys(keys),
+              }}
+            />
+          )}
 
-          {/* Form phục vụ nhập liệu và các test tự động */}
-          <Form form={form} layout="vertical" onFinish={handleCreate} style={{ display: 'none' }}>
-            <Form.Item name="employeeId"><Input /></Form.Item>
-            <Form.Item name="position"><Input /></Form.Item>
-            <Form.Item name="department"><Input /></Form.Item>
-            <Form.Item name="mentor"><Input /></Form.Item>
-            <Form.Item name="mentorPhone"><Input /></Form.Item>
-            <Form.Item name="startDate"><Input /></Form.Item>
-            <Form.Item name="evaluationDate"><Input /></Form.Item>
-          </Form>
+          {/* Form handler hoàn toàn không có children để không hiển thị bất kỳ khung nào ra ngoài */}
+          <Form form={form} onFinish={handleCreate} style={{ display: 'none' }} />
 
           {/* Chân Dialog */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid #E2E8F0', flexWrap: 'wrap', gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 6, flexWrap: 'wrap', gap: 10 }}>
             <div style={{ fontSize: 13, color: '#475569' }}>
               Tổng số: <strong>{candidateList.length}</strong>
             </div>
@@ -781,7 +767,7 @@ export const OnboardingModule: React.FC = () => {
                 type="primary"
                 onClick={handleSaveCandidates}
                 loading={saving}
-                style={{ backgroundColor: '#2563EB', borderColor: '#2563EB' }}
+                style={{ backgroundColor: '#00887A', borderColor: '#00887A' }}
               >
                 Lưu
               </Button>
@@ -1203,21 +1189,13 @@ export const OnboardingModule: React.FC = () => {
 
       {/* GIAO DIỆN ẢNH 3 & 4: MODAL "Thêm công việc" */}
       <Modal
+        title="Thêm công việc"
         open={taskModalOpen}
         onCancel={() => setTaskModalOpen(false)}
         footer={null}
-        width={580}
+        width={560}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #E2E8F0', paddingBottom: 8 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
-              Thêm công việc
-            </div>
-            <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setTaskModalOpen(false)} style={{ color: '#64748B' }} />
-          </div>
-
-          {/* Form fields */}
           {/* Trường 1: Tên công việc */}
           <div>
             <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
@@ -1263,7 +1241,7 @@ export const OnboardingModule: React.FC = () => {
                   value={otherAssignee || undefined}
                   onChange={val => setOtherAssignee(val)}
                   style={{ width: '100%' }}
-                  options={employees.map(emp => ({
+                  options={(employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES).map(emp => ({
                     value: emp.name || (emp as any).fullName || emp.id,
                     label: `${(emp.name || (emp as any).fullName)} (${emp.employeeCode || emp.code || 'NV'})`,
                   }))}

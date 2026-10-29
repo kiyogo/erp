@@ -20,6 +20,7 @@ import {
   financePaymentsApi,
   FinanceCashTransaction,
   FinancePaymentAccount,
+  FinanceCashJournalLine,
   CrmContact,
   EnterpriseEmployee,
 } from '../../api/endpoints';
@@ -44,6 +45,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+  const [journalLines, setJournalLines] = useState<FinanceCashJournalLine[]>([]);
 
   const isTypePinned = typeFilterDefault === 'Thu' || typeFilterDefault === 'Chi';
   const pinnedType = isTypePinned ? typeFilterDefault : null;
@@ -127,6 +129,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     setPartyRefValue('other');
     form.resetFields();
     categoryForm.resetFields();
+    setJournalLines([]);
   };
 
   const handleAddCategory = async (values: { name: string }) => {
@@ -181,7 +184,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       status: editingTransaction?.status || values.status || 'Chờ duyệt',
       note: values.note || '',
       department: values.department || '',
+      journalLines,
     };
+    if (journalLines.length && journalLines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0) !== formattedValues.amount) {
+      message.error('Tổng tiền các dòng hạch toán phải bằng số tiền phiếu.');
+      return;
+    }
     try {
       if (editingTransaction) {
         const response = await financeCashApi.update(editingTransaction.key, formattedValues);
@@ -203,6 +211,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     setPartyRefValue('other');
     setSourceFilter('bank');
     form.resetFields();
+    setJournalLines([{ description: '', debitAccount: '', creditAccount: '', amount: 0 }]);
     form.setFieldsValue({
       type: pinnedType || (typeFilter === 'Chi' ? 'Chi' : 'Thu'),
       date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
@@ -222,6 +231,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     setPartyRefValue(partyRef);
     setSourceFilter(transaction.source);
     form.resetFields();
+    setJournalLines(transaction.journalLines?.length ? transaction.journalLines.map(line => ({ ...line })) : [{ description: transaction.category, debitAccount: '', creditAccount: '', amount: transaction.amount }]);
     form.setFieldsValue({
       type: transaction.type,
       source: transaction.source,
@@ -272,6 +282,13 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   });
 
   const activeVoucherType: 'Thu' | 'Chi' = form.getFieldValue('type') === 'Chi' ? 'Chi' : 'Thu';
+  const updateJournalLine = (index: number, field: keyof FinanceCashJournalLine, value: string | number) => {
+    setJournalLines(current => {
+      const next = current.map((line, lineIndex) => lineIndex === index ? { ...line, [field]: value } : line);
+      if (field === 'amount') form.setFieldsValue({ amount: next.reduce((sum, line) => sum + (Number(line.amount) || 0), 0) });
+      return next;
+    });
+  };
 
   const columns = [
     {
@@ -536,6 +553,25 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
+          </div>
+
+          <div style={{ margin: '4px 0 14px', border: '1px solid #CBD5E1', overflowX: 'auto' }}>
+            <div style={{ minWidth: 760, display: 'grid', gridTemplateColumns: '36px minmax(180px, 2fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(130px, 1fr) 40px', background: '#C5D9C2', fontSize: 12, fontWeight: 700 }}>
+              {['#', 'Diễn giải', 'TK Nợ', 'TK Có', 'Số tiền', ''].map((title, index) => <div key={`${title}-${index}`} style={{ padding: '7px 8px', borderRight: '1px solid #B3C8B0' }}>{title}</div>)}
+            </div>
+            {journalLines.map((line, index) => <div key={index} style={{ minWidth: 760, display: 'grid', gridTemplateColumns: '36px minmax(180px, 2fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(130px, 1fr) 40px', alignItems: 'center', gap: 6, padding: '6px 5px', borderBottom: '1px solid #E2E8F0' }}>
+              <span style={{ textAlign: 'center', fontSize: 12 }}>{index + 1}</span>
+              <Input aria-label={`Diễn giải hạch toán dòng ${index + 1}`} value={line.description} onChange={event => updateJournalLine(index, 'description', event.target.value)} maxLength={500} />
+              <Input aria-label={`Tài khoản Nợ dòng ${index + 1}`} value={line.debitAccount} onChange={event => updateJournalLine(index, 'debitAccount', event.target.value)} placeholder="Ví dụ: 1111" maxLength={24} />
+              <Input aria-label={`Tài khoản Có dòng ${index + 1}`} value={line.creditAccount} onChange={event => updateJournalLine(index, 'creditAccount', event.target.value)} placeholder="Nhập mã TK" maxLength={24} />
+              <Input aria-label={`Số tiền hạch toán dòng ${index + 1}`} type="number" min={0} step={1} value={line.amount} onChange={event => updateJournalLine(index, 'amount', Number(event.target.value) || 0)} />
+              <Button aria-label={`Xóa dòng hạch toán ${index + 1}`} icon={<DeleteOutlined />} disabled={journalLines.length <= 1} onClick={() => {
+                const next = journalLines.filter((_, lineIndex) => lineIndex !== index);
+                setJournalLines(next);
+                form.setFieldsValue({ amount: next.reduce((sum, row) => sum + (Number(row.amount) || 0), 0) });
+              }} />
+            </div>)}
+            <div style={{ padding: 8 }}><Button icon={<PlusOutlined />} onClick={() => setJournalLines(current => [...current, { description: '', debitAccount: '', creditAccount: '', amount: 0 }])}>Thêm dòng</Button></div>
           </div>
 
           <Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Đối tượng nhận tiền' : 'Đối tượng nộp tiền'} rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]}>

@@ -820,6 +820,7 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
     type: 'Thu', source: 'bank', sourceAccountId: account.key, account: 'Tên tài khoản giả',
     category: 'Thu tiền hàng', amount: 1200, date: '2026-10-29', recipientOrPayer: 'Tên giả',
     counterpartyType: 'customer', counterpartyContactId: contact.key, status: 'Chờ duyệt', note: 'Hóa đơn HD-01',
+    journalLines: [{ description: 'Thu tiền hàng', debitAccount: '1121', creditAccount: '131', amount: 1200 }],
   };
   const created = (await request('/finance/cash-transactions', 'POST', baseVoucher, 201)).transaction;
   assert.equal(created.account, `Vietcombank (${account.accountNumber})`);
@@ -827,9 +828,12 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(created.recipientOrPayer, contact.name);
   assert.equal(created.counterpartyType, 'customer');
   assert.equal(created.counterpartyContactId, contact.key);
+  assert.deepEqual(created.journalLines, baseVoucher.journalLines);
+  await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], amount: 1000 }] }, 422);
+  await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], debitAccount: 'abc' }] }, 422);
 
   const updated = (await request(`/finance/cash-transactions/${created.key}`, 'PATCH', {
-    ...baseVoucher, category: 'Thu tiền theo hóa đơn', amount: 1400, recipientOrPayer: 'Không được ghi đè danh mục',
+    ...baseVoucher, category: 'Thu tiền theo hóa đơn', amount: 1400, journalLines: [{ ...baseVoucher.journalLines[0], amount: 1400 }], recipientOrPayer: 'Không được ghi đè danh mục',
   })).transaction;
   assert.equal(updated.code, created.code);
   assert.equal(updated.category, 'Thu tiền theo hóa đơn');

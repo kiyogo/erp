@@ -480,9 +480,12 @@ export type FinanceCashTransaction = {
   sourceAccountId?: string;
   counterpartyType?: 'customer' | 'supplier' | 'partner' | 'employee' | 'other';
   counterpartyContactId?: string;
+  journalLines?: FinanceCashJournalLine[];
   createdAt: string;
   updatedAt: string;
 };
+
+export type FinanceCashJournalLine = { description: string; debitAccount: string; creditAccount: string; amount: number };
 
 export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };
 export type UpdateFinanceCashTransaction = Partial<Omit<CreateFinanceCashTransaction, 'code'>>;
