@@ -169,6 +169,21 @@ test('recruitment saves real candidate records, preserves logical keys, exports 
     assert.ok(report.includes('Test Candidate'));
     assert.ok(report.includes('test@example.com'));
     assert.ok(!report.includes('second@example.com'));
+
+    const candidatesTable = nodes().filter(node => node.type === 'KTable')[1];
+    const candidateActions = candidatesTable.props.columns.find(column => column.key === 'actions').render(null, candidatesTable.props.dataSource[0]);
+    nodes(candidateActions).find(node => node.type === 'Button' && text(node).includes('Thêm vào kho tiềm năng')).props.onClick();
+    await tick(); render();
+    assert.equal(writes.at(-1).record.talentPool, true, 'Adding an existing candidate to the pool persists the membership.');
+    button('Kho tiềm năng (1)').props.onClick(); render();
+    let talentPoolTable = nodes().filter(node => node.type === 'KTable').at(-1);
+    assert.equal(talentPoolTable.props.dataSource.length, 1);
+    assert.equal(talentPoolTable.props.dataSource[0].key, writes[0].record.key);
+    const poolActions = talentPoolTable.props.columns.find(column => column.key === 'actions').render(null, talentPoolTable.props.dataSource[0]);
+    nodes(poolActions).find(node => node.type === 'Button' && text(node).includes('Bỏ khỏi kho tiềm năng')).props.onClick();
+    await tick(); render();
+    talentPoolTable = nodes().filter(node => node.type === 'KTable').at(-1);
+    assert.equal(talentPoolTable.props.dataSource.length, 0, 'Removing an applicant from the pool preserves the profile outside the pool.');
   } finally {
     globalThis.window = originalWindow;
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);

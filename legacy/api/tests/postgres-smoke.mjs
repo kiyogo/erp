@@ -535,9 +535,10 @@ try {
   const pgCandidateEmail = `${randomUUID()}@example.test`;
   const pgCandidate = (await request('/collections/hr_recruitment_candidates', 'POST', { record: {
     key: pgCandidateKey, jobKey: pgRecruitmentJobKey, name: 'PostgreSQL Candidate', email: pgCandidateEmail, appliedAt: new Date().toISOString().slice(0, 10), status: 'applied',
-    region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/pg-candidate', source: 'Website tuyển dụng',
+    region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/pg-candidate', source: 'Website tuyển dụng', talentPool: true,
   } }, 201)).record;
   assert.deepEqual([pgCandidate.region, pgCandidate.country, pgCandidate.province, pgCandidate.ward, pgCandidate.personalAccount, pgCandidate.source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/pg-candidate', 'Website tuyển dụng']);
+  assert.equal(pgCandidate.talentPool, true);
   await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE', undefined, 409);
   await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'PATCH', { patch: { status: 'rejected' } });
   const pgCandidateDeletion = await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE');
@@ -547,6 +548,7 @@ try {
   const pgCandidateRestore = await request(`/admin/trash/${pgCandidateDeletion.trashItemId}/restore`, 'POST', {});
   assert.equal(pgCandidateRestore.restored, true);
   assert.equal(pgCandidateRestore.record.status, 'rejected');
+  assert.equal(pgCandidateRestore.record.talentPool, true);
   assert.deepEqual([pgCandidateRestore.record.region, pgCandidateRestore.record.country, pgCandidateRestore.record.province, pgCandidateRestore.record.ward, pgCandidateRestore.record.personalAccount, pgCandidateRestore.record.source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/pg-candidate', 'Website tuyển dụng']);
   const pgCandidateSecondDeletion = await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE');
   assert.equal(pgCandidateSecondDeletion.deleted, true);

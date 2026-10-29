@@ -169,6 +169,41 @@ try {
   await searchInput.press('Backspace');
   await page.waitForFunction(email => document.body.innerText.includes(email), {}, `candidate-${suffix.toLowerCase()}@example.test`);
 
+  const addToTalentPool = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('tr')].find(item => item.innerText.includes('Ứng viên E2E'));
+    const button = [...(row?.querySelectorAll('button') || [])].find(item => item.textContent.trim() === 'Thêm vào kho tiềm năng');
+    button?.click();
+    return !!button;
+  });
+  assert.equal(addToTalentPool, true, 'An applicant can be added to the talent pool from the candidate list.');
+  let pooledCandidate;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    pooledCandidate = (await fetch(`${apiUrl}/collections/hr_recruitment_candidates`, { headers }).then(response => response.json())).data.find(item => item.key === candidate.key);
+    if (pooledCandidate?.talentPool) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.equal(pooledCandidate?.talentPool, true, 'Talent pool membership should persist on the server.');
+  const candidateListClosedForPool = await page.evaluate(() => {
+    const root = [...document.querySelectorAll('.ant-modal-root')].find(item => item.innerText.includes('Tất cả giai đoạn'));
+    const button = root?.querySelector('button[aria-label="Close"]');
+    button?.click();
+    return !!button;
+  });
+  assert.equal(candidateListClosedForPool, true);
+  await page.waitForFunction(() => ![...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Tất cả giai đoạn')));
+  await clickButton('Kho tiềm năng', true);
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Kho tiềm năng · 1 ứng viên') && root.innerText.includes('Ứng viên E2E')));
+  const poolClosed = await page.evaluate(() => {
+    const root = [...document.querySelectorAll('.ant-modal-root')].find(item => item.innerText.includes('Kho tiềm năng ·'));
+    const button = root?.querySelector('button[aria-label="Close"]');
+    button?.click();
+    return !!button;
+  });
+  assert.equal(poolClosed, true, 'The persisted applicant should be discoverable in the talent pool.');
+  await page.waitForFunction(() => ![...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Kho tiềm năng ·')));
+  await clickButton('Xem Hồ Sơ Ứng Viên', true);
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Tất cả giai đoạn')));
+
   const candidateRowOpened = await page.evaluate(() => {
     const row = [...document.querySelectorAll('tr')].find(item => item.innerText.includes('Ứng viên E2E'));
     const button = [...(row?.querySelectorAll('button') || [])].find(item => item.textContent.trim() === 'Hồ sơ / Cập nhật');
@@ -177,11 +212,56 @@ try {
   });
   assert.equal(candidateRowOpened, true, 'The persisted candidate should be editable from the list.');
   await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Cập nhật hồ sơ · Ứng viên E2E')));
+  await chooseLabel('Giai đoạn', 'Sàng lọc');
+  await clickButton('Lưu hồ sơ');
+  await page.waitForFunction(email => document.body.innerText.includes(email) && document.body.innerText.includes('Sàng lọc'), { timeout: 20000 }, `candidate-${suffix.toLowerCase()}@example.test`);
+  const candidateReopenedForInterview = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('tr')].find(item => item.innerText.includes('Ứng viên E2E'));
+    const button = [...(row?.querySelectorAll('button') || [])].find(item => item.textContent.trim() === 'Hồ sơ / Cập nhật');
+    button?.click();
+    return !!button;
+  });
+  assert.equal(candidateReopenedForInterview, true, 'The screened candidate should be editable for interview scheduling.');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Cập nhật hồ sơ · Ứng viên E2E')));
+  await chooseLabel('Giai đoạn', 'Phỏng vấn');
+  const interviewAt = await page.evaluate(() => {
+    const date = new Date(Date.now() + 30 * 60000);
+    const pad = value => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  });
+  await fillLabel('Lịch phỏng vấn', interviewAt);
+  await fillLabel('Người phỏng vấn', 'Quản lý tuyển dụng');
+  await clickButton('Lưu hồ sơ');
+  await page.waitForFunction(email => document.body.innerText.includes(email) && document.body.innerText.includes('Phỏng vấn'), { timeout: 20000 }, `candidate-${suffix.toLowerCase()}@example.test`);
+  const interviewCandidate = (await fetch(`${apiUrl}/collections/hr_recruitment_candidates`, { headers }).then(response => response.json())).data.find(item => item.key === candidate.key);
+  assert.equal(interviewCandidate.status, 'interview');
+  assert.equal(interviewCandidate.interviewAt, interviewAt);
+  assert.equal(interviewCandidate.interviewer, 'Quản lý tuyển dụng');
+
+  const candidateListClosedBeforeCalendar = await page.evaluate(() => {
+    const root = [...document.querySelectorAll('.ant-modal-root')].find(item => item.innerText.includes('Tất cả giai đoạn'));
+    const button = root?.querySelector('button[aria-label="Close"]');
+    button?.click();
+    return !!button;
+  });
+  assert.equal(candidateListClosedBeforeCalendar, true, 'The candidate list dialog should close before opening the calendar.');
+  await page.waitForFunction(() => ![...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Tất cả giai đoạn')));
+  await clickButton('Lịch phỏng vấn');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Lịch phỏng vấn') && root.innerText.includes('Quản lý tuyển dụng')));
+  await clickButton('Mở hồ sơ · Ứng viên E2E');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Cập nhật hồ sơ · Ứng viên E2E')));
   await chooseLabel('Giai đoạn', 'Không tiếp tục');
   await clickButton('Lưu hồ sơ');
-  await page.waitForFunction(email => document.body.innerText.includes(email) && document.body.innerText.includes('Không tiếp tục'), { timeout: 20000 }, `candidate-${suffix.toLowerCase()}@example.test`);
-  const rejectedCandidate = (await fetch(`${apiUrl}/collections/hr_recruitment_candidates`, { headers }).then(response => response.json())).data.find(item => item.key === candidate.key);
+  let rejectedCandidate;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    rejectedCandidate = (await fetch(`${apiUrl}/collections/hr_recruitment_candidates`, { headers }).then(response => response.json())).data.find(item => item.key === candidate.key);
+    if (rejectedCandidate?.status === 'rejected') break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
   assert.equal(rejectedCandidate.status, 'rejected');
+  assert.equal(rejectedCandidate.interviewAt, interviewAt, 'Rejecting the candidate from the calendar should preserve the interview record.');
+  await clickButton('Xem Hồ Sơ Ứng Viên', true);
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Tất cả giai đoạn')));
   await clickButton('Xóa');
   await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(root => root.innerText.includes('Thùng rác')));
   await clickButton('Xóa hồ sơ');
@@ -226,7 +306,7 @@ try {
   assert.equal(persisted?.status, 'Đã đóng', 'Closing a job from the recruitment UI must persist successfully.');
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(apiErrors, []);
-  console.log(JSON.stringify({ checks: 'open internal job link, add candidate and CV from UI, persist location/profile fields, search by location, reject/delete candidate, close job, no browser or API errors', jobKey, database: directory }));
+  console.log(JSON.stringify({ checks: 'open internal job link, add candidate and CV from UI, persist location/profile fields, search by location, add/discover talent pool applicant, schedule interview, open/edit applicant from calendar, reject/delete candidate, close job, no browser or API errors', jobKey, database: directory }));
 } catch (error) {
   if (page) {
     console.error((await page.$eval('body', node => node.innerText).catch(() => '')).slice(-3000));

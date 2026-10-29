@@ -66,6 +66,7 @@ export interface RecruitmentCandidate {
   ward: string;
   personalAccount: string;
   source: string;
+  talentPool?: boolean;
   status: RecruitmentStage;
   appliedAt: string;
   interviewAt: string;
@@ -82,6 +83,8 @@ const stageTransitions: Record<RecruitmentStage, RecruitmentStage[]> = {
   applied: ['screening', 'rejected'], screening: ['interview', 'rejected'],
   interview: ['offer', 'rejected'], offer: ['hired', 'rejected'], hired: [], rejected: [],
 };
+
+const localDateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
 export function validateRecruitmentCandidate(candidate: RecruitmentCandidate, previous?: RecruitmentCandidate): string {
   if (!candidate.name?.trim() || !candidate.jobKey) return 'Vui lòng nhập tên ứng viên và chọn vị trí tuyển dụng.';
@@ -136,6 +139,11 @@ export const RecruitmentModule: React.FC = () => {
   const [candidateSearch, setCandidateSearch] = useState('');
   const [candidateStage, setCandidateStage] = useState('all');
   const [candidateModalOpen, setCandidateModalOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [talentPoolOpen, setTalentPoolOpen] = useState(false);
+  const [talentPoolSearch, setTalentPoolSearch] = useState('');
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [calendarDate, setCalendarDate] = useState(() => localDateKey(new Date()));
   const [editingCandidate, setEditingCandidate] = useState<RecruitmentCandidate | null>(null);
   const [candidateForm] = Form.useForm();
   const [cvFile, setCvFile] = useState<File | null>(null);
@@ -146,6 +154,16 @@ export const RecruitmentModule: React.FC = () => {
     return { ...job, candidatesApplied: counts.applied, interviewedCount: counts.interviewed, offeredCount: counts.offered, hiredCount: counts.hired };
   }), [data, candidates]);
   const currentJob = jobs.find(job => job.key === selectedJob?.key) || selectedJob;
+  const interviewAppointments = useMemo(() => candidates
+    .filter(candidate => candidate.status === 'interview' && candidate.interviewAt && !Number.isNaN(Date.parse(candidate.interviewAt)))
+    .sort((left, right) => left.interviewAt.localeCompare(right.interviewAt)), [candidates]);
+  const calendarCells = useMemo(() => {
+    const firstDay = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+    const offset = (firstDay.getDay() + 6) % 7;
+    return Array.from({ length: 42 }, (_, index) => new Date(firstDay.getFullYear(), firstDay.getMonth(), index - offset + 1));
+  }, [calendarMonth]);
+  const selectedAppointments = interviewAppointments.filter(candidate => candidate.interviewAt.slice(0, 10) === calendarDate);
+  const talentPoolCandidates = candidates.filter(candidate => candidate.talentPool && `${candidate.name} ${candidate.email} ${candidate.phone} ${candidate.region} ${candidate.country} ${candidate.province} ${candidate.ward} ${candidate.personalAccount} ${candidate.source}`.toLowerCase().includes(talentPoolSearch.trim().toLowerCase()));
 
   const loadData = async () => {
     setLoading(true);
@@ -233,12 +251,13 @@ export const RecruitmentModule: React.FC = () => {
   };
 
   const saveCandidate = async (values: any) => {
-    if (!currentJob || saving) return;
-    if (!editingCandidate && currentJob.status !== 'Đang tuyển dụng') { message.error('Vị trí hiện không tiếp nhận ứng viên mới.'); return; }
+    const candidateJob = editingCandidate ? jobs.find(job => job.key === editingCandidate.jobKey) : currentJob;
+    if (!candidateJob || saving) { if (!candidateJob) message.error('Không tìm thấy vị trí tuyển dụng của hồ sơ.'); return; }
+    if (!editingCandidate && candidateJob.status !== 'Đang tuyển dụng') { message.error('Vị trí hiện không tiếp nhận ứng viên mới.'); return; }
     const status = (values.status || candidateStatus) as RecruitmentStage;
     const candidate: RecruitmentCandidate = {
       ...editingCandidate, ...values,
-      key: editingCandidate?.key || `candidate-${crypto.randomUUID()}`, jobKey: currentJob.key,
+      key: editingCandidate?.key || `candidate-${crypto.randomUUID()}`, jobKey: candidateJob.key,
       name: String(values.name || '').trim(), email: String(values.email || '').trim().toLowerCase(),
       phone: String(values.phone || '').trim(), source: String(values.source || '').trim(),
       status, appliedAt: values.appliedAt || '', interviewAt: values.interviewAt || '',
@@ -330,13 +349,26 @@ export const RecruitmentModule: React.FC = () => {
     },
   });
 
+  const toggleTalentPool = async (candidate: RecruitmentCandidate) => {
+    if (saving) return;
+    const talentPool = !candidate.talentPool;
+    setSaving(true);
+    try {
+      const response = await collectionsApi.update('hr_recruitment_candidates', candidate.key, { ...candidate, talentPool });
+      const record = response.data.record as RecruitmentCandidate;
+      setCandidates(previous => previous.map(item => item.key === candidate.key ? record : item));
+      message.success(talentPool ? 'Đã thêm ứng viên vào Kho tiềm năng.' : 'Đã bỏ ứng viên khỏi Kho tiềm năng.');
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể cập nhật Kho tiềm năng.'); }
+    finally { setSaving(false); }
+  };
+
   const visibleCandidates = candidates.filter(candidate => candidate.jobKey === currentJob?.key && (candidateStage === 'all' || candidate.status === candidateStage)
     && `${candidate.name} ${candidate.email} ${candidate.phone} ${candidate.region} ${candidate.country} ${candidate.province} ${candidate.ward} ${candidate.personalAccount} ${candidate.source} ${candidate.notes}`.toLowerCase().includes(candidateSearch.trim().toLowerCase()));
 
   const candidateColumns = [
     { title: 'Ứng viên', key: 'name', render: (_: unknown, candidate: RecruitmentCandidate) => <div><strong>{candidate.name}</strong><div>{candidate.email}</div><div>{candidate.phone}</div><div>{[candidate.ward, candidate.province, candidate.country].filter(Boolean).join(', ') || candidate.region}</div>{candidate.personalAccount && <div>{candidate.personalAccount}</div>}</div> },
     { title: 'Giai đoạn / lịch hẹn', key: 'status', render: (_: unknown, candidate: RecruitmentCandidate) => <div><Tag color={candidate.status === 'hired' ? 'success' : candidate.status === 'rejected' ? 'error' : 'processing'}>{recruitmentStages.find(stage => stage.value === candidate.status)?.label || candidate.status}</Tag><div>{candidate.interviewAt?.replace('T', ' ') || 'Chưa có lịch phỏng vấn'}</div></div> },
-    { title: 'Thao tác', key: 'actions', render: (_: unknown, candidate: RecruitmentCandidate) => <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><Button size="small" onClick={() => openCandidate(candidate)}>Hồ sơ / Cập nhật</Button>{candidate.cvFileId && <Button size="small" icon={<DownloadOutlined />} onClick={() => void downloadCv(candidate)}>CV</Button>}{candidate.status === 'rejected' && <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteRejectedCandidate(candidate)}>Xóa</Button>}</div> },
+    { title: 'Thao tác', key: 'actions', render: (_: unknown, candidate: RecruitmentCandidate) => <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><Button size="small" onClick={() => openCandidate(candidate)}>Hồ sơ / Cập nhật</Button><Button size="small" onClick={() => void toggleTalentPool(candidate)} disabled={saving}>{candidate.talentPool ? 'Bỏ khỏi kho tiềm năng' : 'Thêm vào kho tiềm năng'}</Button>{candidate.cvFileId && <Button size="small" icon={<DownloadOutlined />} onClick={() => void downloadCv(candidate)}>CV</Button>}{candidate.status === 'rejected' && <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteRejectedCandidate(candidate)}>Xóa</Button>}</div> },
   ];
 
   const filteredData = jobs.filter((item) => {
@@ -352,6 +384,12 @@ export const RecruitmentModule: React.FC = () => {
 
     return matchStatus && matchSearch;
   });
+  const openInterviewCalendar = () => {
+    const today = new Date();
+    setCalendarDate(localDateKey(today));
+    setCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setCalendarOpen(true);
+  };
 
   const columns = [
     {
@@ -512,6 +550,14 @@ export const RecruitmentModule: React.FC = () => {
             style={{ width: 280 }}
             allowClear
           />
+
+          <Button icon={<CalendarOutlined />} onClick={openInterviewCalendar} disabled={loading || !!loadError}>
+            Lịch phỏng vấn
+          </Button>
+
+          <Button icon={<UsergroupAddOutlined />} onClick={() => setTalentPoolOpen(true)} disabled={loading || !!loadError}>
+            Kho tiềm năng ({candidates.filter(candidate => candidate.talentPool).length})
+          </Button>
 
           <Button icon={<DownloadOutlined />} onClick={exportReport} disabled={loading || !!loadError}>
             Xuất Báo Cáo
@@ -697,6 +743,47 @@ export const RecruitmentModule: React.FC = () => {
           <Button type="primary" icon={<PlusOutlined />} disabled={currentJob?.status !== 'Đang tuyển dụng' || !!loadError} onClick={() => openCandidate()}>Tiếp nhận ứng viên</Button>
         </div>
         <KTable dataSource={visibleCandidates} columns={candidateColumns} pagination={{ pageSize: 8 }} />
+      </Modal>
+
+      <Modal title={`Kho tiềm năng · ${talentPoolCandidates.length} ứng viên`} open={talentPoolOpen} onCancel={() => setTalentPoolOpen(false)} footer={null} width={900}>
+        <div style={{ display: 'flex', gap: 8, margin: '14px 0', flexWrap: 'wrap' }}>
+          <Input prefix={<SearchOutlined />} value={talentPoolSearch} onChange={event => setTalentPoolSearch(event.target.value)} placeholder="Tìm tên, email, địa điểm, tài khoản cá nhân, nguồn..." style={{ flex: 1, minWidth: 220 }} allowClear />
+        </div>
+        <KTable dataSource={talentPoolCandidates} columns={candidateColumns} pagination={{ pageSize: 8 }} />
+      </Modal>
+
+      <Modal title="Lịch phỏng vấn" open={calendarOpen} onCancel={() => setCalendarOpen(false)} footer={null} width={1000}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, margin: '14px 0' }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button onClick={() => setCalendarMonth(month => new Date(month.getFullYear(), month.getMonth() - 1, 1))}>Tháng trước</Button>
+            <Button onClick={() => setCalendarMonth(month => new Date(month.getFullYear(), month.getMonth() + 1, 1))}>Tháng sau</Button>
+          </div>
+          <strong style={{ textTransform: 'capitalize' }}>{calendarMonth.toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' })}</strong>
+          <Button onClick={openInterviewCalendar}>Hôm nay</Button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4, marginBottom: 4 }}>
+          {['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ Nhật'].map(day => <div key={day} style={{ padding: 6, textAlign: 'center', color: '#64748B', fontSize: 12, fontWeight: 600 }}>{day}</div>)}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4 }}>
+          {calendarCells.map(date => {
+            const dateKey = localDateKey(date);
+            const dayAppointments = interviewAppointments.filter(candidate => candidate.interviewAt.slice(0, 10) === dateKey);
+            const inMonth = date.getMonth() === calendarMonth.getMonth();
+            return <button key={dateKey} type="button" aria-label={`${date.getDate()} ${date.toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' })}, ${dayAppointments.length} lịch phỏng vấn`} onClick={() => setCalendarDate(dateKey)} style={{ minHeight: 74, padding: 8, textAlign: 'left', verticalAlign: 'top', cursor: 'pointer', border: dateKey === calendarDate ? '1px solid #009688' : '1px solid #E2E8F0', borderRadius: 6, background: dateKey === calendarDate ? '#E0F2F1' : '#FFFFFF', color: inMonth ? '#0F172A' : '#94A3B8' }}>
+              <span style={{ display: 'block', fontWeight: 600 }}>{date.getDate()}</span>
+              {dayAppointments.length > 0 && <span style={{ display: 'block', marginTop: 6, color: '#00796B', fontSize: 11 }}>{dayAppointments.length} lịch phỏng vấn</span>}
+            </button>;
+          })}
+        </div>
+        <div style={{ marginTop: 14, borderTop: '1px solid #E2E8F0', paddingTop: 12 }}>
+          <strong>{new Date(`${calendarDate}T00:00:00`).toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}</strong>
+          {selectedAppointments.length === 0 ? <div style={{ padding: '14px 0', color: '#64748B' }}>Không có lịch phỏng vấn trong ngày này.</div> : <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+            {selectedAppointments.map(candidate => <div key={candidate.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: '1px solid #E2E8F0', borderRadius: 6, padding: 10 }}>
+              <div><strong>{candidate.interviewAt.slice(11, 16) || 'Cả ngày'} · {candidate.name}</strong><div style={{ color: '#64748B', fontSize: 12 }}>{jobs.find(job => job.key === candidate.jobKey)?.title || 'Vị trí không còn hoạt động'} · Người phỏng vấn: {candidate.interviewer || 'Chưa phân công'} · {recruitmentStages.find(stage => stage.value === candidate.status)?.label || candidate.status}</div></div>
+              <Button onClick={() => { setCalendarOpen(false); openCandidate(candidate); }}>Mở hồ sơ · {candidate.name}</Button>
+            </div>)}
+          </div>}
+        </div>
       </Modal>
 
       <Modal title={editingCandidate ? `Cập nhật hồ sơ · ${editingCandidate.name}` : 'Tiếp nhận hồ sơ ứng viên'} open={candidateModalOpen} onCancel={() => { if (!saving) setCandidateModalOpen(false); }} footer={null} width={640}>

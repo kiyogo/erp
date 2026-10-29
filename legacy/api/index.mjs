@@ -4047,6 +4047,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.ward = optionalText(record.ward, 'Phường/Xã', 160);
     record.personalAccount = optionalText(record.personalAccount, 'Tài khoản cá nhân', 500);
     record.source = optionalText(record.source, 'Nguồn ứng viên', 160);
+    if (record.talentPool !== undefined && typeof record.talentPool !== 'boolean') throw new HttpError(422, 'Trạng thái Kho tiềm năng không hợp lệ.');
+    record.talentPool = record.talentPool === true;
     record.notes = optionalText(record.notes, 'Thông tin khác', 5000);
     record.appliedAt = requiredIsoDate(record.appliedAt, 'Ngày ứng tuyển');
     record.status = oneOf(record.status || 'applied', 'Giai đoạn ứng viên', ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected']);

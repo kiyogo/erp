@@ -61,9 +61,11 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   const candidate = {
     key: 'candidate-test', jobKey: job.key, name: 'Integration Candidate', email: 'candidate@example.test', appliedAt: '2026-10-01', status: 'applied',
     region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/candidate', source: 'Website tuyển dụng',
+    talentPool: true,
     cvFileId: file.id, cvFileName: file.name,
   };
   await request('/collections/hr_recruitment_candidates', 'POST', { record: candidate }, 201);
+  assert.equal((await request('/collections/hr_recruitment_candidates')).data[0].talentPool, true, 'Talent pool membership is persisted with the candidate profile.');
   await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...candidate, key: 'duplicate', email: 'CANDIDATE@example.test' } }, 409);
   await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...candidate, key: 'missing-job', email: 'other@example.test', jobKey: 'missing' } }, 422);
   await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...candidate, key: 'long-personal-account', email: 'long-account@example.test', personalAccount: 'x'.repeat(501) } }, 422);
@@ -73,6 +75,8 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   await request(route, 'PATCH', { patch: { status: 'screening' } });
   await request(route, 'PATCH', { patch: { status: 'interview', interviewAt: '2026-09-30T09:00' } }, 422);
   await request(route, 'PATCH', { patch: { status: 'interview', interviewAt: '2026-10-03T09:00', interviewer: 'Integration HR' } });
+  await request(route, 'PATCH', { patch: { talentPool: 'true' } }, 422);
+  await request(route, 'PATCH', { patch: { talentPool: false } });
   await request(route, 'PATCH', { patch: { status: 'offer', offerDate: '2026-10-04' } });
   await request(route, 'PATCH', { patch: { status: 'hired', hiredDate: '2026-10-03' } }, 422);
   await request(route, 'PATCH', { patch: { status: 'hired', hiredDate: '2026-10-11' } });
@@ -82,6 +86,7 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   assert.equal(saved.filter(record => record.status === 'hired').length, 1);
   assert.deepEqual([saved[0].region, saved[0].country, saved[0].province, saved[0].ward, saved[0].personalAccount, saved[0].source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/candidate', 'Website tuyển dụng']);
   assert.deepEqual(saved[0].history.map(item => item.status), ['applied', 'screening', 'interview', 'offer', 'hired']);
+  assert.equal(saved[0].talentPool, false, 'Talent pool membership can be removed without changing pipeline status.');
   assert.ok(saved[0].history.every(item => item.actorId === session.user.id));
   const downloaded = await fetch(`${base}/files/${file.id}/download`, { headers: { Authorization: headers.Authorization } });
   assert.equal(downloaded.status, 200);
