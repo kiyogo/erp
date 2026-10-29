@@ -121,6 +121,9 @@ Nhằm đảm bảo giao diện luôn chuẩn xác 100% theo ảnh mẫu và h�
 
 - **Bố cục xem trước phân ca trong Modal Phân ca chi tiết (Bắt buộc luôn ở bên phải):** Trong modal "Phân ca chi tiết", phần **Xem trước phân ca** (lưới lịch tháng và ca trực) bắt buộc **luôn luôn hiển thị ở cột bên phải** theo bố cục 2 cột (side-by-side: cột trái là Thông tin chung, Thời gian áp dụng và Đối tượng áp dụng; cột phải là Xem trước phân ca). Tuyệt đối **không được bố trí Xem trước phân ca ở phía dưới** các trường nhập liệu.
 
+- **Xóa 100% các thanh kẻ thẳng (border/divider) phân cách trong Dialog:** Tuyệt đối không tạo các đường kẻ thẳng phân cách (như orderLeft, orderRight, orderTop, orderBottom, divider) giữa các cột nội dung hoặc phía trên cụm nút bấm chân trang (footer) của dialog. Bố cục giữa các vùng phải được phân định hoàn toàn tự nhiên bằng khoảng cách đệm (gap, margin), giữ cho giao diện dialog phẳng, liền mạch và thanh thoát.
+- **Kích thước Dialog / Modal rộng rãi và thoáng đãng:** Đối với các modal/dialog có bố cục 2 cột (như modal "Phân ca chi tiết"), kích thước phải đủ lớn (chuẩn width: 1180px - 1200px, maxWidth: '96vw') để các cột thiết lập và lưới lịch xem trước hiển thị to, rõ ràng, không bị co ép chữ hay chật chội.
+
 ## 6. QUY CHUẨN GIAO DIỆN WEB (MENU, THANH CUỘN, FORM VÀ BẢNG)
 
 Toàn bộ hướng dẫn chi tiết và tiêu chuẩn thiết kế giao diện (Menu thả, Thanh cuộn, Dialog, Form và Bảng dữ liệu) được quy định và lưu trữ độc lập tại tài liệu: [docs/WEB_UI_GUIDELINES.md](docs/WEB_UI_GUIDELINES.md).

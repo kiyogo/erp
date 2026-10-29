@@ -735,7 +735,7 @@ export const ShiftDetailModule: React.FC = () => {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
-        width={1040}
+        width={1180}
         style={{ maxWidth: '96vw', top: 35 }}
       >
         <Form
@@ -747,8 +747,8 @@ export const ShiftDetailModule: React.FC = () => {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1.28fr) minmax(360px, 1fr)',
-              gap: 24,
+              gridTemplateColumns: 'minmax(0, 1.3fr) minmax(460px, 1fr)',
+              gap: 32,
               alignItems: 'start',
             }}
           >
@@ -973,10 +973,8 @@ export const ShiftDetailModule: React.FC = () => {
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 10,
-                borderLeft: '1px solid #E2E8F0',
-                paddingLeft: 22,
-                minHeight: 460,
+                gap: 12,
+                minHeight: 480,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1034,9 +1032,9 @@ export const ShiftDetailModule: React.FC = () => {
                       borderBottom: '1px solid #E2E8F0',
                       textAlign: 'center',
                       fontWeight: 700,
-                      fontSize: 11.5,
+                      fontSize: 12.5,
                       color: '#475569',
-                      padding: '8px 0',
+                      padding: '10px 0',
                     }}
                   >
                     <div>Thứ 2</div>
@@ -1061,8 +1059,8 @@ export const ShiftDetailModule: React.FC = () => {
                           style={{
                             borderRight: (idx + 1) % 7 === 0 ? 'none' : '1px solid #F1F5F9',
                             borderBottom: idx >= 28 ? 'none' : '1px solid #F1F5F9',
-                            padding: '6px 2px',
-                            minHeight: 46,
+                            padding: '8px 3px',
+                            minHeight: 52,
                             display: 'flex',
                             flexDirection: 'column',
                             alignItems: 'center',
@@ -1074,7 +1072,7 @@ export const ShiftDetailModule: React.FC = () => {
                         >
                           <span
                             style={{
-                              fontSize: 11.5,
+                              fontSize: 12.5,
                               fontWeight: isAppliedDay ? 700 : 500,
                               color: cell.weekday === 8 ? '#EF4444' : isOctober ? '#1E293B' : '#94A3B8',
                             }}
@@ -1085,12 +1083,12 @@ export const ShiftDetailModule: React.FC = () => {
                           {isAppliedDay && (
                             <div
                               style={{
-                                marginTop: 2,
-                                padding: '1px 5px',
+                                marginTop: 3,
+                                padding: '2px 6px',
                                 borderRadius: 3,
                                 background: '#E0F2F1',
                                 color: '#00796B',
-                                fontSize: 9.5,
+                                fontSize: 10.5,
                                 fontWeight: 700,
                                 whiteSpace: 'nowrap',
                               }}
@@ -1112,7 +1110,7 @@ export const ShiftDetailModule: React.FC = () => {
           </div>
 
           {/* Footer Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18, borderTop: '1px solid #F1F5F9', paddingTop: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
             <Button disabled={saving} onClick={() => setModalOpen(false)} style={{ height: 32 }}>
               Hủy
             </Button>
