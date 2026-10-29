@@ -178,8 +178,8 @@ export const AdminSystemModule: React.FC = () => {
             <Form.Item name="username" label="Tài khoản SMTP" rules={[{ required: true }]}>
               <Input placeholder="Thường là email người gửi" />
             </Form.Item>
-            <Form.Item name="password" label="App Password SMTP" rules={[{ required: true, message: 'Vui lòng nhập App Password SMTP' }]}>
-              <Input.Password autoComplete="new-password" placeholder="Nhập App Password SMTP" />
+            <Form.Item name="password" label="App Password SMTP" rules={[{ required: !config.passwordConfigured, message: 'Vui lòng nhập App Password SMTP' }]}>
+              <Input.Password autoComplete="new-password" placeholder={config.passwordConfigured ? 'Để trống để giữ mật khẩu đã lưu' : 'Nhập App Password SMTP'} />
             </Form.Item>
             <Form.Item name="security" label="Bảo mật kết nối" rules={[{ required: true }]}>
               <Select

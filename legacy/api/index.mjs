@@ -405,7 +405,7 @@ async function getEmailConfig() {
 
 async function publicEmailConfig() {
   const config = await getEmailConfig();
-  return config;
+  return { ...config, password: '' };
 }
 
 async function saveEmailConfig(input) {

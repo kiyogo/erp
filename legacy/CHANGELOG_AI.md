@@ -4,6 +4,15 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-29] - Cấu hình mail server trong web cũ
+
+- Chỉ sửa trong `legacy/`: giữ mật khẩu SMTP ở máy chủ, mã hóa bằng AES-GCM, không trả lại bí mật từ API sau khi đọc hoặc lưu cấu hình. Cả hai màn cấu hình SMTP cho phép thay đổi các trường còn lại mà không cần nhập lại mật khẩu đã lưu; mật khẩu mới chỉ bắt buộc khi chưa cấu hình.
+- Thêm kiểm tra API cho mật khẩu mã hóa, lưu/đọc và cập nhật khi mật khẩu để trống, dữ liệu lỗi không ghi đè cấu hình hợp lệ, quyền Admin và lỗi kết nối gửi thử. E2E trình duyệt xác minh lưu, tải lại, thay cấu hình, không lộ mật khẩu và hiển thị lỗi SMTP không hoạt động.
+- Checklist ID 67 được ghi nhận 1/1 cho chức năng cấu hình; mức sàn tăng từ 98/982 lên 99/982 (10.1%), còn 883 mục chưa được đối chiếu đồng nhất. Chưa xác nhận gửi thành công bằng máy chủ SMTP thật và chưa thể chốt ngày hoàn tất toàn web.
+- Kiểm tra đạt: API 121/121, web/domain 149/149, PostgreSQL smoke 84 checkpoint, E2E cấu hình mail, typecheck, API syntax và production build. Bundle JavaScript 5,058.51 kB; còn cảnh báo chunk trên 500 kB.
+
+---
+
 ## [2026-10-29] - Quản lý tài khoản và hồ sơ nhân viên trong web cũ
 
 - Chỉ sửa trong `legacy/`: mở rộng form tạo/sửa tài khoản theo hồ sơ nhân viên hiện có, gồm mã, họ tên, ảnh, ngày sinh, giới tính, địa chỉ, điện thoại/email cá nhân, phòng ban, vị trí, quản lý, chức danh, trạng thái lao động, ngày thử việc/chính thức và thông tin công ty. Hồ sơ được tải đầy đủ trước khi sửa; Hủy bỏ bản nháp; Lưu và Lưu và phân quyền đều ghi qua API, thao tác sau mở hồ sơ tài khoản đã lưu.

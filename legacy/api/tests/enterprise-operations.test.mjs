@@ -246,3 +246,51 @@ test('company profile stores all legal fields, validates dates and settings, rej
   for (const method of ['GET', 'PUT']) assert.equal((await fetch(`${base}/system/company-profile`, { method, headers: { Authorization: `Bearer ${staff.access_token}`, 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify(second) : undefined })).status, 403);
 });
 
+test('SMTP configuration keeps credentials encrypted, supports updates without revealing the saved password and reports failed delivery', async () => {
+  const initial = (await request('/system/email-config')).config;
+  assert.equal(initial.password, '');
+  assert.equal(initial.passwordConfigured, false);
+  const password = 'SMTP-Secret-26!NeverReturn';
+  const payload = {
+    host: 'smtp.example.test', port: 587, username: 'mailer@example.test', senderEmail: 'mailer@example.test',
+    senderName: 'KIYOVN test mailer', security: 'STARTTLS', portalUrl: 'https://portal.example.test', enabled: true, password,
+  };
+  const saved = (await request('/system/email-config', 'PUT', payload)).config;
+  assert.equal(saved.password, '');
+  assert.equal(saved.passwordConfigured, true);
+  assert.equal(saved.configured, true);
+  const { DatabaseSync } = await import('node:sqlite');
+  const check = new DatabaseSync(env.KIYOVN_DB_PATH, { readOnly: true });
+  let encryptedSetting;
+  try {
+    encryptedSetting = JSON.parse(check.prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'email_config'").get().setting_value);
+  } finally { check.close(); }
+  assert.ok(encryptedSetting.passwordEncrypted);
+  assert.ok(!JSON.stringify(encryptedSetting).includes(password), 'database settings must not contain the SMTP password as plaintext');
+  assert.ok(!JSON.stringify(saved).includes(password), 'API responses must never return the SMTP password');
+  const updated = (await request('/system/email-config', 'PUT', { ...payload, host: 'mail2.example.test', password: '' })).config;
+  assert.equal(updated.host, 'mail2.example.test');
+  assert.equal(updated.password, '');
+  assert.equal(updated.passwordConfigured, true, 'empty password update must retain the encrypted server credential');
+  await request('/system/email-config', 'PUT', { ...payload, senderEmail: 'invalid-email', password: '' }, 422);
+  assert.equal((await request('/system/email-config')).config.host, 'mail2.example.test');
+
+  const user = (await request('/users', 'POST', {
+    email: 'smtp-user@example.test', name: 'SMTP settings user', employeeCode: 'SMTP-USER', role: 'USER', password: 'SMTP-User-26!Strong',
+  }, 201)).user;
+  const userLogin = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: user.email, password: 'SMTP-User-26!Strong' }) });
+  const userSession = await userLogin.json();
+  const userHeaders = { Authorization: `Bearer ${userSession.access_token || userSession.token}`, 'Content-Type': 'application/json' };
+  for (const [method, route, body] of [['GET', '/system/email-config'], ['PUT', '/system/email-config', payload]]) {
+    const response = await fetch(`${base}${route}`, { method, headers: userHeaders, body: body === undefined ? undefined : JSON.stringify(body) });
+    assert.equal(response.status, 403);
+  }
+
+  const probe = createServer();
+  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+  const unusedPort = probe.address().port;
+  await new Promise(resolve => probe.close(resolve));
+  await request('/system/email-config', 'PUT', { ...payload, host: '127.0.0.1', port: unusedPort, security: 'SSL', password: '' });
+  await request('/system/email-config/test', 'POST', { recipient: 'mailer@example.test' }, 422);
+});
+
