@@ -41,3 +41,16 @@ test('favorites view returns only saved launcher entries', () => {
   const entries = buildLauncherEntries(items);
   assert.deepEqual(filterLauncherEntries(entries, { tab: 'favorites', favoriteIds: ['crm/crm-marketing'] }).map((entry) => entry.id), ['crm/crm-marketing']);
 });
+
+test('employee portal apps are grouped by their real work area', () => {
+  const entries = buildLauncherEntries([
+    { id: 'emp-payslip', title: 'Phiếu lương điện tử', path: '/employee/payslip' },
+    { id: 'emp-profile', title: 'Hồ sơ cá nhân', path: '/employee/profile' },
+    { id: 'emp-tasks', title: 'Nhiệm vụ', path: '/employee/tasks' },
+  ]);
+  assert.deepEqual(entries.map(({ title, category }) => [title, category]), [
+    ['Phiếu lương điện tử', 'Tài chính'],
+    ['Hồ sơ cá nhân', 'Nhân sự'],
+    ['Nhiệm vụ', 'Văn phòng số'],
+  ]);
+});
