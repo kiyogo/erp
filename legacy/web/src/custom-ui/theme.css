@@ -1047,6 +1047,17 @@ textarea.ant-input {
   margin-bottom: 6px;
 }
 
+.ant-btn-square-icon {
+  box-sizing: border-box;
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  flex: 0 0 32px;
+  padding: 0 !important;
+  gap: 0 !important;
+  color: var(--antd-primary, #009688);
+}
+
 @media (max-width: 760px) {
   .crm-contact-dialog .crm-contact-header-grid,
   .crm-contact-dialog .crm-contact-fields-grid,

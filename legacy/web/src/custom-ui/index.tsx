@@ -812,6 +812,7 @@ export const Button: React.FC<ButtonProps> = ({
   const loadingClass = isLoading ? 'ant-btn-loading' : '';
   const sizeClass = size ? `ant-btn-${size}` : '';
   const blockClass = block ? 'ant-btn-block' : '';
+  const isStandalonePlus = !children && React.isValidElement(icon) && icon.type === PlusOutlined;
 
   return (
     <button
@@ -819,7 +820,7 @@ export const Button: React.FC<ButtonProps> = ({
       title={title}
       disabled={isDisabled}
       onClick={onClick}
-      className={`ant-btn ${btnTypeClass} ${dangerClass} ${shapeClass} ${loadingClass} ${sizeClass} ${blockClass} ${className}`}
+      className={`ant-btn ${btnTypeClass} ${dangerClass} ${shapeClass} ${loadingClass} ${sizeClass} ${blockClass} ${isStandalonePlus ? 'ant-btn-square-icon' : ''} ${className}`}
       style={{
         display: block ? 'flex' : 'inline-flex',
         alignItems: 'center',
