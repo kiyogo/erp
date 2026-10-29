@@ -47,9 +47,16 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
 
 ## 4. NGUYÊN TẮC GIAO DIỆN & LOGIC HỆ THỐNG
 
+- **Tuân thủ kiến trúc và phong cách giao diện hiện tại:**
+  - Mọi tính năng thêm mới bắt buộc phải làm đúng theo giao diện và kiến trúc giao diện hiện tại của dự án.
+  - Tuyệt đối không tự ý tạo thêm bất kỳ giao diện mới, trang mới hoặc kiểu mẫu khác biệt nào khi người dùng không yêu cầu.
+  - Triển khai chuẩn xác theo các thành phần hiện hành của hệ thống (menu, dialog/modal, form, bảng dữ liệu,...).
+- **Tổng hợp ảnh chụp giao diện:**
+  - Khi người dùng cung cấp nhiều ảnh chụp cho cùng một giao diện hoặc một chức năng, AI Agent phải phân tích, đối chiếu và tổng hợp tất cả các chi tiết từ các ảnh lại để xây dựng thành 1 giao diện duy nhất, hoàn chỉnh, đồng nhất và đúng chuẩn giao diện web hiện tại.
 - **Chuẩn giao diện Modal / Dialog:**
   - Khoảng cách lề viền và khoảng cách giữa các khối chức năng (form rows, grid, actions) trong dialog tuân theo chuẩn 14px.
   - Các phần tử form control bên trong (như ô chọn Multi-Select, Input, Tags) giữ khoảng cách nhỏ gọn (row-gap 3px, column-gap 4px, margin 0) để đảm bảo tính thẩm mỹ, thanh thoát và không bị giãn dòng cách xa nhau.
 - **Ngôn ngữ và thẩm mỹ:**
   - Giao diện và thông báo sử dụng Tiếng Việt chuẩn mực, chuyên nghiệp.
   - Giữ gìn tính toàn vẹn của mã nguồn, chú thích (comments) và cấu trúc hiện hữu của dự án.
+  - Tuyệt đối không chứa emoji / icon trong commit message, nội dung tệp và tài liệu dự án.

@@ -31,13 +31,14 @@ export const SystemSettingsModule: React.FC = () => {
   const changeAccountingBasis = <K extends 'legalForm' | 'companySize'>(field: K, value: CompanyProfile[K]) => setProfile(previous => ({ ...previous, [field]: value, accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false }));
   const changeAccountingRegime = (value: CompanyProfile['accountingRegime']) => setProfile(previous => ({ ...previous, accountingRegime: value, accountingRegimeOther: '', cooperativeUsesTT133: false }));
   const regimeChoices = (() => {
-    const all = ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT152', 'other'] as const;
+    const all = ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT71', 'TT152', 'other'] as const;
     const labels = {
       TT99: 'Thông tư 99/2025/TT-BTC',
       TT133: 'Thông tư 133/2016/TT-BTC',
       TT132: 'Thông tư 132/2018/TT-BTC (kỳ bắt đầu trước 01/07/2026)',
       TT58: 'Thông tư 58/2026/TT-BTC (kỳ bắt đầu từ 01/07/2026)',
-      TT24: 'Thông tư 24/2017/TT-BTC (hợp tác xã)',
+      TT24: 'Thông tư 24/2017/TT-BTC (kỳ bắt đầu trước 01/01/2025)',
+      TT71: 'Thông tư 71/2024/TT-BTC (kỳ bắt đầu từ 01/01/2025)',
       TT152: 'Thông tư 152/2025/TT-BTC (hộ kinh doanh, cá nhân kinh doanh)',
       other: 'Chế độ khác / đặc thù',
     };
@@ -57,7 +58,12 @@ export const SystemSettingsModule: React.FC = () => {
     const microRegimes = fiscalYearStart ? (fiscalYearStart >= '2026-07-01' ? ['TT58' as const] : ['TT132' as const]) : ['TT132' as const, 'TT58' as const];
     let values: readonly (typeof all[number])[];
     if (profile.legalForm === 'household_business') values = ['TT152', 'other'];
-    else if (profile.legalForm === 'cooperative') values = ['TT24', ...(profile.companySize === 'large' ? ['TT133' as const] : []), 'other'];
+    else if (profile.legalForm === 'cooperative') {
+      const cooperativeRegimes = fiscalYearStart
+        ? (fiscalYearStart >= '2025-01-01' ? ['TT71' as const] : ['TT24' as const, ...(profile.companySize === 'large' ? ['TT133' as const] : [])])
+        : ['TT24' as const, 'TT71' as const, ...(profile.companySize === 'large' ? ['TT133' as const] : [])];
+      values = [...cooperativeRegimes, 'other'];
+    }
     else if (['state_owned_enterprise', 'public_company'].includes(profile.legalForm)) values = ['TT99', 'other'];
     else if (['nonprofit_organization', 'public_unit', 'foreign_representative_office'].includes(profile.legalForm)) values = ['other'];
     else if (['branch', 'other'].includes(profile.legalForm)) values = ['TT99', 'TT133', ...microRegimes, 'TT24', 'TT152', 'other'];
@@ -234,7 +240,7 @@ export const SystemSettingsModule: React.FC = () => {
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Chế độ kế toán
                 <Select aria-label="Chế độ kế toán" value={profile.accountingRegime || undefined} onChange={changeAccountingRegime} style={{ display: 'block', width: '100%', marginTop: 6 }} options={regimeChoices} />
               </label>
-              {profile.legalForm === 'cooperative' && profile.companySize === 'large' && profile.accountingRegime === 'TT133' && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: '#334155' }}><input aria-label="Xác nhận điều kiện hợp tác xã áp dụng TT133" type="checkbox" checked={profile.cooperativeUsesTT133} onChange={event => changeProfile('cooperativeUsesTT133', event.target.checked)} />Hợp tác xã có quy mô lớn, có nhiều giao dịch mà Thông tư 24 chưa quy định và xác nhận áp dụng Thông tư 133 cho các giao dịch đó.</label>}
+              {profile.legalForm === 'cooperative' && profile.companySize === 'large' && profile.accountingRegime === 'TT133' && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: '#334155' }}><input aria-label="Xác nhận điều kiện hợp tác xã áp dụng TT133" type="checkbox" checked={profile.cooperativeUsesTT133} onChange={event => changeProfile('cooperativeUsesTT133', event.target.checked)} />Hợp tác xã có quy mô lớn, có nhiều giao dịch mà chế độ kế toán HTX áp dụng cho kỳ này chưa quy định và xác nhận áp dụng Thông tư 133 cho các giao dịch đó.</label>}
               {profile.accountingRegime === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả chế độ kế toán<Input aria-label="Mô tả chế độ kế toán khác" value={profile.accountingRegimeOther} onChange={event => changeProfile('accountingRegimeOther', event.target.value)} /></label>}
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Tháng bắt đầu năm tài chính
                 <Select aria-label="Tháng bắt đầu năm tài chính" value={profile.fiscalYearStartMonth ?? undefined} onChange={value => changeProfile('fiscalYearStartMonth', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={Array.from({ length: 12 }, (_, index) => ({ value: index + 1, label: `Tháng ${index + 1}` }))} />
@@ -250,7 +256,7 @@ export const SystemSettingsModule: React.FC = () => {
               </label>
               {profile.vatMethod === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả phương pháp GTGT<Input aria-label="Mô tả phương pháp GTGT khác" value={profile.vatMethodOther} onChange={event => changeProfile('vatMethodOther', event.target.value)} /></label>}
             </div>
-            <div style={{ color: '#64748B', fontSize: 12 }}>Hộ kinh doanh chọn TT152. Hợp tác xã chọn TT24; chỉ hợp tác xã quy mô lớn mới được chọn TT133 khi có nhiều giao dịch mà TT24 chưa quy định. Doanh nghiệp siêu nhỏ chọn TT132 hoặc TT58 theo ngày bắt đầu năm tài chính; TT133 chỉ dành cho doanh nghiệp nhỏ và vừa đủ điều kiện. Xác nhận theo hồ sơ pháp lý trước khi ghi sổ.</div>
+            <div style={{ color: '#64748B', fontSize: 12 }}>Hộ kinh doanh chọn TT152. Hợp tác xã chọn TT71 cho năm tài chính bắt đầu từ 01/01/2025; kỳ trước đó dùng TT24 và chỉ HTX quy mô lớn mới có thể chọn TT133 theo điều kiện áp dụng. Doanh nghiệp siêu nhỏ chọn TT132 hoặc TT58 theo ngày bắt đầu năm tài chính; TT133 chỉ dành cho doanh nghiệp nhỏ và vừa đủ điều kiện. Xác nhận theo hồ sơ pháp lý trước khi ghi sổ.</div>
           </div>
         )}
         {activeTab === 'legal' && (

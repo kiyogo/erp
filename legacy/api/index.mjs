@@ -730,7 +730,7 @@ function accountingProfileMissing(profile) {
   const allowedValues = new Map([
     ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'state_owned_enterprise', 'public_company', 'foreign_invested', 'nonprofit_organization', 'public_unit', 'foreign_representative_office', 'other']],
     ['companySize', ['micro', 'small', 'medium', 'large', 'not_applicable']],
-    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT152', 'other']],
+    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT71', 'TT152', 'other']],
     ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
   ]);
   for (const [field, allowed] of allowedValues) {
@@ -758,7 +758,12 @@ function allowedAccountingRegimes(profile) {
   const fiscalYearStart = accountingFiscalYearStartDate(profile);
   const microRegimes = fiscalYearStart ? [fiscalYearStart >= '2026-07-01' ? 'TT58' : 'TT132'] : ['TT132', 'TT58'];
   if (profile.legalForm === 'household_business') return ['TT152', ...specialRegime];
-  if (profile.legalForm === 'cooperative') return ['TT24', ...(profile.companySize === 'large' ? ['TT133'] : []), ...specialRegime];
+  if (profile.legalForm === 'cooperative') {
+    const cooperativeRegimes = fiscalYearStart
+      ? (fiscalYearStart >= '2025-01-01' ? ['TT71'] : ['TT24', ...(profile.companySize === 'large' ? ['TT133'] : [])])
+      : ['TT24', 'TT71', ...(profile.companySize === 'large' ? ['TT133'] : [])];
+    return [...cooperativeRegimes, ...specialRegime];
+  }
   if (['state_owned_enterprise', 'public_company'].includes(profile.legalForm)) return ['TT99', ...specialRegime];
   if (['nonprofit_organization', 'public_unit', 'foreign_representative_office'].includes(profile.legalForm)) return specialRegime;
   if (profile.legalForm === 'branch' || profile.legalForm === 'other') return ['TT99', 'TT133', ...microRegimes, 'TT24', 'TT152', ...specialRegime];
@@ -1445,6 +1450,9 @@ function publicCashTransaction(row) {
     note: row.note,
     department: row.department || '',
     employeeCode: row.employee_code || '',
+    sourceAccountId: row.source_account_id || '',
+    counterpartyType: row.counterparty_type || 'other',
+    counterpartyContactId: row.counterparty_contact_id || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1499,7 +1507,7 @@ function publicBankAccount(row, actor = null) {
 
 async function internalTransferAccounts() {
   const banks = (await db.prepare('SELECT * FROM finance_bank_accounts ORDER BY bank_name, id').all()).map(row => publicBankAccount(row));
-  const transactions = await db.prepare("SELECT source, account_name, transaction_type, amount FROM finance_cash_transactions WHERE status = 'Đã hoàn thành'").all();
+  const transactions = await db.prepare("SELECT source, source_account_id, account_name, transaction_type, amount FROM finance_cash_transactions WHERE status = 'Đã hoàn thành'").all();
   const bankNameCounts = new Map();
   for (const bank of banks) bankNameCounts.set(bank.bankName, (bankNameCounts.get(bank.bankName) || 0) + 1);
   const accounts = banks.map(bank => {
@@ -1507,14 +1515,15 @@ async function internalTransferAccounts() {
     const aliases = new Set([bank.key, bank.accountNumber, name, `${bank.bankName} - ${bank.accountNumber} (VND)`]);
     // Old cash entries used bank names; only assign them when the name identifies one account.
     if (bankNameCounts.get(bank.bankName) === 1) aliases.add(bank.bankName);
-    const movement = transactions.filter(item => item.source === 'bank' && aliases.has(item.account_name))
+    const movement = transactions.filter(item => item.source === 'bank' && (item.source_account_id === bank.key || (!item.source_account_id && aliases.has(item.account_name))))
       .reduce((sum, item) => sum + (item.transaction_type === 'Thu' ? Number(item.amount) : -Number(item.amount)), 0);
     return { key: bank.key, name, source: 'bank', balance: Number(bank.balance) + movement, status: bank.status };
   });
   for (const name of new Set(['Quỹ tiền mặt', ...transactions.filter(item => item.source === 'petty').map(item => item.account_name)])) {
-    const balance = transactions.filter(item => item.source === 'petty' && item.account_name === name)
+    const key = `petty:${name}`;
+    const balance = transactions.filter(item => item.source === 'petty' && (item.source_account_id === key || (!item.source_account_id && item.account_name === name)))
       .reduce((sum, item) => sum + (item.transaction_type === 'Thu' ? Number(item.amount) : -Number(item.amount)), 0);
-    accounts.push({ key: `petty:${name}`, name, source: 'petty', balance, status: 'Đang hoạt động' });
+    accounts.push({ key, name, source: 'petty', balance, status: 'Đang hoạt động' });
   }
   return accounts;
 }
@@ -4799,7 +4808,39 @@ function validateCashTransaction(input) {
     note: optionalText(input.note, 'Ghi chú', 2_000),
     department: optionalText(input.department, 'Phòng ban', 160),
     employeeCode: optionalText(input.employeeCode, 'Mã nhân viên', 64).toUpperCase(),
+    sourceAccountId: optionalText(input.sourceAccountId, 'Tài khoản nguồn', 160),
+    counterpartyType: oneOf(input.counterpartyType || 'other', 'Loại đối tượng', ['customer', 'supplier', 'partner', 'employee', 'other']),
+    counterpartyContactId: optionalText(input.counterpartyContactId, 'Đối tượng liên hệ', 160),
   };
+}
+
+async function resolveCashTransactionLinks(transaction) {
+  if (transaction.sourceAccountId) {
+    const account = (await internalTransferAccounts()).find(item => item.key === transaction.sourceAccountId);
+    if (!account || account.status !== 'Đang hoạt động' || account.source !== transaction.source) {
+      throw new HttpError(422, 'Tài khoản nhận hoặc chi không tồn tại, đã ngừng hoạt động hoặc không khớp nguồn tiền.');
+    }
+    transaction.account = account.name;
+  }
+
+  if (['customer', 'supplier', 'partner'].includes(transaction.counterpartyType)) {
+    if (!transaction.counterpartyContactId) throw new HttpError(422, 'Hãy chọn khách hàng, nhà cung cấp hoặc đối tác từ danh mục.');
+    const contact = await db.prepare('SELECT id, name, contact_type, status FROM crm_contacts WHERE id = ?').get(transaction.counterpartyContactId);
+    if (!contact || !['Đang hoạt động', 'Đang hợp tác'].includes(contact.status) || contact.contact_type !== transaction.counterpartyType) {
+      throw new HttpError(422, 'Đối tượng liên hệ không tồn tại, đã ngừng hoạt động hoặc không đúng loại đã chọn.');
+    }
+    transaction.recipientOrPayer = contact.name;
+    transaction.employeeCode = '';
+  } else if (transaction.counterpartyType === 'employee') {
+    if (!transaction.employeeCode) throw new HttpError(422, 'Hãy chọn nhân viên nhận hoặc nộp tiền.');
+    const employee = await db.prepare('SELECT name FROM users WHERE employee_code = ? AND is_active = 1').get(transaction.employeeCode);
+    if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+    transaction.recipientOrPayer = employee.name;
+    transaction.counterpartyContactId = '';
+  } else {
+    if (transaction.counterpartyContactId) throw new HttpError(422, 'Đối tượng nhập tự do không được gắn mã liên hệ.');
+  }
+  return transaction;
 }
 
 function validateFinanceDocument(input) {
@@ -8824,10 +8865,10 @@ async function handleRequest(request, response) {
         const paymentDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
         await db.prepare(`INSERT INTO finance_cash_transactions (
           id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-          account_name, status, note, employee_code, created_by, created_at, updated_at
-        ) VALUES (?, ?, 'Chi', ?, 'Thanh toán đề nghị', ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, ?, ?)`)
+          account_name, status, note, employee_code, source_account_id, counterparty_type, created_by, created_at, updated_at
+        ) VALUES (?, ?, 'Chi', ?, 'Thanh toán đề nghị', ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, 'other', ?, ?, ?)`)
           .run(transactionId, transactionCode, source.source, current.amount, paymentDate, current.beneficiary,
-            source.name, transactionNote, current.empCode || null, actor.id, timestamp, timestamp);
+            source.name, transactionNote, current.empCode || null, source.key, actor.id, timestamp, timestamp);
         payment = {
           ...current, status: 'Đã thanh toán', paidBy: actor.name, paidById: actor.id, paidAt: timestamp,
           settlementReference, settlementRecordedInternally: true, sourceAccountId: source.key,
@@ -8872,27 +8913,32 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && resource === '/finance/cash-transactions') {
     const actor = await requireAdmin(request);
     await requireAccountingProfile();
-    const transaction = validateCashTransaction(await readJson(request));
+    const transaction = await resolveCashTransactionLinks(validateCashTransaction(await readJson(request)));
     transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
     const id = randomUUID();
     const timestamp = now();
     await db.prepare(`INSERT INTO finance_cash_transactions (
       id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-      account_name, status, note, department, employee_code, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      account_name, status, note, department, employee_code, source_account_id, counterparty_type,
+      counterparty_contact_id, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(
         id, transaction.code, transaction.type, transaction.source, transaction.category,
         transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
         transaction.status, transaction.note, transaction.department || null, transaction.employeeCode || null,
+        transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
         actor.id, timestamp, timestamp,
       );
+    await recordAuditEvent(actor.id, 'create_cash_transaction', 'finance_cash_transactions', id, {
+      code: transaction.code, type: transaction.type, amount: transaction.amount, source: transaction.source,
+    });
     sendJson(response, 201, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
     return;
   }
 
   const cashTransactionMatch = /^\/finance\/cash-transactions\/([^/]+)$/.exec(resource);
   if (cashTransactionMatch && request.method === 'PATCH') {
-    await requireAdmin(request);
+    const actor = await requireAdmin(request);
     const id = decodeURIComponent(cashTransactionMatch[1]);
     const current = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id);
     if (!current) throw new HttpError(404, 'Không tìm thấy chứng từ thu chi.');
@@ -8900,8 +8946,37 @@ async function handleRequest(request, response) {
       throw new HttpError(409, 'Chứng từ thuộc lệnh điều chuyển. Hãy hủy cả lệnh để bảo toàn hai bên sổ quỹ.');
     }
     const payload = await readJson(request);
-    if (payload.status !== 'Đã hủy') throw new HttpError(422, 'Chỉ hỗ trợ hủy chứng từ qua API này.');
-    await db.prepare('UPDATE finance_cash_transactions SET status = ?, updated_at = ? WHERE id = ?').run('Đã hủy', now(), id);
+    const timestamp = now();
+    if (payload.status === 'Đã hủy') {
+      const linkedPayment = await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.financeTransactionId') = ?").get(id);
+      if (current.code.startsWith('AUTO-') || linkedPayment) throw new HttpError(409, 'Phiếu được sinh từ chứng từ khác. Hãy hủy hoặc điều chỉnh chứng từ nguồn để giữ đúng liên kết sổ sách.');
+      await db.prepare("UPDATE finance_cash_transactions SET status = 'Đã hủy', updated_at = ? WHERE id = ? AND status <> 'Đã hủy'").run(timestamp, id);
+      await recordAuditEvent(actor.id, 'cancel_cash_transaction', 'finance_cash_transactions', id, { code: current.code, amount: Number(current.amount) });
+    } else {
+      if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Chỉ sửa được phiếu đang chờ duyệt. Phiếu đã hoàn thành cần hủy và lập phiếu thay thế để giữ nguyên dấu vết kế toán.');
+      if (current.code.startsWith('AUTO-')) throw new HttpError(409, 'Phiếu được sinh tự động từ chứng từ nguồn và không thể sửa riêng.');
+      if (payload.status && payload.status !== current.status) throw new HttpError(409, 'Không thể đổi trạng thái phiếu khi sửa nội dung.');
+      const linkedPayment = await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.financeTransactionId') = ?").get(id);
+      if (linkedPayment) throw new HttpError(409, 'Phiếu đã liên kết với đề nghị thanh toán. Hãy điều chỉnh chứng từ nguồn.');
+      const transaction = await resolveCashTransactionLinks(validateCashTransaction({
+        type: current.transaction_type, source: current.source, category: current.category, amount: current.amount,
+        date: current.transaction_date, recipientOrPayer: current.counterparty, account: current.account_name,
+        status: current.status, note: current.note, department: current.department || '', employeeCode: current.employee_code || '',
+        sourceAccountId: current.source_account_id || '', counterpartyType: current.counterparty_type || 'other',
+        counterpartyContactId: current.counterparty_contact_id || '', ...payload,
+      }));
+      const result = await db.prepare(`UPDATE finance_cash_transactions SET
+        source = ?, category = ?, amount = ?, transaction_date = ?, counterparty = ?, account_name = ?, note = ?,
+        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, updated_at = ?
+        WHERE id = ? AND status = 'Chờ duyệt'`)
+        .run(transaction.source, transaction.category, transaction.amount, transaction.date, transaction.recipientOrPayer,
+          transaction.account, transaction.note, transaction.department || null, transaction.employeeCode || null,
+          transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null, timestamp, id);
+      if (!result.changes) throw new HttpError(409, 'Phiếu đã được cập nhật ở nơi khác. Hãy tải lại danh sách rồi thử lại.');
+      await recordAuditEvent(actor.id, 'update_cash_transaction', 'finance_cash_transactions', id, {
+        code: current.code, amount: transaction.amount, source: transaction.source,
+      });
+    }
     sendJson(response, 200, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
     return;
   }
@@ -8955,11 +9030,11 @@ async function handleRequest(request, response) {
       const transactionIds = [randomUUID(), randomUUID(), ...(fee > 0 ? [randomUUID()] : [])];
       const insert = db.prepare(`INSERT INTO finance_cash_transactions (
         id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-        account_name, status, note, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, ?)`);
-      await insert.run(transactionIds[0], `${code}-OUT`, 'Chi', source.source, 'Chuyển tiền nội bộ', amount, transferDate, destination.name, source.name, purpose, actor.id, timestamp, timestamp);
-      await insert.run(transactionIds[1], `${code}-IN`, 'Thu', destination.source, 'Chuyển tiền nội bộ', amount, transferDate, source.name, destination.name, purpose, actor.id, timestamp, timestamp);
-      if (fee > 0) await insert.run(transactionIds[2], `${code}-FEE`, 'Chi', source.source, 'Phí điều chuyển nội bộ', fee, transferDate, 'Phí thực tế do người lập ghi nhận', source.name, purpose, actor.id, timestamp, timestamp);
+        account_name, status, note, source_account_id, counterparty_type, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, 'other', ?, ?, ?)`);
+      await insert.run(transactionIds[0], `${code}-OUT`, 'Chi', source.source, 'Chuyển tiền nội bộ', amount, transferDate, destination.name, source.name, purpose, source.key, actor.id, timestamp, timestamp);
+      await insert.run(transactionIds[1], `${code}-IN`, 'Thu', destination.source, 'Chuyển tiền nội bộ', amount, transferDate, source.name, destination.name, purpose, destination.key, actor.id, timestamp, timestamp);
+      if (fee > 0) await insert.run(transactionIds[2], `${code}-FEE`, 'Chi', source.source, 'Phí điều chuyển nội bộ', fee, transferDate, 'Phí thực tế do người lập ghi nhận', source.name, purpose, source.key, actor.id, timestamp, timestamp);
       transfer = {
         key, transferCode: code, sourceAccountId: sourceId, destinationAccountId: destinationId,
         sourceAccount: source.name, destinationAccount: destination.name, sourceType: source.source, destinationType: destination.source,
@@ -10701,7 +10776,7 @@ async function handleRequest(request, response) {
       for (const [field, allowed] of [
         ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'state_owned_enterprise', 'public_company', 'foreign_invested', 'nonprofit_organization', 'public_unit', 'foreign_representative_office', 'other']],
         ['companySize', ['micro', 'small', 'medium', 'large', 'not_applicable']],
-        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT152', 'other']],
+        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT71', 'TT152', 'other']],
         ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
       ]) {
         const raw = payload[field];

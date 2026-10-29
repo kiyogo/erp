@@ -213,7 +213,7 @@ export type CompanyProfile = {
   domain: string; timezone: 'Asia/Ho_Chi_Minh' | 'UTC'; currency: 'VND' | 'USD'; bankAccountId: string;
   legalForm: '' | 'private_enterprise' | 'llc_single' | 'llc_multiple' | 'joint_stock' | 'partnership' | 'household_business' | 'cooperative' | 'branch' | 'state_owned_enterprise' | 'public_company' | 'foreign_invested' | 'nonprofit_organization' | 'public_unit' | 'foreign_representative_office' | 'other';
   legalFormOther: string; companySize: '' | 'micro' | 'small' | 'medium' | 'large' | 'not_applicable'; industry: string;
-  accountingRegime: '' | 'TT99' | 'TT133' | 'TT132' | 'TT58' | 'TT24' | 'TT152' | 'other'; accountingRegimeOther: string; cooperativeUsesTT133: boolean;
+  accountingRegime: '' | 'TT99' | 'TT133' | 'TT132' | 'TT58' | 'TT24' | 'TT71' | 'TT152' | 'other'; accountingRegimeOther: string; cooperativeUsesTT133: boolean;
   fiscalYearStartMonth: number | null; fiscalYearStartDay: number | null;
   vatMethod: '' | 'deduction' | 'direct_revenue' | 'direct_added_value' | 'other'; vatMethodOther: string;
   accountingProfileComplete?: boolean; accountingProfileMissing?: string[];
@@ -477,11 +477,15 @@ export type FinanceCashTransaction = {
   note: string;
   department?: string;
   employeeCode?: string;
+  sourceAccountId?: string;
+  counterpartyType?: 'customer' | 'supplier' | 'partner' | 'employee' | 'other';
+  counterpartyContactId?: string;
   createdAt: string;
   updatedAt: string;
 };
 
 export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };
+export type UpdateFinanceCashTransaction = Partial<Omit<CreateFinanceCashTransaction, 'code'>>;
 
 export type FinancePaymentRecord = {
   key: string;
@@ -523,6 +527,7 @@ export type FinancePaymentAccount = { key: string; name: string; source: 'bank' 
 export const financeCashApi = {
   getAll: (source?: FinanceCashTransaction['source']) => api.get<{ data: FinanceCashTransaction[] }>('/finance/cash-transactions', { params: source ? { source } : undefined }),
   create: (data: CreateFinanceCashTransaction) => api.post<{ transaction: FinanceCashTransaction }>('/finance/cash-transactions', data),
+  update: (id: string, data: UpdateFinanceCashTransaction) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${encodeURIComponent(id)}`, data),
   cancel: (id: string) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${id}`, { status: 'Đã hủy' }),
 };
 

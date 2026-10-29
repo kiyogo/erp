@@ -791,6 +791,47 @@ test('payment requests persist actual actors and enforce approval, rejection and
   assert.equal((await request('/finance/payments')).data.length, 4);
 });
 
+test('cash vouchers link active accounts and CRM contacts, allow pending edits and preserve posted history', async () => {
+  const suffix = Date.now().toString();
+  const account = (await request('/finance/bank-accounts', 'POST', {
+    bankName: 'Vietcombank', accountNumber: `CASH${suffix.slice(-8)}`, accountHolder: 'HTX kiểm thử', balance: 5000, status: 'Đang hoạt động',
+  }, 201)).account;
+  const contact = (await request('/crm/contacts', 'POST', {
+    type: 'customer', name: `Khách hàng thu tiền ${suffix}`, status: 'Đang hoạt động',
+  }, 201)).contact;
+  const baseVoucher = {
+    type: 'Thu', source: 'bank', sourceAccountId: account.key, account: 'Tên tài khoản giả',
+    category: 'Thu tiền hàng', amount: 1200, date: '2026-10-29', recipientOrPayer: 'Tên giả',
+    counterpartyType: 'customer', counterpartyContactId: contact.key, status: 'Chờ duyệt', note: 'Hóa đơn HD-01',
+  };
+  const created = (await request('/finance/cash-transactions', 'POST', baseVoucher, 201)).transaction;
+  assert.equal(created.account, `Vietcombank (${account.accountNumber})`);
+  assert.equal(created.sourceAccountId, account.key);
+  assert.equal(created.recipientOrPayer, contact.name);
+  assert.equal(created.counterpartyType, 'customer');
+  assert.equal(created.counterpartyContactId, contact.key);
+
+  const updated = (await request(`/finance/cash-transactions/${created.key}`, 'PATCH', {
+    ...baseVoucher, category: 'Thu tiền theo hóa đơn', amount: 1400, recipientOrPayer: 'Không được ghi đè danh mục',
+  })).transaction;
+  assert.equal(updated.code, created.code);
+  assert.equal(updated.category, 'Thu tiền theo hóa đơn');
+  assert.equal(updated.amount, 1400);
+  assert.equal(updated.recipientOrPayer, contact.name);
+  await request(`/finance/cash-transactions/${created.key}`, 'PATCH', { ...baseVoucher, counterpartyType: 'supplier' }, 422);
+  await request(`/finance/cash-transactions/${created.key}`, 'PATCH', { ...baseVoucher, status: 'Đã hoàn thành' }, 409);
+  const cancelled = (await request(`/finance/cash-transactions/${created.key}`, 'PATCH', { status: 'Đã hủy' })).transaction;
+  assert.equal(cancelled.status, 'Đã hủy');
+
+  const accountsBefore = (await request('/finance/payment-accounts')).accounts;
+  const accountBefore = accountsBefore.find(item => item.key === account.key);
+  const completed = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', category: 'Thu đã ghi nhận' }, 201)).transaction;
+  assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, accountBefore.balance + 1200);
+  await request(`/finance/cash-transactions/${completed.key}`, 'PATCH', { ...baseVoucher, category: 'Sửa phiếu đã ghi sổ' }, 409);
+  await request(`/finance/cash-transactions/${completed.key}`, 'PATCH', { status: 'Đã hủy' });
+  assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, accountBefore.balance);
+});
+
 test('legacy attendance mirrors migrate without removing source records', async () => {
   const canonical = (await request('/collections/leave_requests')).data.find(record => record.key === 'legacy-leave');
   assert.equal(canonical.startDate, '2026-10-01');

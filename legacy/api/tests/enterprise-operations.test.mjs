@@ -243,27 +243,25 @@ test('company profile stores all legal fields, validates dates and settings, rej
     { companySize: 'medium', accountingRegime: 'TT132' },
     { companySize: 'micro', accountingRegime: 'TT58', fiscalYearStartMonth: 1, fiscalYearStartDay: 1 },
     { legalForm: 'cooperative', companySize: 'small', accountingRegime: 'TT133' },
+    { legalForm: 'cooperative', companySize: 'large', accountingRegime: 'TT24' },
     { fiscalYearStartMonth: 2, fiscalYearStartDay: 30 }, { fiscalYearStartMonth: 1, fiscalYearStartDay: null },
   ]) await request('/system/company-profile', 'PUT', { ...profile, ...invalid }, 422);
   const household = (await request('/system/company-profile', 'PUT', { ...profile, legalForm: 'household_business', companySize: 'micro', accountingRegime: 'TT152' })).profile;
   assert.equal(household.accountingProfileComplete, true);
   const microTT58 = (await request('/system/company-profile', 'PUT', { ...household, legalForm: 'llc_single', companySize: 'micro', accountingRegime: 'TT58', fiscalYearStartMonth: 7, fiscalYearStartDay: 1 })).profile;
   assert.equal(microTT58.accountingProfileComplete, true);
-  const cooperative = (await request('/system/company-profile', 'PUT', { ...microTT58, legalForm: 'cooperative', companySize: 'large', accountingRegime: 'TT24' })).profile;
+  const cooperative = (await request('/system/company-profile', 'PUT', { ...microTT58, legalForm: 'cooperative', companySize: 'large', accountingRegime: 'TT71' })).profile;
   assert.equal(cooperative.accountingProfileComplete, true);
-  const cooperativeDraft = (await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT133' })).profile;
-  assert.equal(cooperativeDraft.accountingProfileComplete, false);
-  assert.ok(cooperativeDraft.accountingProfileMissing.includes('Xác nhận điều kiện HTX quy mô lớn áp dụng TT133'));
-  const cooperativeTT133 = (await request('/system/company-profile', 'PUT', { ...cooperativeDraft, cooperativeUsesTT133: true })).profile;
-  assert.equal(cooperativeTT133.accountingProfileComplete, true);
-  const saved = (await request('/system/company-profile', 'PUT', { ...profile, updatedAt: cooperativeTT133.updatedAt, revision: cooperativeTT133.revision })).profile;
-  assert.equal(saved.taxCode, '0012345678'); assert.equal(saved.updatedBy, session.user.name); assert.equal(saved.revision, 6);
+  await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT24' }, 422);
+  await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT133', cooperativeUsesTT133: true }, 422);
+  const saved = (await request('/system/company-profile', 'PUT', { ...profile, updatedAt: cooperative.updatedAt, revision: cooperative.revision })).profile;
+  assert.equal(saved.taxCode, '0012345678'); assert.equal(saved.updatedBy, session.user.name); assert.equal(saved.revision, 4);
   assert.equal(saved.accountingProfileComplete, true);
   for (const key of ['fullName', 'shortName', 'companyCode', 'businessType', 'establishedDate', 'registrationDate', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'phone', 'fax', 'email', 'website', 'domain', 'timezone', 'currency', 'bankAccountId', 'legalForm', 'companySize', 'industry', 'accountingRegime', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod']) assert.equal(saved[key], profile[key], key);
   assert.deepEqual((await request('/system/company-profile')).profile, saved);
   await request('/system/company-profile', 'PUT', { ...profile, companyName: 'Stale' }, 409);
   const second = (await request('/system/company-profile', 'PUT', { ...saved, shortName: 'NEW' })).profile;
-  assert.equal(second.revision, 7);
+  assert.equal(second.revision, 5);
   await request('/system/company-profile', 'PUT', { ...saved, companyName: 'Stale again' }, 409);
   assert.equal((await request('/system/company-profile')).profile.shortName, 'NEW');
   const taxDraft = (await request('/collections/finance_tax', 'POST', { record: { key: 'tax-draft-profile', code: 'TAX-TEST', taxType: 'Thuế GTGT', period: 'Quý IV/2026', deadline: '2027-01-30', amountPayable: 1200, amountPaid: 1200, status: 'Đã nộp đủ' } }, 201)).record;

@@ -711,6 +711,21 @@ export async function initDatabaseSchema() {
     CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events(actor_id, created_at DESC);
   `);
+
+  const cashColumnNames = isPg
+    ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'finance_cash_transactions' AND table_schema = current_schema()")).map(row => row.column_name)
+    : (await queryAll('PRAGMA table_info(finance_cash_transactions)')).map(row => row.name);
+  const cashColumns = new Set(cashColumnNames);
+  for (const [name, definition] of [
+    ['source_account_id', 'TEXT'],
+    ['counterparty_type', "TEXT NOT NULL DEFAULT 'other'"],
+    ['counterparty_contact_id', 'TEXT'],
+  ]) {
+    if (cashColumns.has(name)) continue;
+    await exec(`ALTER TABLE finance_cash_transactions ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}${name} ${definition}`);
+  }
+  await exec('CREATE INDEX IF NOT EXISTS finance_cash_transactions_account_idx ON finance_cash_transactions(source_account_id)');
+  await exec('CREATE INDEX IF NOT EXISTS finance_cash_transactions_contact_idx ON finance_cash_transactions(counterparty_contact_id)');
 }
 
 const db = {

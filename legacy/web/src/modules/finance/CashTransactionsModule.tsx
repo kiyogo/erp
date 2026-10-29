@@ -7,12 +7,22 @@ import {
   ArrowDownOutlined,
   DeleteOutlined,
   EyeOutlined,
+  EditOutlined,
   BankOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
-import { financeCashApi, FinanceCashTransaction } from '../../api/endpoints';
+import {
+  crmContactsApi,
+  employeesApi,
+  financeCashApi,
+  financePaymentsApi,
+  FinanceCashTransaction,
+  FinancePaymentAccount,
+  CrmContact,
+  EnterpriseEmployee,
+} from '../../api/endpoints';
 
 export type EnterpriseCashTransaction = FinanceCashTransaction;
 
@@ -25,6 +35,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [typeFilter, setTypeFilter] = useState<'all' | 'Thu' | 'Chi' | 'pending'>(typeFilterDefault);
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [editingTransaction, setEditingTransaction] = useState<EnterpriseCashTransaction | null>(null);
+  const [partyRefValue, setPartyRefValue] = useState('other');
+  const [sourceFilter, setSourceFilter] = useState<'bank' | 'petty'>('bank');
+  const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [contacts, setContacts] = useState<CrmContact[]>([]);
+  const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<EnterpriseCashTransaction | null>(null);
@@ -44,6 +60,9 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
   useEffect(() => {
     void loadData();
+    void financePaymentsApi.getAccounts().then(response => setCashAccounts(response.data.accounts)).catch(() => setCashAccounts([]));
+    void crmContactsApi.getAll().then(response => setContacts(response.data.data.filter(contact => ['Đang hoạt động', 'Đang hợp tác'].includes(contact.status)))).catch(() => setContacts([]));
+    void employeesApi.getAll().then(response => setEmployees(response.data.data.filter(employee => employee.isActive))).catch(() => setEmployees([]));
   }, []);
 
   useEffect(() => {
@@ -59,23 +78,126 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const netCashFlow = totalIncome - totalExpense;
   const pendingCount = data.filter((d) => d.status === 'Chờ duyệt').length;
 
-  const handleCreate = async (values: any) => {
+  const activeCashAccounts = cashAccounts.filter(account => account.source === sourceFilter && account.status === 'Đang hoạt động');
+  const partyOptions = [
+    ...contacts.map(contact => ({
+      label: `${contact.type === 'customer' ? 'Khách hàng' : contact.type === 'supplier' ? 'Nhà cung cấp' : 'Đối tác'} · ${contact.name} (${contact.code})`,
+      value: `contact:${contact.type}:${contact.key}`,
+    })),
+    ...employees.map(employee => ({
+      label: `Nhân viên · ${employee.name || employee.fullName} (${employee.employeeCode || employee.code})`,
+      value: `employee:${employee.employeeCode || employee.code}`,
+    })),
+    { label: 'Khác · Nhập tên người nộp hoặc nhận', value: 'other' },
+  ];
+
+  const getPartyRef = (transaction: EnterpriseCashTransaction) => {
+    if (transaction.counterpartyContactId && transaction.counterpartyType && ['customer', 'supplier', 'partner'].includes(transaction.counterpartyType)) {
+      return `contact:${transaction.counterpartyType}:${transaction.counterpartyContactId}`;
+    }
+    if (transaction.counterpartyType === 'employee' && transaction.employeeCode) return `employee:${transaction.employeeCode}`;
+    return 'other';
+  };
+
+  const closeForm = () => {
+    setModalOpen(false);
+    setEditingTransaction(null);
+    setPartyRefValue('other');
+    form.resetFields();
+  };
+
+  const handleSave = async (values: any) => {
+    const partyRef = String(values.partyRef || 'other');
+    let counterpartyType: FinanceCashTransaction['counterpartyType'] = 'other';
+    let counterpartyContactId = '';
+    let employeeCode = '';
+    let recipientOrPayer = String(values.recipientOrPayer || '').trim();
+    if (partyRef.startsWith('contact:')) {
+      const [, type, id] = partyRef.split(':');
+      const contact = contacts.find(item => item.key === id && item.type === type);
+      if (!contact) { message.error('Không tìm thấy đối tượng đã chọn. Hãy tải lại danh mục.'); return; }
+      counterpartyType = type as FinanceCashTransaction['counterpartyType'];
+      counterpartyContactId = id;
+      recipientOrPayer = contact.name;
+    } else if (partyRef.startsWith('employee:')) {
+      employeeCode = partyRef.slice('employee:'.length);
+      const employee = employees.find(item => (item.employeeCode || item.code) === employeeCode);
+      if (!employee) { message.error('Không tìm thấy nhân viên đã chọn. Hãy tải lại danh mục.'); return; }
+      counterpartyType = 'employee';
+      recipientOrPayer = employee.name || employee.fullName;
+    }
+    const account = activeCashAccounts.find(item => item.key === values.sourceAccountId);
+    if (!account) { message.error('Hãy chọn tài khoản đang hoạt động phù hợp với nguồn tiền.'); return; }
     const formattedValues = {
-      ...values,
+      type: values.type,
+      source: values.source,
+      sourceAccountId: account.key,
+      account: account.name,
+      category: values.category,
       amount: Number(values.amount) || 0,
-      date: values.date || new Date().toISOString().substring(0, 10),
-      status: values.status || 'Đã hoàn thành',
-      source: values.source || 'bank',
+      date: values.date,
+      recipientOrPayer,
+      counterpartyType,
+      counterpartyContactId,
+      employeeCode,
+      status: editingTransaction?.status || values.status || 'Chờ duyệt',
+      note: values.note || '',
+      department: values.department || '',
     };
     try {
-      await financeCashApi.create(formattedValues);
-      message.success(`Đã lập phiếu ${values.type}: ${values.code} thành công`);
-      setModalOpen(false);
-      form.resetFields();
+      if (editingTransaction) {
+        const response = await financeCashApi.update(editingTransaction.key, formattedValues);
+        message.success(`Đã cập nhật phiếu ${response.data.transaction.code}`);
+      } else {
+        const response = await financeCashApi.create(formattedValues);
+        message.success(`Đã lập phiếu ${response.data.transaction.code}`);
+      }
+      closeForm();
+      if (selectedTransaction?.key === editingTransaction?.key) setSelectedTransaction(null);
       await loadData();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể lập phiếu thu chi. Vui lòng kiểm tra lại dữ liệu.');
+      message.error(error?.response?.data?.message || 'Không thể lưu phiếu thu chi. Vui lòng kiểm tra lại dữ liệu.');
     }
+  };
+
+  const openCreateForm = () => {
+    setEditingTransaction(null);
+    setPartyRefValue('other');
+    setSourceFilter('bank');
+    form.resetFields();
+    form.setFieldsValue({
+      type: typeFilterDefault === 'Thu' || typeFilterDefault === 'Chi' ? typeFilterDefault : 'Thu',
+      date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
+      status: 'Chờ duyệt',
+      source: 'bank',
+      partyRef: 'other',
+    });
+    setModalOpen(true);
+  };
+
+  const openEditForm = (transaction: EnterpriseCashTransaction) => {
+    const account = cashAccounts.find(item => item.key === transaction.sourceAccountId)
+      || cashAccounts.find(item => item.source === transaction.source && item.name === transaction.account);
+    const partyRef = getPartyRef(transaction);
+    setEditingTransaction(transaction);
+    setDrawerOpen(false);
+    setPartyRefValue(partyRef);
+    setSourceFilter(transaction.source);
+    form.resetFields();
+    form.setFieldsValue({
+      type: transaction.type,
+      source: transaction.source,
+      sourceAccountId: account?.key,
+      category: transaction.category,
+      amount: transaction.amount,
+      date: transaction.date,
+      status: transaction.status,
+      note: transaction.note,
+      department: transaction.department,
+      partyRef,
+      recipientOrPayer: transaction.recipientOrPayer,
+    });
+    setModalOpen(true);
   };
 
   const handleDelete = (trx: EnterpriseCashTransaction) => {
@@ -282,16 +404,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => {
-              form.resetFields();
-              form.setFieldsValue({
-                type: 'Thu',
-                date: new Date().toISOString().substring(0, 10),
-                status: 'Đã hoàn thành',
-                source: 'bank',
-              });
-              setModalOpen(true);
-            }}
+            onClick={openCreateForm}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Lập phiếu thu / chi
@@ -306,29 +419,35 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
       {/* MODAL: Lập phiếu thu / chi */}
       <Modal
-        title="Lập Chứng Từ Phiếu Thu / Phiếu Chi Tiền Mới"
+        title={editingTransaction ? `Sửa phiếu ${editingTransaction.code}` : 'Lập phiếu thu / chi'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={closeForm}
         footer={null}
         width={640}
       >
-        <Form form={form} layout="vertical" onFinish={handleCreate}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <Form form={form} layout="vertical" onFinish={handleSave}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="type" label="Loại chứng từ" rules={[{ required: true }]}>
               <Select
+                disabled={Boolean(editingTransaction)}
                 options={[
                   { label: 'Phiếu Thu Tiền', value: 'Thu' },
                   { label: 'Phiếu Chi Tiền', value: 'Chi' },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="code" label="Số chứng từ" rules={[{ required: true, whitespace: true }]}>
-              <Input placeholder="Nhập mã chứng từ theo sổ kế toán" />
+            <Form.Item label="Số chứng từ">
+              <Input disabled value={editingTransaction?.code || 'Hệ thống tự cấp khi lưu'} />
             </Form.Item>
           </div>
 
           <Form.Item name="source" label="Nguồn tiền" rules={[{ required: true }]}>
             <Select
+              disabled={Boolean(editingTransaction && editingTransaction.status !== 'Chờ duyệt')}
+              onChange={(value: 'bank' | 'petty') => {
+                setSourceFilter(value);
+                form.setFieldsValue({ source: value, sourceAccountId: undefined });
+              }}
               options={[
                 { label: 'Tiền gửi ngân hàng', value: 'bank' },
                 { label: 'Quỹ tiền mặt', value: 'petty' },
@@ -336,30 +455,56 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             />
           </Form.Item>
 
-          <Form.Item name="category" label="Nội dung thu / chi chi tiết" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Thu tiền quyết toán hợp đồng phần mềm hoặc Chi trả tiền thuê văn phòng..." />
+          <Form.Item name="sourceAccountId" label={sourceFilter === 'petty' ? 'Quỹ tiền mặt' : 'Tài khoản ngân hàng'} rules={[{ required: true, message: 'Hãy chọn tài khoản nguồn.' }]}>
+            <Select
+              placeholder={activeCashAccounts.length ? 'Chọn tài khoản đang hoạt động' : 'Chưa có tài khoản đang hoạt động'}
+              options={activeCashAccounts.map(account => ({
+                value: account.key,
+                label: `${account.name} · Số dư ${Number(account.balance).toLocaleString('vi-VN')} ₫`,
+              }))}
+            />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <Form.Item name="category" label="Nội dung thu / chi chi tiết" rules={[{ required: true }]}>
+            <Input placeholder="Lý do thu hoặc chi" />
+          </Form.Item>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="amount" label="Số tiền thanh toán (VNĐ)" rules={[{ required: true }]}>
-              <Input type="number" min={1000} step={500000} />
+              <Input type="number" min={1} step={1} />
             </Form.Item>
             <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <Form.Item name="recipientOrPayer" label="Đối tác / Người nộp hoặc nhận" rules={[{ required: true }]}>
-              <Input placeholder="Tên khách hàng, đối tác hoặc nhân sự" />
+          <Form.Item name="partyRef" label="Đối tượng thu / chi" rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]}>
+            <Select
+              showSearch
+              onChange={(value: string) => {
+                setPartyRefValue(value);
+                if (value === 'other') { form.setFieldsValue({ recipientOrPayer: '' }); return; }
+                if (value.startsWith('contact:')) {
+                  const contact = contacts.find(item => item.key === value.split(':')[2]);
+                  form.setFieldsValue({ recipientOrPayer: contact?.name || '' });
+                } else if (value.startsWith('employee:')) {
+                  const employeeCode = value.slice('employee:'.length);
+                  const employee = employees.find(item => (item.employeeCode || item.code) === employeeCode);
+                  form.setFieldsValue({ recipientOrPayer: employee?.name || employee?.fullName || '' });
+                }
+              }}
+              options={partyOptions}
+            />
+          </Form.Item>
+          {partyRefValue === 'other' && (
+            <Form.Item name="recipientOrPayer" label="Tên người nộp / nhận" rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên người nộp hoặc nhận.' }]}>
+              <Input placeholder="Nhập tên cá nhân hoặc đơn vị" />
             </Form.Item>
-            <Form.Item name="account" label="Tài khoản nguồn / Quỹ tiền" rules={[{ required: true, whitespace: true }]}>
-              <Input placeholder="Nhập tài khoản ngân hàng hoặc tên quỹ" />
-            </Form.Item>
-          </div>
+          )}
 
           <Form.Item name="status" label="Trạng thái phê duyệt" rules={[{ required: true }]}>
             <Select
+              disabled={Boolean(editingTransaction)}
               options={[
                 { label: 'Đã hoàn thành', value: 'Đã hoàn thành' },
                 { label: 'Chờ duyệt', value: 'Chờ duyệt' },
@@ -367,14 +512,18 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             />
           </Form.Item>
 
-          <Form.Item name="note" label="Ghi chú & Số hóa đơn kèm theo">
-            <Input.TextArea rows={2} placeholder="Hóa đơn GTGT số hoặc Số hợp đồng kinh tế liên quan..." />
+          <Form.Item name="department" label="Phòng ban (nếu có)">
+            <Input placeholder="Chọn hoặc nhập phòng ban liên quan" />
           </Form.Item>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
+          <Form.Item name="note" label="Ghi chú / Số chứng từ liên quan">
+            <Input.TextArea rows={2} placeholder="Ghi số hóa đơn, hợp đồng hoặc nội dung cần đối chiếu" />
+          </Form.Item>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={closeForm}>Đóng</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xác nhận lập phiếu
+              {editingTransaction ? 'Lưu thay đổi' : 'Lập phiếu'}
             </Button>
           </div>
         </Form>
@@ -402,7 +551,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
                 </Tag>
               </div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>
-                Ngày lập phiếu: <strong>{selectedTransaction.date}</strong> · Nguồn: {selectedTransaction.account}
+                Ngày lập phiếu: <strong>{selectedTransaction.date}</strong> · Nguồn: {selectedTransaction.source === 'petty' ? 'Quỹ tiền mặt' : 'Tiền gửi ngân hàng'} · {selectedTransaction.account}
               </div>
             </div>
 
@@ -416,6 +565,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
                   <span style={{ color: '#64748B' }}>Họ tên người nộp/nhận:</span>
                   <strong>{selectedTransaction.recipientOrPayer}</strong>
                 </div>
+                {selectedTransaction.counterpartyType && selectedTransaction.counterpartyType !== 'other' && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#64748B' }}>Liên kết danh mục:</span>
+                    <span>{selectedTransaction.counterpartyType === 'customer' ? 'Khách hàng' : selectedTransaction.counterpartyType === 'supplier' ? 'Nhà cung cấp' : selectedTransaction.counterpartyType === 'employee' ? 'Nhân viên' : 'Đối tác'}</span>
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Lý do thu / chi:</span>
                   <span>{selectedTransaction.category}</span>
@@ -433,11 +588,18 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               </div>
             </div>
 
-            {selectedTransaction.status !== 'Đã hủy' && (
-              <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(selectedTransaction)}>
-                Hủy Phiếu
-              </Button>
-            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {selectedTransaction.status === 'Chờ duyệt' && !selectedTransaction.code.startsWith('AUTO-') && !selectedTransaction.code.startsWith('TRF-') && (
+                <Button icon={<EditOutlined />} onClick={() => openEditForm(selectedTransaction)}>
+                  Sửa phiếu
+                </Button>
+              )}
+              {selectedTransaction.status !== 'Đã hủy' && (
+                <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(selectedTransaction)}>
+                  Hủy phiếu
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </Drawer>
