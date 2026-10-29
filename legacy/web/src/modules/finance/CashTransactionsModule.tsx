@@ -575,7 +575,11 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         className="cash-voucher-dialog"
         open={modalOpen}
         onCancel={closeForm}
-        footer={null}
+        footer={<>
+          <Button onClick={closeForm}>Đóng</Button>
+          <Button type="primary" onClick={() => { saveAndAddRef.current = false; void form.submit(); }}>Cất</Button>
+          {!editingTransaction && <Button type="primary" onClick={() => { saveAndAddRef.current = true; void form.submit(); }}>Cất và thêm</Button>}
+        </>}
         width="min(1600px, calc(100vw - 32px))"
         bodyStyle={{ minHeight: 0, marginRight: -14, paddingRight: 14, overflowX: 'auto' }}
       >
@@ -661,11 +665,6 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             })}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-            <Button onClick={closeForm}>Đóng</Button>
-            <Button type="primary" htmlType="submit" onClick={() => { saveAndAddRef.current = false; }}>Cất</Button>
-            {!editingTransaction && <Button type="primary" htmlType="submit" onClick={() => { saveAndAddRef.current = true; }}>Cất và thêm</Button>}
-          </div>
         </Form>
       </Modal>
 

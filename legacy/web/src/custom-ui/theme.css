@@ -1812,6 +1812,20 @@ textarea.ant-input {
   gap: 14px !important;
 }
 
+.ant-modal .ant-modal-body {
+  min-height: 0;
+  max-width: none !important;
+  margin-right: -14px !important;
+  padding-right: 14px !important;
+}
+
+.ant-modal .ant-modal-body > form,
+.ant-modal .ant-modal-body > .ant-form,
+.ant-modal-header,
+.ant-modal-footer {
+  flex-shrink: 0;
+}
+
 .ant-modal form,
 .ant-modal .ant-form,
 .ant-modal .ant-modal-body > form,
@@ -1929,4 +1943,18 @@ textarea.ant-input {
 .ant-modal-wrap::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.3) !important;
   border-radius: 4px !important;
+}
+
+.ant-modal-body.has-canvas-scrollbar::-webkit-scrollbar:vertical {
+  width: 0 !important;
+}
+
+.ant-modal-canvas-scrollbar {
+  position: absolute;
+  right: 0;
+  width: 8px;
+  visibility: hidden;
+  touch-action: none;
+  cursor: default;
+  z-index: 1;
 }
