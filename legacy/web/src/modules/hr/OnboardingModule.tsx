@@ -845,7 +845,7 @@ export const OnboardingModule: React.FC = () => {
                 type="primary"
                 onClick={handleSaveCandidates}
                 loading={saving}
-                style={{ backgroundColor: '#00887A', borderColor: '#00887A' }}
+                style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               >
                 Lưu
               </Button>
@@ -1013,6 +1013,8 @@ export const OnboardingModule: React.FC = () => {
                         handleSendNote();
                       }
                     }}
+                    onFocus={e => (e.target.style.borderColor = '#009688')}
+                    onBlur={e => (e.target.style.borderColor = '#CBD5E1')}
                     style={{
                       width: '100%',
                       padding: '8px 10px',
@@ -1023,6 +1025,7 @@ export const OnboardingModule: React.FC = () => {
                       resize: 'vertical',
                       boxSizing: 'border-box',
                       outline: 'none',
+                      transition: 'border-color 0.2s',
                     }}
                   />
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>

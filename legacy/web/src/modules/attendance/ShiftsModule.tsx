@@ -387,135 +387,61 @@ export const ShiftsModule: React.FC = () => {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           {/* Search Input */}
-          <div style={{ position: 'relative', width: 220 }}>
-            <SearchOutlined style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-            <input
-              type="text"
-              placeholder="Tìm kiếm"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '6px 10px 6px 30px',
-                border: '1px solid #E2E8F0',
-                borderRadius: 6,
-                fontSize: 13,
-                outline: 'none',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
+          <Input
+            prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
+            placeholder="Tìm kiếm"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 220 }}
+          />
 
           {/* Status Dropdown */}
-          <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              style={{
-                appearance: 'none',
-                WebkitAppearance: 'none',
-                background: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderRadius: 6,
-                padding: '6px 26px 6px 12px',
-                fontSize: 13,
-                color: '#334155',
-                cursor: 'pointer',
-                outline: 'none',
-              }}
-            >
-              <option value="Đang sử dụng">Trạng thái: Đang sử dụng</option>
-              <option value="all">Trạng thái: Tất cả</option>
-              <option value="Tạm ngưng">Trạng thái: Tạm ngưng</option>
-            </select>
-            <DownOutlined style={{ position: 'absolute', right: 8, pointerEvents: 'none', fontSize: 10, color: '#94A3B8' }} />
-          </div>
+          <Select
+            value={statusFilter}
+            onChange={(val) => setStatusFilter(val as any)}
+            style={{ width: 200 }}
+            options={[
+              { label: 'Trạng thái: Đang sử dụng', value: 'Đang sử dụng' },
+              { label: 'Trạng thái: Tất cả', value: 'all' },
+              { label: 'Trạng thái: Tạm ngưng', value: 'Tạm ngưng' },
+            ]}
+          />
 
           {/* Org Unit Dropdown */}
-          <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-            <select
-              value={orgFilter}
-              onChange={(e) => setOrgFilter(e.target.value)}
-              style={{
-                appearance: 'none',
-                WebkitAppearance: 'none',
-                background: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderRadius: 6,
-                padding: '6px 26px 6px 12px',
-                fontSize: 13,
-                color: '#334155',
-                cursor: 'pointer',
-                outline: 'none',
-              }}
-            >
-              <option value="Tất cả đơn vị">Tất cả đơn vị</option>
-              {orgUnits
+          <Select
+            value={orgFilter}
+            onChange={(val) => setOrgFilter(val)}
+            style={{ width: 180 }}
+            options={[
+              { label: 'Tất cả đơn vị', value: 'Tất cả đơn vị' },
+              ...orgUnits
                 .filter((u) => u && u.name)
-                .map((u) => (
-                  <option key={u.key || u.name} value={u.name}>
-                    {u.name}
-                  </option>
-                ))}
-            </select>
-            <DownOutlined style={{ position: 'absolute', right: 8, pointerEvents: 'none', fontSize: 10, color: '#94A3B8' }} />
-          </div>
+                .map((u) => ({ label: u.name, value: u.name })),
+            ]}
+          />
         </div>
 
         {/* Action Buttons Right */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
+          <Button
             onClick={() => void loadShifts()}
             title="Làm mới"
-            style={{
-              background: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: 6,
-              width: 32,
-              height: 32,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: '#64748B',
-            }}
-          >
-            <ReloadOutlined spin={loading} />
-          </button>
-          <button
+            icon={<ReloadOutlined spin={loading} />}
+            className="ant-btn-square-icon"
+            style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          />
+          <Button
             title="Tùy chỉnh cột"
-            style={{
-              background: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: 6,
-              width: 32,
-              height: 32,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: '#64748B',
-            }}
-          >
-            <SettingOutlined />
-          </button>
-          <button
+            icon={<SettingOutlined />}
+            className="ant-btn-square-icon"
+            style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          />
+          <Button
             title="Bộ lọc nâng cao"
-            style={{
-              background: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: 6,
-              width: 32,
-              height: 32,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: '#64748B',
-            }}
-          >
-            <FilterOutlined />
-          </button>
+            icon={<FilterOutlined />}
+            className="ant-btn-square-icon"
+            style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          />
         </div>
       </div>
 
@@ -613,7 +539,7 @@ export const ShiftsModule: React.FC = () => {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
           {/* TAB BAR */}
-          <div style={{ display: 'flex', borderBottom: '1px solid #E2E8F0', marginBottom: 16 }}>
+          <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#FFFFFF', display: 'flex', borderBottom: '1px solid #E2E8F0', marginBottom: 16 }}>
             <button
               onClick={() => setActiveTab('general')}
               style={{
@@ -658,46 +584,34 @@ export const ShiftsModule: React.FC = () => {
                   <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: '#334155', marginBottom: 4 }}>
                     Tên ca <span style={{ color: '#EF4444' }}>*</span>
                   </label>
-                  <input
-                    type="text"
+                  <Input
                     value={formData.shiftName}
                     onChange={(e) => setFormData({ ...formData, shiftName: e.target.value })}
-                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                    placeholder="Nhập tên ca làm việc"
                   />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: '#334155', marginBottom: 4 }}>
                     Loại ca <InfoCircleOutlined style={{ fontSize: 11, color: '#94A3B8' }} />
                   </label>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <div style={{ position: 'relative', flex: 1 }}>
-                      <select
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div style={{ flex: 1 }}>
+                      <Select
                         value={formData.shiftType}
-                        onChange={(e) => setFormData({ ...formData, shiftType: e.target.value })}
-                        style={{
-                          width: '100%',
-                          appearance: 'none',
-                          WebkitAppearance: 'none',
-                          background: '#FFFFFF',
-                          border: '1px solid #E2E8F0',
-                          borderRadius: 6,
-                          padding: '6px 26px 6px 10px',
-                          fontSize: 13,
-                          color: '#334155',
-                          outline: 'none',
-                        }}
-                      >
-                        <option value="-">Nhập tên giá trị</option>
-                        <option value="Hành chính">Hành chính</option>
-                        <option value="Ca kíp">Ca kíp</option>
-                        <option value="Ca đêm">Ca đêm</option>
-                        <option value="Linh hoạt">Linh hoạt</option>
-                      </select>
-                      <DownOutlined style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', fontSize: 10, color: '#94A3B8' }} />
+                        onChange={(val) => setFormData({ ...formData, shiftType: val })}
+                        style={{ width: '100%' }}
+                        options={[
+                          { label: 'Nhập tên giá trị', value: '-' },
+                          { label: 'Hành chính', value: 'Hành chính' },
+                          { label: 'Ca kíp', value: 'Ca kíp' },
+                          { label: 'Ca đêm', value: 'Ca đêm' },
+                          { label: 'Linh hoạt', value: 'Linh hoạt' },
+                        ]}
+                      />
                     </div>
-                    <button style={{ border: '1px solid #E2E8F0', background: '#FFFFFF', borderRadius: 6, padding: '0 10px', cursor: 'pointer', color: '#64748B' }}>
+                    <Button style={{ padding: '0 10px', height: 32 }}>
                       •••
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -707,11 +621,10 @@ export const ShiftsModule: React.FC = () => {
                 <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: '#334155', marginBottom: 4 }}>
                   Mã ca <span style={{ color: '#EF4444' }}>*</span>
                 </label>
-                <input
-                  type="text"
+                <Input
                   value={formData.shiftCode}
                   onChange={(e) => setFormData({ ...formData, shiftCode: e.target.value })}
-                  style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                  placeholder="Nhập mã ca"
                 />
               </div>
 
@@ -720,32 +633,15 @@ export const ShiftsModule: React.FC = () => {
                 <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: '#334155', marginBottom: 4 }}>
                   Đơn vị áp dụng
                 </label>
-                <div style={{ position: 'relative' }}>
-                  <select
-                    value={formData.applicableTo}
-                    onChange={(e) => setFormData({ ...formData, applicableTo: e.target.value })}
-                    style={{
-                      width: '100%',
-                      appearance: 'none',
-                      WebkitAppearance: 'none',
-                      background: '#FFFFFF',
-                      border: '1px solid #E2E8F0',
-                      borderRadius: 6,
-                      padding: '6px 26px 6px 10px',
-                      fontSize: 13,
-                      color: '#334155',
-                      outline: 'none',
-                    }}
-                  >
-                    <option value="Tất cả đơn vị">Tất cả đơn vị</option>
-                    {orgUnits.map((u) => (
-                      <option key={u.key || u.name} value={u.name}>
-                        {u.name}
-                      </option>
-                    ))}
-                  </select>
-                  <DownOutlined style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', fontSize: 10, color: '#94A3B8' }} />
-                </div>
+                <Select
+                  value={formData.applicableTo}
+                  onChange={(val) => setFormData({ ...formData, applicableTo: val })}
+                  style={{ width: '100%' }}
+                  options={[
+                    { label: 'Tất cả đơn vị', value: 'Tất cả đơn vị' },
+                    ...orgUnits.map((u) => ({ label: u.name, value: u.name })),
+                  ]}
+                />
               </div>
 
               {/* Row 4: Giờ bắt đầu ca & Chấm vào */}
@@ -754,15 +650,11 @@ export const ShiftsModule: React.FC = () => {
                   <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: '#334155', marginBottom: 4 }}>
                     Giờ bắt đầu ca <span style={{ color: '#EF4444' }}>*</span>
                   </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type="text"
-                      value={formData.startTime}
-                      onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
-                    />
-                    <ClockCircleOutlined style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-                  </div>
+                  <Input
+                    value={formData.startTime}
+                    onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
+                    suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />}
+                  />
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 22 }}>
@@ -776,24 +668,20 @@ export const ShiftsModule: React.FC = () => {
                     <span>Chấm vào</span>
                   </label>
                   <span style={{ fontSize: 12, color: '#64748B' }}>Từ</span>
-                  <div style={{ position: 'relative', width: 140 }}>
-                    <input
-                      type="text"
+                  <div style={{ width: 140 }}>
+                    <Input
                       value={formData.checkInFrom}
                       onChange={(e) => setFormData({ ...formData, checkInFrom: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                      suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />}
                     />
-                    <ClockCircleOutlined style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
                   </div>
                   <span style={{ fontSize: 12, color: '#64748B' }}>Đến</span>
-                  <div style={{ position: 'relative', width: 140 }}>
-                    <input
-                      type="text"
+                  <div style={{ width: 140 }}>
+                    <Input
                       value={formData.checkInTo}
                       onChange={(e) => setFormData({ ...formData, checkInTo: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                      suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />}
                     />
-                    <ClockCircleOutlined style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
                   </div>
                 </div>
               </div>
@@ -804,15 +692,11 @@ export const ShiftsModule: React.FC = () => {
                   <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: '#334155', marginBottom: 4 }}>
                     Giờ kết thúc ca <span style={{ color: '#EF4444' }}>*</span>
                   </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type="text"
-                      value={formData.endTime}
-                      onChange={(e) => setFormData({ ...formData, endTime: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
-                    />
-                    <ClockCircleOutlined style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-                  </div>
+                  <Input
+                    value={formData.endTime}
+                    onChange={(e) => setFormData({ ...formData, endTime: e.target.value })}
+                    suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />}
+                  />
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 22 }}>
@@ -826,24 +710,20 @@ export const ShiftsModule: React.FC = () => {
                     <span>Chấm ra</span>
                   </label>
                   <span style={{ fontSize: 12, color: '#64748B' }}>Từ</span>
-                  <div style={{ position: 'relative', width: 140 }}>
-                    <input
-                      type="text"
+                  <div style={{ width: 140 }}>
+                    <Input
                       value={formData.checkOutFrom}
                       onChange={(e) => setFormData({ ...formData, checkOutFrom: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                      suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />}
                     />
-                    <ClockCircleOutlined style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
                   </div>
                   <span style={{ fontSize: 12, color: '#64748B' }}>Đến</span>
-                  <div style={{ position: 'relative', width: 140 }}>
-                    <input
-                      type="text"
+                  <div style={{ width: 140 }}>
+                    <Input
                       value={formData.checkOutTo}
                       onChange={(e) => setFormData({ ...formData, checkOutTo: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                      suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />}
                     />
-                    <ClockCircleOutlined style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
                   </div>
                 </div>
               </div>

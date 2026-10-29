@@ -92,3 +92,27 @@ Nhằm đảm bảo giao diện luôn chuẩn xác 100% theo ảnh mẫu và h�
 - **Dữ liệu mẫu dự phòng cho bảng dữ liệu:**
   - Khi triển khai bảng dữ liệu chọn đối tượng từ modal (như danh sách nhân viên hội nhập), luôn chuẩn bị dữ liệu mẫu dự phòng phản ánh đúng thực tế trong ảnh mẫu nếu cơ sở dữ liệu hiện tại đang rỗng hoặc chưa có nhân sự phù hợp, tránh để bảng hiển thị trạng thái "No Data" gây gián đoạn trải nghiệm người dùng.
 
+## 6. QUY CHUẨN GIAO DIỆN WEB (MENU, THANH CUỘN, FORM VÀ BẢNG)
+
+Toàn bộ hướng dẫn chi tiết và tiêu chuẩn thiết kế giao diện (Menu thả, Thanh cuộn, Dialog, Form và Bảng dữ liệu) được quy định và lưu trữ độc lập tại tài liệu: [docs/WEB_UI_GUIDELINES.md](docs/WEB_UI_GUIDELINES.md).
+
+Mọi lập trình viên và AI Agent khi triển khai giao diện bắt buộc phải đối chiếu và tuân thủ các quy tắc trong tài liệu trên, bao gồm:
+1. **Nguyên tắc chung:** Dùng component và token màu sẵn có trong `custom-ui`, dùng cơ chế cuộn native của trình duyệt, không vẽ lại bằng canvas.
+2. **Màu sắc, đường viền và góc bo:** Lấy màu theo token giao diện (`#009688`), bo góc nhẹ, loại bỏ hoàn toàn viền divider hoặc border thừa ở header/footer.
+3. **Khoảng cách form:** Lề và khoảng cách các khối trong dialog theo chuẩn 14px, bố cục control gọn gàng (row-gap 3px, col-gap 4px, margin 0).
+4. **Dialog và panel nổi:** Dùng `Modal` chung qua thuộc tính `title`, thanh cuộn native sát mép phải, không tạo nút đóng X hoặc nút phóng to thứ hai.
+5. **Menu thả xuống (Dropdown/Select):** Nền sáng, viền mảnh, z-index xếp trên nội dung, click chọn chữ không làm giật cuộn trang.
+6. **Thanh cuộn (Scrollbar):** Native, mảnh, chỉ đặt overflow trên vùng thực sự cần thiết, không cuộn lồng nhau.
+7. **Bảng dữ liệu:** Lưới hiển thị đồng nhất, cuộn ngang cục bộ thuộc vùng bảng, chuẩn bị dữ liệu mẫu dự phòng khi cơ sở dữ liệu rỗng.
+
+### Checklist kiểm thử trước khi hoàn tất giao diện
+
+- [ ] Dùng component và token sẵn có; không tạo giao diện trùng lặp.
+- [ ] Dialog không có nút X/phóng to trùng; nội dung dài cuộn trong thân và footer còn dùng được.
+- [ ] Thanh cuộn ở đúng mép phải, không che nội dung và không làm trang đổi kích thước.
+- [ ] Dropdown không bị cắt; chọn bằng cách bấm vào chữ không gây nhảy trang.
+- [ ] Menu, Select, dialog và bảng không có khung xám thừa, dải màu đáy hoặc khoảng trắng bất thường.
+- [ ] Các hàng/cột form thẳng, khoảng cách nhất quán, màu focus/hover/selected đúng hệ thống.
+- [ ] Kiểm tra thao tác chuột, bàn phím và cuộn ở nội dung ngắn/dài, dialog mở/đóng và khung nhìn hẹp.
+- [ ] Xác minh các nút thực hiện đúng hành động; không chỉ chỉnh hình thức mà làm mất chức năng.
+
