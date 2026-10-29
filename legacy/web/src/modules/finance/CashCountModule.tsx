@@ -21,6 +21,7 @@ const today = () => {
 const timeNow = () => new Date().toLocaleTimeString('vi-VN', { hour12: false });
 const denominations = [500000, 200000, 100000, 50000, 20000, 10000, 5000, 2000, 1000];
 const cashCountCode = (index: number) => `KKQ${String(index).padStart(5, '0')}`;
+const nextCashCountCode = (rows: CashCount[]) => cashCountCode(Math.max(0, ...rows.map(row => Number(/^KKQ(\d+)$/i.exec(row.code || '')?.[1]) || 0)) + 1);
 const money = (amount: number) => `${Number(amount || 0).toLocaleString('vi-VN')} ₫`;
 const blankLines = (): CountLine[] => denominations.map(denomination => ({ denomination, quantity: 0, note: `Loại mệnh giá ${denomination}` }));
 const dateText = (value?: string) => value ? new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString('vi-VN') : '—';
@@ -33,6 +34,7 @@ export const CashCountModule: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState('');
+  const [referenceSearchBy, setReferenceSearchBy] = useState('code');
   const [referenceFrom, setReferenceFrom] = useState('');
   const [referenceTo, setReferenceTo] = useState('');
   const [transactions, setTransactions] = useState<FinanceCashTransaction[]>([]);
@@ -47,12 +49,14 @@ export const CashCountModule: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [rows, accountResponse] = await Promise.all([
+      const [rows, accountResponse, cashResponse] = await Promise.all([
         dataService.refreshGenericData('finance_cash_counts'),
         financePaymentsApi.getAccounts(),
+        financeCashApi.getAll(),
       ]);
       setRecords(rows as CashCount[]);
       setAccounts(accountResponse.data.accounts.filter(account => account.source === 'petty' && account.status === 'Đang hoạt động'));
+      setTransactions(cashResponse.data.data);
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không tải được sổ kiểm kê quỹ.');
     } finally {
@@ -63,6 +67,9 @@ export const CashCountModule: React.FC = () => {
   useEffect(() => { void loadData(); }, []);
 
   const bookBalance = accounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
+  const bookBalanceAt = (date: string) => bookBalance - transactions
+    .filter(item => item.source === 'petty' && item.status === 'Đã hoàn thành' && String(item.date || '').slice(0, 10) > date)
+    .reduce((sum, item) => sum + (item.type === 'Thu' ? Number(item.amount || 0) : -Number(item.amount || 0)), 0);
   const actualBalance = lines.reduce((sum, line) => sum + Number(line.denomination || 0) * Number(line.quantity || 0), 0);
   const difference = Number(draft.bookBalance ?? bookBalance) - actualBalance;
   const sortedRecords = useMemo(() => [...records].sort((a, b) => `${b.countDate}${b.time}`.localeCompare(`${a.countDate}${a.time}`)), [records]);
@@ -80,9 +87,9 @@ export const CashCountModule: React.FC = () => {
 
   const openCreate = () => {
     const date = today();
-    const code = cashCountCode(records.length + 1);
+    const code = nextCashCountCode(records);
     setEditing(null);
-    setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', bookBalance, reconciliation: '', reason: '', conclusion: '', resolved: false, status: 'Đã ghi nhận' });
+    setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', bookBalance: bookBalanceAt(date), reconciliation: '', reason: '', conclusion: '', resolved: false, status: 'Đã ghi nhận' });
     setLines(blankLines());
     setSavedFiles([]);
     setRemovedFiles([]);
@@ -111,6 +118,7 @@ export const CashCountModule: React.FC = () => {
 
   const save = async () => {
     if (!draft.countDate || !draft.date || !draft.time) { message.error('Vui lòng nhập ngày kiểm kê, ngày lập và giờ lập.'); return; }
+    if (!String(draft.code || '').trim() || records.some(record => record.key !== editing?.key && record.code.toLocaleLowerCase() === String(draft.code).trim().toLocaleLowerCase())) { message.error('Số phiếu kiểm kê đang trống hoặc đã được sử dụng.'); return; }
     if (lines.some(line => !Number.isFinite(line.denomination) || line.denomination < 0 || !Number.isInteger(line.quantity) || line.quantity < 0)) { message.error('Mệnh giá và số lượng phải là số không âm; số lượng phải là số nguyên.'); return; }
     setSaving(true);
     const uploaded: CountFile[] = [];
@@ -128,7 +136,7 @@ export const CashCountModule: React.FC = () => {
         ...(editing || {} as CashCount),
         ...draft,
         key: editing?.key || String(draft.key || crypto.randomUUID()),
-        code: String(draft.code || cashCountCode(records.length + 1)),
+        code: String(draft.code || nextCashCountCode(records)),
         purpose: String(draft.purpose || '').trim(),
         countDate: String(draft.countDate), currency: String(draft.currency || 'VND'), reference: String(draft.reference || ''),
         date: String(draft.date), time: String(draft.time), participants: String(draft.participants || ''), lines,
@@ -150,6 +158,7 @@ export const CashCountModule: React.FC = () => {
 
   const openReference = async () => {
     setReferenceSearch('');
+    setReferenceSearchBy('code');
     setReferenceFrom('');
     setReferenceTo('');
     setReferenceOpen(true);
@@ -160,7 +169,8 @@ export const CashCountModule: React.FC = () => {
   const referenceRows = transactions.filter(item => {
     const query = referenceSearch.trim().toLocaleLowerCase();
     const date = String(item.date || '').slice(0, 10);
-    return (!query || [item.code, item.category, item.note, item.recipientOrPayer, item.account].some(value => String(value || '').toLocaleLowerCase().includes(query)))
+    const searchValue = referenceSearchBy === 'code' ? item.code : referenceSearchBy === 'description' ? (item.note || item.category) : item.recipientOrPayer;
+    return (!query || String(searchValue || '').toLocaleLowerCase().includes(query))
       && (!referenceFrom || date >= referenceFrom) && (!referenceTo || date <= referenceTo);
   });
 
@@ -201,7 +211,7 @@ export const CashCountModule: React.FC = () => {
         <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 14px' }}>
             <label style={labelStyle}>Mục đích<Input value={draft.purpose || ''} onChange={event => setField('purpose', event.target.value)} /></label>
-            <label style={labelStyle}>Kiểm kê đến ngày<Input type="date" value={draft.countDate || ''} onChange={event => { const value = event.target.value; setField('countDate', value); setField('purpose', `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(value)}`); }} /></label>
+            <label style={labelStyle}>Kiểm kê đến ngày<Input type="date" value={draft.countDate || ''} onChange={event => { const value = event.target.value; setField('countDate', value); setField('purpose', `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(value)}`); if (!editing) setField('bookBalance', bookBalanceAt(value)); }} /></label>
             <label style={labelStyle}>Loại tiền<Select value={draft.currency || 'VND'} onChange={value => setField('currency', value)} options={[{ label: 'VND', value: 'VND' }]} style={{ width: '100%' }} /></label>
             <label style={labelStyle}>Tham chiếu<div style={{ display: 'flex', gap: 4 }}><Input value={draft.reference || ''} onChange={event => setField('reference', event.target.value)} style={{ flex: 1, minWidth: 0 }} /><Button onClick={() => void openReference()}>Chọn</Button></div></label>
             <label style={labelStyle}>Số<Input value={draft.code || ''} onChange={event => setField('code', event.target.value)} /></label>
@@ -250,7 +260,7 @@ export const CashCountModule: React.FC = () => {
       </Modal>
 
       <Modal title="Chọn chứng từ tham chiếu" open={referenceOpen} onCancel={() => setReferenceOpen(false)} footer={null} width="min(1200px, calc(100vw - 32px))">
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 10, margin: '14px 0' }}><label style={labelStyle}>Tìm theo<Input prefix={<SearchOutlined />} value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} placeholder="Số chứng từ, nội dung, đối tượng" /></label><label style={labelStyle}>Từ<Input type="date" value={referenceFrom} onChange={event => setReferenceFrom(event.target.value)} /></label><label style={labelStyle}>Đến<Input type="date" value={referenceTo} onChange={event => setReferenceTo(event.target.value)} /></label><Button onClick={() => { void financeCashApi.getAll().then(response => setTransactions(response.data.data)).catch(() => message.error('Không tải được chứng từ thu chi.')); }}>Lấy dữ liệu</Button></div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 10, margin: '14px 0' }}><label style={labelStyle}>Tìm theo<Select value={referenceSearchBy} onChange={setReferenceSearchBy} options={[{ label: 'Số chứng từ', value: 'code' }, { label: 'Diễn giải', value: 'description' }, { label: 'Đối tượng', value: 'party' }]} /></label><label style={labelStyle}>Giá trị<Input prefix={<SearchOutlined />} value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} /></label><label style={labelStyle}>Từ<Input type="date" value={referenceFrom} onChange={event => setReferenceFrom(event.target.value)} /></label><label style={labelStyle}>Đến<Input type="date" value={referenceTo} onChange={event => setReferenceTo(event.target.value)} /></label><Button onClick={() => { void financeCashApi.getAll().then(response => setTransactions(response.data.data)).catch(() => message.error('Không tải được chứng từ thu chi.')); }}>Lấy dữ liệu</Button></div>
         <KTable dataSource={referenceRows} columns={refColumns} rowKey="key" pagination={{ pageSize: 10 }} locale={{ emptyText: 'Không có chứng từ thu chi.' }} />
       </Modal>
     </div>
