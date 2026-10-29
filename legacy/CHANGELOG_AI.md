@@ -4,6 +4,15 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-29] - Kiểm tra hồ sơ doanh nghiệp trên web cũ
+
+- Chỉ sửa trong `legacy/`: chuyển `aria-label`, `id` và `name` của trường ngày đến DatePicker; hỗ trợ mở bằng bàn phím và đóng bằng Escape để nhãn truy cập được trong hồ sơ công ty.
+- Thêm E2E trình duyệt với SQLite riêng: đăng nhập Admin, nhập 17 trường hồ sơ, lưu, xác nhận dữ liệu máy chủ và tải lại trang; không có lỗi JavaScript hoặc API hồ sơ.
+- Đánh dấu 19/19 mục hồ sơ doanh nghiệp (checklist IDs 1–19). Mức sàn tăng từ 54/982 lên 73/982 (7.4%); còn 909 mục chưa được đối chiếu đồng nhất, chưa thể ước lượng ngày hoàn tất toàn web cũ.
+- Kiểm tra đạt: API 120/120, web/domain 149/149, PostgreSQL smoke 84 checkpoint, E2E hồ sơ doanh nghiệp, typecheck, API syntax và production build. Bundle JavaScript 5,051.66 kB; còn cảnh báo chunk trên 500 kB.
+
+---
+
 ## [2026-10-29] - Sơ đồ kho và bố trí vị trí trong web cũ
 
 - Chỉ cập nhật trong `legacy/`: thêm màn Sơ đồ kho vào module Kho hiện tại và menu sẵn có; cho phép cấu hình vị trí theo kho, khu, kệ/ngăn, sức chứa SKU, thứ tự lấy hàng và trạng thái. Vị trí đã gán không bị xóa; mã đang được SKU sử dụng không thể đổi.

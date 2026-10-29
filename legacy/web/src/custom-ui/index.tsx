@@ -1188,6 +1188,9 @@ export const Input: React.FC<InputProps> & {
   if (props.type === 'date') {
     return (
       <DatePicker
+        id={props.id}
+        name={props.name}
+        aria-label={props['aria-label']}
         value={value !== undefined ? String(value) : undefined}
         onChange={(val) => {
           onChange && onChange({ target: { value: val } } as any);

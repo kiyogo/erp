@@ -29,6 +29,7 @@ export interface DatePickerProps {
   allowClear?: boolean;
   name?: string;
   id?: string;
+  'aria-label'?: string;
 }
 
 export const DatePicker: React.FC<DatePickerProps> = ({
@@ -39,6 +40,9 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   style,
   className = '',
   format = 'YYYY-MM-DD',
+  id,
+  name,
+  'aria-label': ariaLabel,
 }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -260,12 +264,27 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   return (
     <div
       ref={containerRef}
+      id={id}
+      data-name={name}
       className={`kiyovn-datepicker-wrapper ${className}`}
       style={{ position: 'relative', display: 'inline-block', width: '100%', ...style }}
     >
       {/* Date Input Box */}
       <div
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         onClick={handleOpen}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleOpen();
+          } else if (event.key === 'Escape') {
+            setOpen(false);
+          }
+        }}
         className="ant-input kiyovn-datepicker-input"
         style={{
           width: '100%',
@@ -303,6 +322,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         createPortal(
           <div
             ref={popupRef}
+            role="dialog"
+            aria-label={ariaLabel ? `${ariaLabel} chọn ngày` : 'Chọn ngày'}
             className="kiyovn-datepicker-popup"
             style={{
               position: 'fixed',
