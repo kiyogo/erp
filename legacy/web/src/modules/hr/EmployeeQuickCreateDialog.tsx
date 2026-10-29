@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Form, Input, Select, Button, Modal, message } from '../../custom-ui';
-import { EmployeePayload, employeesApi } from '../../api/endpoints';
+import { EmployeePayload, EnterpriseEmployee, employeesApi } from '../../api/endpoints';
 
 type Props = {
   open: boolean;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (employee: EnterpriseEmployee) => void;
   orgUnitOptions: Array<{ label: string; value: string }>;
   positionOptions: Array<{ label: string; value: string }>;
   workStatusOptions: Array<{ label: string; value: string }>;
@@ -44,10 +44,10 @@ export const EmployeeQuickCreateDialog: React.FC<Props> = ({ open, onClose, onCr
   const save = async (values: EmployeePayload) => {
     setSaving(true);
     try {
-      await employeesApi.create({ ...values, department: Array.isArray(values.department) ? values.department.filter(Boolean).join(', ') : values.department, position: Array.isArray(values.position) ? values.position.filter(Boolean).join(', ') : values.position, salaryBase: Number(values.salaryBase) || 0 });
+      const response = await employeesApi.create({ ...values, department: Array.isArray(values.department) ? values.department.filter(Boolean).join(', ') : values.department, position: Array.isArray(values.position) ? values.position.filter(Boolean).join(', ') : values.position, salaryBase: Number(values.salaryBase) || 0 });
       message.success('Đã thêm nhân viên.');
       onClose();
-      onCreated();
+      onCreated(response.data.employee);
     } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể thêm nhân viên.'); }
     finally { setSaving(false); }
   };

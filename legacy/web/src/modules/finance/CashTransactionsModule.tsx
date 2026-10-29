@@ -646,7 +646,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               if (savedAttachments.length + attachmentFiles.length + incoming.length > 20 || totalSize > 5 * 1024 * 1024) message.error('Tệp vượt quá giới hạn 20 tệp hoặc tổng dung lượng 5 MB.');
               else setAttachmentFiles(current => [...current, ...incoming]);
             }} style={{ border: '1px dashed #86A883', padding: '16px 20px', color: '#64748B', cursor: 'pointer', maxWidth: 500, textAlign: 'center', background: '#FAFCFA' }}>Kéo/thả tệp vào đây hoặc bấm để chọn</div>
-            {[...savedAttachments.map(file => ({ ...file, stored: true as const, lastModified: undefined as number | undefined })), ...attachmentFiles.map(file => ({ id: `local-${file.name}-${file.lastModified}`, name: file.name, size: file.size, stored: false as const, lastModified: file.lastModified }))].map(file => <div key={file.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}><PaperClipOutlined /><span>{file.name} · {(file.size / 1024).toFixed(0)} KB</span><Button aria-label={`Bỏ tệp ${file.name}`} onClick={() => { if (file.stored) setSavedAttachments(current => current.filter(item => item.id !== file.id)); else setAttachmentFiles(current => current.filter(item => !(item.name === file.name && item.lastModified === file.lastModified))); }}>Bỏ</Button></div>)}
+            {[...savedAttachments.map(file => ({ ...file, stored: true as const, file: undefined as File | undefined })), ...attachmentFiles.map(file => ({ id: `local-${file.name}-${file.lastModified}`, name: file.name, size: file.size, stored: false as const, file }))].map(item => {
+              const lastModified = item.file?.lastModified;
+              return <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}><PaperClipOutlined /><span>{item.name} · {(item.size / 1024).toFixed(0)} KB</span><Button aria-label={`Bỏ tệp ${item.name}`} onClick={() => item.stored ? setSavedAttachments(current => current.filter(file => file.id !== item.id)) : setAttachmentFiles(current => current.filter(file => !(file.name === item.name && file.lastModified === lastModified)))}>Bỏ</Button></div>;
+            })}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 5, alignItems: 'end' }}><Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Đối tượng nhận tiền' : 'Đối tượng nộp tiền'} rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]} style={{ marginBottom: 14 }}>
@@ -706,15 +709,15 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         orgUnitOptions={orgUnitOptions}
         positionOptions={positionOptions}
         workStatusOptions={workStatusOptions}
-        onCreated={() => {
+        onCreated={createdEmployee => {
           void employeesApi.getAll().then(response => {
             const refreshed = response.data.data.filter(employee => employee.isActive);
             setEmployees(refreshed);
-            const latest = [...refreshed].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-            if (latest) {
-              const ref = `employee:${latest.employeeCode || latest.code}`;
+            const created = refreshed.find(employee => employee.id === createdEmployee.id) || createdEmployee;
+            if (created) {
+              const ref = `employee:${created.employeeCode || created.code}`;
               setPartyRefValue(ref);
-              form.setFieldsValue({ partyRef: ref, recipientOrPayer: latest.name || latest.fullName });
+              form.setFieldsValue({ partyRef: ref, recipientOrPayer: created.name || created.fullName });
             }
           }).catch(() => message.error('Đã tạo nhân viên nhưng không tải lại được danh sách.'));
         }}
