@@ -34,6 +34,7 @@ import { WorkspaceTab, MenuItem } from './types/menu';
 import { findItemByPath } from './utils/routeHelper';
 import { NotificationDropdown } from './components/notification/NotificationDropdown';
 import { MobileBottomNav } from './components/navigation/MobileBottomNav';
+import { AppLauncher } from './components/navigation/AppLauncher';
 import { getEmployeeOnboardingStorage, isEmployeeOnboardingComplete } from './modules/employee/onboardingStorage';
 import { EmployeeProfileWizard } from './modules/employee/EmployeeProfileWizard';
 import { EkycService } from './modules/ekyc/services/ekycService';
@@ -698,6 +699,14 @@ const AppLayout: React.FC = () => {
             >
               {isMobile ? <MenuUnfoldOutlined /> : collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </button>
+            <AppLauncher
+              items={currentMenuItems}
+              userKey={String(user?.id || user?.email || user?.name || 'current-user')}
+              isDark={isDark}
+              onNavigate={() => {
+                if (isMobile) setMobileDrawerOpen(false);
+              }}
+            />
           </div>
 
           {/* Right: Notification Center & User Dropdown */}
