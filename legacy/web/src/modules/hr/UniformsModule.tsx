@@ -618,7 +618,7 @@ export const UniformsModule: React.FC = () => {
                 placeholder="Nhập tên đợt cấp phát..."
                 value={batchName}
                 onChange={e => setBatchName(e.target.value)}
-                style={{ height: 32 }}
+                style={{ width: '100%', height: 32 }}
               />
             </div>
 
@@ -684,7 +684,7 @@ export const UniformsModule: React.FC = () => {
                 value={batchYear}
                 onChange={e => setBatchYear(e.target.value)}
                 placeholder="2026"
-                style={{ height: 32 }}
+                style={{ width: '100%', height: 32 }}
               />
             </div>
 
@@ -765,11 +765,11 @@ export const UniformsModule: React.FC = () => {
                   <tbody>
                     {participatingEmployees.map((emp, idx) => (
                       <tr key={emp.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                        <td style={{ padding: '8px 12px', color: '#64748B', textAlign: 'center' }}>{idx + 1}</td>
-                        <td style={{ padding: '8px 12px', color: '#009688' }}>{emp.empCode}</td>
-                        <td style={{ padding: '8px 12px', color: '#0F172A' }}>{emp.name}</td>
-                        <td style={{ padding: '8px 12px', color: '#64748B' }}>{emp.department}</td>
-                        <td style={{ padding: '8px 12px' }}>
+                        <td style={{ padding: '8px 12px', color: '#64748B', textAlign: 'center', verticalAlign: 'middle' }}>{idx + 1}</td>
+                        <td style={{ padding: '8px 12px', color: '#009688', verticalAlign: 'middle' }}>{emp.empCode}</td>
+                        <td style={{ padding: '8px 12px', color: '#0F172A', verticalAlign: 'middle' }}>{emp.name}</td>
+                        <td style={{ padding: '8px 12px', color: '#64748B', verticalAlign: 'middle' }}>{emp.department}</td>
+                        <td style={{ padding: '8px 12px', verticalAlign: 'middle' }}>
                           <Select
                             value={emp.size}
                             onChange={val => updateEmployeeSize(emp.id, val)}
@@ -783,7 +783,7 @@ export const UniformsModule: React.FC = () => {
                             style={{ width: 85, height: 32 }}
                           />
                         </td>
-                        <td style={{ padding: '8px 12px' }}>
+                        <td style={{ padding: '8px 12px', verticalAlign: 'middle' }}>
                           <Input
                             type="number"
                             min={1}
@@ -793,7 +793,7 @@ export const UniformsModule: React.FC = () => {
                             style={{ width: 65, height: 32 }}
                           />
                         </td>
-                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                        <td style={{ padding: '8px 12px', textAlign: 'center', verticalAlign: 'middle' }}>
                           <Button
                             type="text"
                             danger

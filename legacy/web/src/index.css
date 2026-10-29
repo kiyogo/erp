@@ -2319,3 +2319,84 @@ html body,
 html body *:not(#ui-font-weight-normal) {
   font-weight: 400 !important;
 }
+
+/* ========================================================
+   QUY CHUAN DONG NHAT 100% CHIEU CAO KHUNG NHAP LIEU (32PX)
+   ======================================================== */
+input.ant-input:not(textarea),
+.ant-input:not(textarea),
+.ant-input-affix-wrapper,
+.ant-select:not(.ant-select-multiple),
+.ant-select:not(.ant-select-multiple) .ant-select-selector,
+.kiyovn-datepicker-input,
+.kiyovn-timerangepicker-input,
+.ant-picker {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  box-sizing: border-box !important;
+}
+
+.ant-select:not(.ant-select-multiple) {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  box-sizing: border-box !important;
+}
+
+.ant-select:not(.ant-select-multiple) .ant-select-selector {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 11px !important;
+  display: flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  border-radius: 6px !important;
+}
+
+.ant-select:not(.ant-select-multiple) .ant-select-selection-item,
+.ant-select:not(.ant-select-multiple) .ant-select-selection-placeholder {
+  height: 30px !important;
+  line-height: 30px !important;
+  display: flex !important;
+  align-items: center !important;
+  font-size: 14px !important;
+}
+
+input.ant-input:not(textarea) {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 4px 11px !important;
+  box-sizing: border-box !important;
+  font-size: 14px !important;
+  line-height: 22px !important;
+  border-radius: 6px !important;
+}
+
+.ant-input-affix-wrapper {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 4px 11px !important;
+  box-sizing: border-box !important;
+  border-radius: 6px !important;
+}
+
+.kiyovn-datepicker-input,
+.kiyovn-timerangepicker-input {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 4px 11px !important;
+  box-sizing: border-box !important;
+  border-radius: 6px !important;
+  font-size: 14px !important;
+}
+
+td input,
+table input {
+  width: auto;
+  max-width: 100%;
+}
