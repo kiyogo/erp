@@ -1447,6 +1447,10 @@ function publicCashTransaction(row) {
     voucherDate: row.voucher_date || row.transaction_date,
     currency: row.currency || 'VND',
     reference: row.reference || '',
+    payerName: row.payer_name || '',
+    counterpartyAddress: row.counterparty_address || '',
+    attachmentCount: Number(row.attachment_count) || 0,
+    sourceDocument: row.source_document || '',
     recipientOrPayer: row.counterparty,
     account: row.account_name,
     status: row.status,
@@ -4847,6 +4851,8 @@ function validateCashTransaction(input) {
   if (!Array.isArray(attachments) || attachments.length > 20) throw new HttpError(422, 'Mỗi phiếu được đính kèm tối đa 20 tệp.');
   const attachmentIds = attachments.map((item, index) => requiredText(typeof item === 'string' ? item : item?.id, `Tệp đính kèm ${index + 1}`, 160));
   if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpError(422, 'Tệp đính kèm bị trùng.');
+  const attachmentCount = input.attachmentCount === undefined || input.attachmentCount === '' ? 0 : Number(input.attachmentCount);
+  if (!Number.isSafeInteger(attachmentCount) || attachmentCount < 0 || attachmentCount > 10000) throw new HttpError(422, 'Số lượng chứng từ gốc phải là số nguyên từ 0 đến 10.000.');
   return {
     code: '',
     type: oneOf(input.type, 'Loại chứng từ', ['Thu', 'Chi']),
@@ -4859,6 +4865,10 @@ function validateCashTransaction(input) {
     voucherDate: requiredIsoDate(input.voucherDate || input.date, 'Ngày phiếu'),
     currency: oneOf(input.currency || 'VND', 'Loại tiền', ['VND']),
     reference: optionalText(input.reference, 'Tham chiếu', 500),
+    payerName: optionalText(input.payerName, 'Người nộp hoặc nhận', 200),
+    counterpartyAddress: optionalText(input.counterpartyAddress, 'Địa chỉ đối tượng', 500),
+    attachmentCount,
+    sourceDocument: optionalText(input.sourceDocument, 'Chứng từ gốc', 500),
     recipientOrPayer: requiredText(input.recipientOrPayer, 'Đối tác hoặc người nhận', 200),
     account: requiredText(input.account, 'Tài khoản hoặc quỹ tiền', 200),
     status: oneOf(input.status || 'Chờ duyệt', 'Trạng thái', ['Đã hoàn thành', 'Chờ duyệt', 'Đã hủy']),
@@ -9060,13 +9070,13 @@ async function handleRequest(request, response) {
     const timestamp = now();
     await db.prepare(`INSERT INTO finance_cash_transactions (
       id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-      account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, department, employee_code, source_account_id, counterparty_type,
+      account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
       counterparty_contact_id, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(
         id, transaction.code, transaction.type, transaction.source, transaction.category,
         transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
-        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.department || null, transaction.employeeCode || null,
+        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, transaction.department || null, transaction.employeeCode || null,
         transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
         actor.id, timestamp, timestamp,
       );
@@ -9103,6 +9113,7 @@ async function handleRequest(request, response) {
         type: current.transaction_type, source: current.source, category: current.category, amount: current.amount,
         date: current.transaction_date, recipientOrPayer: current.counterparty, account: current.account_name,
         voucherDate: current.voucher_date || current.transaction_date, currency: current.currency || 'VND', reference: current.reference || '',
+        payerName: current.payer_name || '', counterpartyAddress: current.counterparty_address || '', attachmentCount: Number(current.attachment_count) || 0, sourceDocument: current.source_document || '',
         status: current.status, note: current.note, department: current.department || '', employeeCode: current.employee_code || '',
         sourceAccountId: current.source_account_id || '', counterpartyType: current.counterparty_type || 'other',
         counterpartyContactId: current.counterparty_contact_id || '',
@@ -9112,12 +9123,12 @@ async function handleRequest(request, response) {
       transaction.attachments = await resolveCashAttachments(transaction.attachments, actor);
       const result = await db.prepare(`UPDATE finance_cash_transactions SET
         source = ?, category = ?, amount = ?, transaction_date = ?, counterparty = ?, account_name = ?, note = ?,
-        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, journal_lines_json = ?, attachments_json = ?, voucher_date = ?, currency = ?, reference = ?, updated_at = ?
+        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, journal_lines_json = ?, attachments_json = ?, voucher_date = ?, currency = ?, reference = ?, payer_name = ?, counterparty_address = ?, attachment_count = ?, source_document = ?, updated_at = ?
         WHERE id = ? AND status = 'Chờ duyệt'`)
         .run(transaction.source, transaction.category, transaction.amount, transaction.date, transaction.recipientOrPayer,
           transaction.account, transaction.note, transaction.department || null, transaction.employeeCode || null,
           transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
-          JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, timestamp, id);
+          JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, timestamp, id);
       if (!result.changes) throw new HttpError(409, 'Phiếu đã được cập nhật ở nơi khác. Hãy tải lại danh sách rồi thử lại.');
       await recordAuditEvent(actor.id, 'update_cash_transaction', 'finance_cash_transactions', id, {
         code: current.code, amount: transaction.amount, source: transaction.source,

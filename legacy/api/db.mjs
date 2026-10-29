@@ -285,6 +285,10 @@ export async function initDatabaseSchema() {
       voucher_date TEXT,
       currency TEXT NOT NULL DEFAULT 'VND',
       reference TEXT NOT NULL DEFAULT '',
+      payer_name TEXT NOT NULL DEFAULT '',
+      counterparty_address TEXT NOT NULL DEFAULT '',
+      attachment_count INTEGER NOT NULL DEFAULT 0,
+      source_document TEXT NOT NULL DEFAULT '',
       department TEXT,
       employee_code TEXT,
       created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -742,6 +746,10 @@ export async function initDatabaseSchema() {
     ['voucher_date', 'TEXT'],
     ['currency', "TEXT NOT NULL DEFAULT 'VND'"],
     ['reference', "TEXT NOT NULL DEFAULT ''"],
+    ['payer_name', "TEXT NOT NULL DEFAULT ''"],
+    ['counterparty_address', "TEXT NOT NULL DEFAULT ''"],
+    ['attachment_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['source_document', "TEXT NOT NULL DEFAULT ''"],
   ]) {
     if (cashColumns.has(name)) continue;
     await exec(`ALTER TABLE finance_cash_transactions ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}${name} ${definition}`);

@@ -221,6 +221,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       voucherDate: values.voucherDate,
       currency: values.currency || 'VND',
       reference: values.reference || '',
+      payerName: values.payerName || '',
+      counterpartyAddress: values.counterpartyAddress || '',
+      attachmentCount: Number(values.attachmentCount) || 0,
+      sourceDocument: values.sourceDocument || '',
       recipientOrPayer,
       counterpartyType,
       counterpartyContactId,
@@ -264,6 +268,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       status: 'Chờ duyệt',
       source: 'bank',
       partyRef: 'other',
+      payerName: '',
+      counterpartyAddress: '',
+      attachmentCount: 0,
+      sourceDocument: '',
     });
     setModalOpen(true);
   };
@@ -295,6 +303,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       department: transaction.department,
       partyRef,
       recipientOrPayer: transaction.recipientOrPayer,
+      payerName: transaction.payerName || '',
+      counterpartyAddress: transaction.counterpartyAddress || '',
+      attachmentCount: transaction.attachmentCount || 0,
+      sourceDocument: transaction.sourceDocument || '',
     });
     setModalOpen(true);
   };
@@ -537,89 +549,62 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
       {/* MODAL: Lập phiếu thu / chi */}
       <Modal
-        title={editingTransaction ? `Sửa phiếu ${editingTransaction.code}` : `Lập phiếu ${pinnedType === 'Chi' ? 'chi' : pinnedType === 'Thu' ? 'thu' : 'thu / chi'}`}
+        title={null}
+        className="cash-voucher-fullscreen"
         open={modalOpen}
         onCancel={closeForm}
         footer={null}
-        width="min(1600px, calc(100vw - 24px))"
-        bodyStyle={{ marginRight: -14, paddingRight: 14 }}
+        width="100vw"
+        style={{ maxWidth: '100vw', height: '100vh', maxHeight: '100vh', margin: 0, borderRadius: 0, padding: 14, gap: 8 }}
+        bodyStyle={{ minHeight: 0, marginRight: -14, paddingRight: 0, overflowX: 'auto' }}
       >
-        <Form form={form} layout="vertical" onFinish={handleSave}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="type" label="Loại chứng từ" rules={[{ required: true }]}>
-              <Select
-                disabled={Boolean(editingTransaction) || isTypePinned}
-                onChange={() => {
-                  setPartyRefValue('other');
-                  form.setFieldsValue({ partyRef: 'other', recipientOrPayer: '' });
-                }}
-                options={[
-                  { label: 'Phiếu Thu Tiền', value: 'Thu' },
-                  { label: 'Phiếu Chi Tiền', value: 'Chi' },
-                ]}
-              />
+        <Form form={form} layout="vertical" onFinish={handleSave} style={{ minWidth: 0, paddingRight: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, minHeight: 42, margin: '-4px -8px 0', padding: '4px 8px', background: '#E5EAE9' }}>
+            <strong style={{ fontSize: 22, whiteSpace: 'nowrap' }}>{editingTransaction ? `${activeVoucherType === 'Chi' ? 'Phiếu chi' : 'Phiếu thu'} ${editingTransaction.code}` : `Phiếu ${activeVoucherType === 'Chi' ? 'chi' : 'thu'}`}</strong>
+            <Form.Item name="type" noStyle rules={[{ required: true }]}>
+              <Select disabled={Boolean(editingTransaction) || isTypePinned} style={{ width: 330 }} onChange={() => { setPartyRefValue('other'); form.setFieldsValue({ partyRef: 'other', recipientOrPayer: '' }); }} options={[{ label: 'Phiếu thu tiền', value: 'Thu' }, { label: 'Phiếu chi tiền', value: 'Chi' }]} />
             </Form.Item>
-            <Form.Item label="Số chứng từ">
-              <Input disabled value={editingTransaction?.code || 'Hệ thống tự cấp khi lưu'} />
+            <Form.Item label={null} required style={{ margin: 0, flex: 1, maxWidth: 520 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Form.Item name="category" rules={[{ required: true, message: 'Hãy chọn loại phiếu.' }]} style={{ flex: 1, margin: 0 }}>
+                  <Select showSearch placeholder={cashCategories[activeVoucherType].length ? 'Chọn loại phiếu' : 'Chưa có loại phiếu; bấm dấu cộng để thêm'} options={cashCategories[activeVoucherType].map(name => ({ label: name, value: name }))} />
+                </Form.Item>
+                <Button aria-label={`Thêm loại phiếu ${activeVoucherType === 'Thu' ? 'thu' : 'chi'}`} title="Thêm loại phiếu" icon={<PlusOutlined />} onClick={() => { categoryForm.resetFields(); setCategoryModalOpen(true); }} />
+              </div>
             </Form.Item>
           </div>
 
-          <Form.Item name="source" label="Nguồn tiền" rules={[{ required: true }]}>
-            <Select
-              disabled={Boolean(editingTransaction && editingTransaction.status !== 'Chờ duyệt')}
-              onChange={(value: 'bank' | 'petty') => {
-                setSourceFilter(value);
-                form.setFieldsValue({ source: value, sourceAccountId: undefined });
-              }}
-              options={[
-                { label: 'Tiền gửi ngân hàng', value: 'bank' },
-                { label: 'Quỹ tiền mặt', value: 'petty' },
-              ]}
-            />
-          </Form.Item>
-
-          <Form.Item name="sourceAccountId" label={sourceFilter === 'petty' ? 'Quỹ tiền mặt' : 'Tài khoản ngân hàng'} rules={[{ required: true, message: 'Hãy chọn tài khoản nguồn.' }]}>
-            <Select
-              placeholder={activeCashAccounts.length ? 'Chọn tài khoản đang hoạt động' : 'Chưa có tài khoản đang hoạt động'}
-              options={activeCashAccounts.map(account => ({
-                value: account.key,
-                label: `${account.name} · Số dư ${Number(account.balance).toLocaleString('vi-VN')} ₫`,
-              }))}
-            />
-          </Form.Item>
-
-          <Form.Item label={activeVoucherType === 'Chi' ? 'Loại phiếu chi' : 'Loại phiếu thu'} required>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-              <Form.Item name="category" rules={[{ required: true, message: 'Hãy chọn loại phiếu.' }]} style={{ flex: 1, marginBottom: 0 }}>
-                <Select
-                  showSearch
-                  placeholder={cashCategories[activeVoucherType].length ? 'Chọn loại phiếu' : 'Chưa có loại phiếu; bấm dấu cộng để thêm'}
-                  options={cashCategories[activeVoucherType].map(name => ({ label: name, value: name }))}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-              <Button
-                aria-label={`Thêm loại phiếu ${activeVoucherType === 'Thu' ? 'thu' : 'chi'}`}
-                title={`Thêm loại phiếu ${activeVoucherType === 'Thu' ? 'thu' : 'chi'}`}
-                icon={<PlusOutlined />}
-                onClick={() => { categoryForm.resetFields(); setCategoryModalOpen(true); }}
-              />
-            </div>
-          </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 14 }}>
-            <Form.Item name="amount" label={activeVoucherType === 'Chi' ? 'Số tiền chi (VNĐ)' : 'Số tiền thu (VNĐ)'} rules={[{ required: true }]}>
-              <Input type="number" min={1} step={1} />
+          <div style={{ margin: '0 -8px 14px', padding: '10px 8px 6px', background: '#E5EAE9', display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(240px, 2.8fr) minmax(145px, 1fr) minmax(145px, 1fr) minmax(150px, 1.2fr)', columnGap: 10, rowGap: 0, alignItems: 'start' }}>
+            <Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Mã nhà cung cấp' : 'Mã khách hàng'} rules={[{ required: true, message: 'Hãy chọn đối tượng.' }]} style={{ marginBottom: 6 }}>
+              <Select showSearch onChange={(value: string) => {
+                setPartyRefValue(value);
+                if (value === 'other') { form.setFieldsValue({ recipientOrPayer: '', counterpartyAddress: '' }); return; }
+                if (value.startsWith('contact:')) {
+                  const contact = contacts.find(item => item.key === value.split(':')[2]);
+                  form.setFieldsValue({ recipientOrPayer: contact?.name || '', counterpartyAddress: contact?.address || '' });
+                } else if (value.startsWith('employee:')) {
+                  const employee = employees.find(item => (item.employeeCode || item.code) === value.slice('employee:'.length));
+                  form.setFieldsValue({ recipientOrPayer: employee?.name || employee?.fullName || '', counterpartyAddress: '' });
+                }
+              }} options={partyOptionsFor(form.getFieldValue('type'))} />
             </Form.Item>
-            <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]}>
-              <Input type="date" />
-            </Form.Item>
-            <Form.Item name="voucherDate" label={activeVoucherType === 'Chi' ? 'Ngày phiếu chi' : 'Ngày phiếu thu'} rules={[{ required: true }]}>
-              <Input type="date" />
-            </Form.Item>
+            <Form.Item name="recipientOrPayer" label="Tên khách hàng / nhà cung cấp" rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên đối tượng.' }]} style={{ marginBottom: 6 }}><Input /></Form.Item>
+            <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]} style={{ marginBottom: 6 }}><Input type="date" /></Form.Item>
+            <Form.Item name="voucherDate" label={activeVoucherType === 'Chi' ? 'Ngày phiếu chi' : 'Ngày phiếu thu'} rules={[{ required: true }]} style={{ marginBottom: 6 }}><Input type="date" /></Form.Item>
+            <Form.Item name="amount" label={activeVoucherType === 'Chi' ? 'Tổng tiền chi' : 'Tổng tiền thu'} rules={[{ required: true }]} style={{ marginBottom: 6 }}><Input type="number" min={1} step={1} /></Form.Item>
+
+            <Form.Item name="payerName" label={activeVoucherType === 'Chi' ? 'Người nhận' : 'Người nộp'} style={{ marginBottom: 6 }}><Input /></Form.Item>
+            <Form.Item name="counterpartyAddress" label="Địa chỉ" style={{ marginBottom: 6 }}><Input /></Form.Item>
+            <Form.Item name="source" label="Nguồn tiền" rules={[{ required: true }]} style={{ marginBottom: 6 }}><Select disabled={Boolean(editingTransaction && editingTransaction.status !== 'Chờ duyệt')} onChange={(value: 'bank' | 'petty') => { setSourceFilter(value); form.setFieldsValue({ source: value, sourceAccountId: undefined }); }} options={[{ label: 'Tiền gửi ngân hàng', value: 'bank' }, { label: 'Quỹ tiền mặt', value: 'petty' }]} /></Form.Item>
+            <Form.Item name="sourceAccountId" label={sourceFilter === 'petty' ? 'Quỹ tiền mặt' : 'Tài khoản ngân hàng'} rules={[{ required: true, message: 'Hãy chọn tài khoản nguồn.' }]} style={{ marginBottom: 6 }}><Select placeholder={activeCashAccounts.length ? 'Chọn tài khoản' : 'Chưa có tài khoản'} options={activeCashAccounts.map(account => ({ value: account.key, label: `${account.name} · ${Number(account.balance).toLocaleString('vi-VN')} ₫` }))} /></Form.Item>
+            <Form.Item label="Kèm theo" style={{ marginBottom: 6 }}><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Form.Item name="attachmentCount" noStyle><Input type="number" min={0} step={1} placeholder="Số lượng" /></Form.Item><span style={{ whiteSpace: 'nowrap' }}>chứng từ gốc</span></div></Form.Item>
+
+            <Form.Item name="reference" label="Tham chiếu" style={{ marginBottom: 6 }}><Input maxLength={500} placeholder="Mã tham chiếu" /></Form.Item>
+            <Form.Item name="sourceDocument" label="Chứng từ gốc" style={{ marginBottom: 6 }}><Input maxLength={500} /></Form.Item>
+            <Form.Item name="department" label="Phòng ban" style={{ marginBottom: 6 }}><Input placeholder="Phòng ban liên quan" /></Form.Item>
+            <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]} style={{ marginBottom: 6 }}><Select disabled={Boolean(editingTransaction)} options={[{ label: 'Đã hoàn thành', value: 'Đã hoàn thành' }, { label: 'Chờ duyệt', value: 'Chờ duyệt' }]} /></Form.Item>
+            <Form.Item name="note" label="Ghi chú" style={{ marginBottom: 6 }}><Input.TextArea rows={1} placeholder="Ghi chú" /></Form.Item>
           </div>
-
-          <Form.Item name="reference" label="Tham chiếu"><Input maxLength={500} placeholder="Số chứng từ, hợp đồng hoặc nội dung liên quan" /></Form.Item>
 
           <div style={{ margin: '4px 0 14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}><strong>Hạch toán</strong><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Loại tiền<Form.Item name="currency" noStyle rules={[{ required: true }]}><Select style={{ width: 110 }} options={[{ label: 'VND', value: 'VND' }]} /></Form.Item></div></div>
@@ -652,48 +637,6 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               return <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}><PaperClipOutlined /><span>{item.name} · {(item.size / 1024).toFixed(0)} KB</span><Button aria-label={`Bỏ tệp ${item.name}`} onClick={() => item.stored ? setSavedAttachments(current => current.filter(file => file.id !== item.id)) : setAttachmentFiles(current => current.filter(file => !(file.name === item.name && file.lastModified === lastModified)))}>Bỏ</Button></div>;
             })}
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 5, alignItems: 'end' }}><Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Đối tượng nhận tiền' : 'Đối tượng nộp tiền'} rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]} style={{ marginBottom: 14 }}>
-            <Select
-              showSearch
-              onChange={(value: string) => {
-                setPartyRefValue(value);
-                if (value === 'other') { form.setFieldsValue({ recipientOrPayer: '' }); return; }
-                if (value.startsWith('contact:')) {
-                  const contact = contacts.find(item => item.key === value.split(':')[2]);
-                  form.setFieldsValue({ recipientOrPayer: contact?.name || '' });
-                } else if (value.startsWith('employee:')) {
-                  const employeeCode = value.slice('employee:'.length);
-                  const employee = employees.find(item => (item.employeeCode || item.code) === employeeCode);
-                  form.setFieldsValue({ recipientOrPayer: employee?.name || employee?.fullName || '' });
-                }
-              }}
-              options={partyOptionsFor(form.getFieldValue('type'))}
-            />
-          </Form.Item><Button aria-label="Thêm nhân viên" title="Thêm nhân viên" icon={<PlusOutlined />} onClick={() => setEmployeeCreateOpen(true)} style={{ marginBottom: 14 }} /></div>
-          {partyRefValue === 'other' && (
-            <Form.Item name="recipientOrPayer" label={activeVoucherType === 'Chi' ? 'Người nhận tiền' : 'Người nộp tiền'} rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên người nộp hoặc nhận.' }]}>
-              <Input placeholder={activeVoucherType === 'Chi' ? 'Nhập tên người nhận tiền' : 'Nhập tên người nộp tiền'} />
-            </Form.Item>
-          )}
-
-          <Form.Item name="status" label="Trạng thái phê duyệt" rules={[{ required: true }]}>
-            <Select
-              disabled={Boolean(editingTransaction)}
-              options={[
-                { label: 'Đã hoàn thành', value: 'Đã hoàn thành' },
-                { label: 'Chờ duyệt', value: 'Chờ duyệt' },
-              ]}
-            />
-          </Form.Item>
-
-          <Form.Item name="department" label="Phòng ban (nếu có)">
-            <Input placeholder="Chọn hoặc nhập phòng ban liên quan" />
-          </Form.Item>
-
-          <Form.Item name="note" label="Ghi chú">
-            <Input.TextArea rows={3} placeholder="Nhập ghi chú" />
-          </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button onClick={closeForm}>Đóng</Button>

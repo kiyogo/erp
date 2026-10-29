@@ -820,6 +820,7 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
     type: 'Thu', source: 'bank', sourceAccountId: account.key, account: 'Tên tài khoản giả',
     category: 'Thu tiền hàng', amount: 1200, date: '2026-10-29', voucherDate: '2026-10-28', currency: 'VND', reference: 'HD-01', recipientOrPayer: 'Tên giả',
     counterpartyType: 'customer', counterpartyContactId: contact.key, status: 'Chờ duyệt', note: 'Hóa đơn HD-01',
+    payerName: 'Nguyễn Văn A', counterpartyAddress: 'Số 1, Hà Nội', attachmentCount: 2, sourceDocument: 'PT-001',
     journalLines: [{ description: 'Thu tiền hàng', debitAccount: '1121', creditAccount: '131', amount: 1200 }],
   };
   const created = (await request('/finance/cash-transactions', 'POST', baseVoucher, 201)).transaction;
@@ -831,8 +832,13 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(created.voucherDate, baseVoucher.voucherDate);
   assert.equal(created.currency, baseVoucher.currency);
   assert.equal(created.reference, baseVoucher.reference);
+  assert.equal(created.payerName, baseVoucher.payerName);
+  assert.equal(created.counterpartyAddress, baseVoucher.counterpartyAddress);
+  assert.equal(created.attachmentCount, baseVoucher.attachmentCount);
+  assert.equal(created.sourceDocument, baseVoucher.sourceDocument);
   assert.deepEqual(created.journalLines, baseVoucher.journalLines);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, currency: 'EUR' }, 422);
+  await request('/finance/cash-transactions', 'POST', { ...baseVoucher, attachmentCount: 1.5 }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], amount: 1000 }] }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], debitAccount: 'abc' }] }, 422);
 
@@ -842,6 +848,7 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(updated.code, created.code);
   assert.equal(updated.category, 'Thu tiền theo hóa đơn');
   assert.equal(updated.amount, 1400);
+  assert.equal(updated.sourceDocument, baseVoucher.sourceDocument);
   assert.equal(updated.recipientOrPayer, contact.name);
   await request(`/finance/cash-transactions/${created.key}`, 'PATCH', { ...baseVoucher, counterpartyType: 'supplier' }, 422);
   await request(`/finance/cash-transactions/${created.key}`, 'PATCH', { ...baseVoucher, status: 'Đã hoàn thành' }, 409);

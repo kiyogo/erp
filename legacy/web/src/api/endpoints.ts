@@ -474,6 +474,10 @@ export type FinanceCashTransaction = {
   voucherDate?: string;
   currency?: 'VND';
   reference?: string;
+  payerName?: string;
+  counterpartyAddress?: string;
+  attachmentCount?: number;
+  sourceDocument?: string;
   recipientOrPayer: string;
   account: string;
   status: 'Đã hoàn thành' | 'Chờ duyệt' | 'Đã hủy';
