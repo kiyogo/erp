@@ -529,11 +529,16 @@ export const WorkflowSettingsModule: React.FC = () => {
                 <Form.Item name="requireOtpForLargeBudget" label="Bắt buộc xác thực OTP 2FA cho khoản chi > 500 Triệu">
                   <Select
                     options={[
-                      { label: 'Bắt buộc SMS / Google Authenticator OTP', value: 'yes' },
-                      { label: 'Chỉ yêu cầu mã PIN Token', value: 'no' },
+                      { label: 'Bắt buộc Google Authenticator OTP', value: 'yes' },
+                      { label: 'Không yêu cầu OTP', value: 'no' },
                     ]}
                   />
                 </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Người phê duyệt cần bật Google Authenticator trong mục Bảo mật. Mã dự phòng chỉ dùng được một lần."
+                />
               </div>
             </div>
           </Form>

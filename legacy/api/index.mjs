@@ -43,6 +43,7 @@ const LOGIN_LIMIT = 8;
 const PUBLIC_APPLICATION_WINDOW_MS = 10 * 60 * 1000;
 const PUBLIC_APPLICATION_LIMIT = 20;
 const TOKEN_TTL_SECONDS = 12 * 60 * 60;
+const WORKFLOW_LARGE_BUDGET_OTP_THRESHOLD = 500_000_000;
 const loginAttempts = new Map();
 const publicApplicationAttempts = new Map();
 const ekycSessions = new Map();
@@ -463,6 +464,46 @@ async function requireSecurityPin(request, actor) {
     throw new HttpError(403, 'Mã PIN bảo mật không chính xác.', 'SECURITY_PIN_INVALID');
   }
   clearLoginFailures(attemptKey);
+}
+
+async function requireWorkflowApprovalOtp(request, actor, workflowRecord) {
+  if (Number(workflowRecord.budgetAmount) <= WORKFLOW_LARGE_BUDGET_OTP_THRESHOLD) return;
+
+  const settingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_security_settings' AND record_key = 'security' LIMIT 1").get();
+  const settings = settingsRow ? parseJsonObject(settingsRow.payload_json) : {};
+  if (settings.requireOtpForLargeBudget !== 'yes') return;
+
+  if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`workflow-approval-mfa:${actor.id}`]);
+  const security = await getUserTwoFactor(actor.id);
+  if (!security.enabled || !security.secretEncrypted) {
+    throw new HttpError(409, 'Khoản chi này yêu cầu xác thực hai bước. Hãy bật Google Authenticator trong mục Bảo mật trước khi phê duyệt.', 'WORKFLOW_2FA_SETUP_REQUIRED');
+  }
+
+  const suppliedCode = String(request.headers['x-workflow-otp'] || '').trim();
+  if (!suppliedCode) throw new HttpError(428, 'Nhập mã Google Authenticator hoặc mã dự phòng để tiếp tục.', 'WORKFLOW_OTP_REQUIRED');
+
+  const attemptKey = 'workflow-approval-otp:' + loginKey(request, actor.id);
+  enforceLoginRateLimit(attemptKey, 'Đã thử xác minh OTP quá nhiều lần. Vui lòng thử lại sau.');
+  const validTotp = verifyTotp(decryptSetting(security.secretEncrypted), suppliedCode);
+  const normalizedCode = suppliedCode.replace(/[^a-z0-9]/gi, '').toUpperCase();
+  const codeHash = hashRecoveryCode(normalizedCode);
+  const recoveryCodeIndex = Array.isArray(security.recoveryCodeHashes) ? security.recoveryCodeHashes.indexOf(codeHash) : -1;
+  const validRecoveryCode = recoveryCodeIndex >= 0 && /^[A-F0-9]{5}-?[A-F0-9]{5}$/i.test(suppliedCode);
+  if (!validTotp && !validRecoveryCode) {
+    recordLoginFailure(attemptKey);
+    throw new HttpError(403, 'Mã xác minh không chính xác hoặc đã hết hiệu lực.', 'WORKFLOW_OTP_INVALID');
+  }
+
+  if (validRecoveryCode) {
+    const recoveryCodeHashes = [...security.recoveryCodeHashes];
+    recoveryCodeHashes.splice(recoveryCodeIndex, 1);
+    await saveUserTwoFactor(actor.id, { ...security, recoveryCodeHashes });
+  }
+  clearLoginFailures(attemptKey);
+  await recordAuditEvent(actor.id, 'verify_workflow_approval_otp', 'workflow_requests', workflowRecord.key, {
+    budgetAmount: Number(workflowRecord.budgetAmount),
+    method: validRecoveryCode ? 'recovery_code' : 'authenticator',
+  });
 }
 
 function hashRecoveryCode(code) {
@@ -5484,7 +5525,7 @@ function allowOrigin(request, response) {
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || origin === extraOrigin) {
     response.setHeader('Access-Control-Allow-Origin', origin);
     response.setHeader('Vary', 'Origin');
-    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Parent-Id, X-Origin-Module, X-Security-Pin');
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Parent-Id, X-Origin-Module, X-Security-Pin, X-Workflow-Otp');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   }
 }
@@ -7460,6 +7501,7 @@ async function handleRequest(request, response) {
         const item = await normalizeCollectionRecord({ ...current, ...patch, key: current.key ?? recordKey }, scope, actor, current);
         if (scope === 'workflow_requests' && Object.hasOwn(patch, 'decision')) {
           await requireSecurityPin(request, actor);
+          await requireWorkflowApprovalOtp(request, actor, item.record);
         }
         if (scope === 'asset_maintenances' && item.record.lastCompletedAt !== current.lastCompletedAt) {
           const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(current.assetKey);

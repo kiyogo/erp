@@ -1,8 +1,13 @@
 import axios from 'axios';
 import { requestSecurityPin } from './securityPinPrompt';
+import { requestWorkflowOtp } from './workflowOtpPrompt';
 
 type SecurityPinRetryConfig = NonNullable<Parameters<typeof axios.request>[0]> & {
   __securityPinPromptCount?: number;
+};
+
+type WorkflowOtpRetryConfig = NonNullable<Parameters<typeof axios.request>[0]> & {
+  __workflowOtpPromptCount?: number;
 };
 
 // ===== Axios instance =====
@@ -37,6 +42,19 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const securityCode = err.response?.data?.code;
+    if (securityCode === 'WORKFLOW_OTP_REQUIRED' || securityCode === 'WORKFLOW_OTP_INVALID') {
+      const config = err.config as WorkflowOtpRetryConfig | undefined;
+      const promptCount = Number(config?.__workflowOtpPromptCount || 0);
+      if (!config || promptCount >= 8) return Promise.reject(err);
+      try {
+        const code = await requestWorkflowOtp(securityCode === 'WORKFLOW_OTP_INVALID' ? err.response?.data?.message : '');
+        config.headers = { ...config.headers, 'X-Workflow-Otp': code } as any;
+        config.__workflowOtpPromptCount = promptCount + 1;
+        return await api.request(config as any);
+      } catch (promptError) {
+        return Promise.reject(promptError);
+      }
+    }
     if (securityCode === 'SECURITY_PIN_REQUIRED' || securityCode === 'SECURITY_PIN_INVALID') {
       const config = err.config as SecurityPinRetryConfig | undefined;
       const promptCount = Number(config?.__securityPinPromptCount || 0);

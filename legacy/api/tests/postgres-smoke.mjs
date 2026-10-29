@@ -54,8 +54,9 @@ try {
   }
   let token = '';
   let securityPin = '';
+  let workflowOtp = '';
   async function request(route, method = 'GET', payload, expected = 200) {
-    const response = await fetch(`${base}${route}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(securityPin ? { 'X-Security-Pin': securityPin } : {}) }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+    const response = await fetch(`${base}${route}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(securityPin ? { 'X-Security-Pin': securityPin } : {}), ...(workflowOtp ? { 'X-Workflow-Otp': workflowOtp } : {}) }, body: payload === undefined ? undefined : JSON.stringify(payload) });
     const result = await response.json();
     assert.equal(response.status, expected, JSON.stringify(result));
     return result;
@@ -814,6 +815,31 @@ try {
   assert.equal(finalDecision.status, 'Đã phê duyệt');
   assert.equal(finalDecision.approvalHistory[1].approverId, finalApprover.id); completed++;
   token = adminToken;
+  const adminMfa = await request('/auth/2fa/enrollment', 'POST', {});
+  await request('/auth/2fa/enrollment/verify', 'POST', { code: totpCode(adminMfa.secret) });
+  await request('/collections/workflow_security_settings', 'POST', { record: {
+    caProvider: 'not_configured', encryptionStandard: 'rsa_2048', sessionTimeout: 15,
+    autoEscalate: 'no', requireOtpForLargeBudget: 'yes', dailyDigestTime: '08:00',
+  } }, 201);
+  const otpWorkflowCode = 'PG-WF-OTP';
+  await request('/collections/workflow_blueprints', 'POST', { record: {
+    key: otpWorkflowCode, workflowCode: otpWorkflowCode, workflowName: 'PG high budget OTP', category: 'Tài chính & Thanh toán',
+    description: 'PostgreSQL high budget OTP', scope: 'PostgreSQL', totalSteps: 1, slaTargetHours: 2,
+    applicableBudgetLimit: 1000000000, status: 'Đang áp dụng', version: 'v1.0', formFields: [],
+    approvalFlow: [{ roleName: 'Finance approver', defaultApprover: login.user.name, approverId: login.user.id, slaHours: 2, canReject: true, requireTokenPKI: false }],
+  } }, 201);
+  await request('/collections/workflow_requests', 'POST', { record: {
+    key: 'pg-large-budget-otp', code: 'PG-REQ-OTP', workflowCode: otpWorkflowCode, workflowName: 'PG large budget approval',
+    category: 'Tài chính & Thanh toán', department: 'PG', summaryDetails: 'Verify OTP for high budget approvals.',
+    budgetAmount: 600000000, priority: 'Bình thường (P3)', totalLevels: 1, attachments: [], formData: {},
+  } }, 201);
+  const missingOtp = await request('/collections/workflow_requests/pg-large-budget-otp', 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 428);
+  assert.equal(missingOtp.code, 'WORKFLOW_OTP_REQUIRED');
+  workflowOtp = totpCode(adminMfa.secret);
+  const otpDecision = (await request('/collections/workflow_requests/pg-large-budget-otp', 'PATCH', { patch: { decision: 'Đã phê duyệt' } })).record;
+  workflowOtp = '';
+  assert.equal(otpDecision.status, 'Đã phê duyệt'); completed++;
+  await request('/auth/2fa/disable', 'POST', { code: totpCode(adminMfa.secret) });
   const costing = (await request('/collections/finance_costing', 'POST', { record: {
     key: 'pg-costing-contract', code: 'PG-COST-001', projectName: 'PG contract costing', category: 'Hợp đồng kinh tế B2B',
     materialCost: 1, directLabor: 2, infrastructureCost: 3, softwareLicense: 4, overheadCost: 5, totalCost: 999999,

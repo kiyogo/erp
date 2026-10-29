@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -63,6 +63,19 @@ async function uploadWorkflowFile(name, headers = adminHeaders, content = '%PDF-
   const body = await response.json();
   assert.equal(response.status, 201, JSON.stringify(body));
   return body.file;
+}
+
+function createTotp(secret, timestamp = Date.now()) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const character of secret) bits += alphabet.indexOf(character).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) bytes.push(parseInt(bits.slice(offset, offset + 8), 2));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(timestamp / 30_000)));
+  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
 }
 
 function expectedFileSize(size) {
@@ -333,6 +346,32 @@ test('workflow security settings persist without returning the encrypted Slack w
   assert.equal(updated.slackWebhookConfigured, true);
   assert.equal(updated.slackWebhookEncrypted, undefined);
   await request('/collections/workflow_security_settings/security', 'PATCH', { patch: { sessionTimeout: 3 } }, 422);
+});
+
+test('large workflow approvals enforce authenticator OTP and consume recovery codes once', async () => {
+  const enrollment = await request('/auth/2fa/enrollment', 'POST', {});
+  const enrolled = await request('/auth/2fa/enrollment/verify', 'POST', { code: createTotp(enrollment.secret) });
+  assert.equal(enrolled.enabled, true);
+
+  await request('/collections/workflow_requests', 'POST', { record: createRequest('otp-threshold', { budgetAmount: 500_000_000, totalLevels: 1 }) }, 201);
+  const atThreshold = (await request('/collections/workflow_requests/otp-threshold', 'PATCH', { patch: { decision: 'Đã phê duyệt' } })).record;
+  assert.equal(atThreshold.status, 'Đã phê duyệt');
+
+  await request('/collections/workflow_requests', 'POST', { record: createRequest('otp-required', { budgetAmount: 500_000_001, totalLevels: 1 }) }, 201);
+  const route = '/collections/workflow_requests/otp-required';
+  await request(route, 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 428);
+  const currentOtp = createTotp(enrollment.secret);
+  const invalidOtp = currentOtp === '000000' ? '000001' : '000000';
+  await request(route, 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 403, { ...adminHeaders, 'X-Workflow-Otp': invalidOtp });
+  const approved = (await request(route, 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 200, { ...adminHeaders, 'X-Workflow-Otp': createTotp(enrollment.secret) })).record;
+  assert.equal(approved.status, 'Đã phê duyệt');
+
+  const recoveryCode = enrolled.backupCodes[0];
+  await request('/collections/workflow_requests', 'POST', { record: createRequest('otp-recovery', { budgetAmount: 600_000_000, totalLevels: 1 }) }, 201);
+  const recoveryRoute = '/collections/workflow_requests/otp-recovery';
+  await request(recoveryRoute, 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 200, { ...adminHeaders, 'X-Workflow-Otp': recoveryCode });
+  await request('/collections/workflow_requests', 'POST', { record: createRequest('otp-recovery-replay', { budgetAmount: 600_000_000, totalLevels: 1 }) }, 201);
+  await request('/collections/workflow_requests/otp-recovery-replay', 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 403, { ...adminHeaders, 'X-Workflow-Otp': recoveryCode });
 });
 
 test('assigned approvers and active delegates can see and decide only their current workflow level', async () => {
