@@ -762,6 +762,7 @@ export async function initDatabaseSchema() {
     ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'crm_contacts' AND table_schema = current_schema()")).map(row => row.column_name)
     : (await queryAll('PRAGMA table_info(crm_contacts)')).map(row => row.name));
   if (!crmColumns.has('details_json')) await exec(`ALTER TABLE crm_contacts ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}details_json TEXT NOT NULL DEFAULT ''`);
+
 }
 
 const db = {
