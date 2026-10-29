@@ -334,7 +334,7 @@ export const WorkflowSettingsModule: React.FC = () => {
                       SLA: <strong style={{ color: '#2563EB' }}>{r.slaHours} Giờ</strong>
                     </div>
                     <div style={{ color: '#D97706', marginTop: 2 }}>
-                      Leo thang sau: <strong>{r.autoEscalateHours} Giờ</strong>
+                      Cảnh báo sau: <strong>{r.autoEscalateHours} Giờ</strong>
                     </div>
                   </div>
                 ),
@@ -517,7 +517,11 @@ export const WorkflowSettingsModule: React.FC = () => {
                   <Input placeholder={securitySettings?.slackWebhookConfigured ? 'Đã lưu; nhập URL mới để thay thế' : 'https://hooks.slack.com/services/...'} />
                 </Form.Item>
 
-                <Form.Item name="autoEscalate" label="Tự động leo thang cấp duyệt khi quá hạn SLA">
+                <Form.Item
+                  name="autoEscalate"
+                  label="Thông báo quản trị viên khi hồ sơ quá hạn SLA"
+                  extra="Hệ thống ghi nhật ký và gửi thông báo nội bộ; không tự thay đổi người duyệt hoặc quyền phê duyệt."
+                >
                   <Select
                     options={[
                       { label: 'Bật', value: 'yes' },

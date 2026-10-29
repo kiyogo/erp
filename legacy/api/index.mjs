@@ -44,6 +44,7 @@ const PUBLIC_APPLICATION_WINDOW_MS = 10 * 60 * 1000;
 const PUBLIC_APPLICATION_LIMIT = 20;
 const TOKEN_TTL_SECONDS = 12 * 60 * 60;
 const WORKFLOW_LARGE_BUDGET_OTP_THRESHOLD = 500_000_000;
+const WORKFLOW_ESCALATION_INTERVAL_MS = Math.max(100, Number(process.env.WORKFLOW_ESCALATION_INTERVAL_MS) || 60_000);
 const loginAttempts = new Map();
 const publicApplicationAttempts = new Map();
 const ekycSessions = new Map();
@@ -3497,6 +3498,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       lastDecision: 'Đã nộp bổ sung',
       slaDeadlineAt: new Date(Date.now() + Number(current.slaHoursTarget || 4) * 60 * 60 * 1000).toISOString(),
       slaHoursLeft: Number(current.slaHoursTarget || 4),
+      autoEscalateHoursTarget: Math.max(Number(current.autoEscalateHoursTarget) || 0, Number(current.slaHoursTarget) || 4),
+      autoEscalationHistory: Array.isArray(current.autoEscalationHistory) ? [...current.autoEscalationHistory] : [],
       approvalHistory: [
         ...(Array.isArray(current.approvalHistory) ? current.approvalHistory : []),
         {
@@ -3515,6 +3518,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       ],
     });
     record.slaDeadline = record.slaDeadlineAt;
+    record.autoEscalateAt = new Date(Date.now() + record.autoEscalateHoursTarget * 60 * 60 * 1000).toISOString();
     delete record.resubmission;
     const recordKey = requiredText(current.key ?? current.code, 'Khóa hồ sơ', 160);
     const serialized = JSON.stringify(record);
@@ -3694,6 +3698,9 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record.slaDeadlineAt = new Date(Date.now() + Number(record.slaHoursTarget || slaHours) * 60 * 60 * 1000).toISOString();
       record.slaDeadline = record.slaDeadlineAt;
       record.slaHoursLeft = Number(record.slaHoursTarget || slaHours);
+      record.autoEscalateHoursTarget = Math.max(Number(budgetTier?.autoEscalateHours) || 0, Number(record.slaHoursTarget || slaHours));
+      record.autoEscalateAt = new Date(Date.now() + record.autoEscalateHoursTarget * 60 * 60 * 1000).toISOString();
+      record.autoEscalationHistory = [];
       record.approvalHistory = [];
       delete record.approvalNotes;
       delete record.decision;
@@ -3749,6 +3756,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
           record.slaDeadlineAt = new Date(Date.now() + Number(record.slaHoursTarget || slaHours) * 60 * 60 * 1000).toISOString();
           record.slaDeadline = record.slaDeadlineAt;
           record.slaHoursLeft = Number(record.slaHoursTarget || slaHours);
+          record.autoEscalateHoursTarget = Math.max(Number(current.autoEscalateHoursTarget) || 0, Number(record.slaHoursTarget || slaHours));
+          record.autoEscalateAt = new Date(Date.now() + record.autoEscalateHoursTarget * 60 * 60 * 1000).toISOString();
         } else record.slaHoursLeft = 0;
       } else {
         record.status = decision === 'Từ chối' ? 'Đã từ chối' : 'Yêu cầu bổ sung';
@@ -4298,6 +4307,75 @@ async function recordAuditEvent(actorId, action, scope, resourceId = '', details
   await db.prepare(`INSERT INTO audit_events (id, actor_id, action, resource_scope, resource_id, details_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(randomUUID(), actorId || null, requiredText(action, 'Hành động', 120), normalizeCollectionScope(scope), String(resourceId || '').slice(0, 160), serialized.slice(0, 8_192), now());
+}
+
+let workflowEscalationSweepRunning = false;
+async function processOverdueWorkflowEscalations() {
+  if (workflowEscalationSweepRunning) return;
+  workflowEscalationSweepRunning = true;
+  try {
+    const settingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_security_settings' AND record_key = 'security' LIMIT 1").get();
+    if (parseJsonObject(settingsRow?.payload_json).autoEscalate !== 'yes') return;
+
+    const pendingRows = await db.prepare("SELECT id FROM collection_records WHERE scope = 'workflow_requests' AND json_extract(payload_json, '$.status') = ? ORDER BY updated_at ASC LIMIT 500").all('Chờ bạn ký duyệt');
+    for (const row of pendingRows) {
+      await db.transaction(async () => {
+        if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', ['workflow_requests']);
+        const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ? AND scope = ?').get(row.id, 'workflow_requests');
+        if (!fresh) return;
+
+        const record = parseJsonObject(fresh.payload_json);
+        if (record.status !== 'Chờ bạn ký duyệt') return;
+        const escalationAt = Date.parse(record.autoEscalateAt || record.slaDeadlineAt || '');
+        if (!Number.isFinite(escalationAt) || escalationAt > Date.now()) return;
+
+        const currentSettingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_security_settings' AND record_key = 'security' LIMIT 1").get();
+        if (parseJsonObject(currentSettingsRow?.payload_json).autoEscalate !== 'yes') return;
+
+        const eventKey = [record.code || fresh.record_key, Number(record.currentLevel) || 1, record.slaDeadlineAt || record.autoEscalateAt, record.resubmittedAt || record.createdAt || fresh.created_at].join(':');
+        const escalationHistory = Array.isArray(record.autoEscalationHistory) ? record.autoEscalationHistory : [];
+        if (escalationHistory.some(event => event?.eventKey === eventKey)) return;
+
+        const administrators = await db.prepare("SELECT id FROM users WHERE role = 'ADMIN' AND is_active = 1 ORDER BY id").all();
+        if (!administrators.length) return;
+
+        const timestamp = now();
+        const event = {
+          eventKey,
+          requestCode: String(record.code || fresh.record_key),
+          level: Number(record.currentLevel) || 1,
+          totalLevels: Number(record.totalLevels) || 1,
+          currentApproverId: String(record.currentApproverId || ''),
+          currentApprover: String(record.currentApprover || ''),
+          dueAt: new Date(escalationAt).toISOString(),
+          notifiedAt: timestamp,
+          recipientCount: administrators.length,
+        };
+        const message = `Hồ sơ ${event.requestCode} đã quá hạn SLA tại cấp ${event.level}/${event.totalLevels}. Người duyệt hiện tại: ${event.currentApprover || 'Chưa phân công'}. Hệ thống đã thông báo quản trị viên; quyền phê duyệt vẫn giữ nguyên.`;
+        for (const administrator of administrators) {
+          await db.prepare(`INSERT INTO notifications (id, user_id, title, message, type, link, is_read, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)`)
+            .run(randomUUID(), administrator.id, `Hồ sơ quy trình ${event.requestCode} quá hạn`, message, 'workflow_escalation', '/admin/workflows/requests', timestamp);
+        }
+
+        record.autoEscalationHistory = [...escalationHistory, event];
+        record.lastAutoEscalationAt = timestamp;
+        record.updatedAt = timestamp;
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+          .run(JSON.stringify(record), timestamp, fresh.id);
+        await recordAuditEvent(null, 'auto_escalation_alert', 'workflow_requests', fresh.record_key, {
+          requestCode: event.requestCode,
+          level: event.level,
+          dueAt: event.dueAt,
+          recipientCount: administrators.length,
+        });
+      });
+    }
+  } catch (error) {
+    logger.error('Workflow SLA escalation sweep failed', error);
+  } finally {
+    workflowEscalationSweepRunning = false;
+  }
 }
 
 function applicationCategoryForAudit(scope, resourceId = '') {
@@ -11250,6 +11328,10 @@ const server = createServer((request, response) => {
   });
 });
 
+const workflowEscalationTimer = setInterval(() => { void processOverdueWorkflowEscalations(); }, WORKFLOW_ESCALATION_INTERVAL_MS);
+workflowEscalationTimer.unref();
+void processOverdueWorkflowEscalations();
+
 server.listen(PORT, HOST, () => {
   console.log(`KIYOVN API listening on http://${HOST}:${PORT}`);
 });
@@ -11263,8 +11345,11 @@ process.on('unhandledRejection', (reason) => {
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => server.close(async () => {
-    await db.close();
-    process.exit(0);
-  }));
+  process.on(signal, () => {
+    clearInterval(workflowEscalationTimer);
+    server.close(async () => {
+      await db.close();
+      process.exit(0);
+    });
+  });
 }

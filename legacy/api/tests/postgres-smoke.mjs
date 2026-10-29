@@ -20,8 +20,9 @@ const probe = createServer();
 await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
 const port = probe.address().port;
 await new Promise(resolve => probe.close(resolve));
-const env = { ...process.env, DATABASE_URL: '', USE_SQLITE: 'false', PGHOST: config.host, PGPORT: String(config.port), PGUSER: config.user, PGPASSWORD: config.password, PGDATABASE: database, HOST: '127.0.0.1', PORT: String(port), KIYOVN_DATA_DIR: directory, KIYOVN_DB_PATH: path.join(directory, 'fallback.sqlite'), KIYOVN_FILES_DIR: path.join(directory, 'files'), SEED_ADMIN_EMAIL: 'pg@example.test', SEED_ADMIN_PASSWORD: 'Postgres-Test-26!Secure', SEED_ADMIN_EMPLOYEE_CODE: 'PG-ADMIN', GOOGLE_ENFORCE_LOGIN: 'false' };
+const env = { ...process.env, DATABASE_URL: '', USE_SQLITE: 'false', PGHOST: config.host, PGPORT: String(config.port), PGUSER: config.user, PGPASSWORD: config.password, PGDATABASE: database, HOST: '127.0.0.1', PORT: String(port), WORKFLOW_ESCALATION_INTERVAL_MS: '100', KIYOVN_DATA_DIR: directory, KIYOVN_DB_PATH: path.join(directory, 'fallback.sqlite'), KIYOVN_FILES_DIR: path.join(directory, 'files'), SEED_ADMIN_EMAIL: 'pg@example.test', SEED_ADMIN_PASSWORD: 'Postgres-Test-26!Secure', SEED_ADMIN_EMPLOYEE_CODE: 'PG-ADMIN', GOOGLE_ENFORCE_LOGIN: 'false' };
 let server;
+let testDatabase;
 let created = false;
 let logs = '';
 let completed = 0;
@@ -40,6 +41,8 @@ function totpCode(secret) {
 try {
   await admin.query(`CREATE DATABASE "${database}"`);
   created = true;
+  testDatabase = new pg.Client({ ...config, database });
+  await testDatabase.connect();
   const seed = spawnSync(process.execPath, ['index.mjs', '--seed-admin'], { cwd, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
   assert.equal(seed.status, 0, seed.stderr);
   assert.ok(seed.stdout.includes('Connected successfully to PostgreSQL'), 'SQLite fallback is not a PostgreSQL test');
@@ -840,6 +843,38 @@ try {
   workflowOtp = '';
   assert.equal(otpDecision.status, 'Đã phê duyệt'); completed++;
   await request('/auth/2fa/disable', 'POST', { code: totpCode(adminMfa.secret) });
+  await request('/collections/workflow_security_settings/security', 'PATCH', { patch: {
+    autoEscalate: 'yes', requireOtpForLargeBudget: 'no',
+  } });
+  const overdueWorkflow = (await request('/collections/workflow_requests', 'POST', { record: {
+    key: 'pg-overdue-escalation', code: 'PG-REQ-OVERDUE', workflowCode: otpWorkflowCode,
+    workflowName: 'PG overdue escalation', category: 'Tài chính & Thanh toán', department: 'PG',
+    summaryDetails: 'Verify overdue escalation notifications on PostgreSQL.', budgetAmount: 0,
+    priority: 'Bình thường (P3)', totalLevels: 1, attachments: [], formData: {},
+  } }, 201)).record;
+  assert.equal(overdueWorkflow.status, 'Chờ bạn ký duyệt');
+  const overdueRow = await testDatabase.query("SELECT id, payload_json FROM collection_records WHERE scope = 'workflow_requests' AND record_key = $1", ['pg-overdue-escalation']);
+  assert.equal(overdueRow.rowCount, 1);
+  const overduePayload = JSON.parse(overdueRow.rows[0].payload_json);
+  const overdueAt = new Date(Date.now() - 60_000).toISOString();
+  overduePayload.autoEscalateAt = overdueAt;
+  overduePayload.slaDeadlineAt = overdueAt;
+  await testDatabase.query('UPDATE collection_records SET payload_json = $1, updated_at = $2 WHERE id = $3', [JSON.stringify(overduePayload), overdueAt, overdueRow.rows[0].id]);
+  let overdueAlerts = [];
+  for (let attempt = 0; attempt < 40; attempt++) {
+    overdueAlerts = (await request('/notifications')).data.filter(notification => notification.type === 'workflow_escalation' && notification.message.includes('PG-REQ-OVERDUE'));
+    if (overdueAlerts.length) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(overdueAlerts.length, 1);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  overdueAlerts = (await request('/notifications')).data.filter(notification => notification.type === 'workflow_escalation' && notification.message.includes('PG-REQ-OVERDUE'));
+  assert.equal(overdueAlerts.length, 1);
+  const savedOverdueWorkflow = (await request('/collections/workflow_requests/pg-overdue-escalation')).record;
+  assert.equal(savedOverdueWorkflow.status, 'Chờ bạn ký duyệt');
+  assert.equal(savedOverdueWorkflow.currentLevel, 1);
+  assert.equal(savedOverdueWorkflow.currentApproverId, overdueWorkflow.currentApproverId);
+  assert.equal(savedOverdueWorkflow.autoEscalationHistory.length, 1); completed += 5;
   const costing = (await request('/collections/finance_costing', 'POST', { record: {
     key: 'pg-costing-contract', code: 'PG-COST-001', projectName: 'PG contract costing', category: 'Hợp đồng kinh tế B2B',
     materialCost: 1, directLabor: 2, infrastructureCost: 3, softwareLicense: 4, overheadCost: 5, totalCost: 999999,
@@ -926,6 +961,7 @@ try {
     server.kill();
     await exited;
   }
+  if (testDatabase) await testDatabase.end();
   if (created) {
     await admin.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()', [database]);
     await admin.query(`DROP DATABASE "${database}"`);
