@@ -371,12 +371,12 @@ export const WorkflowRequestsModule: React.FC = () => {
     }
     setSaving(true);
     try {
-      await collectionsApi.patch<ApprovalRequestItem>('workflow_requests', signingItem.key, { decision: 'Đã phê duyệt', approvalNote });
+      const { data: decisionResult } = await collectionsApi.patch<ApprovalRequestItem>('workflow_requests', signingItem.key, { decision: 'Đã phê duyệt', approvalNote });
       const refreshed = await dataService.refreshGenericData('workflow_requests');
       setData(refreshed);
-      const updated = refreshed.find((item) => item.key === signingItem.key) || null;
+      const updated = refreshed.find((item) => item.key === signingItem.key) || decisionResult.record;
       if (updated) setDetailItem(updated);
-      message.success(updated?.status === 'Đã phê duyệt'
+      message.success(decisionResult.record.status === 'Đã phê duyệt'
         ? `Đã hoàn tất phê duyệt nội bộ hồ sơ ${signingItem.code}.`
         : `Đã phê duyệt cấp ${signingItem.currentLevel}; hồ sơ chuyển sang cấp tiếp theo.`);
       setSignModalOpen(false);

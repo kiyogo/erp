@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -190,6 +191,28 @@ try {
     assert.equal(response.status, 200, JSON.stringify(body));
     return body.record;
   }
+  async function apiWrite(route, method, payload, session, expected = 200) {
+    const response = await fetch(`${apiUrl}${route}`, {
+      method,
+      headers: headersOf(session),
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json();
+    assert.equal(response.status, expected, JSON.stringify(body));
+    return body;
+  }
+  function totpCode(secret, timestamp = Date.now()) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = '';
+    for (const character of secret) bits += alphabet.indexOf(character).toString(2).padStart(5, '0');
+    const bytes = [];
+    for (let offset = 0; offset + 8 <= bits.length; offset += 8) bytes.push(parseInt(bits.slice(offset, offset + 8), 2));
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(BigInt(Math.floor(timestamp / 30_000)));
+    const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+    const offset = digest[digest.length - 1] & 0x0f;
+    return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+  }
   async function waitForRecord(scope, key, session, predicate, label) {
     let latest;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -351,6 +374,44 @@ try {
   assert.equal(rejected.approvalHistory[0].approverId, approver.user.id);
   assert.equal(rejected.approvalHistory[0].comments, 'Hồ sơ không đáp ứng điều kiện áp dụng trong kiểm thử.');
 
+  const enrollment = await apiWrite('/auth/2fa/enrollment', 'POST', {}, approver);
+  const enrolled = await apiWrite('/auth/2fa/enrollment/verify', 'POST', { code: totpCode(enrollment.secret) }, approver);
+  assert.equal(enrolled.enabled, true);
+  await apiWrite('/collections/workflow_security_settings', 'POST', { record: {
+    caProvider: 'not_configured', encryptionStandard: 'rsa_2048', sessionTimeout: 15,
+    autoEscalate: 'no', requireOtpForLargeBudget: 'yes', dailyDigestTime: '08:00',
+  } }, admin, 201);
+  const otpWorkflowCode = 'WF-BROWSER-OTP';
+  await apiWrite('/collections/workflow_blueprints', 'POST', { record: {
+    key: otpWorkflowCode, workflowCode: otpWorkflowCode, workflowName: 'Quy trình OTP ngân sách lớn',
+    category: 'Tài chính & Thanh toán', description: 'Kiểm tra OTP trên trình duyệt.', scope: 'Kiểm thử',
+    totalSteps: 1, slaTargetHours: 4, applicableBudgetLimit: 1_000_000_000,
+    status: 'Đang áp dụng', version: 'v1.0', formFields: [],
+    approvalFlow: [{ roleName: 'Người duyệt tài chính', defaultApprover: approver.user.name, approverId: approver.user.id, slaHours: 4, canReject: true, requireTokenPKI: false }],
+  } }, admin, 201);
+  const otpRequestCode = `REQ-OTP-${Date.now()}`;
+  await apiWrite('/collections/workflow_requests', 'POST', { record: {
+    key: otpRequestCode, code: otpRequestCode, workflowCode: otpWorkflowCode, workflowName: 'Kiểm tra yêu cầu OTP',
+    category: 'Tài chính & Thanh toán', department: 'Phòng kiểm thử', summaryDetails: 'Yêu cầu dùng kiểm thử OTP trong trình duyệt.',
+    budgetAmount: 600_000_000, priority: 'Bình thường (P3)', totalLevels: 1, attachments: [], formData: {},
+  } }, requester, 201);
+
+  await useSession(approver, '/employee/workflows/requests');
+  await page.waitForFunction(code => document.body.innerText.includes(code) && document.body.innerText.includes('Phê duyệt'), { timeout: 30000 }, otpRequestCode);
+  await clickButton('Phê duyệt');
+  await page.waitForFunction(() => document.body.innerText.includes('Ghi nhận quyết định phê duyệt'), { timeout: 10000 });
+  await fillModalTextarea('Đã xác minh OTP khoản chi lớn trên giao diện.');
+  await clickButton('Ghi nhận phê duyệt nội bộ', true);
+  await page.waitForSelector('[role="dialog"][aria-labelledby="workflow-otp-title"]', { timeout: 15000 });
+  const otpInput = await page.$('[aria-label="Mã xác thực OTP"]');
+  assert.ok(otpInput, 'The API challenge should display the OTP dialog in the browser.');
+  await otpInput.type(totpCode(enrollment.secret));
+  await page.evaluate(() => document.querySelector('[aria-labelledby="workflow-otp-title"] button[type="submit"]')?.click());
+  const otpApproved = await waitForRecord('workflow_requests', otpRequestCode, requester, item => item.status === 'Đã phê duyệt', 'The browser OTP retry should complete the high budget approval');
+  await page.waitForFunction(code => document.body.innerText.includes(`Đã hoàn tất phê duyệt nội bộ hồ sơ ${code}.`), { timeout: 10000 }, otpRequestCode);
+  await page.waitForFunction(() => !document.querySelector('[aria-labelledby="workflow-otp-title"]') && document.body.innerText.includes('0 hồ sơ'), { timeout: 20000 });
+  assert.equal(otpApproved.approvalHistory.at(-1).approverId, approver.user.id);
+
   await useSession(requester, '/employee/workflows/requests');
   await page.waitForFunction(() => document.body.innerText.includes('Tất cả hồ sơ'), { timeout: 30000 });
   await clickButton('Tất cả hồ sơ');
@@ -360,8 +421,8 @@ try {
   }, { timeout: 30000 }, rejectedRequestCode);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({
-    checks: 'workflow UI creator, required custom fields and PDF, requester submission, assigned approver supplement, requester resubmission, file retention, internal approval, rejection with reason, terminal requester view and reload persistence',
-    requestCode, rejectedRequestCode, workflowCode, database: directory,
+    checks: 'workflow UI creator, required custom fields and PDF, requester submission, assigned approver supplement, requester resubmission, file retention, internal approval, rejection with reason, terminal requester view, OTP dialog and large budget approval retry',
+    requestCode, rejectedRequestCode, otpRequestCode, workflowCode, database: directory,
   }));
 } catch (error) {
   if (page) console.error((await page.$eval('body', node => node.innerText).catch(() => '')).slice(-4000));
