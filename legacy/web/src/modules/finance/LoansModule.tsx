@@ -323,7 +323,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         onCancel={closeForm}
         footer={[
           <Button key="cancel" onClick={closeForm}>Hủy</Button>,
-          <Button key="save" type="primary" loading={saving} onClick={() => form.submit()}>Cất</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={() => form.submit()}>Lưu</Button>,
         ]}
         width="min(1120px, calc(100vw - 32px))"
       >
