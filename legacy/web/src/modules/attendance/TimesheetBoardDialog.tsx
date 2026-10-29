@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { Button, Input, Modal, Select, message } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
 
-type TimesheetBoardDialogProps = { summary?: boolean };
+type TimesheetBoardDialogProps = { summary?: boolean; payroll?: boolean };
 
-export const TimesheetBoardDialog: React.FC<TimesheetBoardDialogProps> = ({ summary = false }) => {
+export const TimesheetBoardDialog: React.FC<TimesheetBoardDialogProps> = ({ summary = false, payroll = false }) => {
   const today = new Date();
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState('Chấm công theo buổi');
@@ -20,7 +20,9 @@ export const TimesheetBoardDialog: React.FC<TimesheetBoardDialogProps> = ({ summ
   const createBoard = () => {
     if (!name.trim() || selectedUnits.length === 0) { message.error('Nhập tên bảng và chọn ít nhất một đơn vị.'); return; }
     if (!summary && (!startDate || !endDate || endDate < startDate)) { message.error('Chọn khoảng ngày hợp lệ cho bảng chấm công.'); return; }
-    const scope = summary ? 'attendance_timesheet_board_summaries' : 'attendance_timesheet_boards';
+    const scope = payroll
+      ? summary ? 'finance_payroll_timesheet_summaries' : 'finance_payroll_timesheet_boards'
+      : summary ? 'attendance_timesheet_board_summaries' : 'attendance_timesheet_boards';
     const rows = dataService.getGenericData(scope);
     dataService.saveGenericData(scope, [{
       key: crypto.randomUUID(), name: name.trim(), type: kind, month, year,

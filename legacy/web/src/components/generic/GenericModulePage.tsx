@@ -61,6 +61,7 @@ import { CashCountModule } from '../../modules/finance/CashCountModule';
 import { LoansModule } from '../../modules/finance/LoansModule';
 import { CashForecastModule } from '../../modules/finance/CashForecastModule';
 import { PayrollModule } from '../../modules/finance/PayrollModule';
+import { PayrollTimesheetModule } from '../../modules/finance/PayrollTimesheetModule';
 import { InvoicesModule } from '../../modules/finance/InvoicesModule';
 import { FinanceOverviewModule } from '../../modules/finance/FinanceOverviewModule';
 import { EInvoiceModule } from '../../modules/finance/EInvoiceModule';
@@ -338,6 +339,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/finance/invoices') return <InvoicesModule />;
   if (p.startsWith('/finance/debts')) return <Navigate to="/admin/finance/overview" replace />;
   if (p === '/finance/payroll/tax') return <Navigate to="/admin/finance/payroll" replace />;
+  if (p.startsWith('/finance/payroll/timesheet/')) return <PayrollTimesheetModule />;
   if (p.startsWith('/finance/payroll')) return <PayrollModule />;
   if (p.startsWith('/finance/e-invoice')) return <EInvoiceModule />;
   if (p.includes('digital-signature')) return <DigitalSignatureModule />;
