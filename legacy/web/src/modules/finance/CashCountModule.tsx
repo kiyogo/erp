@@ -248,12 +248,14 @@ export const CashCountModule: React.FC = () => {
           <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setLines(current => [...current, { key: crypto.randomUUID(), denomination: 0, quantity: 0, note: '' }])}>Thêm dòng</Button><Button onClick={() => setLines([])}>Xóa hết dòng</Button></div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '3px 14px' }}>
-            <label style={labelStyle}>I. Số dư theo sổ kế toán tiền mặt<Input type="number" min={0} value={draft.bookBalance ?? bookBalance} onChange={event => setField('bookBalance', Number(event.target.value))} /></label>
-            <label style={labelStyle}>II. Số dư kiểm kê thực tế<Input value={actualBalance.toLocaleString('vi-VN')} readOnly /></label>
-            <label style={labelStyle}>III. Chênh lệch (I - II)<Input value={difference.toLocaleString('vi-VN')} readOnly /></label>
+            <label style={labelStyle}>Số dư theo sổ kế toán tiền mặt<Input type="number" min={0} value={draft.bookBalance ?? bookBalance} onChange={event => setField('bookBalance', Number(event.target.value))} /></label>
+            <label style={labelStyle}>Số dư kiểm kê thực tế<Input value={actualBalance.toLocaleString('vi-VN')} readOnly /></label>
+            <label style={labelStyle}>Chênh lệch<Input value={difference.toLocaleString('vi-VN')} readOnly /></label>
             <label style={labelStyle}>Đối chiếu<Input value={draft.reconciliation || ''} onChange={event => setField('reconciliation', event.target.value)} /></label>
-            <label style={labelStyle}>Lý do (thừa/thiếu)<Input value={draft.reason || ''} onChange={event => setField('reason', event.target.value)} /></label>
-            <label style={labelStyle}>Kết luận<Input value={draft.conclusion || ''} onChange={event => setField('conclusion', event.target.value)} /></label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '3px 14px' }}>
+            <label style={labelStyle}>Lý do<Input.TextArea rows={4} value={draft.reason || ''} onChange={event => setField('reason', event.target.value)} /></label>
+            <label style={labelStyle}>Kết luận<Input.TextArea rows={4} value={draft.conclusion || ''} onChange={event => setField('conclusion', event.target.value)} /></label>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#334155', fontSize: 13 }}><input type="checkbox" checked={Boolean(draft.resolved)} onChange={event => setField('resolved', event.target.checked)} /> Đã xử lý chênh lệch</label>
 
