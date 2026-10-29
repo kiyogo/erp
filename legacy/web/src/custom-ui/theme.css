@@ -957,8 +957,17 @@ textarea.ant-input {
   min-width: 0;
   min-height: 190px;
   padding: 10px;
-  border: 1px solid #CBD5E1;
-  border-radius: 6px;
+}
+
+.crm-contact-dialog .crm-contact-tab-panel .ant-input:hover,
+.crm-contact-dialog .crm-contact-tab-panel .ant-input:focus,
+.crm-contact-dialog .crm-contact-tab-panel .ant-input-focused {
+  border-color: var(--antd-primary, #009688) !important;
+}
+
+.crm-contact-dialog .crm-contact-tab-panel .ant-input:focus,
+.crm-contact-dialog .crm-contact-tab-panel .ant-input-focused {
+  box-shadow: 0 0 0 2px rgba(0, 150, 136, 0.12) !important;
 }
 
 .crm-contact-dialog .crm-contact-tab-panel .ant-form-item,
@@ -974,6 +983,12 @@ textarea.ant-input {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-content: start;
+}
+
+.crm-contact-dialog .crm-contact-tab-grid > div:not(.crm-contact-salutation-grid):not(.crm-contact-id-grid) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .crm-contact-dialog .crm-contact-payment-grid {
