@@ -1234,6 +1234,12 @@ textarea.ant-input {
   cursor: not-allowed;
 }
 
+.ant-table-selection-column .ant-checkbox-wrapper,
+.ant-table-selection-column .ant-checkbox {
+  margin-right: 0 !important;
+}
+
+
 /* --- Ant Design v5 Switch Stretch & Hover --- */
 .ant-switch:not(.ant-switch-checked):not(.ant-switch-disabled):hover {
   background: rgba(0, 0, 0, 0.35);

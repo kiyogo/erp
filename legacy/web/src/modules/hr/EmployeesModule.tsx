@@ -25,6 +25,7 @@ import {
   FileTextOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
+import { EmployeeQuickFormFields } from './EmployeeQuickCreateDialog';
 import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Progress, Card, Tooltip, Dropdown } from '../../custom-ui';
 import { EnterpriseEmployee, employeesApi, systemApi, collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
@@ -810,59 +811,7 @@ export const EmployeesModule: React.FC = () => {
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={handleCreateOrUpdate}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã nhân viên" rules={[{ required: true }]}>
-              <Input placeholder="Nhập mã nhân viên..." />
-            </Form.Item>
-            <Form.Item name="name" label="Họ và tên" rules={[{ required: true }]}>
-              <Input placeholder="Nhập họ và tên nhân viên..." />
-            </Form.Item>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="email" label="Email công việc" rules={[{ required: true, type: 'email' }]}>
-              <Input placeholder="Nhập email công việc..." />
-            </Form.Item>
-            <Form.Item name="phone" label="Số điện thoại">
-              <Input placeholder="Nhập số điện thoại..." />
-            </Form.Item>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="department" label="Đơn vị">
-              <Select
-                mode="multiple"
-                placeholder="Chọn đơn vị..."
-                options={orgUnitOptions}
-                showSearch
-                allowClear
-              />
-            </Form.Item>
-            <Form.Item name="position" label="Chức danh">
-              <Select
-                mode="multiple"
-                placeholder="Chọn chức danh..."
-                options={positionOptions}
-                showSearch
-                allowClear
-              />
-            </Form.Item>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="salaryBase" label="Lương cơ bản (VNĐ)">
-              <Input type="number" step={500000} placeholder="Nhập lương cơ bản..." />
-            </Form.Item>
-            <Form.Item name="status" label="Trạng thái">
-              <Select
-                options={workStatusOptions}
-                placeholder="Chọn trạng thái..."
-              />
-            </Form.Item>
-            <Form.Item name="joinDate" label="Ngày vào làm">
-              <Input type="date" />
-            </Form.Item>
-          </div>
+          <EmployeeQuickFormFields orgUnitOptions={orgUnitOptions} positionOptions={positionOptions} workStatusOptions={workStatusOptions} />
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 6 }}>
             <Button disabled={submitting} onClick={() => setModalOpen(false)}>Hủy</Button>

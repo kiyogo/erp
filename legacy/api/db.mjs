@@ -281,6 +281,10 @@ export async function initDatabaseSchema() {
       status TEXT NOT NULL CHECK (status IN ('Đã hoàn thành', 'Chờ duyệt', 'Đã hủy')),
       note TEXT NOT NULL DEFAULT '',
       journal_lines_json TEXT NOT NULL DEFAULT '[]',
+      attachments_json TEXT NOT NULL DEFAULT '[]',
+      voucher_date TEXT,
+      currency TEXT NOT NULL DEFAULT 'VND',
+      reference TEXT NOT NULL DEFAULT '',
       department TEXT,
       employee_code TEXT,
       created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -352,6 +356,7 @@ export async function initDatabaseSchema() {
       email TEXT NOT NULL DEFAULT '',
       address TEXT NOT NULL DEFAULT '',
       bank_account TEXT NOT NULL DEFAULT '',
+      details_json TEXT NOT NULL DEFAULT '',
       credit_limit BIGINT NOT NULL DEFAULT 0 CHECK (credit_limit >= 0),
       total_value BIGINT NOT NULL DEFAULT 0 CHECK (total_value >= 0),
       debt_balance BIGINT NOT NULL DEFAULT 0 CHECK (debt_balance >= 0),
@@ -733,12 +738,20 @@ export async function initDatabaseSchema() {
     ['counterparty_type', "TEXT NOT NULL DEFAULT 'other'"],
     ['counterparty_contact_id', 'TEXT'],
     ['journal_lines_json', "TEXT NOT NULL DEFAULT '[]'"],
+    ['attachments_json', "TEXT NOT NULL DEFAULT '[]'"],
+    ['voucher_date', 'TEXT'],
+    ['currency', "TEXT NOT NULL DEFAULT 'VND'"],
+    ['reference', "TEXT NOT NULL DEFAULT ''"],
   ]) {
     if (cashColumns.has(name)) continue;
     await exec(`ALTER TABLE finance_cash_transactions ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}${name} ${definition}`);
   }
   await exec('CREATE INDEX IF NOT EXISTS finance_cash_transactions_account_idx ON finance_cash_transactions(source_account_id)');
   await exec('CREATE INDEX IF NOT EXISTS finance_cash_transactions_contact_idx ON finance_cash_transactions(counterparty_contact_id)');
+  const crmColumns = new Set(isPg
+    ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'crm_contacts' AND table_schema = current_schema()")).map(row => row.column_name)
+    : (await queryAll('PRAGMA table_info(crm_contacts)')).map(row => row.name));
+  if (!crmColumns.has('details_json')) await exec(`ALTER TABLE crm_contacts ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}details_json TEXT NOT NULL DEFAULT ''`);
 }
 
 const db = {

@@ -818,7 +818,7 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   }, 201)).contact;
   const baseVoucher = {
     type: 'Thu', source: 'bank', sourceAccountId: account.key, account: 'Tên tài khoản giả',
-    category: 'Thu tiền hàng', amount: 1200, date: '2026-10-29', recipientOrPayer: 'Tên giả',
+    category: 'Thu tiền hàng', amount: 1200, date: '2026-10-29', voucherDate: '2026-10-28', currency: 'VND', reference: 'HD-01', recipientOrPayer: 'Tên giả',
     counterpartyType: 'customer', counterpartyContactId: contact.key, status: 'Chờ duyệt', note: 'Hóa đơn HD-01',
     journalLines: [{ description: 'Thu tiền hàng', debitAccount: '1121', creditAccount: '131', amount: 1200 }],
   };
@@ -828,7 +828,11 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(created.recipientOrPayer, contact.name);
   assert.equal(created.counterpartyType, 'customer');
   assert.equal(created.counterpartyContactId, contact.key);
+  assert.equal(created.voucherDate, baseVoucher.voucherDate);
+  assert.equal(created.currency, baseVoucher.currency);
+  assert.equal(created.reference, baseVoucher.reference);
   assert.deepEqual(created.journalLines, baseVoucher.journalLines);
+  await request('/finance/cash-transactions', 'POST', { ...baseVoucher, currency: 'EUR' }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], amount: 1000 }] }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], debitAccount: 'abc' }] }, 422);
 
@@ -879,6 +883,9 @@ test('CRM contacts can be updated without changing their identity or exposing in
     name: 'Đối tác trước cập nhật', type: 'customer', taxCode: 'CRM-EDIT-001', contactPerson: 'Nguyễn An',
     phone: '0900000001', email: 'crm-before@example.test', address: 'Địa chỉ cũ', bankAccount: '0123456789',
     creditLimit: 1000000, totalValue: 200000, debtBalance: 50000, status: 'Đang hoạt động',
+    details: { entityKind: 'person', isSupplier: true, isMember: true, citizenId: '012345678901', paymentTerm: 'NET30', creditDays: 30,
+      bankAccounts: [{ accountNumber: '024680', bankName: 'Ngân hàng A', branch: 'Hà Nội', province: 'Hà Nội' }], addresses: ['Địa chỉ giao hàng'],
+      customFields: [{ name: 'Mã nội bộ', value: 'CRM-01' }] },
   }, 201)).contact;
   const updated = (await request(`/crm/contacts/${encodeURIComponent(created.key)}`, 'PATCH', { patch: {
     name: 'Đối tác sau cập nhật', contactPerson: 'Trần Bình', email: 'crm-after@example.test',
@@ -894,10 +901,14 @@ test('CRM contacts can be updated without changing their identity or exposing in
   assert.equal(updated.address, 'Địa chỉ mới');
   assert.equal(updated.creditLimit, 2000000);
   assert.equal(updated.status, 'Tạm dừng');
+  assert.equal(updated.details.citizenId, '012345678901');
+  assert.equal(updated.details.bankAccounts[0].accountNumber, '024680');
+  assert.deepEqual(updated.details.addresses, ['Địa chỉ giao hàng']);
   assert.ok(updated.updatedAt >= created.updatedAt);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { type: 'supplier' } }, 422);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { code: 'FORGED-CODE' } }, 422);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { email: 'invalid-email' } }, 422);
+  await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { details: { bankAccounts: Array.from({ length: 21 }, (_, index) => ({ accountNumber: `BA-${index}` })) } } }, 422);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: {} }, 422);
   await request('/crm/contacts/missing-crm-contact', 'PATCH', { patch: { name: 'Không tồn tại' } }, 404);
   const employee = (await request('/users', 'POST', { email: 'crm-contact-staff@example.test', name: 'Nhân viên CRM', password: 'Crm-Contact-26!Secure', employeeCode: 'CRM-CONTACT-STAFF', role: 'USER' }, 201)).user;

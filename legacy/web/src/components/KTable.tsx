@@ -425,6 +425,7 @@ export function KTable<T extends object>({
       <Table<T>
         scroll={rest.scroll || { x: 'max-content' }}
         {...rest}
+        rowSelection={rowSelection}
         columns={enhancedColumns}
         dataSource={visibleDataSource}
         pagination={visiblePagination}

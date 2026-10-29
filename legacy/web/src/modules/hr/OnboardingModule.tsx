@@ -249,7 +249,10 @@ export const OnboardingModule: React.FC = () => {
       return;
     }
     const pool = employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES;
-    const selectedEmps = pool.filter(emp => selectedEmpKeys.includes(emp.id || emp.userId || emp.employeeCode || emp.code || ''));
+    const selectedEmps = pool.filter(emp => {
+      const k = emp.id || emp.userId || emp.employeeCode || emp.code || '';
+      return selectedEmpKeys.includes(k) || selectedEmpKeys.includes(emp.key || '');
+    });
     if (selectedEmps.length === 0) return;
 
     setSaving(true);
@@ -749,7 +752,22 @@ export const OnboardingModule: React.FC = () => {
               rowSelection={{
                 selectedRowKeys: selectedEmpKeys,
                 onChange: (keys: any) => setSelectedEmpKeys(keys),
+                columnWidth: 36,
               }}
+              onRow={(record: any) => {
+                const key = record.id || record.userId || record.employeeCode || record.code;
+                return {
+                  onClick: (e: React.MouseEvent) => {
+                    if ((e.target as HTMLElement).closest('.ant-table-selection-column')) return;
+                    setSelectedEmpKeys(prev =>
+                      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+                    );
+                  },
+                  style: { cursor: 'pointer' },
+                };
+              }}
+              enableFloatingActionBar={false}
+              enableColumnResizing={false}
             />
           )}
 

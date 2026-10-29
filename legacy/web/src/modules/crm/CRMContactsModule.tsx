@@ -11,8 +11,8 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
-import { CrmContact, CrmContactType, crmContactsApi } from '../../api/endpoints';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Tabs, Checkbox } from '../../custom-ui';
+import { CrmContact, CrmContactType, crmContactsApi, collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { useNavigate } from 'react-router-dom';
 import { crmContactExportRows } from './crmContactExports';
@@ -45,6 +45,12 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
   const [selectedContact, setSelectedContact] = useState<CrmContact | null>(null);
   const [editingContact, setEditingContact] = useState<CrmContact | null>(null);
   const [form] = Form.useForm();
+  const [bankRows, setBankRows] = useState<Array<{ accountNumber: string; bankName: string; branch: string; province: string }>>([]);
+  const [addressRows, setAddressRows] = useState<string[]>([]);
+  const [customRows, setCustomRows] = useState<Array<{ name: string; value: string }>>([]);
+  const [paymentTerms, setPaymentTerms] = useState<Array<{ key: string; code: string; name: string; creditDays: number; discountDays: number; discountRate: number }>>([]);
+  const [paymentTermOpen, setPaymentTermOpen] = useState(false);
+  const [paymentTermForm] = Form.useForm();
 
   useEffect(() => {
     setTypeFilter(type);
@@ -63,9 +69,30 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
     }
   };
 
+  const loadPaymentTerms = async () => {
+    try {
+      const response = await collectionsApi.get<{ key: string; code: string; name: string; creditDays: number; discountDays: number; discountRate: number }>('crm_payment_terms', { limit: 500 });
+      setPaymentTerms(response.data.data);
+    } catch { setPaymentTerms([]); }
+  };
+
   useEffect(() => {
     void loadData();
+    void loadPaymentTerms();
   }, [type]);
+
+  const savePaymentTerm = async (values: any) => {
+    const term = { key: crypto.randomUUID(), code: String(values.code).trim(), name: String(values.name).trim(), creditDays: Number(values.creditDays) || 0, discountDays: Number(values.discountDays) || 0, discountRate: Number(values.discountRate) || 0 };
+    if (paymentTerms.some(item => item.code.toLowerCase() === term.code.toLowerCase())) { message.error('Mã điều khoản thanh toán đã tồn tại.'); return; }
+    try {
+      await collectionsApi.create('crm_payment_terms', term, term.key);
+      setPaymentTerms(current => [...current, term]);
+      form.setFieldsValue({ details: { ...form.getFieldValue('details'), paymentTerm: term.code, creditDays: term.creditDays } });
+      paymentTermForm.resetFields();
+      setPaymentTermOpen(false);
+      message.success('Đã thêm điều khoản thanh toán.');
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể thêm điều khoản thanh toán.'); }
+  };
 
   const visibleData = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
@@ -101,6 +128,12 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
         email: values.email || '',
         address: values.address || '',
         bankAccount: values.bankAccount || '',
+        details: {
+          ...(values.details || {}),
+          bankAccounts: bankRows.filter(row => row.accountNumber || row.bankName || row.branch || row.province),
+          addresses: addressRows.filter(Boolean),
+          customFields: customRows,
+        },
         creditLimit: Number(values.creditLimit) || 0,
         totalValue: Number(values.totalValue) || 0,
         debtBalance: Number(values.debtBalance) || 0,
@@ -131,6 +164,9 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
   const openEdit = (contact: CrmContact) => {
     setEditingContact(contact);
     form.setFieldsValue({ ...contact });
+    setBankRows(contact.details?.bankAccounts?.length ? contact.details.bankAccounts.map(row => ({ ...row })) : []);
+    setAddressRows(contact.details?.addresses?.length ? [...contact.details.addresses] : []);
+    setCustomRows(contact.details?.customFields?.length ? contact.details.customFields.map(row => ({ ...row })) : Array.from({ length: 5 }, (_, index) => ({ name: `Trường mở rộng ${index + 1}`, value: '' })));
     setDrawerOpen(false);
     setModalOpen(true);
   };
@@ -245,6 +281,9 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
             onClick={() => {
               setEditingContact(null);
               form.resetFields();
+              setBankRows([]);
+              setAddressRows([]);
+              setCustomRows(Array.from({ length: 5 }, (_, index) => ({ name: `Trường mở rộng ${index + 1}`, value: '' })));
               form.setFieldsValue({ type: type === 'all' ? 'customer' : type, status: 'Đang hoạt động', debtBalance: 0, totalValue: 0, creditLimit: 0 });
               setModalOpen(true);
             }}
@@ -259,43 +298,40 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
         <KTable dataSource={visibleData} columns={columns} loading={loading} pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có dữ liệu đối tác.' }} />
       </div>
 
-      <Modal title={editingContact ? 'Cập nhật đối tác' : 'Thêm đối tác'} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingContact(null); }} footer={null} width={640}>
+      <Modal title={editingContact ? 'Cập nhật đối tác' : 'Thông tin khách hàng'} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingContact(null); }} footer={null} width="min(1120px, calc(100vw - 32px))">
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {editingContact && <Form.Item label="Mã đối tác"><Input value={editingContact.code} disabled /></Form.Item>}
-            <Form.Item name="type" label="Loại đối tác" rules={[{ required: true }]}>
-              <Select disabled={type !== 'all' || !!editingContact} options={[{ label: 'Khách hàng', value: 'customer' }, { label: 'Nhà cung cấp', value: 'supplier' }, { label: 'Đối tác phân phối', value: 'partner' }]} />
-            </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(250px, 1.1fr) minmax(220px, 1fr) minmax(260px, 1fr)', gap: 14, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <Form.Item name={['details', 'entityKind']} initialValue="organization" style={{ marginBottom: 0, flex: 1 }}>
+                <Select options={[{ label: 'Tổ chức', value: 'organization' }, { label: 'Cá nhân', value: 'person' }]} />
+              </Form.Item>
+              <Form.Item name="type" rules={[{ required: true }]} style={{ display: 'none' }}><Select options={[{ label: 'Khách hàng', value: 'customer' }, { label: 'Nhà cung cấp', value: 'supplier' }, { label: 'Đối tác phân phối', value: 'partner' }]} /></Form.Item>
+              {editingContact && <span style={{ color: '#64748B', fontSize: 12 }}>{editingContact.code}</span>}
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <Form.Item name={['details', 'isSupplier']} valuePropName="checked" style={{ marginBottom: 0 }}><Checkbox>Nhà cung cấp</Checkbox></Form.Item>
+              <Form.Item name={['details', 'isMember']} valuePropName="checked" style={{ marginBottom: 0 }}><Checkbox>Là thành viên</Checkbox></Form.Item>
+              <Form.Item name={['details', 'isInternal']} valuePropName="checked" style={{ marginBottom: 0 }}><Checkbox>Đối tượng nội bộ</Checkbox></Form.Item>
+            </div>
+            <Form.Item name="name" label="Tên khách hàng / đối tác" rules={[{ required: true, whitespace: true }]} style={{ marginBottom: 0 }}><Input /></Form.Item>
           </div>
-          <Form.Item name="name" label="Tên tổ chức" rules={[{ required: true, whitespace: true }]}>
-            <Input />
-          </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '3px 14px', marginTop: 10 }}>
             <Form.Item name="taxCode" label="Mã số thuế">
               <Input />
             </Form.Item>
             <Form.Item name="industry" label="Ngành/Lĩnh vực">
               <Input />
             </Form.Item>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="contactPerson" label="Người liên hệ">
               <Input />
             </Form.Item>
-            <Form.Item name="phone" label="Số điện thoại">
-              <Input />
-            </Form.Item>
+            <Form.Item name="phone" label="Số điện thoại"><Input /></Form.Item>
+            <Form.Item name="email" label="Email" rules={[{ type: 'email', message: 'Email không đúng định dạng.' }]}><Input /></Form.Item>
+            <Form.Item name={['details', 'website']} label="Website"><Input /></Form.Item>
+            <Form.Item name={['details', 'customerGroup']} label="Nhóm khách hàng"><Input /></Form.Item>
+            <Form.Item name="address" label="Địa chỉ"><Input /></Form.Item>
           </div>
-          <Form.Item name="email" label="Email" rules={[{ type: 'email', message: 'Email không đúng định dạng.' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="address" label="Địa chỉ">
-            <Input />
-          </Form.Item>
-          <Form.Item name="bankAccount" label="Tài khoản ngân hàng">
-            <Input />
-          </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px' }}>
             <Form.Item name="creditLimit" label="Hạn mức">
               <Input type="number" min={0} />
             </Form.Item>
@@ -306,23 +342,52 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
               <Input type="number" min={0} />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="tier" label="Hạng đối tác" initialValue="Tiêu chuẩn">
-              <Input />
-            </Form.Item>
-            <Form.Item name="status" label="Trạng thái">
-              <Select options={statusOptions} />
-            </Form.Item>
-          </div>
-          <Form.Item name="accountManager" label="Người phụ trách nội bộ">
-            <Input />
-          </Form.Item>
+          <Form.Item name="tier" label="Hạng đối tác" initialValue="Tiêu chuẩn" style={{ display: 'none' }}><Input /></Form.Item>
+          <Form.Item name="status" initialValue="Đang hoạt động" style={{ display: 'none' }}><Select options={statusOptions} /></Form.Item>
+          <Form.Item name="accountManager" style={{ display: 'none' }}><Input /></Form.Item>
+          <Tabs items={[
+            { key: 'contact', label: 'Thông tin liên hệ', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8 }}><Form.Item name={['details', 'salutation']} label="Xưng hô"><Select options={['Anh', 'Bà', 'Bạn', 'Chị', 'Miss', 'Ông'].map(value => ({ label: value, value }))} /></Form.Item><Form.Item name={['details', 'personalName']} label="Họ và tên"><Input /></Form.Item></div>
+              <div><Form.Item name={['details', 'invoiceRecipientName']} label="Người nhận hóa đơn điện tử"><Input /></Form.Item><Form.Item name={['details', 'invoiceRecipientEmails']} label="Email nhận hóa đơn"><Input placeholder="Có thể nhập nhiều email, phân cách bằng dấu ;" /></Form.Item></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}><Form.Item name={['details', 'citizenId']} label="Số CMND/Thẻ căn cước"><Input /></Form.Item><Form.Item name={['details', 'idIssueDate']} label="Ngày cấp"><Input type="date" /></Form.Item><Form.Item name={['details', 'idIssuePlace']} label="Nơi cấp"><Input /></Form.Item><Form.Item name={['details', 'passportNo']} label="Số hộ chiếu"><Input /></Form.Item></div>
+              <div><Form.Item name={['details', 'invoiceRecipientPhone']} label="Điện thoại nhận hóa đơn"><Input /></Form.Item><Form.Item name={['details', 'socialInsuranceCode']} label="Mã số ĐVQHNS / BHXH"><Input /></Form.Item></div>
+            </div> },
+            { key: 'payment', label: 'Điều khoản thanh toán', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 220px))', gap: 14, alignContent: 'start' }}>
+              <Form.Item label="Điều khoản thanh toán"><div style={{ display: 'flex', gap: 4 }}><Form.Item name={['details', 'paymentTerm']} style={{ flex: 1, marginBottom: 0 }}><Select showSearch placeholder="Chọn điều khoản" options={paymentTerms.map(term => ({ value: term.code, label: `${term.code} · ${term.name}` }))} onChange={(value: string) => { const term = paymentTerms.find(item => item.code === value); if (term) form.setFieldsValue({ details: { ...form.getFieldValue('details'), creditDays: term.creditDays } }); }} /></Form.Item><Button aria-label="Thêm điều khoản thanh toán" icon={<PlusOutlined />} onClick={() => { paymentTermForm.resetFields(); setPaymentTermOpen(true); }} /></div></Form.Item>
+              <Form.Item name={['details', 'creditDays']} label="Số ngày được nợ"><Input type="number" min={0} /></Form.Item>
+              <Form.Item name={['details', 'maxDebt']} label="Số nợ tối đa"><Input type="number" min={0} /></Form.Item>
+              <Form.Item name={['details', 'receivableAccount']} label="Tài khoản công nợ phải thu"><Input placeholder="131" /></Form.Item>
+              <Form.Item name={['details', 'memberType']} label="Loại thành viên"><Select options={['Thành viên chính thức', 'Thành viên liên kết góp vốn', 'Thành viên liên kết không góp vốn'].map(value => ({ label: value, value }))} /></Form.Item>
+              <Form.Item name={['details', 'memberGroup']} label="Đội, tổ"><Input /></Form.Item>
+            </div> },
+            { key: 'banks', label: 'Tài khoản ngân hàng', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1', overflowX: 'auto' }}>
+              <div style={{ minWidth: 720, display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1.2fr 2fr 40px', gap: 6, fontWeight: 700, background: '#C5D9C2', padding: 7 }}><span>Số tài khoản</span><span>Tên ngân hàng</span><span>Chi nhánh</span><span>Tỉnh/TP của ngân hàng</span><span /></div>
+              {bankRows.map((row, index) => <div key={index} style={{ minWidth: 720, display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1.2fr 2fr 40px', gap: 6, padding: '6px 0' }}>{(['accountNumber', 'bankName', 'branch', 'province'] as const).map(field => <Input key={field} aria-label={`${field} ngân hàng ${index + 1}`} value={row[field]} onChange={event => setBankRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, [field]: event.target.value } : item))} />)}<Button aria-label={`Xóa tài khoản ngân hàng ${index + 1}`} onClick={() => setBankRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>×</Button></div>)}
+              <Button onClick={() => setBankRows(current => [...current, { accountNumber: '', bankName: '', branch: '', province: '' }])}>Thêm dòng</Button><Button style={{ marginLeft: 8 }} onClick={() => setBankRows([])}>Xóa hết dòng</Button>
+            </div> },
+            { key: 'addresses', label: 'Địa chỉ khác', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><Checkbox checked={form.getFieldValue(['details', 'sameAsCustomer'])} onChange={event => form.setFieldsValue({ details: { ...form.getFieldValue('details'), sameAsCustomer: event.target.checked } })}>Giống địa chỉ khách hàng</Checkbox>{addressRows.map((value, index) => <div key={index} style={{ display: 'flex', gap: 8, marginTop: 8 }}><Input value={value} onChange={event => setAddressRows(current => current.map((row, rowIndex) => rowIndex === index ? event.target.value : row))} /><Button onClick={() => setAddressRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></div>)}<Button style={{ marginTop: 8 }} onClick={() => setAddressRows(current => [...current, ''])}>Thêm dòng</Button><Button style={{ margin: '8px 0 0 8px' }} onClick={() => setAddressRows([])}>Xóa hết dòng</Button></div> },
+            { key: 'notes', label: 'Ghi chú', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><Form.Item name={['details', 'note']} label="Ghi chú"><Input.TextArea rows={7} /></Form.Item></div> },
+            { key: 'custom', label: 'Thông tin bổ sung', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><div style={{ color: '#64748B', fontStyle: 'italic', marginBottom: 8 }}>Thông tin bổ sung dùng để quản lý trường dữ liệu riêng của đơn vị.</div>{customRows.map((row, index) => <div key={index} style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 8, marginBottom: 6 }}><Input value={row.name} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, name: event.target.value } : item))} /><Input value={row.value} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, value: event.target.value } : item))} /></div>)}</div> },
+          ]} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => { setModalOpen(false); setEditingContact(null); }}>Hủy</Button>
             <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               {editingContact ? 'Lưu thay đổi' : 'Lưu đối tác'}
             </Button>
           </div>
+        </Form>
+      </Modal>
+
+      <Modal title="Thêm điều khoản thanh toán" open={paymentTermOpen} onCancel={() => setPaymentTermOpen(false)} footer={null} width="min(650px, calc(100vw - 32px))">
+        <Form form={paymentTermForm} layout="vertical" onFinish={savePaymentTerm} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 14 }}>
+            <Form.Item name="code" label="Mã" rules={[{ required: true, whitespace: true }]}><Input maxLength={40} /></Form.Item>
+            <Form.Item name="name" label="Tên" rules={[{ required: true, whitespace: true }]}><Input maxLength={160} /></Form.Item>
+            <Form.Item name="creditDays" label="Số ngày được nợ" initialValue={0}><Input type="number" min={0} max={3650} /></Form.Item>
+            <Form.Item name="discountDays" label="Thời hạn hưởng chiết khấu" initialValue={0}><Input type="number" min={0} max={3650} /></Form.Item>
+            <Form.Item name="discountRate" label="Tỷ lệ chiết khấu" initialValue={0}><Input type="number" min={0} max={100} step="0.01" /></Form.Item>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}><Button onClick={() => setPaymentTermOpen(false)}>Hủy</Button><Button type="primary" htmlType="submit">Cất và Thêm</Button></div>
         </Form>
       </Modal>
 

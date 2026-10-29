@@ -471,6 +471,9 @@ export type FinanceCashTransaction = {
   category: string;
   amount: number;
   date: string;
+  voucherDate?: string;
+  currency?: 'VND' | 'USD';
+  reference?: string;
   recipientOrPayer: string;
   account: string;
   status: 'Đã hoàn thành' | 'Chờ duyệt' | 'Đã hủy';
@@ -481,11 +484,13 @@ export type FinanceCashTransaction = {
   counterpartyType?: 'customer' | 'supplier' | 'partner' | 'employee' | 'other';
   counterpartyContactId?: string;
   journalLines?: FinanceCashJournalLine[];
+  attachments?: FinanceCashAttachment[];
   createdAt: string;
   updatedAt: string;
 };
 
 export type FinanceCashJournalLine = { description: string; debitAccount: string; creditAccount: string; amount: number };
+export type FinanceCashAttachment = { id: string; name: string; size: number; mimeType?: string };
 
 export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };
 export type UpdateFinanceCashTransaction = Partial<Omit<CreateFinanceCashTransaction, 'code'>>;
@@ -697,6 +702,15 @@ export type CrmContact = {
   email: string;
   address: string;
   bankAccount: string;
+  details?: {
+    entityKind?: 'organization' | 'person'; salutation?: string; personalName?: string; socialInsuranceCode?: string;
+    citizenId?: string; idIssueDate?: string; idIssuePlace?: string; passportNo?: string; website?: string;
+    customerGroup?: string; paymentTerm?: string; creditDays?: number; maxDebt?: number; receivableAccount?: string;
+    invoiceRecipientName?: string; invoiceRecipientEmails?: string; invoiceRecipientPhone?: string;
+    isSupplier?: boolean; isMember?: boolean; isInternal?: boolean; memberType?: string; memberGroup?: string; note?: string;
+    bankAccounts?: Array<{ accountNumber: string; bankName: string; branch: string; province: string }>;
+    addresses?: string[]; customFields?: Array<{ name: string; value: string }>;
+  };
   creditLimit: number;
   totalValue: number;
   debtBalance: number;

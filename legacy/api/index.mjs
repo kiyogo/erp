@@ -1444,11 +1444,15 @@ function publicCashTransaction(row) {
     category: row.category,
     amount: row.amount,
     date: row.transaction_date,
+    voucherDate: row.voucher_date || row.transaction_date,
+    currency: row.currency || 'VND',
+    reference: row.reference || '',
     recipientOrPayer: row.counterparty,
     account: row.account_name,
     status: row.status,
     note: row.note,
     journalLines: (() => { try { const value = JSON.parse(row.journal_lines_json || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } })(),
+    attachments: (() => { try { const value = JSON.parse(row.attachments_json || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } })(),
     department: row.department || '',
     employeeCode: row.employee_code || '',
     sourceAccountId: row.source_account_id || '',
@@ -1553,6 +1557,7 @@ function publicCrmContact(row, actor = null) {
     email: isFull ? rawEmail : maskEmail(rawEmail),
     address: isFull ? rawAddress : '',
     bankAccount: isFull ? rawBank : maskBankAccount(rawBank),
+    details: isFull && row.details_json ? (() => { try { return JSON.parse(decryptField(row.details_json, 'crm_details')); } catch { return {}; } })() : {},
     creditLimit: isFull ? (row.credit_limit || 0) : 0,
     totalValue: isFull ? (row.total_value || 0) : 0,
     debtBalance: isFull ? (row.debt_balance || 0) : 0,
@@ -4834,6 +4839,10 @@ function validateCashTransaction(input) {
   if (normalizedJournalLines.length && normalizedJournalLines.reduce((sum, line) => sum + line.amount, 0) !== amount) {
     throw new HttpError(422, 'Tổng tiền các dòng hạch toán phải bằng số tiền phiếu.');
   }
+  const attachments = input.attachments === undefined ? [] : input.attachments;
+  if (!Array.isArray(attachments) || attachments.length > 20) throw new HttpError(422, 'Mỗi phiếu được đính kèm tối đa 20 tệp.');
+  const attachmentIds = attachments.map((item, index) => requiredText(typeof item === 'string' ? item : item?.id, `Tệp đính kèm ${index + 1}`, 160));
+  if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpError(422, 'Tệp đính kèm bị trùng.');
   return {
     code: '',
     type: oneOf(input.type, 'Loại chứng từ', ['Thu', 'Chi']),
@@ -4841,7 +4850,11 @@ function validateCashTransaction(input) {
     category: requiredText(input.category, 'Nội dung thu chi', 500),
     amount,
     journalLines: normalizedJournalLines,
+    attachments: attachmentIds,
     date: requiredIsoDate(input.date, 'Ngày hạch toán'),
+    voucherDate: requiredIsoDate(input.voucherDate || input.date, 'Ngày phiếu'),
+    currency: oneOf(input.currency || 'VND', 'Loại tiền', ['VND', 'USD']),
+    reference: optionalText(input.reference, 'Tham chiếu', 500),
     recipientOrPayer: requiredText(input.recipientOrPayer, 'Đối tác hoặc người nhận', 200),
     account: requiredText(input.account, 'Tài khoản hoặc quỹ tiền', 200),
     status: oneOf(input.status || 'Chờ duyệt', 'Trạng thái', ['Đã hoàn thành', 'Chờ duyệt', 'Đã hủy']),
@@ -4852,6 +4865,19 @@ function validateCashTransaction(input) {
     counterpartyType: oneOf(input.counterpartyType || 'other', 'Loại đối tượng', ['customer', 'supplier', 'partner', 'employee', 'other']),
     counterpartyContactId: optionalText(input.counterpartyContactId, 'Đối tượng liên hệ', 160),
   };
+}
+
+async function resolveCashAttachments(ids, actor) {
+  const attachments = [];
+  let totalBytes = 0;
+  for (const id of ids) {
+    const node = requireFileAccess(actor, await fileNodeById(id));
+    if (node.node_type !== 'file') throw new HttpError(422, 'Chỉ được đính kèm tệp, không đính kèm thư mục.');
+    totalBytes += Number(node.size) || 0;
+    if (totalBytes > 5 * 1024 * 1024) throw new HttpError(413, 'Tổng dung lượng tệp đính kèm tối đa 5 MB.');
+    attachments.push({ id: node.id, name: node.name, size: Number(node.size) || 0, mimeType: node.mime_type || '' });
+  }
+  return attachments;
 }
 
 async function resolveCashTransactionLinks(transaction) {
@@ -4942,6 +4968,7 @@ function validateCrmContact(input) {
     email,
     address: optionalText(input.address, 'Địa chỉ', 500),
     bankAccount: optionalText(input.bankAccount, 'Tài khoản ngân hàng', 220),
+    details: validateCrmContactDetails(input.details),
     creditLimit: optionalAmount(input.creditLimit, 'Hạn mức tín dụng'),
     totalValue: optionalAmount(input.totalValue, 'Giá trị giao dịch'),
     debtBalance: optionalAmount(input.debtBalance, 'Công nợ'),
@@ -4949,6 +4976,38 @@ function validateCrmContact(input) {
     accountManager: optionalText(input.accountManager, 'Người phụ trách', 160),
     status: optionalText(input.status, 'Trạng thái', 80) || 'Đang hoạt động',
   };
+}
+
+function validateCrmContactDetails(input) {
+  if (input === undefined || input === null) return {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(422, 'Thông tin mở rộng đối tác không hợp lệ.');
+  const strings = ['entityKind', 'salutation', 'personalName', 'socialInsuranceCode', 'citizenId', 'idIssueDate', 'idIssuePlace', 'passportNo', 'website', 'customerGroup', 'paymentTerm', 'receivableAccount', 'invoiceRecipientName', 'invoiceRecipientEmails', 'invoiceRecipientPhone', 'memberType', 'memberGroup', 'note'];
+  const details = Object.fromEntries(strings.map(field => [field, optionalText(input[field], `Thông tin ${field}`, field === 'note' ? 4000 : 500)]));
+  if (details.entityKind && !['organization', 'person'].includes(details.entityKind)) throw new HttpError(422, 'Loại đối tượng phải là tổ chức hoặc cá nhân.');
+  for (const field of ['isSupplier', 'isMember', 'isInternal']) {
+    if (input[field] !== undefined && typeof input[field] !== 'boolean') throw new HttpError(422, `Trường ${field} phải là đúng hoặc sai.`);
+    details[field] = input[field] === true;
+  }
+  for (const field of ['creditDays', 'maxDebt']) {
+    if (input[field] !== undefined && input[field] !== '') details[field] = optionalAmount(input[field], field === 'creditDays' ? 'Số ngày được nợ' : 'Số nợ tối đa');
+  }
+  const listOf = (field, label, max, validate) => {
+    const rows = input[field] === undefined ? [] : input[field];
+    if (!Array.isArray(rows) || rows.length > max) throw new HttpError(422, `${label} tối đa ${max} dòng.`);
+    return rows.map(validate);
+  };
+  details.bankAccounts = listOf('bankAccounts', 'Tài khoản ngân hàng', 20, (row, index) => ({
+    accountNumber: requiredText(row?.accountNumber, `Số tài khoản ngân hàng ${index + 1}`, 100),
+    bankName: optionalText(row?.bankName, `Ngân hàng ${index + 1}`, 160),
+    branch: optionalText(row?.branch, `Chi nhánh ${index + 1}`, 160),
+    province: optionalText(row?.province, `Tỉnh/TP ngân hàng ${index + 1}`, 160),
+  }));
+  details.addresses = listOf('addresses', 'Địa chỉ khác', 20, (row, index) => requiredText(row, `Địa chỉ ${index + 1}`, 500));
+  details.customFields = listOf('customFields', 'Trường mở rộng', 5, (row, index) => ({
+    name: optionalText(row?.name, `Tên trường mở rộng ${index + 1}`, 100),
+    value: optionalText(row?.value, `Giá trị trường mở rộng ${index + 1}`, 500),
+  }));
+  return details;
 }
 
 const TASK_PRIORITIES = ['Khẩn cấp', 'Cao', 'Trung bình', 'Thấp'];
@@ -8991,18 +9050,19 @@ async function handleRequest(request, response) {
     const actor = await requireAdmin(request);
     await requireAccountingProfile();
     const transaction = await resolveCashTransactionLinks(validateCashTransaction(await readJson(request)));
+    transaction.attachments = await resolveCashAttachments(transaction.attachments, actor);
     transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
     const id = randomUUID();
     const timestamp = now();
     await db.prepare(`INSERT INTO finance_cash_transactions (
       id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-      account_name, status, note, journal_lines_json, department, employee_code, source_account_id, counterparty_type,
+      account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, department, employee_code, source_account_id, counterparty_type,
       counterparty_contact_id, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(
         id, transaction.code, transaction.type, transaction.source, transaction.category,
         transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
-        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), transaction.department || null, transaction.employeeCode || null,
+        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.department || null, transaction.employeeCode || null,
         transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
         actor.id, timestamp, timestamp,
       );
@@ -9038,19 +9098,22 @@ async function handleRequest(request, response) {
       const transaction = await resolveCashTransactionLinks(validateCashTransaction({
         type: current.transaction_type, source: current.source, category: current.category, amount: current.amount,
         date: current.transaction_date, recipientOrPayer: current.counterparty, account: current.account_name,
+        voucherDate: current.voucher_date || current.transaction_date, currency: current.currency || 'VND', reference: current.reference || '',
         status: current.status, note: current.note, department: current.department || '', employeeCode: current.employee_code || '',
         sourceAccountId: current.source_account_id || '', counterpartyType: current.counterparty_type || 'other',
         counterpartyContactId: current.counterparty_contact_id || '',
+        attachments: (() => { try { return JSON.parse(current.attachments_json || '[]'); } catch { return []; } })(),
         journalLines: (() => { try { return JSON.parse(current.journal_lines_json || '[]'); } catch { return []; } })(), ...payload,
       }));
+      transaction.attachments = await resolveCashAttachments(transaction.attachments, actor);
       const result = await db.prepare(`UPDATE finance_cash_transactions SET
         source = ?, category = ?, amount = ?, transaction_date = ?, counterparty = ?, account_name = ?, note = ?,
-        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, journal_lines_json = ?, updated_at = ?
+        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, journal_lines_json = ?, attachments_json = ?, voucher_date = ?, currency = ?, reference = ?, updated_at = ?
         WHERE id = ? AND status = 'Chờ duyệt'`)
         .run(transaction.source, transaction.category, transaction.amount, transaction.date, transaction.recipientOrPayer,
           transaction.account, transaction.note, transaction.department || null, transaction.employeeCode || null,
           transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
-          JSON.stringify(transaction.journalLines), timestamp, id);
+          JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, timestamp, id);
       if (!result.changes) throw new HttpError(409, 'Phiếu đã được cập nhật ở nơi khác. Hãy tải lại danh sách rồi thử lại.');
       await recordAuditEvent(actor.id, 'update_cash_transaction', 'finance_cash_transactions', id, {
         code: current.code, amount: transaction.amount, source: transaction.source,
@@ -10094,7 +10157,7 @@ async function handleRequest(request, response) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật đối tác không hợp lệ.');
     const editableFields = new Set([
       'name', 'taxCode', 'industry', 'contactPerson', 'phone', 'email', 'address', 'bankAccount',
-      'creditLimit', 'totalValue', 'debtBalance', 'tier', 'accountManager', 'status',
+      'creditLimit', 'totalValue', 'debtBalance', 'tier', 'accountManager', 'status', 'details',
     ]);
     const unsupportedFields = Object.keys(patch).filter(field => !editableFields.has(field));
     if (unsupportedFields.length) throw new HttpError(422, 'Không thể thay đổi mã hoặc loại đối tác.');
@@ -10104,7 +10167,7 @@ async function handleRequest(request, response) {
     const timestamp = now();
     await db.prepare(`UPDATE crm_contacts SET
       name = ?, tax_code = ?, industry = ?, contact_person = ?, phone = ?, email = ?, address = ?, bank_account = ?,
-      credit_limit = ?, total_value = ?, debt_balance = ?, tier = ?, account_manager = ?, status = ?, updated_at = ?
+      details_json = ?, credit_limit = ?, total_value = ?, debt_balance = ?, tier = ?, account_manager = ?, status = ?, updated_at = ?
       WHERE id = ?`)
       .run(
         contact.name,
@@ -10115,6 +10178,7 @@ async function handleRequest(request, response) {
         encryptField(contact.email, 'crm'),
         encryptField(contact.address, 'crm'),
         encryptField(contact.bankAccount, 'crm'),
+        encryptField(JSON.stringify(contact.details), 'crm_details'),
         contact.creditLimit,
         contact.totalValue,
         contact.debtBalance,
@@ -10136,9 +10200,9 @@ async function handleRequest(request, response) {
     const timestamp = now();
     await db.prepare(`INSERT INTO crm_contacts (
       id, code, name, contact_type, tax_code, industry, contact_person, phone, email,
-      address, bank_account, credit_limit, total_value, debt_balance, tier, account_manager,
+      address, bank_account, details_json, credit_limit, total_value, debt_balance, tier, account_manager,
       status, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(
         id,
         contact.code,
@@ -10151,6 +10215,7 @@ async function handleRequest(request, response) {
         encryptField(contact.email, 'crm'),
         encryptField(contact.address, 'crm'),
         encryptField(contact.bankAccount, 'crm'),
+        encryptField(JSON.stringify(contact.details), 'crm_details'),
         contact.creditLimit,
         contact.totalValue,
         contact.debtBalance,
