@@ -2,7 +2,7 @@ import { dataService } from '../../services/dataService';
 import { collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceDate, dateRangeDays, employeeAttendanceFields } from './attendanceRules';
-import type { EnterpriseWorkShift } from './ShiftsModule';
+import type { WorkShiftItem } from './ShiftsModule';
 import React, { useEffect, useState } from 'react';
 import {
   PlusOutlined,
@@ -43,7 +43,7 @@ const INITIAL_ASSIGNMENTS: EnterpriseShiftAssignment[] = [];
 export const ShiftAssignmentModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseShiftAssignment[]>(INITIAL_ASSIGNMENTS);
   const [employees, setEmployees] = useState(dataService.getEmployees());
-  const [shifts, setShifts] = useState<EnterpriseWorkShift[]>([]);
+  const [shifts, setShifts] = useState<WorkShiftItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapForm] = Form.useForm();
@@ -82,11 +82,11 @@ export const ShiftAssignmentModule: React.FC = () => {
     setSaving(true);
     try {
       dateRangeDays(values.effectiveFrom, values.effectiveTo);
-      const shift = shifts.find((item) => item.key === values.shiftName && item.status === 'Đang áp dụng');
+      const shift = shifts.find((item) => item.key === values.shiftName && item.status === 'Đang sử dụng');
       if (!shift) throw new Error('Vui lòng chọn ca làm việc đang áp dụng từ danh mục ca.');
       const newItem = {
         ...values, ...employeeAttendanceFields(employees, values.employeeName),
-        key: crypto.randomUUID(), shiftKey: shift.key, shiftName: shift.shiftName, shiftCode: shift.shiftCode, workHours: shift.timeRange,
+        key: crypto.randomUUID(), shiftKey: shift.key, shiftName: shift.shiftName, shiftCode: shift.shiftCode, workHours: `${shift.startTime} - ${shift.endTime}`,
         status: 'Đang áp dụng',
       };
       await collectionsApi.create('attendance_shift_assignments', newItem);
@@ -354,8 +354,8 @@ export const ShiftAssignmentModule: React.FC = () => {
             </Form.Item>
             <Form.Item name="shiftName" label="Ca làm việc chỉ định" rules={[{ required: true }]}>
               <Select
-                options={shifts.filter((shift) => shift.status === 'Đang áp dụng').map((shift) => ({ label: `${shift.shiftName} (${shift.timeRange})`, value: shift.key }))}
-                onChange={(key) => { const shift = shifts.find((item) => item.key === key); if (shift) form.setFieldsValue({ workHours: shift.timeRange }); }}
+                options={shifts.filter((shift) => shift.status === 'Đang sử dụng').map((shift) => ({ label: `${shift.shiftName} (${shift.startTime} - ${shift.endTime})`, value: shift.key }))}
+                onChange={(key) => { const shift = shifts.find((item) => item.key === key); if (shift) form.setFieldsValue({ workHours: `${shift.startTime} - ${shift.endTime}` }); }}
               />
             </Form.Item>
           </div>

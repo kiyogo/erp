@@ -237,6 +237,8 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         key: editingLoan?.key || crypto.randomUUID(),
         direction,
         contractCode,
+        disbursedDate: String(values.disbursedDate || ''),
+        dueDate: String(values.dueDate || ''),
         counterpartyName: String(values.counterpartyName || '').trim(),
         bankName: String(values.bankName || '').trim(),
         principalAmount,
@@ -315,11 +317,20 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         <KTable dataSource={visibleData} columns={columns} rowKey="key" pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có khế ước.' }} />
       </div>
 
-      <Modal title={`${editingLoan ? 'Sửa' : 'Thêm'} khế ước ${isLend ? 'cho vay' : 'đi vay'}`} open={modalOpen} onCancel={closeForm} footer={null} width="min(1120px, calc(100vw - 32px))">
+      <Modal
+        title={`${editingLoan ? 'Sửa' : 'Thêm'} khế ước ${isLend ? 'cho vay' : 'đi vay'}`}
+        open={modalOpen}
+        onCancel={closeForm}
+        footer={[
+          <Button key="cancel" onClick={closeForm}>Hủy</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={() => form.submit()}>Cất</Button>,
+        ]}
+        width="min(1120px, calc(100vw - 32px))"
+      >
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
           {routeDirection === 'all' && <Form.Item name="direction" label="Loại khế ước" rules={[{ required: true }]}><Select options={[{ label: 'Khế ước đi vay', value: 'borrow' }, { label: 'Khế ước cho vay', value: 'lend' }]} onChange={(value: LoanDirection) => { setDraftDirection(value); form.setFieldsValue({ principalAccount: value === 'borrow' ? '341' : '1218', interestAccount: value === 'borrow' ? '658' : '558', disbursementMethod: value === 'borrow' ? 'Chuyển khoản vào tài khoản DN' : 'Chuyển khoản' }); }} /></Form.Item>}
           <strong>Thông tin giải ngân</strong>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '3px 14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
             <Form.Item name="contractCode" label="Số khế ước" rules={[{ required: true, whitespace: true }]}><Input maxLength={80} /></Form.Item>
             <Form.Item name="counterpartyName" label={isLend ? 'Đối tượng vay' : 'Đối tượng cho vay'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
             <Form.Item name="creditContract" label="Hợp đồng tín dụng"><Input /></Form.Item>
@@ -338,7 +349,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
 
           <Tabs items={[
             { key: 'interest', label: 'Lãi suất', children: <div style={{ display: 'grid', gap: 14 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
                 <Form.Item name="rateType" label="Loại lãi suất" rules={[{ required: true }]}><Select options={['Lãi suất trên dư nợ giảm dần', 'Lãi suất trên dư nợ gốc'].map(value => ({ label: value, value }))} /></Form.Item>
                 <Form.Item name="interestDayBase" label="Cơ sở tính lãi ngày" rules={[{ required: true }]}><Select options={['Lãi năm/365', 'Lãi năm/360'].map(value => ({ label: value, value }))} /></Form.Item>
                 <Form.Item name="adjustmentMethod" label="Phương thức điều chỉnh" rules={[{ required: true }]}><Select options={['Có điều chỉnh', 'Cố định'].map(value => ({ label: value, value }))} /></Form.Item>
@@ -358,7 +369,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
               </div>
               <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setRateRows(current => [...current, blankRate()])}>Thêm dòng</Button><Button onClick={() => setRateRows([])}>Xóa hết dòng</Button></div>
             </div> },
-            { key: 'repayment', label: isLend ? 'Hình thức thu nợ' : 'Hình thức trả nợ', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px', alignContent: 'start' }}>
+            { key: 'repayment', label: isLend ? 'Hình thức thu nợ' : 'Hình thức trả nợ', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', alignContent: 'start' }}>
               <Form.Item name="principalRepayment" label={isLend ? 'Thu gốc' : 'Trả gốc'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
               <Form.Item name="firstPrincipalDate" label={isLend ? 'Ngày thu gốc đầu tiên' : 'Ngày trả gốc đầu tiên'} rules={[{ required: true }]}><Input type="date" /></Form.Item>
               <Form.Item name="interestRepayment" label={isLend ? 'Thu lãi' : 'Trả lãi'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
@@ -367,7 +378,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
               <Form.Item name="repaymentAccount" label="Chuyển vào tài khoản"><Input /></Form.Item>
               <Form.Item name="repaymentBankName" label="Tên ngân hàng"><Input /></Form.Item>
             </div> },
-            { key: 'statistics', label: 'Thống kê khác', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px', alignContent: 'start' }}>
+            { key: 'statistics', label: 'Thống kê khác', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', alignContent: 'start' }}>
               <Form.Item name="project" label="Công trình"><Input /></Form.Item>
               <Form.Item name={isLend ? 'salesOrder' : 'purchaseOrder'} label={isLend ? 'Đơn đặt hàng' : 'Đơn mua hàng'}><Input /></Form.Item>
               <Form.Item name={isLend ? 'salesContract' : 'purchaseContract'} label={isLend ? 'Hợp đồng bán' : 'Hợp đồng mua'}><Input /></Form.Item>
@@ -383,7 +394,6 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
             </div> },
           ]} />
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={closeForm}>Hủy</Button><Button type="primary" htmlType="submit" loading={saving}>{editingLoan ? 'Lưu thay đổi' : 'Lưu khế ước'}</Button></div>
         </Form>
       </Modal>
 

@@ -11,7 +11,7 @@ import {
   DownOutlined,
   InfoCircleOutlined,
   FileTextOutlined,
-  SparklesOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import { Modal, Input, Select, Button, message, Tag, Switch, Radio, Checkbox, Tooltip } from '../../custom-ui';
 import { collectionsApi } from '../../api/endpoints';
@@ -104,16 +104,16 @@ const EmptyTableIllustration: React.FC = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '36px 0' }}>
     <svg width="68" height="60" viewBox="0 0 68 60" fill="none" xmlns="http://www.w3.org/2000/svg">
       {/* Decorative airplane & sparkle */}
-      <path d="M53 14L59 11L56 17L53 14Z" fill="#EA580C" />
-      <circle cx="50" cy="13" r="1.5" fill="#F97316" />
-      <circle cx="44" cy="10" r="1" fill="#FB923C" />
-      <path d="M22 12L23.5 9L25 12L28 13.5L25 15L23.5 18L22 15L19 13.5L22 12Z" fill="#F97316" opacity="0.85" />
+      <path d="M53 14L59 11L56 17L53 14Z" fill="var(--antd-primary, #009688)" />
+      <circle cx="50" cy="13" r="1.5" fill="var(--antd-primary-hover, #26a69a)" />
+      <circle cx="44" cy="10" r="1" fill="var(--antd-primary-hover, #26a69a)" />
+      <path d="M22 12L23.5 9L25 12L28 13.5L25 15L23.5 18L22 15L19 13.5L22 12Z" fill="var(--antd-primary-hover, #26a69a)" opacity="0.85" />
       {/* Document page */}
       <path d="M24 18H42L50 26V50C50 51.1 49.1 52 48 52H24C22.9 52 22 51.1 22 50V20C22 18.9 22.9 18 24 18Z" fill="#FFFFFF" stroke="#CBD5E1" strokeWidth="1.5" />
       <path d="M42 18V26H50" stroke="#CBD5E1" strokeWidth="1.5" fill="#F8FAFC" />
       {/* Magnifier */}
-      <circle cx="42" cy="42" r="7.5" fill="#FFFFFF" stroke="#EA580C" strokeWidth="2" />
-      <path d="M47.5 47.5L52.5 52.5" stroke="#EA580C" strokeWidth="2.5" strokeLinecap="round" />
+      <circle cx="42" cy="42" r="7.5" fill="#FFFFFF" stroke="var(--antd-primary, #009688)" strokeWidth="2" />
+      <path d="M47.5 47.5L52.5 52.5" stroke="var(--antd-primary, #009688)" strokeWidth="2.5" strokeLinecap="round" />
     </svg>
     <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 10 }}>
       Không có dữ liệu
@@ -323,40 +323,7 @@ export const ShiftsModule: React.FC = () => {
         </h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {/* Thêm bằng AI */}
-          <button
-            onClick={() => setAiModalOpen(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              background: '#FFFFFF',
-              border: '1px solid #D8B4FE',
-              borderRadius: 20,
-              padding: '6px 14px',
-              cursor: 'pointer',
-              color: '#9333EA',
-              fontSize: 13,
-              fontWeight: 600,
-              boxShadow: '0 1px 2px rgba(147, 51, 234, 0.08)',
-            }}
-          >
-            <span
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, #A855F7, #EC4899)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#FFFFFF',
-                fontSize: 10,
-              }}
-            >
-              ✦
-            </span>
-            Thêm bằng AI
-          </button>
+          <Button icon={<BulbOutlined />} onClick={() => setAiModalOpen(true)}>Thêm bằng AI</Button>
 
           {/* Thiết lập mặc định */}
           <button
@@ -386,7 +353,7 @@ export const ShiftsModule: React.FC = () => {
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              background: '#EA580C',
+              background: 'var(--antd-primary, #009688)',
               border: 'none',
               borderRadius: 6,
               padding: '7px 16px',
@@ -558,7 +525,7 @@ export const ShiftsModule: React.FC = () => {
           <thead>
             <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontWeight: 600 }}>
               <th style={{ padding: '10px 12px', width: 36 }}>
-                <input type="checkbox" style={{ accentColor: '#EA580C' }} />
+                <input type="checkbox" style={{ accentColor: 'var(--antd-primary, #009688)' }} />
               </th>
               <th style={{ padding: '10px 12px' }}>Mã ca</th>
               <th style={{ padding: '10px 12px' }}>Tên ca</th>
@@ -590,7 +557,7 @@ export const ShiftsModule: React.FC = () => {
                   onClick={() => handleOpenEdit(item)}
                 >
                   <td style={{ padding: '10px 12px' }} onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" style={{ accentColor: '#EA580C' }} />
+                    <input type="checkbox" style={{ accentColor: 'var(--antd-primary, #009688)' }} />
                   </td>
                   <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0F172A' }}>{item.shiftCode}</td>
                   <td style={{ padding: '10px 12px', color: '#1E293B', fontWeight: 500 }}>{item.shiftName}</td>
@@ -632,11 +599,16 @@ export const ShiftsModule: React.FC = () => {
 
       {/* CREATE / EDIT SHIFT MODAL WITH TABS */}
       <Modal
-        title={null}
+        title={editingKey ? 'Sửa ca làm việc' : 'Thêm ca làm việc'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         width={980}
-        footer={null}
+        footer={[
+          <Button key="cancel" onClick={() => setModalOpen(false)}>Hủy</Button>,
+          <Button key="save-add" disabled={saving} onClick={() => void handleSave(true)}>Cất và Thêm</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={() => void handleSave(false)}>Cất</Button>,
+        ]}
+        className="attendance-shifts-dialog"
         style={{ top: 20 }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -651,8 +623,8 @@ export const ShiftsModule: React.FC = () => {
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: 'pointer',
-                color: activeTab === 'general' ? '#EA580C' : '#64748B',
-                borderBottom: activeTab === 'general' ? '2px solid #EA580C' : '2px solid transparent',
+                color: activeTab === 'general' ? 'var(--antd-primary, #009688)' : '#64748B',
+                borderBottom: activeTab === 'general' ? '2px solid var(--antd-primary, #009688)' : '2px solid transparent',
               }}
             >
               Chung
@@ -666,8 +638,8 @@ export const ShiftsModule: React.FC = () => {
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: 'pointer',
-                color: activeTab === 'advanced' ? '#EA580C' : '#64748B',
-                borderBottom: activeTab === 'advanced' ? '2px solid #EA580C' : '2px solid transparent',
+                color: activeTab === 'advanced' ? 'var(--antd-primary, #009688)' : '#64748B',
+                borderBottom: activeTab === 'advanced' ? '2px solid var(--antd-primary, #009688)' : '2px solid transparent',
               }}
             >
               Thiết lập nâng cao
@@ -676,7 +648,7 @@ export const ShiftsModule: React.FC = () => {
 
           {/* TAB 1: CHUNG */}
           {activeTab === 'general' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '68vh', overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {/* SECTION: THÔNG TIN CHUNG */}
               <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A' }}>Thông tin chung</div>
 
@@ -799,7 +771,7 @@ export const ShiftsModule: React.FC = () => {
                       type="checkbox"
                       checked={formData.enableCheckIn}
                       onChange={(e) => setFormData({ ...formData, enableCheckIn: e.target.checked })}
-                      style={{ accentColor: '#EA580C' }}
+                      style={{ accentColor: 'var(--antd-primary, #009688)' }}
                     />
                     <span>Chấm vào</span>
                   </label>
@@ -849,7 +821,7 @@ export const ShiftsModule: React.FC = () => {
                       type="checkbox"
                       checked={formData.enableCheckOut}
                       onChange={(e) => setFormData({ ...formData, enableCheckOut: e.target.checked })}
-                      style={{ accentColor: '#EA580C' }}
+                      style={{ accentColor: 'var(--antd-primary, #009688)' }}
                     />
                     <span>Chấm ra</span>
                   </label>
@@ -883,7 +855,7 @@ export const ShiftsModule: React.FC = () => {
                     type="checkbox"
                     checked={formData.hasBreak}
                     onChange={(e) => setFormData({ ...formData, hasBreak: e.target.checked })}
-                    style={{ accentColor: '#EA580C' }}
+                    style={{ accentColor: 'var(--antd-primary, #009688)' }}
                   />
                   <span>Có nghỉ giữa ca</span>
                 </label>
@@ -985,7 +957,7 @@ export const ShiftsModule: React.FC = () => {
                           style={{ width: 64, padding: '4px 8px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 12.5, textAlign: 'center' }}
                         />
                       </div>
-                      <span style={{ color: '#EA580C', fontSize: 12, cursor: 'pointer' }}>
+                      <span style={{ color: 'var(--antd-primary, #009688)', fontSize: 12, cursor: 'pointer' }}>
                         Thiết lập riêng cho từng ngày lễ
                       </span>
                     </div>
@@ -1014,7 +986,7 @@ export const ShiftsModule: React.FC = () => {
                     type="checkbox"
                     checked={formData.deductNoIn}
                     onChange={(e) => setFormData({ ...formData, deductNoIn: e.target.checked })}
-                    style={{ accentColor: '#EA580C' }}
+                    style={{ accentColor: 'var(--antd-primary, #009688)' }}
                   />
                   <span>Nếu không có giờ vào thì bị trừ công</span>
                 </label>
@@ -1023,7 +995,7 @@ export const ShiftsModule: React.FC = () => {
                     type="checkbox"
                     checked={formData.deductNoOut}
                     onChange={(e) => setFormData({ ...formData, deductNoOut: e.target.checked })}
-                    style={{ accentColor: '#EA580C' }}
+                    style={{ accentColor: 'var(--antd-primary, #009688)' }}
                   />
                   <span>Nếu không có giờ ra thì bị trừ công</span>
                 </label>
@@ -1033,7 +1005,7 @@ export const ShiftsModule: React.FC = () => {
 
           {/* TAB 2: THIẾT LẬP NÂNG CAO */}
           {activeTab === 'advanced' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxHeight: '68vh', overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {/* SECTION: ĐI MUỘN VỀ SỚM */}
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Đi muộn về sớm</div>
@@ -1067,7 +1039,7 @@ export const ShiftsModule: React.FC = () => {
                       type="checkbox"
                       checked={formData.penaltyLate}
                       onChange={(e) => setFormData({ ...formData, penaltyLate: e.target.checked })}
-                      style={{ accentColor: '#EA580C' }}
+                      style={{ accentColor: 'var(--antd-primary, #009688)' }}
                     />
                     <span>Phạt đi muộn</span>
                   </label>
@@ -1077,7 +1049,7 @@ export const ShiftsModule: React.FC = () => {
                       type="checkbox"
                       checked={formData.penaltyEarly}
                       onChange={(e) => setFormData({ ...formData, penaltyEarly: e.target.checked })}
-                      style={{ accentColor: '#EA580C' }}
+                      style={{ accentColor: 'var(--antd-primary, #009688)' }}
                     />
                     <span>Phạt về sớm</span>
                   </label>
@@ -1089,11 +1061,11 @@ export const ShiftsModule: React.FC = () => {
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Làm thêm giờ</div>
                 <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
                   <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12.5, color: '#334155' }}>
-                    <input type="checkbox" defaultChecked style={{ accentColor: '#EA580C' }} />
+                    <input type="checkbox" defaultChecked style={{ accentColor: 'var(--antd-primary, #009688)' }} />
                     <span>Tính làm thêm trước ca</span>
                   </label>
                   <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12.5, color: '#334155' }}>
-                    <input type="checkbox" defaultChecked style={{ accentColor: '#EA580C' }} />
+                    <input type="checkbox" defaultChecked style={{ accentColor: 'var(--antd-primary, #009688)' }} />
                     <span>Tính làm thêm sau ca</span>
                   </label>
                 </div>
@@ -1110,7 +1082,7 @@ export const ShiftsModule: React.FC = () => {
                         name="hasMealAllowance"
                         checked={formData.hasMealAllowance}
                         onChange={() => setFormData({ ...formData, hasMealAllowance: true })}
-                        style={{ accentColor: '#EA580C' }}
+                        style={{ accentColor: 'var(--antd-primary, #009688)' }}
                       />
                       <span>Có</span>
                     </label>
@@ -1120,7 +1092,7 @@ export const ShiftsModule: React.FC = () => {
                         name="hasMealAllowance"
                         checked={!formData.hasMealAllowance}
                         onChange={() => setFormData({ ...formData, hasMealAllowance: false })}
-                        style={{ accentColor: '#EA580C' }}
+                        style={{ accentColor: 'var(--antd-primary, #009688)' }}
                       />
                       <span>Không</span>
                     </label>
@@ -1133,7 +1105,7 @@ export const ShiftsModule: React.FC = () => {
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: '#1E293B' }}>
                       Tính cho thời gian làm việc bình thường
                     </span>
-                    <span style={{ color: '#EA580C', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    <span style={{ color: 'var(--antd-primary, #009688)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                       + Thêm
                     </span>
                   </div>
@@ -1179,7 +1151,7 @@ export const ShiftsModule: React.FC = () => {
                         name="mealBasis"
                         checked={formData.mealBasis === 'payroll'}
                         onChange={() => setFormData({ ...formData, mealBasis: 'payroll' })}
-                        style={{ accentColor: '#EA580C' }}
+                        style={{ accentColor: 'var(--antd-primary, #009688)' }}
                       />
                       <span>Theo số công hưởng lương</span>
                     </label>
@@ -1189,7 +1161,7 @@ export const ShiftsModule: React.FC = () => {
                         name="mealBasis"
                         checked={formData.mealBasis === 'actual'}
                         onChange={() => setFormData({ ...formData, mealBasis: 'actual' })}
-                        style={{ accentColor: '#EA580C' }}
+                        style={{ accentColor: 'var(--antd-primary, #009688)' }}
                       />
                       <span>Theo số công đi làm thực tế</span>
                     </label>
@@ -1218,7 +1190,7 @@ export const ShiftsModule: React.FC = () => {
                               : formData.mealExclusions.filter((k) => k !== item.key);
                             setFormData({ ...formData, mealExclusions: updated });
                           }}
-                          style={{ accentColor: '#EA580C' }}
+                          style={{ accentColor: 'var(--antd-primary, #009688)' }}
                         />
                         <span>{item.label}</span>
                       </label>
@@ -1232,7 +1204,7 @@ export const ShiftsModule: React.FC = () => {
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: '#1E293B' }}>
                       Tính cho thời gian làm thêm
                     </span>
-                    <span style={{ color: '#EA580C', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    <span style={{ color: 'var(--antd-primary, #009688)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                       + Thêm
                     </span>
                   </div>
@@ -1278,7 +1250,7 @@ export const ShiftsModule: React.FC = () => {
                         name="hasDispatchCredit"
                         checked={formData.hasDispatchCredit}
                         onChange={() => setFormData({ ...formData, hasDispatchCredit: true })}
-                        style={{ accentColor: '#EA580C' }}
+                        style={{ accentColor: 'var(--antd-primary, #009688)' }}
                       />
                       <span>Có</span>
                     </label>
@@ -1288,7 +1260,7 @@ export const ShiftsModule: React.FC = () => {
                         name="hasDispatchCredit"
                         checked={!formData.hasDispatchCredit}
                         onChange={() => setFormData({ ...formData, hasDispatchCredit: false })}
-                        style={{ accentColor: '#EA580C' }}
+                        style={{ accentColor: 'var(--antd-primary, #009688)' }}
                       />
                       <span>Không</span>
                     </label>
@@ -1301,7 +1273,7 @@ export const ShiftsModule: React.FC = () => {
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: '#1E293B' }}>
                       Danh sách công điều động:
                     </span>
-                    <span style={{ color: '#EA580C', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    <span style={{ color: 'var(--antd-primary, #009688)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                       + Thêm
                     </span>
                   </div>
@@ -1338,56 +1310,6 @@ export const ShiftsModule: React.FC = () => {
             </div>
           )}
 
-          {/* MODAL FOOTER */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16, paddingTop: 14, borderTop: '1px solid #E2E8F0' }}>
-            <button
-              onClick={() => setModalOpen(false)}
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: 6,
-                padding: '6px 16px',
-                fontSize: 13,
-                cursor: 'pointer',
-                color: '#475569',
-              }}
-            >
-              Hủy
-            </button>
-            <button
-              onClick={() => void handleSave(true)}
-              disabled={saving}
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #EA580C',
-                borderRadius: 6,
-                padding: '6px 16px',
-                fontSize: 13,
-                cursor: 'pointer',
-                color: '#EA580C',
-                fontWeight: 600,
-              }}
-            >
-              Lưu &amp; Thêm mới
-            </button>
-            <button
-              onClick={() => void handleSave(false)}
-              disabled={saving}
-              style={{
-                background: '#EA580C',
-                border: 'none',
-                borderRadius: 6,
-                padding: '6px 20px',
-                fontSize: 13,
-                cursor: 'pointer',
-                color: '#FFFFFF',
-                fontWeight: 600,
-                boxShadow: '0 1px 2px rgba(234, 88, 12, 0.25)',
-              }}
-            >
-              Lưu
-            </button>
-          </div>
         </div>
       </Modal>
 
@@ -1405,7 +1327,6 @@ export const ShiftsModule: React.FC = () => {
             type="primary"
             loading={aiLoading}
             onClick={handleGenerateAI}
-            style={{ background: '#9333EA', borderColor: '#9333EA' }}
           >
             Tạo ca làm việc
           </Button>,
@@ -1415,12 +1336,11 @@ export const ShiftsModule: React.FC = () => {
           <div style={{ fontSize: 13, color: '#64748B' }}>
             Mô tả ca làm việc bằng ngôn ngữ tự nhiên (ví dụ: &quot;Ca hành chính sáng 8h đến 12h, chiều 13h30 đến 17h30, đi muộn tối đa 15 phút, tính 1 công&quot;):
           </div>
-          <textarea
+          <Input.TextArea
             rows={4}
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
             placeholder="Nhập mô tả ca làm việc..."
-            style={{ width: '100%', padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none' }}
           />
         </div>
       </Modal>
