@@ -47,7 +47,9 @@ export class PointerController {
     zoom: number
   ): void {
     const target = e.currentTarget;
-    target.setPointerCapture(e.pointerId);
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {}
 
     const rect = target.getBoundingClientRect();
     const docX = (e.clientX - rect.left) / zoom;
@@ -141,7 +143,7 @@ export class PointerController {
     }
 
     this.isSelecting = true;
-    this.selectionEngine.setCursor(pos.blockId, pos.offset);
+    this.selectionEngine.setCursor(pos.blockId, pos.offset, pos.affinity);
   }
 
   public handlePointerMove(

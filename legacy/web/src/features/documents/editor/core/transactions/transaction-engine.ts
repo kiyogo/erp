@@ -70,6 +70,7 @@ export class TransactionEngine {
     }
 
     this.doc.data.metadata.updatedAt = new Date().toISOString();
+    this.doc.incrementRevision();
 
     const inverseTx: EditorTransaction = {
       id: generateTransactionId(),

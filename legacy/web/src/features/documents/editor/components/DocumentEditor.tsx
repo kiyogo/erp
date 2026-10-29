@@ -180,14 +180,14 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   }, [eventBus, triggerRelayout]);
 
   // Input and Pointer controllers
-  const textInputController = useMemo(
-    () => new TextInputController(commandRegistry, compositionManager, selectionEngine, docModelRef.current),
-    [commandRegistry, compositionManager, selectionEngine]
+  const keyboardController = useMemo(
+    () => new KeyboardController(docModelRef.current, selectionEngine, commandRegistry, () => layout, compositionManager),
+    [selectionEngine, commandRegistry, layout, compositionManager]
   );
 
-  const keyboardController = useMemo(
-    () => new KeyboardController(docModelRef.current, selectionEngine, commandRegistry, () => layout),
-    [selectionEngine, commandRegistry, layout]
+  const textInputController = useMemo(
+    () => new TextInputController(commandRegistry, compositionManager, selectionEngine, docModelRef.current, keyboardController),
+    [commandRegistry, compositionManager, selectionEngine, keyboardController]
   );
 
   const pointerController = useMemo(

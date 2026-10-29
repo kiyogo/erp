@@ -22,6 +22,13 @@ export class FontMetricsService {
   private widthCache: Map<string, number> = new Map();
   private clusterCache: Map<string, ClusterMeasurement[]> = new Map();
 
+  private storeBounded<T>(cache: Map<string, T>, key: string, value: T, limit: number): void {
+    // Do not retain a growing copy of an entire pasted paragraph per keystroke.
+    if (key.length > 2048) return;
+    if (cache.size >= limit && !cache.has(key)) cache.delete(cache.keys().next().value!);
+    cache.set(key, value);
+  }
+
   constructor() {
     this.initContext();
   }
@@ -38,20 +45,30 @@ export class FontMetricsService {
         const canvas = new OffscreenCanvas(100, 100);
         this.ctx = canvas.getContext('2d') as any;
       }
+      if (this.ctx) {
+        this.ctx.textBaseline = 'alphabetic';
+        if ('textRendering' in this.ctx) {
+          (this.ctx as any).textRendering = 'optimizeLegibility';
+        }
+        if ('fontKerning' in this.ctx) {
+          (this.ctx as any).fontKerning = 'normal';
+        }
+      }
     } catch {
       this.ctx = null;
     }
   }
 
   /**
-   * Generates a standard CSS font string from marks
+   * Generates a standard CSS font string from marks in physical/logical px to ensure 100% exact parity with Canvas 2D
    */
   public getFontString(marks?: TextMarks): string {
     const family = marks?.fontFamily || DEFAULT_FONT_FAMILY;
     const size = marks?.fontSize || DEFAULT_FONT_SIZE;
     const weight = marks?.bold ? 'bold' : 'normal';
     const style = marks?.italic ? 'italic' : 'normal';
-    return `${style} ${weight} ${size}pt ${family}, sans-serif`;
+    const sizePx = (size * 96) / 72;
+    return `${style} ${weight} ${sizePx}px "${family}", "Segoe UI", Arial, "Times New Roman", sans-serif`;
   }
 
   private getCacheKey(fontStr: string, text: string): string {
@@ -79,6 +96,8 @@ export class FontMetricsService {
 
     if (this.ctx) {
       this.ctx.font = fontStr;
+      if ('textRendering' in this.ctx) (this.ctx as any).textRendering = 'optimizeLegibility';
+      if ('fontKerning' in this.ctx) (this.ctx as any).fontKerning = 'normal';
       const metrics = this.ctx.measureText(text || ' ');
       fontAscent = metrics.fontBoundingBoxAscent || metrics.actualBoundingBoxAscent || fontSizePx * 0.8;
       fontDescent = metrics.fontBoundingBoxDescent || metrics.actualBoundingBoxDescent || fontSizePx * 0.2;
@@ -99,7 +118,7 @@ export class FontMetricsService {
       lineHeightPx,
     };
 
-    this.metricsCache.set(key, result);
+    this.storeBounded(this.metricsCache, key, result, 2048);
     return result;
   }
 
@@ -121,17 +140,22 @@ export class FontMetricsService {
     let width = 0;
     if (this.ctx) {
       this.ctx.font = fontStr;
+      if ('textRendering' in this.ctx) (this.ctx as any).textRendering = 'optimizeLegibility';
+      if ('fontKerning' in this.ctx) (this.ctx as any).fontKerning = 'normal';
       width = this.ctx.measureText(text).width;
     } else {
       width = text.length * (fontSizePx * 0.55);
     }
 
-    this.widthCache.set(key, width);
+    this.storeBounded(this.widthCache, key, width, 32768);
     return width;
   }
 
   /**
-   * Measure each grapheme cluster position within a text run for accurate hit testing and selection highlighting
+   * Measure each grapheme cluster position using exact prefix substring measurement.
+   * This guarantees that OpenType kerning pairs, ligatures, and Vietnamese diacritics
+   * are 100% incorporated into cluster advances and that the sum of all clusters matches
+   * the exact canvas-rendered outline with zero drift.
    */
   public measureClusters(text: string, marks?: TextMarks): ClusterMeasurement[] {
     if (!text) return [];
@@ -147,21 +171,36 @@ export class FontMetricsService {
     this.initContext();
     if (this.ctx) {
       this.ctx.font = fontStr;
+      if ('textRendering' in this.ctx) (this.ctx as any).textRendering = 'optimizeLegibility';
+      if ('fontKerning' in this.ctx) (this.ctx as any).fontKerning = 'normal';
     }
-    let currentX = 0;
+
+    let prevX = 0;
+    let charOffset = 0;
+    const fontSizePt = marks?.fontSize || DEFAULT_FONT_SIZE;
+    const fontSizePx = (fontSizePt * 96) / 72;
 
     for (let i = 0; i < clusters.length; i++) {
       const cluster = clusters[i];
-      const clusterWidth = this.measureWidth(cluster, marks);
+      charOffset += cluster.length;
+
+      let currentX = 0;
+      if (this.ctx) {
+        currentX = this.ctx.measureText(text.slice(0, charOffset)).width;
+      } else {
+        currentX = charOffset * (fontSizePx * 0.55);
+      }
+
+      const clusterWidth = Math.max(0, currentX - prevX);
       result.push({
         cluster,
         width: clusterWidth,
-        xOffset: currentX,
+        xOffset: prevX,
       });
-      currentX += clusterWidth;
+      prevX = currentX;
     }
 
-    this.clusterCache.set(key, result);
+    this.storeBounded(this.clusterCache, key, result, 2048);
     return result;
   }
 

@@ -25,6 +25,7 @@ async function setup(name) {
   let cursor = 0, formCursor = 0, effectCursor = 0, failSave = false, saveGate = null, cacheGate = null;
   const react = {
     createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
+    lazy: () => 'DocxEditorModal',
     useState: initial => { const index = cursor++; if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial; return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }]; },
     useEffect: (fn, dependencies) => { const index = effectCursor++; if (!effectDependencies[index] || dependencies.some((value, i) => value !== effectDependencies[index][i])) { effectDependencies[index] = dependencies; effects.push(fn); } },
   };

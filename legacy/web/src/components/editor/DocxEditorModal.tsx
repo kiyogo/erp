@@ -19,6 +19,7 @@ import {
 import { saveFileBlob, getFileBlob } from "../../utils/fileStorage";
 import { extractReadableTextFromDoc, parseDocxBlobToHtml } from "../../utils/documentViewer";
 import { generateValidDocxBlob } from "../../utils/fileExporter";
+import { filesApi } from "../../api/endpoints";
 
 // Canvas Document Engine Core Imports
 import { DocumentModel } from "../../features/documents/editor/core/model/document-model";
@@ -43,6 +44,13 @@ import { TypedEventBus } from "../../features/documents/editor/core/utils/event-
 import { CanvasPage } from "../../features/documents/editor/components/CanvasPage";
 import { PdfExporter } from "../../features/documents/editor/core/export/pdf-exporter";
 import { PrintService } from "../../features/documents/editor/core/export/print-service";
+import { FontManager } from "../../features/documents/editor/core/fonts/font-manager";
+import { fontMetrics } from "../../features/documents/editor/core/fonts/font-metrics-service";
+import { useDevicePixelRatio } from "../../features/documents/editor/core/utils/use-device-pixel-ratio";
+import { CentralRenderScheduler, RenderPriority } from "../../features/documents/editor/core/rendering/central-render-scheduler";
+import { performanceMonitor, PerformanceStats } from "../../features/documents/editor/core/diagnostics/performance-monitor";
+import { PageHeightIndex } from "../../features/documents/editor/core/layout/page-height-index";
+import { streamingSearchEngine } from "../../features/documents/editor/core/search/streaming-search-engine";
 
 export interface DocxEditorModalProps {
   open: boolean;
@@ -378,13 +386,13 @@ function RibbonHome({ bold, ital, uline, strike, align, fontName, fontSize, exec
     </Group>
     <Group label="Đang chỉnh sửa">
       <div className="flex flex-col justify-center flex-1 gap-[2px] min-w-[90px]">
-        <Btn onClick={() => { setShowFind((v: boolean) => !v); setTimeout(() => findInputRef.current?.focus(), 100); }} cls="h-[20px] px-2 gap-1.5 justify-start whitespace-nowrap w-full" title="Tìm (Ctrl+F)">
+        <Btn onClick={() => { setShowFind((v: boolean) => !v); setTimeout(() => findInputRef.current?.focus(), 100); }} cls="h-[20px] px-2 gap-1.5 justify-start whitespace-nowrap w-full" title="Tìm">
           <Search className="w-[12px] h-[12px] text-[#555] shrink-0" strokeWidth={1.5} /><span className="text-[11.5px] text-[#333]">Tìm</span>
         </Btn>
-        <Btn onClick={() => { setShowFind(true); setShowReplace(true); }} cls="h-[20px] px-2 gap-1.5 justify-start whitespace-nowrap w-full" title="Thay thế (Ctrl+H)">
+        <Btn onClick={() => { setShowFind(true); setShowReplace(true); }} cls="h-[20px] px-2 gap-1.5 justify-start whitespace-nowrap w-full" title="Thay thế">
           <Type className="w-[12px] h-[12px] text-[#0F6CBD] shrink-0" strokeWidth={1.5} /><span className="text-[11.5px] text-[#333]">Thay thế</span>
         </Btn>
-        <Btn onClick={() => exec("selectAll")} cls="h-[20px] px-2 gap-1.5 justify-start whitespace-nowrap w-full" title="Chọn tất cả (Ctrl+A)">
+        <Btn onClick={() => exec("selectAll")} cls="h-[20px] px-2 gap-1.5 justify-start whitespace-nowrap w-full" title="Chọn tất cả">
           <TextCursorInput className="w-[12px] h-[12px] text-[#555] shrink-0" strokeWidth={1.5} /><span className="text-[11.5px] text-[#333]">Chọn</span>
         </Btn>
       </div>
@@ -423,11 +431,11 @@ function RibbonFile({ handleSave, handleOpen, clearDocument, exportTxt, handleDo
   return (<>
     <Group label="Tệp" border={false}>
       <div className="flex items-center gap-2 h-full py-2">
-        <Btn onClick={handleSave} cls="flex-col w-[62px] h-full justify-center gap-1" title="Lưu (Ctrl+S)">
+        <Btn onClick={handleSave} cls="flex-col w-[62px] h-full justify-center gap-1" title="Lưu">
           <Save className="w-6 h-6 text-[#0F6CBD]" strokeWidth={1.5} />
           <span className="text-[10px] text-[#333]">Lưu</span>
         </Btn>
-        <Btn onClick={handleDownloadDocx} cls="flex-col w-[62px] h-full justify-center gap-1" title="Tải về file Word (.docx)">
+        <Btn onClick={handleDownloadDocx} cls="flex-col w-[62px] h-full justify-center gap-1" title="Tải về file Word">
           <Download className="w-6 h-6 text-[#10B981]" strokeWidth={1.5} />
           <span className="text-[10px] text-[#333]">Tải .docx</span>
         </Btn>
@@ -435,7 +443,7 @@ function RibbonFile({ handleSave, handleOpen, clearDocument, exportTxt, handleDo
           <FileUp className="w-6 h-6 text-[#0F6CBD]" strokeWidth={1.5} />
           <span className="text-[10px] text-[#333]">Mở</span>
         </Btn>
-        <Btn onClick={() => window.print()} cls="flex-col w-[62px] h-full justify-center gap-1" title="In (Ctrl+P)">
+        <Btn onClick={() => window.print()} cls="flex-col w-[62px] h-full justify-center gap-1" title="In">
           <Printer className="w-6 h-6 text-[#0F6CBD]" strokeWidth={1.5} />
           <span className="text-[10px] text-[#333]">In</span>
         </Btn>
@@ -466,7 +474,7 @@ function RibbonInsert({ exec, setShowTablePicker, handleInsertImage, handleInser
   return (<>
     <Group label="Trang">
       <div className="flex items-center h-full gap-1">
-        <Btn onClick={() => onAction("insert-page")} cls="flex-col w-[56px] h-full justify-center gap-1" title="Thêm trang mới / Ngắt trang (Ctrl+Enter)">
+        <Btn onClick={() => onAction("insert-page")} cls="flex-col w-[56px] h-full justify-center gap-1" title="Thêm trang mới / Ngắt trang">
           <FilePlus2 className="w-6 h-6 text-[#0F6CBD]" strokeWidth={1.5} />
           <span className="text-[10px] text-[#333]">Ngắt trang</span>
         </Btn>
@@ -841,25 +849,28 @@ function RibbonView({ zoom, setZoom, onAction }: any) {
     </Group>
     <Group label="Thu phóng" border={false}>
       <div className="flex items-center h-full gap-1">
-        <Btn onClick={() => setZoom((v: number) => Math.max(10, v - 10))} cls="w-[26px] h-[26px]">
+        <Btn onClick={() => setZoom((v: number) => Math.max(10, v - 10))} cls="w-[26px] h-[26px]" title="Thu nhỏ">
           <ZoomOut className="w-4 h-4" strokeWidth={1.5} />
         </Btn>
-        <span className="text-[12px] font-medium w-[38px] text-center">{zoom}%</span>
-        <Btn onClick={() => setZoom((v: number) => Math.min(200, v + 10))} cls="w-[26px] h-[26px]">
+        <span className="text-[12px] font-medium w-[44px] text-center">{zoom}%</span>
+        <Btn onClick={() => setZoom((v: number) => Math.min(500, v + 10))} cls="w-[26px] h-[26px]" title="Phóng to">
           <ZoomIn className="w-4 h-4" strokeWidth={1.5} />
         </Btn>
         <Btn onClick={() => setZoom(100)} cls="w-[36px] h-[26px] text-[10px]" title="100%">
           100%
         </Btn>
-        <Btn onClick={() => setZoom(75)} cls="w-[36px] h-[26px] text-[10px]" title="75%">
-          75%
+        <Btn onClick={() => setZoom(200)} cls="w-[36px] h-[26px] text-[10px]" title="200%">
+          200%
+        </Btn>
+        <Btn onClick={() => setZoom(500)} cls="w-[36px] h-[26px] text-[10px] font-bold text-[#0F6CBD]" title="Phóng to tối đa">
+          500%
         </Btn>
         <Btn onClick={() => setZoom(50)} cls="w-[36px] h-[26px] text-[10px]" title="50%">
           50%
         </Btn>
         <div className="flex flex-col text-[11px] text-[#999] ml-2 italic max-w-[120px]">
-          <span>Điều chỉnh tỷ lệ</span>
-          <span>hiển thị tài liệu</span>
+          <span>Thu phóng</span>
+          <span>tối đa 500%</span>
         </div>
       </div>
     </Group>
@@ -927,6 +938,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   initialParagraphs,
   onSaveSuccess,
 }) => {
+  const saveInFlightRef = useRef(false);
   const [activeTab, setActiveTab] = useState("home");
   const [bold, setBold] = useState(false);
   const [ital, setItal] = useState(false);
@@ -937,7 +949,6 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   const [align, setAlign] = useState("left");
   const [zoom, setZoom] = useState(100);
   const [words, setWords] = useState(0);
-  const saveInFlightRef = useRef(false);
   const [fontName, setFontName] = useState("Times New Roman");
   const [fontSize, setFontSize] = useState(14);
   const [showFind, setShowFind] = useState(false);
@@ -964,21 +975,20 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   const compositionManager = useMemo(() => new CompositionManager(), []);
   const hiddenInputRef = useRef<HTMLTextAreaElement | null>(null);
   const caretRef = useRef<CaretGeometry | null>(null);
-  const optimisticOverlayRef = useRef<HTMLDivElement | null>(null);
-  const optimisticTextRef = useRef("");
 
-  const textInputController = useMemo(
-    () => new TextInputController(commandRegistry, compositionManager, selectionEngine, docModelRef.current),
-    [commandRegistry, compositionManager, selectionEngine]
-  );
   const keyboardController = useMemo(
-    () => new KeyboardController(docModelRef.current, selectionEngine, commandRegistry, () => layoutRef.current),
-    [commandRegistry, selectionEngine]
+    () => new KeyboardController(docModelRef.current, selectionEngine, commandRegistry, () => layoutRef.current, compositionManager),
+    [commandRegistry, selectionEngine, compositionManager]
+  );
+  const textInputController = useMemo(
+    () => new TextInputController(commandRegistry, compositionManager, selectionEngine, docModelRef.current, keyboardController),
+    [commandRegistry, compositionManager, selectionEngine, keyboardController]
   );
   // The pointer controller needs the newest calculated layout when turning a
   // click on a canvas into a document position.  A ref avoids closing over the
   // initial (empty) layout while keeping the controller instance stable.
-  const layoutRef = useRef<DocumentLayout>(layoutEngine.layoutDocument(docModelRef.current));
+  const [initialLayout] = useState(() => layoutEngine.layoutDocument(docModelRef.current));
+  const layoutRef = useRef<DocumentLayout>(initialLayout);
   const pointerController = useMemo(
     () => new PointerController(docModelRef.current, selectionEngine, () => layoutRef.current, commandRegistry),
     [selectionEngine, commandRegistry]
@@ -987,6 +997,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     () => new ClipboardService(docModelRef.current, selectionEngine, commandRegistry),
     [selectionEngine, commandRegistry]
   );
+  const dpr = useDevicePixelRatio();
 
   const [layout, setLayout] = useState<DocumentLayout>(() => layoutRef.current);
   const [selectionRects, setSelectionRects] = useState<SelectionPageRect[]>([]);
@@ -1040,10 +1051,25 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
 
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
+  const currentPageRef = useRef(1);
   const [renderedPageStart, setRenderedPageStart] = useState(0);
   const [renderedPageEnd, setRenderedPageEnd] = useState(1);
   const renderedPageRangeRef = useRef({ start: 0, end: 1 });
-  const PAGE_RENDER_OVERSCAN = 0;
+  const viewportFrameRef = useRef<number | null>(null);
+
+  const [showPerfHud, setShowPerfHud] = useState(false);
+  const [perfStats, setPerfStats] = useState<PerformanceStats | null>(null);
+
+  useEffect(() => {
+    if (!showPerfHud) {
+      performanceMonitor.setEnabled(false);
+      return;
+    }
+    performanceMonitor.setEnabled(true);
+    return performanceMonitor.subscribe((stats) => {
+      setPerfStats(stats);
+    });
+  }, [showPerfHud]);
 
   const tabButtonRefs = useRef<{ [key: string]: HTMLButtonElement | null }>({});
   const [tabIndicator, setTabIndicator] = useState<{ left: number; width: number; visible: boolean }>({
@@ -1073,38 +1099,100 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   const updateRenderedPageWindow = useCallback(() => {
     const container = docRef.current;
     const stack = editorRef.current;
-    const pageCount = layout.pages.length;
-    const firstPageHeight = layout.pages[0]?.height || pageHeight;
-    if (!container || !stack || !pageCount || !firstPageHeight) return;
+    const currentLayout = layoutRef.current || layout;
+    const pageIndexTree = currentLayout.pageHeightIndex || layoutEngine.pageHeightIndex;
+    const pageCount = currentLayout.pageCount || pageIndexTree.getPageCount();
+    if (!container || !stack || !pageCount) return;
 
     const scale = zoom / 100;
-    const pageStride = (firstPageHeight + 24) * scale;
-    const stackTop = container.scrollTop + stack.getBoundingClientRect().top - container.getBoundingClientRect().top;
-    const viewportTop = Math.max(0, container.scrollTop - stackTop);
-    const viewportBottom = viewportTop + container.clientHeight;
-    const firstVisiblePage = Math.max(0, Math.min(pageCount - 1, Math.floor(viewportTop / pageStride)));
-    const lastVisiblePage = Math.max(firstVisiblePage, Math.min(pageCount - 1, Math.floor(viewportBottom / pageStride)));
-    const nextStart = Math.max(0, firstVisiblePage - PAGE_RENDER_OVERSCAN);
-    const nextEnd = Math.min(pageCount, lastVisiblePage + PAGE_RENDER_OVERSCAN + 1);
+    const scrollMetrics = pageIndexTree.getVirtualScrollMetrics(scale);
+    const scrollRatio = scrollMetrics.scrollRatio;
 
+    const containerRect = container.getBoundingClientRect();
+    const stackRect = stack.getBoundingClientRect();
+    const stackTop = container.scrollTop + stackRect.top - containerRect.top;
+    const physicalViewportTop = Math.max(0, container.scrollTop - stackTop);
+    const physicalViewportBottom = Math.max(0, container.scrollTop + container.clientHeight - stackTop);
+
+    const virtualViewportTop = pageIndexTree.physicalToVirtualScrollY(physicalViewportTop, scrollRatio);
+    const virtualViewportBottom = pageIndexTree.physicalToVirtualScrollY(physicalViewportBottom, scrollRatio);
+
+    const top = virtualViewportTop / scale;
+    const bottom = virtualViewportBottom / scale;
+    let firstVisiblePage = pageIndexTree.getPageIndexAtOffset(top);
+    // A viewport starting in the gap must not mount the preceding page.
+    if (top >= pageIndexTree.getPageOffset(firstVisiblePage) + pageIndexTree.getPageHeight(firstVisiblePage)) {
+      firstVisiblePage = Math.min(pageCount - 1, firstVisiblePage + 1);
+    }
+    const lastVisiblePage = pageIndexTree.getPageIndexAtOffset(Math.max(0, bottom - 0.01));
+
+    const nextStart = Math.max(0, firstVisiblePage);
+    const nextEnd = Math.max(nextStart, Math.min(pageCount, lastVisiblePage + 1));
+
+    // Evict far pages from cache to maintain bounded RAM
+    layoutEngine.pageCache.evictFarPages(nextStart, nextEnd, 8);
+    performanceMonitor.updatePageMetrics(nextEnd - nextStart, pageCount, layoutEngine.pageCache.size);
+
+    currentPageRef.current = firstVisiblePage + 1;
     setCurrentPage(firstVisiblePage + 1);
     renderedPageRangeRef.current = { start: nextStart, end: nextEnd };
     setRenderedPageStart((previous) => previous === nextStart ? previous : nextStart);
     setRenderedPageEnd((previous) => previous === nextEnd ? previous : nextEnd);
-  }, [layout.pages, pageHeight, zoom]);
+  }, [layout, zoom]);
+
+  const scheduleViewportUpdate = useCallback(() => {
+    if (viewportFrameRef.current !== null) return;
+    viewportFrameRef.current = window.requestAnimationFrame(() => {
+      viewportFrameRef.current = null;
+      updateRenderedPageWindow();
+    });
+  }, [updateRenderedPageWindow]);
 
   useEffect(() => {
-    const pageCount = layout.pages.length;
+    const container = docRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(scheduleViewportUpdate);
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      if (viewportFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportFrameRef.current);
+        viewportFrameRef.current = null;
+      }
+    };
+  }, [scheduleViewportUpdate]);
+
+  const jumpToPage = useCallback((targetPageNum: number) => {
+    const currentLayout = layoutRef.current || layout;
+    const pageIndexTree = currentLayout.pageHeightIndex || layoutEngine.pageHeightIndex;
+    const pageIdx = Math.max(0, Math.min(pageIndexTree.getPageCount() - 1, targetPageNum - 1));
+    const scale = zoom / 100;
+    const scrollMetrics = pageIndexTree.getVirtualScrollMetrics(scale);
+    const virtualY = pageIndexTree.getPageOffset(pageIdx) * scale;
+    const physicalY = pageIndexTree.virtualToPhysicalScrollY(virtualY, scrollMetrics.scrollRatio);
+    if (docRef.current) {
+      docRef.current.scrollTop = physicalY;
+    }
+  }, [layout, zoom]);
+
+  useEffect(() => {
+    const currentLayout = layoutRef.current || layout;
+    const pageIndexTree = currentLayout.pageHeightIndex || layoutEngine.pageHeightIndex;
+    const pageCount = currentLayout.pageCount || pageIndexTree.getPageCount();
     setRenderedPageStart((previous) => Math.min(previous, Math.max(0, pageCount - 1)));
     setRenderedPageEnd((previous) => Math.max(1, Math.min(previous, pageCount)));
     renderedPageRangeRef.current = {
       start: Math.min(renderedPageRangeRef.current.start, Math.max(0, pageCount - 1)),
       end: Math.max(1, Math.min(renderedPageRangeRef.current.end, pageCount)),
     };
-    setCurrentPage((previous) => Math.max(1, Math.min(previous, Math.max(1, pageCount))));
+    setCurrentPage((previous) => {
+      const finalP = Math.max(1, Math.min(previous, Math.max(1, pageCount)));
+      currentPageRef.current = finalP;
+      return finalP;
+    });
     const frame = window.requestAnimationFrame(updateRenderedPageWindow);
     return () => window.cancelAnimationFrame(frame);
-  }, [layout.pages.length, updateRenderedPageWindow]);
+  }, [layout, updateRenderedPageWindow]);
 
   useEffect(() => {
     caretRef.current = caret;
@@ -1151,40 +1239,6 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   const localDraftTimerRef = useRef<number | null>(null);
   const lastToolbarSignatureRef = useRef("");
 
-  const clearOptimisticOverlay = useCallback(() => {
-    optimisticTextRef.current = "";
-    const overlay = optimisticOverlayRef.current;
-    if (!overlay) return;
-    overlay.textContent = "";
-    overlay.style.display = "none";
-  }, []);
-
-  const showOptimisticText = useCallback((text: string) => {
-    if (!text) {
-      clearOptimisticOverlay();
-      return;
-    }
-
-    const overlay = optimisticOverlayRef.current;
-    const currentCaret = caretRef.current;
-    const currentLayout = layoutRef.current;
-    const page = currentCaret ? currentLayout.pages[currentCaret.pageIndex] : null;
-    if (!overlay || !currentCaret || !page) return;
-    if (currentCaret.pageIndex < renderedPageRangeRef.current.start || currentCaret.pageIndex >= renderedPageRangeRef.current.end) return;
-
-    optimisticTextRef.current += text;
-    const pageStride = page.height + 24;
-    overlay.textContent = optimisticTextRef.current;
-    overlay.style.display = "block";
-    overlay.style.left = `${currentCaret.x}px`;
-    overlay.style.top = `${currentCaret.pageIndex * pageStride + currentCaret.y}px`;
-    overlay.style.height = `${currentCaret.height}px`;
-    overlay.style.lineHeight = `${currentCaret.height}px`;
-    overlay.style.fontFamily = fontName || "Times New Roman";
-    overlay.style.fontSize = `${fontSizeVal || 14}pt`;
-    overlay.style.color = textColor || "#000000";
-  }, [clearOptimisticOverlay, fontName, fontSizeVal, textColor]);
-
   const scheduleLocalDraftSave = useCallback(() => {
     if (!fileKey) return;
     if (localDraftTimerRef.current !== null) {
@@ -1193,21 +1247,36 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     localDraftTimerRef.current = window.setTimeout(() => {
       localDraftTimerRef.current = null;
       try {
-        localStorage.setItem(`doc_draft_${fileKey}`, JSON.stringify({
-          savedAt: new Date().toISOString(),
-          name: docName,
-          data: docModelRef.current.data,
-        }));
+        const blocksCount = docModelRef.current.blocks.length;
+        if (blocksCount > 500) {
+          const dirtyBlocks = Array.from(docModelRef.current.dirtyBlockIds)
+            .map(id => docModelRef.current.getBlockById(id))
+            .filter(Boolean);
+          localStorage.setItem(`doc_draft_${fileKey}`, JSON.stringify({
+            savedAt: new Date().toISOString(),
+            name: docName,
+            isIncremental: true,
+            totalBlocks: blocksCount,
+            dirtyBlocks,
+          }));
+          docModelRef.current.clearDirty();
+        } else {
+          localStorage.setItem(`doc_draft_${fileKey}`, JSON.stringify({
+            savedAt: new Date().toISOString(),
+            name: docName,
+            data: docModelRef.current.data,
+          }));
+        }
       } catch {
         // Draft autosave is best-effort only; editing must never block on it.
       }
-    }, 300);
+    }, 400);
   }, [docName, fileKey]);
 
   useEffect(() => {
-    textInputController.setOptimisticTextHandler(showOptimisticText);
+    textInputController.setOptimisticTextHandler(null);
     return () => textInputController.setOptimisticTextHandler(null);
-  }, [textInputController, showOptimisticText]);
+  }, [textInputController]);
 
   const activeTableInfo = useMemo(() => {
     const sel = selectionEngine.getSelection();
@@ -1221,43 +1290,133 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   }, [selectionEngine, selectionRects, caret]);
 
   const performRelayout = useCallback(() => {
-    clearOptimisticOverlay();
+    const startMs = performance.now();
+    performanceMonitor.recordInputStart();
     isRelayoutingRef.current = true;
     textInputController.setDocument(docModelRef.current);
     keyboardController.setDocument(docModelRef.current);
     pointerController.setDocument(docModelRef.current);
     clipboardService.setDocument(docModelRef.current);
 
+    // Scroll Anchoring: Capture current visible state before layout
+    const container = docRef.current;
+    let anchorVisiblePage = 0;
+    let anchorOffsetInPage = 0;
+    const oldIndex = layoutRef.current.pageHeightIndex || layoutEngine.pageHeightIndex;
+    const currentScale = zoom / 100;
+    if (container) {
+      const scrollMetrics = oldIndex.getVirtualScrollMetrics(currentScale);
+      const virtualScrollY = oldIndex.physicalToVirtualScrollY(container.scrollTop, scrollMetrics.scrollRatio);
+      anchorVisiblePage = oldIndex.getPageIndexAtOffset(virtualScrollY / currentScale);
+      anchorOffsetInPage = virtualScrollY - (oldIndex.getPageOffset(anchorVisiblePage) * currentScale);
+    }
+
     const newLayout = layoutEngine.layoutDocument(docModelRef.current);
     layoutRef.current = newLayout;
     setLayout(newLayout);
-    setTotalPages(newLayout.pages.length);
+    const selBeforeLog = selectionEngine.getSelection();
+    if (typeof window !== 'undefined' && (window as any).__debugEditorLogs) {
+      console.log(`[LAYOUT]\n  layoutVersion = ${newLayout.pages[0]?.version || 1}\n  dirtyBlocks = [${Array.from(docModelRef.current.dirtyBlockIds).join(', ')}]\n  caretOffset = ${selBeforeLog?.focus?.offset ?? 'N/A'}`);
+    }
+    const totalP = newLayout.pageCount || (newLayout.pageHeightIndex ? newLayout.pageHeightIndex.getPageCount() : newLayout.pages.length);
+    setTotalPages(totalP);
+
+    // Scroll Anchoring: Preserve reading position if page heights above changed
+    if (container && anchorVisiblePage > 0) {
+      const newIndex = newLayout.pageHeightIndex || layoutEngine.pageHeightIndex;
+      const newScrollMetrics = newIndex.getVirtualScrollMetrics(currentScale);
+      const newVirtualY = (newIndex.getPageOffset(anchorVisiblePage) * currentScale) + anchorOffsetInPage;
+      const targetPhysicalY = newIndex.virtualToPhysicalScrollY(newVirtualY, newScrollMetrics.scrollRatio);
+      if (Math.abs(container.scrollTop - targetPhysicalY) > 5) {
+        container.scrollTop = targetPhysicalY;
+      }
+    }
 
     const sel = selectionEngine.getSelection();
     if (sel) {
       const rects = HitTester.getSelectionRectangles(sel, newLayout, docModelRef.current, renderedPageRangeRef.current);
       setSelectionRects(rects);
-      const caretGeom = HitTester.getCaretGeometry(sel.focus, newLayout, docModelRef.current, renderedPageRangeRef.current);
-      setCaret(caretGeom);
+      const caretGeom = HitTester.getCaretGeometry(sel.focus, newLayout, docModelRef.current);
+      if (caretGeom) {
+        setCaret(caretGeom);
+      }
+
+      // Auto-scroll to keep caret comfortably in view with virtual coordinate scaling
+      if (caretGeom && container) {
+        const stack = editorRef.current;
+        const pageTree = newLayout.pageHeightIndex || layoutEngine.pageHeightIndex;
+        const scrollMetrics = pageTree.getVirtualScrollMetrics(currentScale);
+        const scrollRatio = scrollMetrics.scrollRatio;
+
+        const containerRect = container.getBoundingClientRect();
+        const stackRect = stack ? stack.getBoundingClientRect() : containerRect;
+        const stackRelativeTop = stackRect.top - containerRect.top + container.scrollTop;
+
+        const virtualCaretTop = (pageTree.getPageOffset(caretGeom.pageIndex) * currentScale) + (caretGeom.y * currentScale);
+        const physicalCaretTop = stackRelativeTop + (virtualCaretTop / scrollRatio);
+        const caretHeight = (caretGeom.height || 20) * currentScale;
+        const physicalCaretBottom = physicalCaretTop + caretHeight;
+
+        const viewTop = container.scrollTop;
+        const viewBottom = viewTop + container.clientHeight;
+        const margin = 40;
+        const scrollAhead = Math.max(80, caretHeight * 3);
+
+        if (physicalCaretBottom > viewBottom - margin) {
+          container.scrollTop = physicalCaretBottom - container.clientHeight + margin + scrollAhead;
+        } else if (physicalCaretTop < viewTop + margin) {
+          container.scrollTop = Math.max(0, physicalCaretTop - margin - scrollAhead);
+        }
+      }
     } else {
       setSelectionRects([]);
       setCaret(null);
     }
 
-    // Sync toolbar formatting state
+    if (typeof window !== 'undefined') {
+      (window as any).__editorDebug = {
+        layout: newLayout,
+        doc: docModelRef.current,
+        caret: sel ? HitTester.getCaretGeometry(sel.focus, newLayout, docModelRef.current) : null,
+        selectionEngine,
+        commandRegistry,
+        triggerRelayout,
+        performRelayout,
+        HitTester,
+      };
+    }
+
+    // Sync toolbar formatting state (guarded to avoid unneeded React component tree re-renders)
     const marks = selectionEngine.getActiveMarks(docModelRef.current);
-    setBold(Boolean(marks.bold));
-    setItal(Boolean(marks.italic));
-    setUline(Boolean(marks.underline));
-    setStrike(Boolean(marks.strike));
-    if (marks.fontFamily) setFontName(marks.fontFamily);
-    if (marks.fontSize) setFontSizeVal(marks.fontSize);
-    if (marks.foregroundColor) setTextColor(marks.foregroundColor);
-    if (marks.backgroundColor) setHighlightColor(marks.backgroundColor);
+    const newBold = Boolean(marks.bold);
+    setBold((prev) => (prev !== newBold ? newBold : prev));
+    const newItal = Boolean(marks.italic);
+    setItal((prev) => (prev !== newItal ? newItal : prev));
+    const newUline = Boolean(marks.underline);
+    setUline((prev) => (prev !== newUline ? newUline : prev));
+    const newStrike = Boolean(marks.strike);
+    setStrike((prev) => (prev !== newStrike ? newStrike : prev));
+    if (marks.fontFamily) {
+      const newFont = marks.fontFamily;
+      setFontName((prev) => (prev !== newFont ? newFont : prev));
+    }
+    if (marks.fontSize) {
+      const newSize = marks.fontSize;
+      setFontSizeVal((prev) => (prev !== newSize ? newSize : prev));
+    }
+    if (marks.foregroundColor) {
+      const newColor = marks.foregroundColor;
+      setTextColor((prev) => (prev !== newColor ? newColor : prev));
+    }
+    if (marks.backgroundColor) {
+      const newBg = marks.backgroundColor;
+      setHighlightColor((prev) => (prev !== newBg ? newBg : prev));
+    }
 
     const style = selectionEngine.getActiveParagraphStyle(docModelRef.current);
     if (style.alignment) {
-      setAlign(style.alignment);
+      const newAlign = style.alignment;
+      setAlign((prev) => (prev !== newAlign ? newAlign : prev));
       alignRef.current = style.alignment;
     }
 
@@ -1267,7 +1426,10 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
       let totalWords = 0;
       let totalChars = 0;
       let totalParas = 0;
-      for (const block of docModelRef.current.blocks) {
+      const blks = docModelRef.current.blocks;
+      const count = Math.min(blks.length, 1000); // Sample first 1000 blocks for speed on massive docs
+      for (let i = 0; i < count; i++) {
+        const block = blks[i];
         if ('runs' in block && Array.isArray(block.runs)) {
           totalParas++;
           const text = docModelRef.current.getBlockText(block);
@@ -1279,25 +1441,42 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
       setWords(totalWords);
       setChars(totalChars);
       setParas(totalParas);
-      setLines(newLayout.pages.reduce((acc, p) => acc + p.hitTestIndex.length, 0));
+      setLines(newLayout.pages.length * 30);
     }, 250);
 
-    window.requestAnimationFrame(() => {
-      isRelayoutingRef.current = false;
-    });
+    performanceMonitor.recordLayoutDuration(performance.now() - startMs);
+    performanceMonitor.recordInputEnd();
+    isRelayoutingRef.current = false;
     scheduleLocalDraftSave();
-  }, [selectionEngine, textInputController, keyboardController, pointerController, clipboardService, clearOptimisticOverlay, scheduleLocalDraftSave]);
+  }, [selectionEngine, textInputController, keyboardController, pointerController, clipboardService, scheduleLocalDraftSave, zoom]);
 
-  // Core triggerRelayout and status sync. It is intentionally frame-scheduled
-  // so typing, dragging selection, and toolbar actions do not block the input
-  // event by laying out a long document multiple times in the same frame.
+  const renderScheduler = useMemo(
+    () => new CentralRenderScheduler((pages, isCaretOnly) => {
+      if (isCaretOnly) {
+        const sel = selectionEngine.getSelection();
+        if (sel) {
+          const caretGeom = HitTester.getCaretGeometry(sel.focus, layoutRef.current, docModelRef.current);
+          setCaret(caretGeom);
+        }
+      } else {
+        performRelayout();
+      }
+    }),
+    [selectionEngine, performRelayout]
+  );
+
   const triggerRelayout = useCallback(() => {
-    if (relayoutFrameRef.current !== null) return;
-    relayoutFrameRef.current = window.setTimeout(() => {
-      relayoutFrameRef.current = null;
-      performRelayout();
-    }, 90);
-  }, [performRelayout]);
+    renderScheduler.schedulePage(0);
+  }, [renderScheduler]);
+
+  useEffect(() => () => renderScheduler.cancel(), [renderScheduler]);
+
+  // Re-layout and re-render automatically when document fonts finish loading
+  useEffect(() => {
+    return FontManager.getInstance().onFontChange(() => {
+      triggerRelayout();
+    });
+  }, [triggerRelayout]);
 
   // Register commands
   useEffect(() => {
@@ -1314,22 +1493,17 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   // Subscribe to selection change event
   useEffect(() => {
     return eventBus.on('selectionChanged', () => {
-      if (isRelayoutingRef.current) return;
-      if (selectionFrameRef.current !== null) {
-        window.cancelAnimationFrame(selectionFrameRef.current);
+      if (isRelayoutingRef.current || relayoutFrameRef.current !== null) return;
+      const selection = selectionEngine.getSelection();
+      if (selection) {
+        const rects = HitTester.getSelectionRectangles(selection, layoutRef.current, docModelRef.current, renderedPageRangeRef.current);
+        setSelectionRects(rects);
+        const caretGeom = HitTester.getCaretGeometry(selection.focus, layoutRef.current, docModelRef.current);
+        setCaret(caretGeom);
+      } else {
+        setSelectionRects([]);
+        setCaret(null);
       }
-      selectionFrameRef.current = window.requestAnimationFrame(() => {
-        selectionFrameRef.current = null;
-        const selection = selectionEngine.getSelection();
-        if (selection) {
-          const rects = HitTester.getSelectionRectangles(selection, layoutRef.current, docModelRef.current, renderedPageRangeRef.current);
-          setSelectionRects(rects);
-          const caretGeom = HitTester.getCaretGeometry(selection.focus, layoutRef.current, docModelRef.current, renderedPageRangeRef.current);
-          setCaret(caretGeom);
-        } else {
-          setSelectionRects([]);
-          setCaret(null);
-        }
 
         const marks = selectionEngine.getActiveMarks(docModelRef.current);
         const style = selectionEngine.getActiveParagraphStyle(docModelRef.current);
@@ -1361,26 +1535,48 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
           }
         }
       });
-    });
   }, [eventBus, selectionEngine]);
 
   useEffect(() => () => {
     if (selectionFrameRef.current !== null) {
       window.cancelAnimationFrame(selectionFrameRef.current);
+      selectionFrameRef.current = null;
     }
     if (relayoutFrameRef.current !== null) {
-      window.clearTimeout(relayoutFrameRef.current);
+      window.cancelAnimationFrame(relayoutFrameRef.current);
+      relayoutFrameRef.current = null;
     }
     if (localDraftTimerRef.current !== null) {
       window.clearTimeout(localDraftTimerRef.current);
+      localDraftTimerRef.current = null;
     }
   }, []);
 
   // Sync settings with document model
+  const lastSettingsRef = useRef({ pageSize: '', orientation: '', margins: -1, pageColor: '' });
   useEffect(() => {
+    const curSize = paperSize === 'A5' ? 'A5' : 'A4';
+    const curOrient = landscape ? 'landscape' : 'portrait';
+    const last = lastSettingsRef.current;
+    if (
+      last.pageSize === curSize &&
+      last.orientation === curOrient &&
+      last.margins === pagePadding &&
+      last.pageColor === pageBackground
+    ) {
+      return;
+    }
+    lastSettingsRef.current = {
+      pageSize: curSize,
+      orientation: curOrient,
+      margins: pagePadding,
+      pageColor: pageBackground,
+    };
+
     docModelRef.current.settings = {
-      pageSize: paperSize === 'A5' ? 'A5' : 'A4',
-      orientation: landscape ? 'landscape' : 'portrait',
+      ...docModelRef.current.settings,
+      pageSize: curSize,
+      orientation: curOrient,
       margins: {
         top: pagePadding,
         bottom: pagePadding,
@@ -1432,31 +1628,24 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     pointerController.setDocument(docModelRef.current);
     clipboardService.setDocument(docModelRef.current);
     historyManager.clear();
-    let firstBodyBlock: any = docModelRef.current.blocks.find(b => {
-      if (b.type === 'table') return false;
-      const text = docModelRef.current.getBlockText(b);
-      return !text.includes('CỘNG HÒA') && !text.includes('Độc lập');
-    }) || docModelRef.current.blocks.find(b => b.type !== 'table');
-
-    if (!firstBodyBlock && docModelRef.current.blocks.length > 0) {
-      const firstB = docModelRef.current.blocks[0];
-      if (firstB.type === 'table') {
-        firstBodyBlock = (firstB as TableBlock).rows?.[0]?.cells?.[0]?.blocks?.[0];
-      } else {
-        firstBodyBlock = firstB;
-      }
+    // Blur hidden input to prevent browser restoring focus on reload
+    if (hiddenInputRef.current) {
+      hiddenInputRef.current.blur();
     }
-
-    if (firstBodyBlock) {
-      selectionEngine.setSelection(
-        {
-          anchor: { blockId: firstBodyBlock.id, offset: 0 },
-          focus: { blockId: firstBodyBlock.id, offset: 0 },
-        }
-      );
+    if (typeof document !== 'undefined' && document.activeElement === hiddenInputRef.current) {
+      (document.activeElement as HTMLElement)?.blur();
     }
-    triggerRelayout();
-  }, [docName, textInputController, keyboardController, pointerController, clipboardService, historyManager, selectionEngine, triggerRelayout]);
+    fontMetrics.clearCache();
+    // On document load / reload, start in clean pristine state without forcing a caret at the top title
+    selectionEngine.setSelection(null);
+    setCaret(null);
+    setSelectionRects([]);
+    const freshLayout = layoutEngine.layoutDocument(docModelRef.current);
+    layoutRef.current = freshLayout;
+    setLayout(freshLayout);
+    const totalP = freshLayout.pageCount || (freshLayout.pageHeightIndex ? freshLayout.pageHeightIndex.getPageCount() : freshLayout.pages.length);
+    setTotalPages(totalP);
+  }, [docName, textInputController, keyboardController, pointerController, clipboardService, historyManager, selectionEngine]);
 
   const setDocumentHtml = setDocumentFromHtml;
 
@@ -1525,11 +1714,22 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     hasInitializedRef.current = true;
 
     const initDocContent = async () => {
+      if (hiddenInputRef.current) {
+        hiddenInputRef.current.blur();
+      }
+      if (typeof document !== 'undefined' && document.activeElement === hiddenInputRef.current) {
+        (document.activeElement as HTMLElement)?.blur();
+      }
+      fontMetrics.clearCache();
+      selectionEngine.setSelection(null);
+      setCaret(null);
+      setSelectionRects([]);
+
       if (initialContent) {
         setDocumentHtml(initialContent);
         window.requestAnimationFrame(() => {
           syncAll();
-          focusCurrentPage();
+          if (typeof window !== 'undefined') (window as any).__editorReady = true;
         });
         return;
       }
@@ -1552,6 +1752,15 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
         if (!blob && meta?.key) {
           blob = await getFileBlob(meta.key);
         }
+        if (!blob) {
+          try {
+            const res = await filesApi.download(fileKey);
+            if (res.data && res.data.size > 0) {
+              blob = res.data;
+              await saveFileBlob(fileKey, blob);
+            }
+          } catch (e) {}
+        }
       }
 
       if (blob) {
@@ -1562,7 +1771,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
             setDocumentHtml(parsedDocxHtml);
             window.requestAnimationFrame(() => {
               syncAll();
-              focusCurrentPage();
+              if (typeof window !== 'undefined') (window as any).__editorReady = true;
             });
             return;
           }
@@ -1579,7 +1788,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
               setDocumentHtml(bodyHtml);
               window.requestAnimationFrame(() => {
                 syncAll();
-                focusCurrentPage();
+                if (typeof window !== 'undefined') (window as any).__editorReady = true;
               });
               return;
             }
@@ -1619,7 +1828,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
           `);
           window.requestAnimationFrame(() => {
             syncAll();
-            focusCurrentPage();
+            if (typeof window !== 'undefined') (window as any).__editorReady = true;
           });
           return;
         }
@@ -1660,7 +1869,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
 
       window.requestAnimationFrame(() => {
         syncAll();
-        focusCurrentPage();
+        if (typeof window !== 'undefined') (window as any).__editorReady = true;
       });
     };
 
@@ -1819,14 +2028,16 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
   const growFont = useCallback(() => {
     commandRegistry.execute('growFont');
     setFontSizeVal(v => Math.min(72, v + 2));
+    textInputController.focus();
     triggerRelayout();
-  }, [commandRegistry, triggerRelayout]);
+  }, [commandRegistry, textInputController, triggerRelayout]);
 
   const shrinkFont = useCallback(() => {
     commandRegistry.execute('shrinkFont');
     setFontSizeVal(v => Math.max(8, v - 2));
+    textInputController.focus();
     triggerRelayout();
-  }, [commandRegistry, triggerRelayout]);
+  }, [commandRegistry, textInputController, triggerRelayout]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -2073,8 +2284,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
 
   const handlePaste = useCallback(async () => {
     await clipboardService.paste();
-    triggerRelayout();
-  }, [clipboardService, triggerRelayout]);
+  }, [clipboardService]);
 
   const handleCut = useCallback(async () => {
     await clipboardService.cut();
@@ -2090,7 +2300,8 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     saveInFlightRef.current = true;
     try {
     const html = getDocumentHtml();
-    const finalName = docName.trim().endsWith(".docx") ? docName.trim() : `${docName.trim()}.docx`;
+    const baseName = docName.trim().replace(/\.docx?$/i, '') || 'Van_ban_moi';
+    const finalName = `${baseName}.docx`;
     const docxBlob = generateValidDocxBlob(html, finalName);
 
     if (fileKey) {
@@ -2110,12 +2321,21 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     notify("Đã lưu tài liệu Word thành công!");
     } catch (error: any) {
       notify(error?.response?.data?.message || error?.message || 'Không thể lưu tài liệu. Vui lòng thử lại.');
-    } finally { saveInFlightRef.current = false; }
+    } finally {
+      saveInFlightRef.current = false;
+    }
   }, [docName, fileKey, getDocumentHtml, onSaveSuccess, notify]);
+
+  useEffect(() => {
+    return commandRegistry.register('save', () => {
+      void handleSave();
+    });
+  }, [commandRegistry, handleSave]);
 
   const handleDownloadDocx = useCallback(() => {
     const html = getDocumentHtml();
-    const finalName = docName.trim().endsWith(".docx") ? docName.trim() : `${docName.trim()}.docx`;
+    const baseName = docName.trim().replace(/\.docx?$/i, '') || 'Van_ban_moi';
+    const finalName = `${baseName}.docx`;
     const docxBlob = generateValidDocxBlob(html, finalName);
 
     const url = URL.createObjectURL(docxBlob);
@@ -2124,7 +2344,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     a.download = finalName;
     a.click();
     URL.revokeObjectURL(url);
-    notify("Đã tải tệp Word chuẩn về máy!");
+    notify("Đã tải tệp Nôm chuẩn về máy!");
   }, [docName, getDocumentHtml, notify]);
 
   const handleOpen = useCallback(() => {
@@ -2170,16 +2390,18 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
     const val = e.target.value;
     setFontName(val);
     commandRegistry.execute('setFontFamily', val);
+    textInputController.focus();
     triggerRelayout();
-  }, [commandRegistry, triggerRelayout]);
+  }, [commandRegistry, textInputController, triggerRelayout]);
 
   const handleSizeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = Number(e.target.value);
     setFontSize(val);
     setFontSizeVal(val);
     commandRegistry.execute('setFontSize', val);
+    textInputController.focus();
     triggerRelayout();
-  }, [commandRegistry, triggerRelayout]);
+  }, [commandRegistry, textInputController, triggerRelayout]);
 
   const handleTextColor = useCallback(() => {
     const input = document.createElement("input");
@@ -2263,6 +2485,15 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
           return;
         }
 
+        // Ctrl + Alt + P -> Toggle Engine Diagnostics Performance HUD
+        if (key === "p" && e.altKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowPerfHud(prev => !prev);
+          notify("Đã bật/tắt HUD giám sát hiệu năng engine.");
+          return;
+        }
+
         // 4. Ctrl + P -> In tài liệu
         if (key === "p") {
           e.preventDefault();
@@ -2340,9 +2571,9 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
 
         // 13. Ctrl + V -> Dán
         if (key === "v" && !isSearchInput) {
-          e.preventDefault();
-          e.stopPropagation();
-          clipboardService.paste();
+          // Keep the browser's single native paste event (including HTML).
+          // Focus the editor when paste was invoked with a ribbon button focused.
+          textInputController.focus();
           return;
         }
 
@@ -2389,7 +2620,25 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
 
     window.addEventListener("keydown", handleGlobalKeyDown, true);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown, true);
-  }, [open, handleSave, exec, clipboardService, keyboardController, commandRegistry, triggerRelayout, notify]);
+  }, [open, handleSave, exec, clipboardService, keyboardController, textInputController, commandRegistry, triggerRelayout, notify]);
+
+  // Zoom on Ctrl + Wheel / Cmd + Wheel (up to 500%)
+  useEffect(() => {
+    if (!open) return;
+    const container = docRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const step = e.deltaY < 0 ? 10 : -10;
+        setZoom((prev) => Math.max(10, Math.min(500, prev + step)));
+      }
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [open]);
 
   const handleRibbonAction = useCallback((action: string) => {
     const selectedText = window.getSelection()?.toString().trim() || "";
@@ -2403,11 +2652,6 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
         notify("Đã thêm trang mới.");
         return;
       }
-      case "insert-page":
-        commandRegistry.execute('insertPageBreak');
-        triggerRelayout();
-        notify("Đã thêm trang mới.");
-        return;
       case "insert-hr":
         commandRegistry.execute('insertHorizontalRule');
         triggerRelayout();
@@ -2743,7 +2987,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
       const rect = slider.getBoundingClientRect();
       if (rect.width <= 0) return;
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      const newZoom = Math.round(ratio * 190 + 10);
+      const newZoom = Math.round(ratio * 490 + 10);
       setZoom(newZoom);
     };
 
@@ -2774,7 +3018,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
       style={{ fontFamily: '"Segoe UI", system-ui, sans-serif', isolation: 'isolate' }}>
 
       {/* TITLE BAR */}
-      <div className="docx-title-bar h-[42px] flex items-center justify-between px-3 shrink-0 relative z-50 bg-white border-b border-[#E2E8F0]">
+      <div className="docx-title-bar h-[42px] flex items-center justify-between px-3 shrink-0 relative z-50 bg-white">
         <div className="docx-title-start flex items-center gap-2 shrink-0">
           <div className="docx-title-brand w-[48px] h-[22px] bg-[#c94f2a] rounded-[3px] flex items-center justify-center font-bold text-white text-[12px] tracking-[0.5px] shadow shrink-0">Nôm</div>
           <div className="docx-title-history flex items-center">
@@ -2858,7 +3102,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
               ref={(el) => { tabButtonRefs.current[t.id] = el; }}
               type="button"
               onClick={() => setActiveTab(t.id)}
-              className={`px-3 h-full text-[13px] relative flex items-center whitespace-nowrap transition-colors duration-150 ${activeTab === t.id ? "text-[#0F6CBD] font-semibold" : "text-[#555] hover:text-[#1f1f1f] hover:bg-[#F1F5F9] rounded-t"}`}
+              className={`px-3 h-full text-[13px] relative flex items-center whitespace-nowrap transition-colors duration-150 font-normal rounded-t-[4px] outline-none ${activeTab === t.id ? "text-[#0F6CBD]" : "text-[#555] hover:text-[#1f1f1f]"}`}
             >
               {t.label}
             </button>
@@ -3146,7 +3390,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
         </div>
 
         {/* DOCUMENT CANVAS */}
-        <div ref={docRef} className="flex-1 relative overflow-y-auto overflow-x-auto flex flex-col items-center pb-8"
+        <div ref={docRef} className="docx-document-container flex-1 relative overflow-y-auto overflow-x-auto flex flex-col items-center pb-8"
           style={{
             paddingTop: "98px",
             scrollbarWidth: "thin",
@@ -3158,7 +3402,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
           onContextMenu={handleContextMenu}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
-          onScroll={updateRenderedPageWindow}>
+          onScroll={scheduleViewportUpdate}>
 
           {showRuler && (
             <div className="docx-ruler h-6 mb-2 bg-white border border-[#CBD5E1] text-[9px] text-[#64748B] flex items-center justify-between px-5 shadow-sm" style={{ width: pageWidth * (zoom / 100) }}>
@@ -3169,14 +3413,23 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
           {/* DYNAMIC SCALED WRAPPER FOR 100% PERFECT SCROLLING AT ANY ZOOM LEVEL */}
           {(() => {
             const scale = zoom / 100;
+            const pageIndexTree = layout.pageHeightIndex || layoutEngine.pageHeightIndex;
             const pageW = layout.pages[0]?.width || pageWidth;
             const pageH = layout.pages[0]?.height || pageHeight;
-            const unscaledHeight = layout.pages.length * pageH + Math.max(0, layout.pages.length - 1) * 24;
-            const marginBottomCompensation = -(unscaledHeight * (1 - scale));
-            const scaledWrapperWidth = Math.max(pageW * scale + 48, pageW + 48);
+            const scaledPageW = Math.round(pageW * scale);
+            const scaledPageH = Math.round(pageH * scale);
+            const scaledWrapperWidth = Math.max(scaledPageW + 48, pageW + 48);
+
+            const scrollMetrics = pageIndexTree.getVirtualScrollMetrics(scale);
+            const scrollRatio = scrollMetrics.scrollRatio;
+
             const visiblePages = layout.pages.slice(renderedPageStart, renderedPageEnd);
-            const topSpacerHeight = renderedPageStart * (pageH + 24);
-            const bottomSpacerHeight = Math.max(0, layout.pages.length - renderedPageEnd) * (pageH + 24);
+            const virtualTopOffset = pageIndexTree.getPageOffset(renderedPageStart) * scale;
+            const topSpacerHeight = Math.round(virtualTopOffset / scrollRatio);
+
+            const totalVirtualHeight = pageIndexTree.getTotalHeight() * scale;
+            const virtualEndOffset = pageIndexTree.getPageOffset(renderedPageEnd) * scale;
+            const bottomSpacerHeight = Math.max(0, Math.round((totalVirtualHeight - virtualEndOffset) / scrollRatio));
 
             return (
               <div
@@ -3190,32 +3443,18 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                   ref={editorRef}
                   className="docx-page-stack flex flex-col items-center cursor-text"
                   style={{
-                    width: pageW,
-                    minWidth: pageW,
-                    maxWidth: pageW,
+                    width: scaledPageW,
+                    minWidth: scaledPageW,
+                    maxWidth: scaledPageW,
                     margin: "0 auto",
-                    transform: `scale(${scale})`,
-                    transformOrigin: "top center",
-                    marginBottom: `${marginBottomCompensation}px`,
                     position: "relative",
                   }}
                 >
-                  <div
-                    ref={optimisticOverlayRef}
-                    aria-hidden="true"
-                    style={{
-                      position: "absolute",
-                      display: "none",
-                      whiteSpace: "pre",
-                      pointerEvents: "none",
-                      zIndex: 5,
-                    }}
-                  />
                   {topSpacerHeight > 0 && (
                     <div
                       aria-hidden="true"
                       style={{
-                        width: pageW,
+                        width: scaledPageW,
                         height: topSpacerHeight,
                         flexShrink: 0,
                       }}
@@ -3225,6 +3464,8 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                     const pageIndex = pageLayout.pageIndex;
                     const pageSelRects = selectionRectsByPage.get(pageIndex) || [];
                     const pageCaret = caret && caret.pageIndex === pageIndex ? caret : null;
+                    const currentScaledW = Math.round(pageLayout.width * scale);
+                    const currentScaledH = Math.round(pageLayout.height * scale);
 
                     return (
                       <div
@@ -3234,28 +3475,32 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                         onPointerDown={(e) => {
                           textInputController.focus();
                           if (e.target === e.currentTarget) {
-                            pointerController.handlePointerDown(e as any, pageIndex, zoom / 100);
+                            pointerController.handlePointerDown(e as any, pageIndex, scale);
                           }
                         }}
                         style={{
-                          width: pageLayout.width,
-                          minWidth: pageLayout.width,
-                          maxWidth: pageLayout.width,
-                          height: pageLayout.height,
-                          minHeight: pageLayout.height,
-                          maxHeight: pageLayout.height,
+                          width: currentScaledW,
+                          minWidth: currentScaledW,
+                          maxWidth: currentScaledW,
+                          height: currentScaledH,
+                          minHeight: currentScaledH,
+                          maxHeight: currentScaledH,
                           backgroundColor: pageBackground,
                           border: pageBorder ? "1px solid #64748B" : undefined,
                           position: "relative",
                           boxSizing: "border-box",
                           overflow: "hidden",
                           flexShrink: 0,
-                          margin: "0 auto 24px",
+                          margin: `0 auto ${pageIndexTree.getPageGap() * scale}px`,
+                          imageRendering: "-webkit-optimize-contrast",
+                          transform: "translateZ(0)",
                         }}
                       >
                         <CanvasPage
                           page={pageLayout}
-                          zoom={1}
+                          pageVersion={pageLayout.version}
+                          zoom={scale}
+                          dpr={dpr}
                           selectionRects={pageSelRects}
                           caret={pageCaret}
                           isCaretVisible={isCaretBlinkingVisible}
@@ -3263,10 +3508,10 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                           findHighlights={EMPTY_FIND_HIGHLIGHTS}
                           onPointerDown={(e) => {
                             textInputController.focus();
-                            pointerController.handlePointerDown(e, pageIndex, zoom / 100);
+                            pointerController.handlePointerDown(e, pageIndex, scale);
                           }}
                           onPointerMove={(e) => {
-                            pointerController.handlePointerMove(e, pageIndex, zoom / 100);
+                            pointerController.handlePointerMove(e, pageIndex, scale);
                           }}
                           onPointerUp={(e) => {
                             pointerController.handlePointerUp(e);
@@ -3280,7 +3525,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                     <div
                       aria-hidden="true"
                       style={{
-                        width: pageW,
+                        width: scaledPageW,
                         height: bottomSpacerHeight,
                         flexShrink: 0,
                       }}
@@ -3295,6 +3540,11 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                     spellCheck="false"
                     aria-hidden="true"
                     onKeyDown={(e) => keyboardController.handleKeyDown(e.nativeEvent)}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void clipboardService.paste(e.nativeEvent);
+                    }}
                     style={{
                       position: 'fixed',
                       top: '-10000px',
@@ -3452,7 +3702,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                   type="button"
                   className="px-2 py-1 hover:bg-[#EEF4FB] hover:text-[#0F6CBD] rounded text-[#334155] transition-colors flex items-center gap-1"
                   onClick={moveImageUp}
-                  title="Di chuyển ảnh lên trên (Alt + Mũi tên Lên)"
+                  title="Di chuyển ảnh lên trên"
                 >
                   <ArrowUp className="w-3.5 h-3.5" />
                   <span>Lên</span>
@@ -3461,7 +3711,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                   type="button"
                   className="px-2 py-1 hover:bg-[#EEF4FB] hover:text-[#0F6CBD] rounded text-[#334155] transition-colors flex items-center gap-1"
                   onClick={moveImageDown}
-                  title="Di chuyển ảnh xuống dưới (Alt + Mũi tên Xuống)"
+                  title="Di chuyển ảnh xuống dưới"
                 >
                   <ArrowDown className="w-3.5 h-3.5" />
                   <span>Xuống</span>
@@ -3534,7 +3784,7 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
                       syncAll();
                     }
                   }}
-                  title="Xóa ảnh (Delete / Backspace)"
+                  title="Xóa ảnh"
                 >
                   <Trash2 className="w-4 h-4" strokeWidth={1.8} />
                 </button>
@@ -3650,7 +3900,28 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
             <span className="text-[#bbb]">|</span>
             <span>{paras} đoạn</span>
             <span className="text-[#bbb]">|</span>
-            <span>Trang {currentPage} / {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => {
+                const target = window.prompt(`Nhập số trang muốn chuyển tới (1 - ${totalPages.toLocaleString()}):`, String(currentPage));
+                if (target) {
+                  const pNum = parseInt(target, 10);
+                  if (!isNaN(pNum)) jumpToPage(pNum);
+                }
+              }}
+              className="hover:bg-[#e0e7ff] text-[#0F6CBD] font-medium px-1.5 py-0.5 rounded transition-colors"
+              title="Nhấp để chuyển nhanh tới trang bất kỳ"
+            >
+              Trang {currentPage} / {totalPages.toLocaleString()}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPerfHud(v => !v)}
+              className={`hover:bg-[#e2e8f0] px-1.5 py-0.5 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-colors ${showPerfHud ? 'bg-[#38BDF8]/20 text-[#0284C7]' : 'text-[#64748B]'}`}
+              title="Bật/Tắt HUD Giám sát Hiệu năng"
+            >
+              ⚡ {perfStats?.fps ? `${perfStats.fps} FPS` : 'FPS'}
+            </button>
             {selInfo && (
               <><span className="text-[#bbb]">|</span><span className="text-[#0F6CBD]">{selInfo}</span></>
             )}
@@ -3666,22 +3937,22 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
               <SmilePlus className="w-3 h-3 text-[#555]" strokeWidth={1.5} />
             </button>
             <div className="flex items-center gap-1.5 select-none">
-              <button type="button" className="hover:bg-[#e5e5e5] p-0.5 rounded text-[#555]" onClick={() => setZoom(v => Math.max(10, v - 10))} title="Thu nhỏ (-10%)"><ZoomOut className="w-3.5 h-3.5" strokeWidth={1.6} /></button>
+              <button type="button" className="hover:bg-[#e5e5e5] p-0.5 rounded text-[#555]" onClick={() => setZoom(v => Math.max(10, v - 10))} title="Thu nhỏ"><ZoomOut className="w-3.5 h-3.5" strokeWidth={1.6} /></button>
               <div
                 className="w-[90px] h-[18px] flex items-center cursor-pointer select-none touch-none px-1"
                 onPointerDown={handleZoomSliderPointerDown}
                 title={`Thu phóng: ${zoom}%`}
               >
                 <div className="w-full h-[4px] bg-[#CBD5E1] rounded-full relative">
-                  <div className="h-full bg-[#0F6CBD] rounded-full" style={{ width: `${Math.max(0, Math.min(100, (zoom - 10) / 190 * 100))}%` }} />
+                  <div className="h-full bg-[#0F6CBD] rounded-full" style={{ width: `${Math.max(0, Math.min(100, (zoom - 10) / 490 * 100))}%` }} />
                   <div
                     className="w-[12px] h-[12px] bg-white border-2 border-[#0F6CBD] rounded-full absolute top-1/2 -translate-y-1/2 shadow-sm transition-transform active:scale-125"
-                    style={{ left: `calc(${Math.max(0, Math.min(100, (zoom - 10) / 190 * 100))}% - 6px)` }}
+                    style={{ left: `calc(${Math.max(0, Math.min(100, (zoom - 10) / 490 * 100))}% - 6px)` }}
                   />
                 </div>
               </div>
-              <button type="button" className="hover:bg-[#e5e5e5] p-0.5 rounded text-[#555]" onClick={() => setZoom(v => Math.min(200, v + 10))} title="Phóng to (+10%)"><ZoomIn className="w-3.5 h-3.5" strokeWidth={1.6} /></button>
-              <span className="w-[40px] text-right font-semibold text-[11px] text-[#334155] cursor-pointer hover:text-[#0F6CBD]" onClick={() => setZoom(100)} title="Nhấp để về 100%">{zoom}%</span>
+              <button type="button" className="hover:bg-[#e5e5e5] p-0.5 rounded text-[#555]" onClick={() => setZoom(v => Math.min(500, v + 10))} title="Phóng to"><ZoomIn className="w-3.5 h-3.5" strokeWidth={1.6} /></button>
+              <span className="w-[46px] text-right font-semibold text-[11px] text-[#334155] cursor-pointer hover:text-[#0F6CBD]" onClick={() => setZoom(100)} title="Nhấp để về 100%">{zoom}%</span>
             </div>
           </div>
         </div>
@@ -3938,12 +4209,39 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
           background: #E81123 !important;
           color: #FFFFFF !important;
         }
+        .editor-wrap .docx-tab-bar,
+        .editor-wrap .docx-ribbon,
+        .editor-wrap .docx-ribbon *,
+        .editor-wrap .docx-tab-bar * {
+          scrollbar-width: none !important;
+          -ms-overflow-style: none !important;
+        }
+        .editor-wrap .docx-tab-bar::-webkit-scrollbar,
+        .editor-wrap .docx-ribbon::-webkit-scrollbar,
+        .editor-wrap .docx-ribbon *::-webkit-scrollbar,
+        .editor-wrap .docx-tab-bar *::-webkit-scrollbar {
+          display: none !important;
+          width: 0 !important;
+          height: 0 !important;
+        }
         .editor-wrap .docx-tab-bar > div:first-child button {
-          transition: none !important;
+          border-top-left-radius: 4px !important;
+          border-top-right-radius: 4px !important;
+          border-bottom-left-radius: 0 !important;
+          border-bottom-right-radius: 0 !important;
+          transition: background-color 0.15s ease, color 0.15s ease !important;
           transform: none !important;
+          outline: none !important;
         }
         .editor-wrap .docx-tab-bar > div:first-child button:hover {
           background: #F3F6F9 !important;
+          border-top-left-radius: 4px !important;
+          border-top-right-radius: 4px !important;
+        }
+        .editor-wrap .docx-tab-bar > div:first-child button:active {
+          background: #EBF1F8 !important;
+          border-top-left-radius: 4px !important;
+          border-top-right-radius: 4px !important;
         }
         .editor-wrap .docx-action-btn:hover {
           background: #F3F4F6 !important;
@@ -4173,6 +4471,33 @@ export const DocxEditorModal: React.FC<DocxEditorModalProps> = ({
         [contenteditable] ul, [contenteditable] ol { padding-left: 30px; margin: 6px 0; }
         [contenteditable] hr { margin: 12px 0; border: none; border-top: 1px solid #ccc; }
       `}</style>
+
+      {/* PERFORMANCE DIAGNOSTICS HUD */}
+      {showPerfHud && perfStats && (
+        <div
+          className="fixed bottom-10 right-6 z-50 bg-[#0F172A]/90 text-white rounded-lg p-3 text-[11px] font-mono shadow-2xl backdrop-blur border border-slate-700 pointer-events-none select-none"
+          style={{ minWidth: 230 }}
+        >
+          <div className="flex items-center justify-between font-bold border-b border-slate-700 pb-1 mb-2 text-[#38BDF8]">
+            <span>⚡ NOM ENGINE HUD</span>
+            <span className={perfStats.fps >= 50 ? "text-emerald-400" : "text-amber-400"}>{perfStats.fps} FPS</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-slate-400">Input Latency:</span>
+            <span className="text-right text-emerald-300 font-semibold">{perfStats.inputLatencyMs} ms</span>
+            <span className="text-slate-400">Layout Time:</span>
+            <span className="text-right text-emerald-300 font-semibold">{perfStats.layoutTimeMs} ms</span>
+            <span className="text-slate-400">Mounted Pages:</span>
+            <span className="text-right text-sky-300 font-semibold">{perfStats.mountedPages} / {perfStats.totalPages.toLocaleString()}</span>
+            <span className="text-slate-400">Layout Cache:</span>
+            <span className="text-right text-indigo-300 font-semibold">{perfStats.cacheSize} pgs</span>
+            <span className="text-slate-400">Memory (Est):</span>
+            <span className="text-right text-violet-300 font-semibold">{perfStats.memoryEstimateMB} MB</span>
+            <span className="text-slate-400">Dropped Frames:</span>
+            <span className="text-right text-slate-400 font-semibold">{perfStats.droppedFrames}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

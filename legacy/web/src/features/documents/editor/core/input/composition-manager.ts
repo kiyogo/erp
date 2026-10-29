@@ -14,6 +14,7 @@ export class CompositionManager {
     compositionLength: 0,
     text: '',
   };
+  private lastCompositionEndTime: number = 0;
 
   public isComposing(): boolean {
     return this.state.isComposing;
@@ -71,6 +72,7 @@ export class CompositionManager {
       text: '',
     };
 
+    this.lastCompositionEndTime = Date.now();
     return result;
   }
 
@@ -82,5 +84,10 @@ export class CompositionManager {
       compositionLength: 0,
       text: '',
     };
+    this.lastCompositionEndTime = Date.now();
+  }
+
+  public isRecentComposition(thresholdMs = 150): boolean {
+    return this.state.isComposing || (Date.now() - this.lastCompositionEndTime < thresholdMs);
   }
 }

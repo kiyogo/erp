@@ -122,7 +122,7 @@ export const RevisionHistoryDialog: React.FC<RevisionHistoryDialogProps> = ({
                       <Clock size={16} style={{ color: isSelected ? '#1A73E8' : '#757575' }} />
                       <div>
                         <div style={{ fontSize: 13.5, fontWeight: 600, color: '#202124' }}>
-                          Phiên bản #{h.revision} {i === 0 && ''}
+                          Phiên bản #{h.revision} {i === 0 && '(Hiện tại)'}
                         </div>
                         <div style={{ fontSize: 11.5, color: '#5F6368' }}>{dateStr}</div>
                       </div>

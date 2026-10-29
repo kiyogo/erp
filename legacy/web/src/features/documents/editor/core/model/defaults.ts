@@ -13,8 +13,8 @@ import {
 import { generateBlockId, generateRunId } from '../utils/id-generator';
 import { PAPER_SIZES } from '../utils/units';
 
-export const DEFAULT_FONT_FAMILY = 'Arial';
-export const DEFAULT_FONT_SIZE = 11; // 11pt
+export const DEFAULT_FONT_FAMILY = 'Times New Roman';
+export const DEFAULT_FONT_SIZE = 14; // 14pt (standard Vietnamese document size)
 export const DEFAULT_FOREGROUND_COLOR = '#202124';
 export const DEFAULT_LINE_HEIGHT = 1.25;
 
@@ -57,7 +57,7 @@ export const PARAGRAPH_PRESETS: Record<
 > = {
   normal: {
     name: 'Văn bản thường',
-    marks: { fontSize: 11, bold: false, foregroundColor: '#202124' },
+    marks: { fontSize: 14, bold: false, foregroundColor: '#202124' },
     style: { alignment: 'left', lineHeight: 1.25, spaceBefore: 0, spaceAfter: 6 },
   },
   title: {

@@ -21,7 +21,7 @@ import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Radio } from '../../custom-ui';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { saveFileBlob } from '../../utils/fileStorage';
-import { DocxEditorModal } from '../../components/editor/DocxEditorModal';
+const DocxEditorModal = React.lazy(() => import('../../components/editor/DocxEditorModal').then((module) => ({ default: module.DocxEditorModal })));
 
 export interface EnterpriseDocItem {
   key: string;
@@ -722,24 +722,26 @@ export const DocumentsModule: React.FC = () => {
 
       {/* Docx Rich Text Editor Modal */}
       {docxEditorOpen && editorDocItem && (
-        <DocxEditorModal
-          open={docxEditorOpen}
-          fileName={`${editorDocItem.docCode}.docx`}
-          fileKey={editorDocItem.key}
-          initialContent={buildDocxInitialContent(editorDocItem)}
-          onClose={() => setDocxEditorOpen(false)}
-          onSaveSuccess={async (updatedName, blob) => {
-            if (!blob) throw new Error('Chưa tạo được nội dung Word.');
-            const file = await upload(blob, updatedName);
-            try {
-              const saved = await persist({ ...editorDocItem, wordFileNodeId: file.id });
-              setEditorDocItem(saved);
-            } catch (error) {
-              await filesApi.remove(file.id).catch(() => {});
-              throw error;
-            }
-          }}
-        />
+        <React.Suspense fallback={<div className="p-4 text-center text-sm text-slate-600">Đang tải trình soạn thảo...</div>}>
+          <DocxEditorModal
+            open={docxEditorOpen}
+            fileName={`${editorDocItem.docCode}.docx`}
+            fileKey={editorDocItem.key}
+            initialContent={buildDocxInitialContent(editorDocItem)}
+            onClose={() => setDocxEditorOpen(false)}
+            onSaveSuccess={async (updatedName, blob) => {
+              if (!blob) throw new Error('Chưa tạo được nội dung Word.');
+              const file = await upload(blob, updatedName);
+              try {
+                const saved = await persist({ ...editorDocItem, wordFileNodeId: file.id });
+                setEditorDocItem(saved);
+              } catch (error) {
+                await filesApi.remove(file.id).catch(() => {});
+                throw error;
+              }
+            }}
+          />
+        </React.Suspense>
       )}
     </div>
   );

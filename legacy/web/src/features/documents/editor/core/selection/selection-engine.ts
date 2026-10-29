@@ -26,7 +26,7 @@ export class SelectionEngine {
 
   public setSelection(
     sel: EditorSelection | null,
-    options: { resetPendingMarks?: boolean; resetPreferredX?: boolean } = {}
+    options: { resetPendingMarks?: boolean; resetPreferredX?: boolean; silent?: boolean } = {}
   ): void {
     const prev = this.selection;
     if (
@@ -53,15 +53,22 @@ export class SelectionEngine {
       this.preferredCaretX = null;
     }
 
-    this.eventBus.emit('selectionChanged', {
-      hasSelection: Boolean(sel),
-      isCollapsed: isSelectionCollapsed(sel),
-    });
+    if (!options.silent) {
+      this.eventBus.emit('selectionChanged', {
+        hasSelection: Boolean(sel),
+        isCollapsed: isSelectionCollapsed(sel),
+      });
+    }
   }
 
-  public setCursor(blockId: string, offset: number): void {
-    const pos: DocPosition = { blockId, offset };
-    this.setSelection({ anchor: pos, focus: pos });
+  public setCursor(
+    blockId: string,
+    offset: number,
+    affinity?: 'forward' | 'backward',
+    options?: { resetPendingMarks?: boolean; resetPreferredX?: boolean; silent?: boolean }
+  ): void {
+    const pos: DocPosition = { blockId, offset, affinity };
+    this.setSelection({ anchor: pos, focus: pos }, options);
   }
 
   public setPreferredCaretX(x: number | null): void {

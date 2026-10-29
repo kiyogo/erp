@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   FileText,
-  CloudCheck,
+  Check,
   CloudUpload,
   CloudOff,
   History,
@@ -73,7 +73,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
       return (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#D93025', fontSize: 12 }}>
           <CloudOff size={14} />
-          <span>Ngoại tuyến</span>
+          <span>Ngoại tuyến (Đã lưu cục bộ)</span>
         </span>
       );
     }
@@ -86,8 +86,8 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
       );
     }
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#5F6368', fontSize: 12 }} title="Tất cả thay đổi đã được lưu vào đám mây">
-        <CloudCheck size={14} style={{ color: '#188038' }} />
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#5F6368', fontSize: 12 }} title="Tất cả thay đổi đã được lưu vào bộ nhớ">
+        <Check size={14} style={{ color: '#188038' }} />
         <span>Đã lưu vào bộ nhớ</span>
       </span>
     );

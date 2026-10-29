@@ -23,7 +23,12 @@ interface IntermediateWord {
   startOffsetInBlock: number;
 }
 
-export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLayout[]; totalHeight: number } {
+export interface ParagraphLayoutResult {
+  lines: TextLineLayout[];
+  totalHeight: number;
+}
+
+export function layoutParagraphLines(input: BreakLineInput): ParagraphLayoutResult {
   const { blockId, runs, style, contentWidth, startX, startY } = input;
   const alignment = style.alignment || 'left';
   const lineHeightMultiplier = style.lineHeight || 1.25;
@@ -33,7 +38,7 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
   const firstLineIndent = style.firstLineIndent || 0;
 
   // Handle completely empty paragraph
-  if (runs.length === 0 || (runs.length === 1 && runs[0].text.length === 0)) {
+  if (runs.length === 0 || (runs.length === 1 && (runs[0].text.length === 0 || runs[0].text === '\n'))) {
     const marks = runs[0]?.marks || {};
     const metrics = fontMetrics.measureRun(' ', marks, lineHeightMultiplier);
     const availableWidth = Math.max(50, contentWidth - leftIndent - rightIndent - firstLineIndent);
@@ -44,8 +49,10 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
       alignOffsetX = availableWidth;
     }
     const lineX = startX + leftIndent + firstLineIndent + alignOffsetX;
-    const lineHeight = metrics.lineHeightPx;
-    const baseline = startY + metrics.ascent;
+    const fontHeight = metrics.ascent + metrics.descent;
+    const lineHeight = Math.max(fontHeight, metrics.lineHeightPx);
+    const halfLeading = Math.max(0, (lineHeight - fontHeight) / 2);
+    const baseline = startY + halfLeading + metrics.ascent;
 
     const emptyLine: TextLineLayout = {
       lineIndex: 0,
@@ -64,7 +71,7 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
           text: '',
           marks: { ...marks },
           x: lineX,
-          y: startY,
+          y: startY + halfLeading,
           width: 0,
           height: lineHeight,
           baseline,
@@ -121,74 +128,85 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
   let currentGroupWidth = 0;
   let lineIdx = 0;
 
+  const getAvailableWidthForLine = (lIdx: number) => {
+    const currentFirstLine = lIdx === 0 ? firstLineIndent : 0;
+    return Math.max(50, contentWidth - leftIndent - rightIndent - currentFirstLine);
+  };
+
   for (let wIdx = 0; wIdx < words.length; wIdx++) {
     const w = words[wIdx];
-    const currentFirstLine = lineIdx === 0 ? firstLineIndent : 0;
-    const availableWidth = Math.max(50, contentWidth - leftIndent - rightIndent - currentFirstLine);
+    const avail = getAvailableWidthForLine(lineIdx);
 
-    // If word itself is wider than available width, split by grapheme clusters
-    if (w.width > availableWidth) {
-      if (currentGroup.length > 0) {
+    if (w.isSpace) {
+      // Trailing spaces hang on the current line (Word / Google Docs / CSS behavior)
+      if (currentGroupWidth + w.width <= avail + 120) {
+        currentGroup.push(w);
+        currentGroupWidth += w.width;
+      } else {
         lineWordGroups.push(currentGroup);
-        currentGroup = [];
-        currentGroupWidth = 0;
         lineIdx += 1;
+        currentGroup = [w];
+        currentGroupWidth = w.width;
       }
+    } else if (/^[.,;:!?)}\]]+$/.test(w.text) && currentGroup.length > 0) {
+      // Punctuation marks must never wrap to start a new line on their own!
+      // They cling to the preceding word on the current line.
+      currentGroup.push(w);
+      currentGroupWidth += w.width;
+    } else if (currentGroupWidth + w.width <= avail) {
+      // Fits on the current line
+      currentGroup.push(w);
+      currentGroupWidth += w.width;
+    } else {
+      // Fill the remaining line before moving overflowing graphemes. Moving
+      // the whole token after a space made already typed text jump to the next
+      // line as the token grew. Graphemes keep Vietnamese accents/emoji intact.
+      {
+        const clusters = getGraphemeClusters(w.text);
+        let partialWord = '';
+        let partialWidth = 0;
+        let clusterOffset = w.startOffsetInBlock;
 
-      const clusters = getGraphemeClusters(w.text);
-      let partialWord = '';
-      let partialWidth = 0;
-      let clusterOffset = w.startOffsetInBlock;
+        for (const cl of clusters) {
+          const nextWord = partialWord + cl;
+          const nextWidth = fontMetrics.measureWidth(nextWord, w.marks);
+          const curAvail = getAvailableWidthForLine(lineIdx);
 
-      for (const cl of clusters) {
-        const clW = fontMetrics.measureWidth(cl, w.marks);
-        if (partialWidth + clW > availableWidth && partialWord.length > 0) {
-          lineWordGroups.push([
-            {
-              text: partialWord,
-              runIndex: w.runIndex,
-              marks: w.marks,
-              width: partialWidth,
-              isSpace: false,
-              startOffsetInBlock: clusterOffset - partialWord.length,
-            },
-          ]);
-          lineIdx += 1;
-          partialWord = cl;
-          partialWidth = clW;
-        } else {
-          partialWord += cl;
-          partialWidth += clW;
+          if (currentGroupWidth + nextWidth > curAvail && (currentGroup.length > 0 || partialWord.length > 0)) {
+            if (partialWord.length > 0) {
+              currentGroup.push({
+                text: partialWord,
+                runIndex: w.runIndex,
+                marks: w.marks,
+                width: partialWidth,
+                isSpace: false,
+                startOffsetInBlock: clusterOffset - partialWord.length,
+              });
+            }
+            lineWordGroups.push(currentGroup);
+            lineIdx += 1;
+            currentGroup = [];
+            currentGroupWidth = 0;
+            partialWord = cl;
+            partialWidth = fontMetrics.measureWidth(cl, w.marks);
+          } else {
+            partialWord = nextWord;
+            partialWidth = nextWidth;
+          }
+          clusterOffset += cl.length;
         }
-        clusterOffset += cl.length;
-      }
 
-      if (partialWord.length > 0) {
-        currentGroup = [
-          {
+        if (partialWord.length > 0) {
+          currentGroup.push({
             text: partialWord,
             runIndex: w.runIndex,
             marks: w.marks,
             width: partialWidth,
             isSpace: false,
             startOffsetInBlock: clusterOffset - partialWord.length,
-          },
-        ];
-        currentGroupWidth = partialWidth;
-      }
-    } else if (currentGroupWidth + w.width <= availableWidth || currentGroup.length === 0) {
-      currentGroup.push(w);
-      currentGroupWidth += w.width;
-    } else {
-      // Line is full -> wrap
-      lineWordGroups.push(currentGroup);
-      lineIdx += 1;
-      if (w.isSpace) {
-        currentGroup = [];
-        currentGroupWidth = 0;
-      } else {
-        currentGroup = [w];
-        currentGroupWidth = w.width;
+          });
+          currentGroupWidth += partialWidth;
+        }
       }
     }
   }
@@ -199,6 +217,9 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
 
   // Convert word groups into TextLineLayout objects with metrics and positioned clusters
   const lines: TextLineLayout[] = [];
+  // Font line metrics are shared by all words in a run; measuring every word
+  // separately adds thousands of canvas calls on a large paste.
+  const runMetrics = runs.map(run => fontMetrics.measureRun('Mg', run.marks, lineHeightMultiplier));
   let currentY = startY;
 
   for (let lIdx = 0; lIdx < lineWordGroups.length; lIdx++) {
@@ -215,7 +236,7 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
     let spaceCount = 0;
 
     for (const w of group) {
-      const metrics = fontMetrics.measureRun(w.text, w.marks, lineHeightMultiplier);
+      const metrics = runMetrics[w.runIndex];
       if (metrics.ascent > maxAscent) maxAscent = metrics.ascent;
       if (metrics.descent > maxDescent) maxDescent = metrics.descent;
       totalWordsWidth += w.width;
@@ -225,21 +246,39 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
     if (maxAscent === 0) maxAscent = 12;
     if (maxDescent === 0) maxDescent = 4;
 
-    const lineHeightPx = (maxAscent + maxDescent) * (lineHeightMultiplier > 1 ? lineHeightMultiplier * 0.9 : 1.15);
-    const baseline = currentY + maxAscent;
+    const fontHeight = maxAscent + maxDescent;
+    const lineHeightPx = Math.max(fontHeight, fontHeight * (lineHeightMultiplier > 1 ? lineHeightMultiplier * 0.9 : 1.15));
+    const halfLeading = Math.max(0, (lineHeightPx - fontHeight) / 2);
+    const baseline = currentY + halfLeading + maxAscent;
 
     // Calculate alignment offset & justification space expansion
     let alignOffsetX = 0;
     let extraSpacePerWord = 0;
 
+    // Count trailing spaces at the end of the line
+    let trailingSpacesCount = 0;
+    let trailingSpacesWidth = 0;
+    for (let i = group.length - 1; i >= 0; i--) {
+      if (group[i].isSpace) {
+        trailingSpacesCount++;
+        trailingSpacesWidth += group[i].width;
+      } else {
+        break;
+      }
+    }
+
+    const innerSpaceCount = spaceCount - trailingSpacesCount;
+    const contentWidthForJustify = totalWordsWidth - trailingSpacesWidth;
+    const justifyRemainingSpace = availableWidth - contentWidthForJustify;
     const remainingSpace = availableWidth - totalWordsWidth;
 
     if (alignment === 'center') {
       alignOffsetX = Math.max(0, remainingSpace / 2);
     } else if (alignment === 'right') {
       alignOffsetX = Math.max(0, remainingSpace);
-    } else if (alignment === 'justify' && !isLastLine && spaceCount > 0 && remainingSpace > 0) {
-      extraSpacePerWord = remainingSpace / spaceCount;
+    } else if (alignment === 'justify' && !isLastLine && innerSpaceCount > 0 && justifyRemainingSpace > 0) {
+      const maxExtraSpace = 32;
+      extraSpacePerWord = Math.min(maxExtraSpace, justifyRemainingSpace / innerSpaceCount);
     }
 
     const lineStartX = startX + leftIndent + currentFirstLine + alignOffsetX;
@@ -257,52 +296,91 @@ export function layoutParagraphLines(input: BreakLineInput): { lines: TextLineLa
     const flushRun = (wordsInRun: IntermediateWord[]) => {
       if (wordsInRun.length === 0) return;
       const rObj = runs[wordsInRun[0].runIndex];
-      const runText = wordsInRun.map((w) => w.text).join('');
       const runMarks = wordsInRun[0].marks;
-      const startOffset = wordsInRun[0].startOffsetInBlock;
-      const endOffset = wordsInRun[wordsInRun.length - 1].startOffsetInBlock + wordsInRun[wordsInRun.length - 1].text.length;
 
-      let runWidth = 0;
-      const positionedClusters: PositionedCluster[] = [];
-      let clusterX = runX;
+      if (extraSpacePerWord === 0) {
+        // Normal text (left, center, right, or last line of justified paragraph)
+        // Measure clusters across the full runText so OpenType kerning across words & spaces is 100% incorporated
+        const runText = wordsInRun.map((w) => w.text).join('');
+        const startOffset = wordsInRun[0].startOffsetInBlock;
+        const endOffset = wordsInRun[wordsInRun.length - 1].startOffsetInBlock + wordsInRun[wordsInRun.length - 1].text.length;
 
-      for (const w of wordsInRun) {
-        const clusters = fontMetrics.measureClusters(w.text, w.marks);
-        let wordClusterOffset = w.startOffsetInBlock;
+        // Character positions are needed for a caret/selection, not for drawing
+        // all pages. Shape them lazily and retain exact prefix measurements.
+        let positionedClusters: PositionedCluster[] | undefined;
+        const clusterX = runX;
+        const clusterY = currentY + halfLeading;
+        const runWidth = fontMetrics.measureWidth(runText, runMarks);
 
-        for (const cl of clusters) {
-          positionedClusters.push({
-            cluster: cl.cluster,
-            x: clusterX + cl.xOffset,
-            y: currentY,
-            width: cl.width,
+        lineRuns.push({
+          runId: rObj?.id || generateRunId(),
+          text: runText,
+          marks: { ...runMarks },
+          x: runX,
+          y: currentY + halfLeading,
+          width: runWidth,
+          height: lineHeightPx,
+          baseline,
+          startOffset,
+          endOffset,
+          get clusters() {
+            if (!positionedClusters) {
+              let clusterOffset = startOffset;
+              positionedClusters = fontMetrics.measureClusters(runText, runMarks).map(cl => {
+                const result = { cluster: cl.cluster, x: clusterX + cl.xOffset,
+                  y: clusterY, width: cl.width, height: lineHeightPx, offsetInBlock: clusterOffset };
+                clusterOffset += cl.cluster.length;
+                return result;
+              });
+            }
+            return positionedClusters;
+          },
+        });
+
+        runX += runWidth;
+      } else {
+        // Justified text with expanded spaces: push each word as its own positioned run
+        // so Canvas renders each word at its exact expanded coordinate matching the caret.
+        let wordX = runX;
+        for (const w of wordsInRun) {
+          let positionedClusters: PositionedCluster[] | undefined;
+          const isTrailingSpace = w.isSpace && group.slice(group.lastIndexOf(w)).every((item) => item.isSpace);
+          const addedSpace = w.isSpace && !isTrailingSpace ? extraSpacePerWord : 0;
+          const clusterX = wordX;
+          const clusterY = currentY + halfLeading;
+          const wordWidth = w.width + addedSpace;
+
+          lineRuns.push({
+            runId: generateRunId(),
+            text: w.text,
+            marks: { ...w.marks },
+            x: wordX,
+            y: currentY + halfLeading,
+            width: wordWidth,
             height: lineHeightPx,
-            offsetInBlock: wordClusterOffset,
+            baseline,
+            startOffset: w.startOffsetInBlock,
+            endOffset: w.startOffsetInBlock + w.text.length,
+            get clusters() {
+              if (!positionedClusters) {
+                const clusters = fontMetrics.measureClusters(w.text, w.marks);
+                const extra = clusters.length ? addedSpace / clusters.length : 0;
+                let offset = w.startOffsetInBlock;
+                positionedClusters = clusters.map((cl, index) => {
+                  const result = { cluster: cl.cluster, x: clusterX + cl.xOffset + index * extra,
+                    y: clusterY, width: cl.width + extra, height: lineHeightPx, offsetInBlock: offset };
+                  offset += cl.cluster.length;
+                  return result;
+                });
+              }
+              return positionedClusters;
+            },
           });
-          wordClusterOffset += cl.cluster.length;
+
+          wordX += wordWidth;
         }
-
-        const addedSpace = w.isSpace ? extraSpacePerWord : 0;
-        const totalWordW = w.width + addedSpace;
-        clusterX += totalWordW;
-        runWidth += totalWordW;
+        runX = wordX;
       }
-
-      lineRuns.push({
-        runId: rObj?.id || generateRunId(),
-        text: runText,
-        marks: { ...runMarks },
-        x: runX,
-        y: currentY,
-        width: runWidth,
-        height: lineHeightPx,
-        baseline,
-        startOffset,
-        endOffset,
-        clusters: positionedClusters,
-      });
-
-      runX += runWidth;
     };
 
     for (const w of group) {

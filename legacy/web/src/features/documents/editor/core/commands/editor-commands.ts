@@ -31,6 +31,7 @@ import {
 } from '../model/defaults';
 import { generateBlockId } from '../utils/id-generator';
 import { EditorOperation } from '../transactions/operations';
+import { sliceBlockRuns } from '../selection/range';
 
 export function registerEditorCommands(
   registry: CommandRegistry,
@@ -46,10 +47,46 @@ export function registerEditorCommands(
     const tx = transactionEngine.createTransaction(ops, source, selBefore);
     const { inverseTx } = transactionEngine.applyTransaction(tx);
     historyManager.record(tx, inverseTx);
+    const op = ops[0];
+    const opDetail = op?.type === 'insert-text' ? `insert "${(op as any).text}"` : op?.type;
+    if (typeof window !== 'undefined' && (window as any).__debugEditorLogs) {
+      console.log(`[INPUT] ${opDetail}\n  documentVersion = ${doc.revision}\n  blockId = ${op && 'blockId' in op ? (op as any).blockId : 'N/A'}`);
+    }
     onMutated();
   };
 
   // 1. Insert Text
+  registry.register('pasteBlocks', (args: { blocks: BlockNode[] }) => {
+    const sel = selectionEngine.getSelection();
+    if (!sel || !args.blocks.length) return false;
+    const { start, end } = normalizeSelection(sel, doc);
+    const first = doc.getBlockById(start.blockId);
+    const last = doc.getBlockById(end.blockId);
+    const startLoc = doc.getBlockLocation(start.blockId);
+    const endLoc = doc.getBlockLocation(end.blockId);
+    if (!first || !last || !('runs' in first) || !('runs' in last) ||
+        startLoc?.parentArray !== endLoc?.parentArray) return false;
+    const blocks = structuredClone(args.blocks);
+    if (!blocks.every(block => 'runs' in block)) return false;
+    const before = sliceBlockRuns(first.runs, start.offset, start.offset).before;
+    const after = sliceBlockRuns(last.runs, end.offset, end.offset).after;
+    const head = blocks[0] as typeof first;
+    const tail = blocks[blocks.length - 1] as typeof first;
+    const tailOffset = tail.runs.reduce((sum, run) => sum + run.text.length, 0) +
+      (blocks.length === 1 ? start.offset : 0);
+    head.id = first.id;
+    head.style = { ...first.style };
+    head.runs = DocumentModel.normalizeRuns([...before, ...head.runs]);
+    tail.runs = DocumentModel.normalizeRuns([...tail.runs, ...after]);
+    const ops: EditorOperation[] = [{ type: 'replace-block-range', startBlockId: first.id, endBlockId: last.id, blocks }];
+    const tx = transactionEngine.createTransaction(ops, 'paste', sel,
+      { anchor: { blockId: tail.id, offset: tailOffset }, focus: { blockId: tail.id, offset: tailOffset } });
+    const { inverseTx } = transactionEngine.applyTransaction(tx);
+    historyManager.record(tx, inverseTx);
+    selectionEngine.setCursor(tail.id, tailOffset, undefined, { silent: true });
+    onMutated();
+  });
+
   registry.register('insertText', (args: { text: string; marks?: TextMarks }) => {
     const sel = selectionEngine.getSelection();
     if (!sel) return;
@@ -80,7 +117,7 @@ export function registerEditorCommands(
       marks,
     });
 
-    selectionEngine.setCursor(targetBlockId, targetOffset + args.text.length);
+    selectionEngine.setCursor(targetBlockId, targetOffset + args.text.length, undefined, { silent: true });
     executeTx(ops, 'keyboard');
   });
 
@@ -108,7 +145,7 @@ export function registerEditorCommands(
       });
     }
 
-    selectionEngine.setCursor(blockId, startOffset + text.length);
+    selectionEngine.setCursor(blockId, startOffset + text.length, undefined, { silent: true });
     executeTx(ops, 'keyboard');
   });
 
@@ -119,7 +156,7 @@ export function registerEditorCommands(
 
     if (!isSelectionCollapsed(sel)) {
       const { start, end } = normalizeSelection(sel, doc);
-      selectionEngine.setCursor(start.blockId, start.offset);
+      selectionEngine.setCursor(start.blockId, start.offset, undefined, { silent: true });
       executeTx([{ type: 'delete-range', start, end }], 'keyboard');
       return;
     }
@@ -131,7 +168,7 @@ export function registerEditorCommands(
     if (sel.focus.offset > 0) {
       const blockText = doc.getBlockText(block);
       const prevOffset = getPreviousGraphemeOffset(blockText, sel.focus.offset);
-      selectionEngine.setCursor(sel.focus.blockId, prevOffset);
+      selectionEngine.setCursor(sel.focus.blockId, prevOffset, undefined, { silent: true });
       executeTx(
         [
           {
@@ -191,7 +228,7 @@ export function registerEditorCommands(
       const prevBlock = doc.blocks[idx - 1];
       if (prevBlock && 'runs' in prevBlock && Array.isArray(prevBlock.runs)) {
         const prevLen = doc.getBlockLength(prevBlock);
-        selectionEngine.setCursor(prevBlock.id, prevLen);
+        selectionEngine.setCursor(prevBlock.id, prevLen, undefined, { silent: true });
         executeTx([
           {
             type: 'merge-paragraph',
@@ -210,7 +247,7 @@ export function registerEditorCommands(
 
     if (!isSelectionCollapsed(sel)) {
       const { start, end } = normalizeSelection(sel, doc);
-      selectionEngine.setCursor(start.blockId, start.offset);
+      selectionEngine.setCursor(start.blockId, start.offset, undefined, { silent: true });
       executeTx([{ type: 'delete-range', start, end }], 'keyboard');
       return;
     }
@@ -222,7 +259,7 @@ export function registerEditorCommands(
     if (sel.focus.offset < blockLen) {
       const blockText = doc.getBlockText(block);
       const nextOffset = getNextGraphemeOffset(blockText, sel.focus.offset);
-      selectionEngine.setCursor(sel.focus.blockId, sel.focus.offset);
+      selectionEngine.setCursor(sel.focus.blockId, sel.focus.offset, undefined, { silent: true });
       executeTx(
         [
           {
@@ -240,7 +277,7 @@ export function registerEditorCommands(
     const idx = doc.getBlockIndex(block.id);
     if (idx < doc.blocks.length - 1) {
       const nextBlock = doc.blocks[idx + 1];
-      selectionEngine.setCursor(block.id, blockLen);
+      selectionEngine.setCursor(block.id, blockLen, undefined, { silent: true });
       executeTx([
         {
           type: 'merge-paragraph',
@@ -278,7 +315,7 @@ export function registerEditorCommands(
         style: { ...DEFAULT_PARAGRAPH_STYLE },
         blockType: 'paragraph',
       });
-      selectionEngine.setCursor(block.id, 0);
+      selectionEngine.setCursor(block.id, 0, undefined, { silent: true });
       executeTx(ops);
       return;
     }
@@ -291,7 +328,7 @@ export function registerEditorCommands(
       newBlockId,
     });
 
-    selectionEngine.setCursor(newBlockId, 0);
+    selectionEngine.setCursor(newBlockId, 0, undefined, { silent: true });
     executeTx(ops);
   });
 
@@ -310,6 +347,20 @@ export function registerEditorCommands(
 
     if (isSelectionCollapsed(sel)) {
       selectionEngine.setPendingMarks({ ...activeMarks, ...markUpdate });
+      const block = doc.getBlockById(sel.focus.blockId);
+      if (block && 'runs' in block && (block.runs.length <= 1 && (block.runs[0]?.text || '') === '')) {
+        executeTx(
+          [
+            {
+              type: 'set-text-style',
+              start: sel.focus,
+              end: sel.focus,
+              marks: markUpdate,
+            },
+          ],
+          'toolbar'
+        );
+      }
     } else {
       const { start, end } = normalizeSelection(sel, doc);
       executeTx(

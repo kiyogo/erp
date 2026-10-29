@@ -67,6 +67,13 @@ export interface InsertBlockOp {
   block: BlockNode;
 }
 
+export interface ReplaceBlockRangeOp {
+  type: 'replace-block-range';
+  startBlockId: string;
+  endBlockId: string;
+  blocks: BlockNode[];
+}
+
 export interface DeleteBlockOp {
   type: 'delete-block';
   blockId: string;
@@ -94,6 +101,7 @@ export type EditorOperation =
   | SetTextStyleOp
   | SetParagraphStyleOp
   | InsertBlockOp
+  | ReplaceBlockRangeOp
   | DeleteBlockOp
   | SetDocumentSettingsOp
   | SetDocumentTitleOp;
@@ -103,6 +111,24 @@ export type EditorOperation =
  */
 export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorOperation | null {
   switch (op.type) {
+    case 'replace-block-range': {
+      const start = doc.getBlockLocation(op.startBlockId);
+      const end = doc.getBlockLocation(op.endBlockId);
+      if (!start || !end || start.parentArray !== end.parentArray || end.index < start.index || !op.blocks.length) return null;
+      const removed = start.parentArray.slice(start.index, end.index + 1);
+      // Clone both directions so later typing cannot mutate undo/redo payloads.
+      const inserted = structuredClone(op.blocks);
+      start.parentArray.splice(start.index, removed.length, ...inserted);
+      for (const block of removed) doc.markDirty(block.id);
+      for (const block of inserted) doc.incrementBlockVersion(block.id);
+      doc.invalidateBlockIndexMap();
+      return {
+        type: 'replace-block-range',
+        startBlockId: inserted[0].id,
+        endBlockId: inserted[inserted.length - 1].id,
+        blocks: removed,
+      };
+    }
     case 'insert-text': {
       let block = doc.getBlockById(op.blockId);
       if (block && block.type === 'table') {
@@ -156,6 +182,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
       }
 
       block.runs = DocumentModel.normalizeRuns(newRuns);
+      doc.incrementBlockVersion(op.blockId);
 
       // Return inverse: delete the inserted range
       return {
@@ -178,6 +205,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
         const { before, middle, after } = sliceBlockRuns(block.runs, minOffset, maxOffset);
         const combined = [...before, ...after];
         block.runs = DocumentModel.normalizeRuns(combined);
+        doc.incrementBlockVersion(op.start.blockId);
 
         const deletedText = middle.map((r) => r.text).join('');
         return {
@@ -211,7 +239,14 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
           startBlock.runs = DocumentModel.normalizeRuns([...startSlice.before, ...endSlice.after]);
         }
 
+        doc.incrementBlockVersion(startBlock.id);
+        for (let i = startIdx + 1; i <= endIdx; i++) {
+          const b = locStart.parentArray[i];
+          if (b) doc.incrementBlockVersion(b.id);
+        }
+
         locStart.parentArray.splice(startIdx + 1, endIdx - startIdx);
+        doc.invalidateBlockIndexMap();
 
         return {
           type: 'insert-block',
@@ -251,6 +286,9 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
       }
 
       loc.parentArray.splice(loc.index + 1, 0, newBlock);
+      doc.incrementBlockVersion(op.blockId);
+      doc.incrementBlockVersion(op.newBlockId);
+      doc.invalidateBlockIndexMap();
 
       return {
         type: 'merge-paragraph',
@@ -271,6 +309,9 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
         const prevLength = doc.getBlockLength(prevBlock);
         prevBlock.runs = DocumentModel.normalizeRuns([...prevBlock.runs, ...nextBlock.runs]);
         locPrev.parentArray.splice(locNext.index, 1);
+        doc.incrementBlockVersion(op.prevBlockId);
+        doc.incrementBlockVersion(op.nextBlockId);
+        doc.invalidateBlockIndexMap();
 
         return {
           type: 'split-paragraph',
@@ -289,6 +330,18 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
 
         const minOffset = Math.min(op.start.offset, op.end.offset);
         const maxOffset = Math.max(op.start.offset, op.end.offset);
+
+        // If collapsed selection on an empty block, update the block's run marks directly
+        if (minOffset === maxOffset && (block.runs.length <= 1 && (block.runs[0]?.text || '') === '')) {
+          if (block.runs.length === 0) {
+            block.runs = [{ id: generateRunId(), text: '', marks: { ...DEFAULT_TEXT_MARKS, ...op.marks } }];
+          } else {
+            block.runs[0].marks = { ...block.runs[0].marks, ...op.marks };
+          }
+          doc.incrementBlockVersion(op.start.blockId);
+          return null;
+        }
+
         const { before, middle, after } = sliceBlockRuns(block.runs, minOffset, maxOffset);
 
         for (const run of middle) {
@@ -296,6 +349,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
         }
 
         block.runs = DocumentModel.normalizeRuns([...before, ...middle, ...after]);
+        doc.incrementBlockVersion(op.start.blockId);
         return null;
       }
 
@@ -319,6 +373,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
         }
 
         block.runs = DocumentModel.normalizeRuns([...before, ...middle, ...after]);
+        doc.incrementBlockVersion(block.id);
       }
       return null;
     }
@@ -347,12 +402,15 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
             delete (block as any).level;
           }
         }
+        doc.incrementBlockVersion(blockId);
       }
       return null;
     }
 
     case 'insert-block': {
       doc.blocks.splice(op.index, 0, op.block);
+      doc.incrementBlockVersion(op.block.id);
+      doc.invalidateBlockIndexMap();
       return {
         type: 'delete-block',
         blockId: op.block.id,
@@ -363,6 +421,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
       const idx = doc.getBlockIndex(op.blockId);
       if (idx === -1) return null;
       const [deleted] = doc.blocks.splice(idx, 1);
+      doc.invalidateBlockIndexMap();
       if (doc.blocks.length === 0) {
         doc.blocks.push(createEmptyParagraph());
       }
@@ -376,6 +435,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
     case 'set-settings': {
       const prev = { ...doc.settings };
       doc.settings = { ...doc.settings, ...op.settings };
+      doc.incrementRevision();
       return {
         type: 'set-settings',
         settings: prev,
@@ -385,6 +445,7 @@ export function applyOperation(op: EditorOperation, doc: DocumentModel): EditorO
     case 'set-title': {
       const prev = doc.title;
       doc.title = op.title;
+      doc.incrementRevision();
       return {
         type: 'set-title',
         title: prev,

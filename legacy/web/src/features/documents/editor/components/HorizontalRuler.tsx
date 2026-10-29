@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { PageMargins } from '../core/model/types';
+import { useDevicePixelRatio } from '../core/utils/use-device-pixel-ratio';
 
 interface HorizontalRulerProps {
   pageWidth: number;
@@ -15,6 +16,7 @@ export const HorizontalRuler: React.FC<HorizontalRulerProps> = ({
   onMarginChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dpr = useDevicePixelRatio();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -23,7 +25,6 @@ export const HorizontalRuler: React.FC<HorizontalRulerProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
     const rulerWidth = Math.round(pageWidth * zoom);
     const rulerHeight = 16;
 
@@ -51,7 +52,8 @@ export const HorizontalRuler: React.FC<HorizontalRulerProps> = ({
 
     // 3. Ruler Ticks (Every 1/8 inch / 12px logical)
     ctx.strokeStyle = '#9AA0A6';
-    ctx.lineWidth = 1;
+    const physicalLineWidth = Math.max(1, Math.round(1 * dpr));
+    ctx.lineWidth = physicalLineWidth / dpr;
     ctx.fillStyle = '#5F6368';
     ctx.font = '9px Arial, sans-serif';
     ctx.textAlign = 'center';
@@ -66,22 +68,29 @@ export const HorizontalRuler: React.FC<HorizontalRulerProps> = ({
 
       const tickHeight = isInch ? 8 : isHalfInch ? 5 : 3;
 
+      // Pixel-align 1px tick lines
+      const halfShift = (physicalLineWidth % 2 === 1) ? (0.5 / dpr) : 0;
+      const alignedX = Math.round(x * dpr) / dpr + halfShift;
+
       ctx.beginPath();
-      ctx.moveTo(x, rulerHeight);
-      ctx.lineTo(x, rulerHeight - tickHeight);
+      ctx.moveTo(alignedX, rulerHeight);
+      ctx.lineTo(alignedX, rulerHeight - tickHeight);
       ctx.stroke();
 
       if (isInch && distFromMargin > 0) {
         const inchNum = Math.round(distFromMargin / 96);
-        ctx.fillText(String(inchNum), x, rulerHeight - 7);
+        const textX = Math.round(x * dpr) / dpr;
+        ctx.fillText(String(inchNum), textX, rulerHeight - 7);
       }
     }
 
     // 4. Draw Margin Border Lines
     ctx.strokeStyle = '#DADCE0';
+    const borderHalfShift = (physicalLineWidth % 2 === 1) ? (0.5 / dpr) : 0;
+    const alignedBottomY = Math.round((rulerHeight - 1) * dpr) / dpr + borderHalfShift;
     ctx.beginPath();
-    ctx.moveTo(0, rulerHeight - 0.5);
-    ctx.lineTo(rulerWidth, rulerHeight - 0.5);
+    ctx.moveTo(0, alignedBottomY);
+    ctx.lineTo(rulerWidth, alignedBottomY);
     ctx.stroke();
 
     // 5. Margin Handle Triangles (Left and Right)
@@ -101,7 +110,7 @@ export const HorizontalRuler: React.FC<HorizontalRulerProps> = ({
     ctx.lineTo(rightMarginX, 6);
     ctx.closePath();
     ctx.fill();
-  }, [pageWidth, margins, zoom]);
+  }, [pageWidth, margins, zoom, dpr]);
 
   const displayWidth = Math.round(pageWidth * zoom);
 

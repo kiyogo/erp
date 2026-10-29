@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { DocxEditorModal } from '../components/editor/DocxEditorModal';
+const DocxEditorModal = React.lazy(() => import('../components/editor/DocxEditorModal').then((module) => ({ default: module.DocxEditorModal })));
 import { filesApi } from '../api/endpoints';
 import { getFileBlob, storeFileBlob, formatFileSize } from '../utils/fileStorage';
 import { downloadFile, generateValidPdfBlob } from '../utils/fileExporter';
@@ -255,32 +255,33 @@ export const DocumentEditorPage: React.FC = () => {
     }
 
     return (
-      <DocxEditorModal
-        open={true}
-        onClose={() => {
-          if (window.opener) {
-            window.close();
-          } else if (window.history.length > 1) {
-            navigate(-1);
-          } else {
-            window.close();
-          }
-        }}
-        fileName={docName || `Tai_lieu_${fileKey}.docx`}
-        fileKey={fileKey}
-        onSaveSuccess={(updatedName, updatedBlob) => {
-          void (async () => {
+      <Suspense fallback={<div className="p-4 text-center text-sm text-slate-600">Đang tải trình soạn thảo...</div>}>
+        <DocxEditorModal
+          open={true}
+          onClose={() => {
+            if (window.opener) {
+              window.close();
+            } else if (window.history.length > 1) {
+              navigate(-1);
+            } else {
+              window.close();
+            }
+          }}
+          fileName={docName || `Tai_lieu_${fileKey}.docx`}
+          fileKey={fileKey}
+          onSaveSuccess={async (updatedName, updatedBlob) => {
             try {
               if (updatedBlob) await filesApi.updateContent(fileKey, updatedBlob);
               if (updatedName !== docName) await filesApi.update(fileKey, updatedName);
               setDocName(updatedName);
               setSaveStatus('Đã đồng bộ');
-            } catch {
+            } catch (error) {
               setSaveStatus('Chưa thể đồng bộ lên máy chủ');
+              throw error;
             }
-          })();
-        }}
-      />
+          }}
+        />
+      </Suspense>
     );
   }
 

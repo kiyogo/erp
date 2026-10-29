@@ -1,6 +1,7 @@
 import { DocumentLayout, PageLayout, HitTestEntry, Rect, PositionedCluster } from '../layout/layout-types';
 import { DocPosition, EditorSelection, normalizeSelection } from '../selection/position';
 import { DocumentModel } from '../model/document-model';
+import { layoutEngine } from '../layout/layout-engine';
 
 export interface CaretGeometry {
   pageIndex: number;
@@ -49,8 +50,7 @@ export class HitTester {
   ): DocPosition | null {
     const page = layout.pages[pageIndex];
     if (!page || page.blocks.length === 0) {
-      const firstBlock = doc.blocks[0];
-      return firstBlock ? { blockId: firstBlock.id, offset: 0 } : null;
+      return null;
     }
 
     // 1. Precise Table Cell Hit Testing
@@ -144,45 +144,42 @@ export class HitTester {
     });
 
     const candidateEntries = nonTableLines.length > 0 ? nonTableLines : page.hitTestIndex;
-
-    // Find entries overlapping vertically with y
-    let matchingEntries = candidateEntries.filter(
-      (entry) => y >= entry.rect.y && y <= entry.rect.y + entry.rect.height
-    );
-
-    if (matchingEntries.length === 0) {
-      let minDist = Infinity;
-      let closestY = candidateEntries[0].rect.y;
-      for (const entry of candidateEntries) {
-        const dist = Math.abs(y - (entry.rect.y + entry.rect.height / 2));
-        if (dist < minDist) {
-          minDist = dist;
-          closestY = entry.rect.y;
-        }
-      }
-      matchingEntries = candidateEntries.filter((entry) => Math.abs(entry.rect.y - closestY) < 4);
+    if (candidateEntries.length === 0) {
+      return null;
     }
 
-    if (matchingEntries.length === 0) {
-      matchingEntries = [candidateEntries[0]];
-    }
+    // 2D Line Proximity & Text Bounds Affinity:
+    // Accurately chooses the intended line without letting adjacent line boxes steal clicks,
+    // properly accounting for first-line indent, blank margins, and vertical line spacing.
+    let targetEntry = candidateEntries[0];
+    let bestScore = Infinity;
 
-    let targetEntry = matchingEntries[0];
-    let bestXDist = Infinity;
-
-    for (const entry of matchingEntries) {
-      const entryRight = entry.clusters.length > 0
+    for (const entry of candidateEntries) {
+      const lineTop = entry.rect.y;
+      const lineBottom = entry.rect.y + entry.rect.height;
+      const lineCenterY = (lineTop + lineBottom) / 2;
+      const lineLeft = entry.clusters.length > 0 ? entry.clusters[0].x : entry.rect.x;
+      const lineRight = entry.clusters.length > 0
         ? entry.clusters[entry.clusters.length - 1].x + entry.clusters[entry.clusters.length - 1].width
         : entry.rect.x + entry.rect.width;
 
-      if (x >= entry.rect.x && x <= entryRight) {
-        targetEntry = entry;
-        break;
-      }
+      // Vertical distance from click y to the line's bounding box
+      const vertDist = y >= lineTop && y <= lineBottom
+        ? 0
+        : (y < lineTop ? lineTop - y : y - lineBottom);
 
-      const dist = Math.min(Math.abs(x - entry.rect.x), Math.abs(x - entryRight));
-      if (dist < bestXDist) {
-        bestXDist = dist;
+      // Is x within the line's text bounds (with 12px margin on sides)
+      const isHorizTextHit = x >= lineLeft - 12 && x <= lineRight + 12;
+      const horizGap = isHorizTextHit ? 0 : (x < lineLeft ? (lineLeft - x) * 0.5 : (x - lineRight) * 0.2);
+
+      // Score:
+      // - vertDist * 8: heavily penalize lines far above or below click
+      // - Math.abs(y - lineCenterY): distance to visual center of line
+      // - isHorizTextHit: heavily rewards lines where x is directly on actual characters
+      const score = vertDist * 8 + Math.abs(y - lineCenterY) + (isHorizTextHit ? 0 : 35) + horizGap;
+
+      if (score < bestScore) {
+        bestScore = score;
         targetEntry = entry;
       }
     }
@@ -193,16 +190,28 @@ export class HitTester {
   private static hitTestLineOffset(targetEntry: any, x: number): DocPosition {
     const clusters: PositionedCluster[] = targetEntry.clusters || (targetEntry.runs || []).flatMap((r: any) => r.clusters || []);
     if (clusters.length === 0) {
-      return { blockId: targetEntry.blockId, offset: targetEntry.startOffset };
+      return { blockId: targetEntry.blockId, offset: targetEntry.startOffset, affinity: 'forward' };
     }
 
-    if (x <= targetEntry.rect.x) {
-      return { blockId: targetEntry.blockId, offset: targetEntry.startOffset };
+    if (x <= clusters[0].x) {
+      return { blockId: targetEntry.blockId, offset: clusters[0].offsetInBlock, affinity: 'forward' };
     }
 
     const lastCluster = clusters[clusters.length - 1];
     if (x >= lastCluster.x + lastCluster.width) {
-      return { blockId: targetEntry.blockId, offset: targetEntry.endOffset };
+      let lastVisibleIdx = clusters.length - 1;
+      while (lastVisibleIdx >= 0 && /^\s+$/.test(clusters[lastVisibleIdx].cluster)) {
+        lastVisibleIdx--;
+      }
+      if (lastVisibleIdx >= 0 && lastVisibleIdx < clusters.length - 1) {
+        const lastVisCl = clusters[lastVisibleIdx];
+        return {
+          blockId: targetEntry.blockId,
+          offset: lastVisCl.offsetInBlock + lastVisCl.cluster.length,
+          affinity: 'backward',
+        };
+      }
+      return { blockId: targetEntry.blockId, offset: targetEntry.endOffset, affinity: 'backward' };
     }
 
     let low = 0;
@@ -219,7 +228,7 @@ export class HitTester {
         const offset = isCloserToRight
           ? cl.offsetInBlock + cl.cluster.length
           : cl.offsetInBlock;
-        return { blockId: targetEntry.blockId, offset };
+        return { blockId: targetEntry.blockId, offset, affinity: isCloserToRight ? 'forward' : 'forward' };
       }
 
       if (x < clLeft) {
@@ -229,7 +238,26 @@ export class HitTester {
       }
     }
 
-    return { blockId: targetEntry.blockId, offset: targetEntry.startOffset };
+    // Binary search did not find an exact overlapping cluster
+    // (e.g. between clusters, due to fractional subpixel rounding, or spacing).
+    // Clamp to the closest neighboring cluster boundary instead of resetting to start of line!
+    if (high < 0) {
+      return { blockId: targetEntry.blockId, offset: clusters[0].offsetInBlock, affinity: 'forward' };
+    }
+    if (low >= clusters.length) {
+      return { blockId: targetEntry.blockId, offset: targetEntry.endOffset, affinity: 'backward' };
+    }
+
+    const leftCl = clusters[high];
+    const rightCl = clusters[low];
+    const distToLeft = Math.abs(x - (leftCl.x + leftCl.width));
+    const distToRight = Math.abs(rightCl.x - x);
+
+    const offset = distToLeft <= distToRight
+      ? leftCl.offsetInBlock + leftCl.cluster.length
+      : rightCl.offsetInBlock;
+
+    return { blockId: targetEntry.blockId, offset, affinity: 'forward' };
   }
 
   /**
@@ -247,23 +275,62 @@ export class HitTester {
     const block = doc.getBlockById(pos.blockId);
     let fontSizePt = 14;
     if (block && 'runs' in block && Array.isArray(block.runs)) {
-      const runWithFont = block.runs.find((r) => r.marks && r.marks.fontSize);
-      if (runWithFont && runWithFont.marks && runWithFont.marks.fontSize) {
-        fontSizePt = runWithFont.marks.fontSize;
+      let currentOff = 0;
+      let targetRun = block.runs[0];
+      for (const r of block.runs) {
+        currentOff += r.text.length;
+        if (currentOff >= pos.offset || currentOff === 0) {
+          targetRun = r;
+          break;
+        }
+      }
+      if (targetRun && targetRun.marks && targetRun.marks.fontSize) {
+        fontSizePt = targetRun.marks.fontSize;
       }
     }
     const fontSizePx = (fontSizePt * 96) / 72;
     const caretHeight = Math.max(14, Math.round(fontSizePx * 1.15));
 
-    const pages = pageRange
-      ? layout.pages.slice(Math.max(0, pageRange.start), Math.max(pageRange.start, pageRange.end))
-      : layout.pages;
+    let pages: PageLayout[];
+    if (pageRange) {
+      pages = layout.pages.slice(Math.max(0, pageRange.start), Math.max(pageRange.start, pageRange.end));
+    } else if (layout.pages.length > 20 && (doc.settings as any).virtualPageCount) {
+      const targetPage = layoutEngine.getBlockPageIndex(pos.blockId);
+      const startP = Math.max(0, targetPage - 1);
+      const endP = Math.min(layout.pages.length, targetPage + 2);
+      pages = layout.pages.slice(startP, endP);
+    } else {
+      pages = layout.pages;
+    }
+
+    let firstBlockEntry: HitTestEntry | null = null;
+    let lastBlockEntry: HitTestEntry | null = null;
 
     for (const page of pages) {
       for (const entry of page.hitTestIndex) {
         if (entry.blockId === pos.blockId) {
+          if (!firstBlockEntry) firstBlockEntry = entry;
+          lastBlockEntry = entry;
+
           // Check if offset falls within this line
           if (pos.offset >= entry.startOffset && pos.offset <= entry.endOffset) {
+            // Soft wrap boundary check:
+            // When pos.offset is at the end of this line, but there is a subsequent line in the same block starting at pos.offset:
+            // If pos.affinity is 'backward', the user specifically clicked at the end of this line, so keep caret here.
+            // Otherwise (affinity is 'forward' or undefined, e.g. from typing or wrapping), let the subsequent line render the caret at its beginning!
+            if (pos.offset === entry.endOffset && (pos as any).affinity !== 'backward') {
+              const hasSubsequentLine = pages.some((p) =>
+                p.hitTestIndex.some(
+                  (other) =>
+                    other.blockId === pos.blockId &&
+                    other.lineIndex === entry.lineIndex + 1 &&
+                    other.startOffset === pos.offset
+                )
+              );
+              if (hasSubsequentLine) {
+                continue;
+              }
+            }
             const caretY = Math.round(entry.baseline - fontSizePx * 0.88);
 
             // If empty line
@@ -282,7 +349,7 @@ export class HitTester {
               const lastCl = entry.clusters[entry.clusters.length - 1];
               return {
                 pageIndex: page.pageIndex,
-                x: lastCl.x + lastCl.width,
+                x: lastCl ? lastCl.x + lastCl.width : entry.rect.x,
                 y: caretY,
                 height: caretHeight,
                 baseline: entry.baseline,
@@ -294,9 +361,10 @@ export class HitTester {
               const cl = entry.clusters[i];
               if (pos.offset >= cl.offsetInBlock && pos.offset <= cl.offsetInBlock + cl.cluster.length) {
                 const fraction = cl.cluster.length > 0 ? (pos.offset - cl.offsetInBlock) / cl.cluster.length : 0;
+                const clX = fraction === 1 ? cl.x + cl.width : (fraction === 0 ? cl.x : cl.x + cl.width * fraction);
                 return {
                   pageIndex: page.pageIndex,
-                  x: Math.round(cl.x + cl.width * fraction),
+                  x: clX,
                   y: caretY,
                   height: caretHeight,
                   baseline: entry.baseline,
@@ -314,6 +382,30 @@ export class HitTester {
           }
         }
       }
+    }
+
+    // If offset is beyond the last measured line of the block, position at end of block
+    if (lastBlockEntry && pos.offset >= lastBlockEntry.endOffset) {
+      const caretY = Math.round(lastBlockEntry.baseline - fontSizePx * 0.88);
+      const lastCl = lastBlockEntry.clusters[lastBlockEntry.clusters.length - 1];
+      return {
+        pageIndex: lastBlockEntry.pageIndex,
+        x: lastCl ? lastCl.x + lastCl.width : lastBlockEntry.rect.x,
+        y: caretY,
+        height: caretHeight,
+        baseline: lastBlockEntry.baseline,
+      };
+    }
+
+    if (firstBlockEntry && pos.offset <= firstBlockEntry.startOffset) {
+      const caretY = Math.round(firstBlockEntry.baseline - fontSizePx * 0.88);
+      return {
+        pageIndex: firstBlockEntry.pageIndex,
+        x: firstBlockEntry.rect.x,
+        y: caretY,
+        height: caretHeight,
+        baseline: firstBlockEntry.baseline,
+      };
     }
 
     // Also search inside page blocks and table cells
@@ -341,7 +433,7 @@ export class HitTester {
                         const lastCl = lineClusters[lineClusters.length - 1];
                         return {
                           pageIndex: page.pageIndex,
-                          x: lastCl.x + lastCl.width,
+                          x: lastCl ? lastCl.x + lastCl.width : line.rect.x,
                           y: caretY,
                           height: caretHeight,
                           baseline: line.baseline,
@@ -350,9 +442,10 @@ export class HitTester {
                       for (const cl of lineClusters) {
                         if (pos.offset >= cl.offsetInBlock && pos.offset <= cl.offsetInBlock + cl.cluster.length) {
                           const fraction = cl.cluster.length > 0 ? (pos.offset - cl.offsetInBlock) / cl.cluster.length : 0;
+                          const clX = fraction === 1 ? cl.x + cl.width : (fraction === 0 ? cl.x : cl.x + cl.width * fraction);
                           return {
                             pageIndex: page.pageIndex,
-                            x: Math.round(cl.x + cl.width * fraction),
+                            x: clX,
                             y: caretY,
                             height: caretHeight,
                             baseline: line.baseline,
@@ -383,17 +476,6 @@ export class HitTester {
       }
     }
 
-    // Fallback: use first page content position
-    const firstPage = layout.pages[0];
-    if (firstPage) {
-      return {
-        pageIndex: 0,
-        x: firstPage.contentRect.x,
-        y: firstPage.contentRect.y + 2,
-        height: 18,
-        baseline: firstPage.contentRect.y + 14,
-      };
-    }
     return null;
   }
 
@@ -412,9 +494,18 @@ export class HitTester {
 
     const rects: SelectionPageRect[] = [];
 
-    const pages = pageRange
-      ? layout.pages.slice(Math.max(0, pageRange.start), Math.max(pageRange.start, pageRange.end))
-      : layout.pages;
+    let pages: PageLayout[];
+    if (pageRange) {
+      pages = layout.pages.slice(Math.max(0, pageRange.start), Math.max(pageRange.start, pageRange.end));
+    } else if (layout.pages.length > 20 && (doc.settings as any).virtualPageCount) {
+      const startPage = layoutEngine.getBlockPageIndex(start.blockId);
+      const endPage = layoutEngine.getBlockPageIndex(end.blockId);
+      const startP = Math.max(0, Math.min(startPage, endPage) - 1);
+      const endP = Math.min(layout.pages.length, Math.max(startPage, endPage) + 2);
+      pages = layout.pages.slice(startP, endP);
+    } else {
+      pages = layout.pages;
+    }
 
     for (const page of pages) {
       for (const entry of page.hitTestIndex) {

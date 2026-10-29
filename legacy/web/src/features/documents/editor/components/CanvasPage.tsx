@@ -7,6 +7,8 @@ import { CaretGeometry, SelectionPageRect } from '../core/hit-testing/hit-tester
 interface CanvasPageProps {
   page: PageLayout;
   zoom: number;
+  dpr?: number;
+  pageVersion?: number;
   selectionRects: SelectionPageRect[];
   caret: CaretGeometry | null;
   isCaretVisible: boolean;
@@ -20,7 +22,9 @@ interface CanvasPageProps {
 
 export const CanvasPage: React.FC<CanvasPageProps> = React.memo(({
   page,
+  pageVersion,
   zoom,
+  dpr,
   selectionRects,
   caret,
   isCaretVisible,
@@ -33,14 +37,29 @@ export const CanvasPage: React.FC<CanvasPageProps> = React.memo(({
 }) => {
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const interactionCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const renderDpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const latestPageRef = useRef(page);
+  latestPageRef.current = page;
+  const renderDpr = dpr || (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
 
   // Render base content canvas
   useEffect(() => {
     if (baseCanvasRef.current) {
-      CanvasRenderer.renderPage(baseCanvasRef.current, page, renderDpr);
+      if ((window as any).__debugEditorLogs) {
+        console.log(`[RENDER]\n  pageIndex = ${page.pageIndex}\n  renderVersion = ${page.version || 1}`);
+      }
+      CanvasRenderer.renderPage(baseCanvasRef.current, page, renderDpr, zoom);
+      const canvas = baseCanvasRef.current;
+      return () => {
+        CanvasRenderer.releaseCanvas(canvas);
+        page.releaseRenderResources?.();
+      };
     }
-  }, [page, renderDpr]);
+  }, [page, page.version, pageVersion, renderDpr, zoom]);
+
+  useEffect(() => {
+    const canvas = interactionCanvasRef.current;
+    return () => { if (canvas) canvas.width = canvas.height = 0; };
+  }, []);
 
   // Render interaction canvas (selection, caret, collaborator tags)
   useEffect(() => {
@@ -57,10 +76,31 @@ export const CanvasPage: React.FC<CanvasPageProps> = React.memo(({
           collaborators,
           findHighlights,
           dpr: renderDpr,
+          zoom,
         }
       );
     }
-  }, [page, selectionRects, caret, isCaretVisible, collaborators, findHighlights, renderDpr]);
+  }, [page, selectionRects, caret, isCaretVisible, collaborators, findHighlights, renderDpr, zoom]);
+
+  // Ensure crisp repaint as soon as system/web fonts finish loading
+  useEffect(() => {
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+      let isMounted = true;
+      const repaint = () => {
+        if (isMounted && baseCanvasRef.current) {
+          CanvasRenderer.renderPage(baseCanvasRef.current, latestPageRef.current, renderDpr, zoom);
+        }
+      };
+      // The base effect already painted loaded fonts. Repainting again after
+      // every resolved fonts.ready promise doubled work on each input frame.
+      if (document.fonts.status === 'loading') void document.fonts.ready.then(repaint);
+      document.fonts.addEventListener('loadingdone', repaint);
+      return () => {
+        isMounted = false;
+        document.fonts.removeEventListener('loadingdone', repaint);
+      };
+    }
+  }, [renderDpr, zoom]);
 
   const displayWidth = Math.round(page.width * zoom);
   const displayHeight = Math.round(page.height * zoom);
@@ -80,6 +120,8 @@ export const CanvasPage: React.FC<CanvasPageProps> = React.memo(({
         userSelect: 'none',
         flexShrink: 0,
         overflow: 'hidden',
+        imageRendering: '-webkit-optimize-contrast',
+        transform: 'translateZ(0)',
       }}
     >
       {/* Base content canvas */}
@@ -93,6 +135,9 @@ export const CanvasPage: React.FC<CanvasPageProps> = React.memo(({
           width: `${displayWidth}px`,
           height: `${displayHeight}px`,
           pointerEvents: 'none',
+          imageRendering: '-webkit-optimize-contrast',
+          transform: 'translateZ(0)',
+          backfaceVisibility: 'hidden',
         }}
       />
 
@@ -118,6 +163,9 @@ export const CanvasPage: React.FC<CanvasPageProps> = React.memo(({
           height: `${displayHeight}px`,
           cursor: 'text',
           touchAction: 'none',
+          imageRendering: '-webkit-optimize-contrast',
+          transform: 'translateZ(0)',
+          backfaceVisibility: 'hidden',
         }}
       />
     </div>

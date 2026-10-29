@@ -2,6 +2,7 @@ import { CommandRegistry } from '../commands/command-registry';
 import { CompositionManager } from './composition-manager';
 import { SelectionEngine } from '../selection/selection-engine';
 import { DocumentModel } from '../model/document-model';
+import type { KeyboardController } from './keyboard-controller';
 
 export type OptimisticTextHandler = (text: string) => void;
 
@@ -11,6 +12,7 @@ export class TextInputController {
   private compositionManager: CompositionManager;
   private selectionEngine: SelectionEngine;
   private doc: DocumentModel;
+  private keyboardController: KeyboardController | null = null;
   private isProcessingInput = false;
   private justFinishedComposition = false;
   private compositionTimeout: any = null;
@@ -21,16 +23,22 @@ export class TextInputController {
     commands: CommandRegistry,
     compositionManager: CompositionManager,
     selectionEngine: SelectionEngine,
-    doc: DocumentModel
+    doc: DocumentModel,
+    keyboardController?: KeyboardController | null
   ) {
     this.commands = commands;
     this.compositionManager = compositionManager;
     this.selectionEngine = selectionEngine;
     this.doc = doc;
+    this.keyboardController = keyboardController || null;
   }
 
   public setDocument(doc: DocumentModel): void {
     this.doc = doc;
+  }
+
+  public setKeyboardController(kc: KeyboardController | null): void {
+    this.keyboardController = kc;
   }
 
   public setOptimisticTextHandler(handler: OptimisticTextHandler | null): void {
@@ -104,8 +112,8 @@ export class TextInputController {
         return;
       }
 
-      // If composition has just finished, ignore the trailing insertFromComposition event
-      if (this.justFinishedComposition || e.inputType === 'insertFromComposition' || e.inputType === 'insertCompositionText') {
+      // If composition has just finished, ignore trailing composition insert events
+      if (e.inputType === 'insertFromComposition' || e.inputType === 'insertCompositionText') {
         e.preventDefault();
         this.justFinishedComposition = false;
         el.value = '';
@@ -122,16 +130,47 @@ export class TextInputController {
       } else if (inputType === 'deleteContentBackward') {
         e.preventDefault();
         this.optimisticTextHandler?.('');
+        const now = Date.now();
+        // If keyboardController already handled Backspace via keydown in the last 45ms,
+        // ignore duplicate deleteContentBackward to prevent deleting 2 characters (e.g. Unikey/EVKey)
+        if (this.keyboardController && now - this.keyboardController.lastBackspaceHandledTime < 45) {
+          el.value = '';
+          return;
+        }
+        if (this.keyboardController) {
+          this.keyboardController.lastBackspaceHandledTime = now;
+        }
         this.commands.execute('deleteBackward');
         el.value = '';
       } else if (inputType === 'deleteContentForward') {
         e.preventDefault();
         this.optimisticTextHandler?.('');
+        const now = Date.now();
+        if (this.keyboardController && now - this.keyboardController.lastDeleteHandledTime < 45) {
+          el.value = '';
+          return;
+        }
+        if (this.keyboardController) {
+          this.keyboardController.lastDeleteHandledTime = now;
+        }
         this.commands.execute('deleteForward');
         el.value = '';
       } else if (inputType === 'insertParagraph' || inputType === 'insertLineBreak') {
         e.preventDefault();
         this.optimisticTextHandler?.('');
+        // Guard against IME candidate commit Enter splitting paragraph
+        if (this.compositionManager.isRecentComposition(150)) {
+          el.value = '';
+          return;
+        }
+        const now = Date.now();
+        if (this.keyboardController && now - this.keyboardController.lastEnterHandledTime < 45) {
+          el.value = '';
+          return;
+        }
+        if (this.keyboardController) {
+          this.keyboardController.lastEnterHandledTime = now;
+        }
         this.commands.execute('insertParagraph');
         el.value = '';
       } else if (inputType === 'insertFromPaste') {

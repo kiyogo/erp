@@ -10,27 +10,39 @@ import {
 import { DocPosition, isSelectionCollapsed, normalizeSelection } from '../selection/position';
 import { DocumentLayout } from '../layout/layout-types';
 import { HitTester } from '../hit-testing/hit-tester';
+import { CompositionManager } from './composition-manager';
 
 export class KeyboardController {
   private doc: DocumentModel;
   private selectionEngine: SelectionEngine;
   private commands: CommandRegistry;
   private getLayout: () => DocumentLayout;
+  private compositionManager?: CompositionManager | null;
+
+  public lastBackspaceHandledTime = 0;
+  public lastDeleteHandledTime = 0;
+  public lastEnterHandledTime = 0;
 
   constructor(
     doc: DocumentModel,
     selectionEngine: SelectionEngine,
     commands: CommandRegistry,
-    getLayout: () => DocumentLayout
+    getLayout: () => DocumentLayout,
+    compositionManager?: CompositionManager | null
   ) {
     this.doc = doc;
     this.selectionEngine = selectionEngine;
     this.commands = commands;
     this.getLayout = getLayout;
+    this.compositionManager = compositionManager;
   }
 
   public setDocument(doc: DocumentModel): void {
     this.doc = doc;
+  }
+
+  public setCompositionManager(cm: CompositionManager | null): void {
+    this.compositionManager = cm;
   }
 
   private executeCommand(name: string, payload?: any): void {
@@ -84,9 +96,9 @@ export class KeyboardController {
       return true;
     }
     if (mod && (key === 'v' || key === 'V')) {
-      e.preventDefault();
-      this.executeCommand('paste');
-      return true;
+      // Let each native paste event insert once, including key auto-repeat.
+      // Do not also read/insert clipboard data from the keydown handler.
+      return false;
     }
 
     // 4. Formatting Shortcuts
@@ -171,11 +183,13 @@ export class KeyboardController {
     // 9. Backspace & Delete
     if (key === 'Backspace') {
       e.preventDefault();
+      this.lastBackspaceHandledTime = Date.now();
       this.executeCommand('deleteBackward');
       return true;
     }
     if (key === 'Delete') {
       e.preventDefault();
+      this.lastDeleteHandledTime = Date.now();
       this.executeCommand('deleteForward');
       return true;
     }
@@ -183,6 +197,13 @@ export class KeyboardController {
     // 10. Enter & Shift+Enter
     if (key === 'Enter') {
       e.preventDefault();
+      // If an IME composition (Vietnamese Telex, VNI, CJK) has just completed,
+      // the Enter key was used solely to commit the word candidate.
+      // Do NOT split the paragraph or insert an unexpected newline!
+      if (this.compositionManager?.isRecentComposition(150)) {
+        return true;
+      }
+      this.lastEnterHandledTime = Date.now();
       if (shift) {
         this.executeCommand('insertLineBreak');
       } else {

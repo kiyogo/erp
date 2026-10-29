@@ -109,9 +109,16 @@ export interface PageLayout {
   blocks: BlockLayout[];
   hitTestIndex: HitTestEntry[];
   displayList: PaintCommand[];
+  readonly hasRenderResources?: boolean;
+  releaseRenderResources?: () => void;
+  version?: number;
 }
 
 export interface DocumentLayout {
   pages: PageLayout[];
   documentHeight: number;
+  pageHeightIndex?: any;
+  pageCount?: number;
+  getPage?: (index: number) => PageLayout;
+  ensurePageRange?: (start: number, end: number) => void;
 }

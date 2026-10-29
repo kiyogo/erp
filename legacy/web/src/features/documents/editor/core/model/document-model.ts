@@ -60,12 +60,71 @@ export class DocumentModel {
     this.data.metadata.updatedAt = new Date().toISOString();
   }
 
+  private blockIndexMap: Map<string, { block: BlockNode; index: number; table?: TableBlock; cell?: any }> | null = null;
+  private blockVersions: Map<string, number> = new Map();
+  public dirtyBlockIds: Set<string> = new Set();
+
   get blocks(): BlockNode[] {
     return this.data.blocks;
   }
 
   set blocks(val: BlockNode[]) {
     this.data.blocks = val;
+    this.invalidateBlockIndexMap();
+  }
+
+  public invalidateBlockIndexMap(): void {
+    this.blockIndexMap = null;
+  }
+
+  public getBlockVersion(blockId: string): number {
+    return this.blockVersions.get(blockId) || 1;
+  }
+
+  public incrementRevision(): number {
+    this.data.revision = (this.data.revision || 0) + 1;
+    return this.data.revision;
+  }
+
+  public incrementBlockVersion(blockId: string): number {
+    const nextVer = (this.blockVersions.get(blockId) || 1) + 1;
+    this.blockVersions.set(blockId, nextVer);
+    this.dirtyBlockIds.add(blockId);
+    this.incrementRevision();
+    return nextVer;
+  }
+
+  public markDirty(blockId: string): void {
+    this.dirtyBlockIds.add(blockId);
+  }
+
+  public clearDirty(): void {
+    this.dirtyBlockIds.clear();
+  }
+
+  private ensureBlockIndexMap(): Map<string, { block: BlockNode; index: number; table?: TableBlock; cell?: any }> {
+    if (this.blockIndexMap !== null) {
+      return this.blockIndexMap;
+    }
+    const map = new Map<string, { block: BlockNode; index: number; table?: TableBlock; cell?: any }>();
+    const blks = this.data.blocks;
+    for (let i = 0; i < blks.length; i++) {
+      const b = blks[i];
+      map.set(b.id, { block: b, index: i });
+      if (b.type === 'table') {
+        const tbl = b as TableBlock;
+        for (const row of tbl.rows) {
+          for (const cell of row.cells) {
+            for (let ci = 0; ci < cell.blocks.length; ci++) {
+              const cb = cell.blocks[ci];
+              map.set(cb.id, { block: cb, index: ci, table: tbl, cell });
+            }
+          }
+        }
+      }
+    }
+    this.blockIndexMap = map;
+    return map;
   }
 
   public clone(): DocumentModel {
@@ -73,47 +132,25 @@ export class DocumentModel {
   }
 
   public getBlockIndex(blockId: string): number {
-    return this.data.blocks.findIndex((b) => b.id === blockId);
+    const map = this.ensureBlockIndexMap();
+    const entry = map.get(blockId);
+    return entry !== undefined ? entry.index : -1;
   }
 
   public getBlockById(blockId: string): BlockNode | null {
-    const block = this.data.blocks.find((b) => b.id === blockId);
-    if (block) return block;
-
-    // Search in table cells
-    for (const b of this.data.blocks) {
-      if (b.type === 'table') {
-        for (const row of b.rows) {
-          for (const cell of row.cells) {
-            const cellBlock = cell.blocks.find((cb) => cb.id === blockId);
-            if (cellBlock) return cellBlock;
-          }
-        }
-      }
-    }
-    return null;
+    const map = this.ensureBlockIndexMap();
+    const entry = map.get(blockId);
+    return entry !== undefined ? entry.block : null;
   }
 
   public getBlockLocation(blockId: string): { parentArray: BlockNode[]; index: number; table?: TableBlock; cell?: any } | null {
-    const topIdx = this.data.blocks.findIndex((b) => b.id === blockId);
-    if (topIdx !== -1) {
-      return { parentArray: this.data.blocks, index: topIdx };
+    const map = this.ensureBlockIndexMap();
+    const entry = map.get(blockId);
+    if (!entry) return null;
+    if (entry.table && entry.cell) {
+      return { parentArray: entry.cell.blocks, index: entry.index, table: entry.table, cell: entry.cell };
     }
-
-    for (const b of this.data.blocks) {
-      if (b.type === 'table') {
-        for (const row of b.rows) {
-          for (const cell of row.cells) {
-            const cellIdx = cell.blocks.findIndex((cb) => cb.id === blockId);
-            if (cellIdx !== -1) {
-              return { parentArray: cell.blocks, index: cellIdx, table: b, cell };
-            }
-          }
-        }
-      }
-    }
-
-    return null;
+    return { parentArray: this.data.blocks, index: entry.index };
   }
 
   /**
@@ -161,6 +198,10 @@ export class DocumentModel {
 
     if (merged.length === 0) {
       return [{ id: generateRunId(), text: '', marks: runs[0]?.marks || {} }];
+    }
+
+    if (merged.length === 1 && merged[0].text === '\n') {
+      merged[0].text = '';
     }
 
     return merged;
