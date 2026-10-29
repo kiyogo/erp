@@ -1000,48 +1000,41 @@ export const OnboardingModule: React.FC = () => {
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>
                   Ghi chú
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div
-                    style={{
-                      width: 26,
-                      height: 26,
-                      borderRadius: '50%',
-                      backgroundColor: '#10B981',
-                      color: '#FFFFFF',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 700,
-                      fontSize: 10,
-                      flexShrink: 0,
+                {/* Khung nhập ghi chú 5 dòng */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <textarea
+                    rows={5}
+                    placeholder="Nhập ghi chú..."
+                    value={newNoteText}
+                    onChange={e => setNewNoteText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        handleSendNote();
+                      }
                     }}
-                  >
-                    NN
-                  </div>
-                  <div style={{ position: 'relative', flex: 1 }}>
-                    <input
-                      type="text"
-                      placeholder="Enter để gửi"
-                      value={newNoteText}
-                      onChange={e => setNewNoteText(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleSendNote(); }}
-                      style={{
-                        width: '100%',
-                        padding: '6px 44px 6px 10px',
-                        border: '1px solid #CBD5E1',
-                        borderRadius: 6,
-                        fontSize: 12,
-                        boxSizing: 'border-box',
-                      }}
-                    />
-                    <div style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: 4 }}>
-                      <button type="button" onClick={() => message.info('Chọn tệp đính kèm')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748B', padding: 2 }}>
-                        <PaperClipOutlined />
-                      </button>
-                      <button type="button" onClick={handleSendNote} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#009688', padding: 2 }}>
-                        <SendOutlined />
-                      </button>
-                    </div>
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      border: '1px solid #CBD5E1',
+                      borderRadius: 6,
+                      fontSize: 12.5,
+                      fontFamily: 'inherit',
+                      resize: 'vertical',
+                      boxSizing: 'border-box',
+                      outline: 'none',
+                    }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={handleSendNote}
+                      disabled={!newNoteText.trim()}
+                      style={{ backgroundColor: '#009688', borderColor: '#009688', fontSize: 12 }}
+                    >
+                      Lưu ghi chú
+                    </Button>
                   </div>
                 </div>
 
