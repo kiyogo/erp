@@ -355,19 +355,20 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
                 <Form.Item name="adjustmentMethod" label="Phương thức điều chỉnh" rules={[{ required: true }]}><Select options={['Có điều chỉnh', 'Cố định'].map(value => ({ label: value, value }))} /></Form.Item>
               </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse' }}>
-                  <thead><tr style={{ background: '#C5D9C2', textAlign: 'left' }}>{['#', 'Lãi suất (%)', 'Lãi suất quá hạn (%)', 'Hiệu lực từ', 'Ghi chú', ''].map((label, index) => <th key={index} style={{ padding: 8 }}>{label}</th>)}</tr></thead>
-                  <tbody>{rateRows.map((row, index) => <tr key={index}>
-                    <td style={{ padding: 4, textAlign: 'center' }}>{index + 1}</td>
-                    <td style={{ padding: 4 }}><Input aria-label={`Lãi suất dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.rate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, rate: event.target.value } : item))} /></td>
-                    <td style={{ padding: 4 }}><Input aria-label={`Lãi suất quá hạn dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.overdueRate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, overdueRate: event.target.value } : item))} /></td>
-                    <td style={{ padding: 4 }}><Input aria-label={`Ngày hiệu lực dòng ${index + 1}`} type="date" value={row.effectiveFrom} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, effectiveFrom: event.target.value } : item))} /></td>
-                    <td style={{ padding: 4 }}><Input aria-label={`Ghi chú dòng ${index + 1}`} value={row.note} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, note: event.target.value } : item))} /></td>
-                    <td style={{ padding: 4 }}><Button aria-label={`Xóa lãi suất dòng ${index + 1}`} disabled={rateRows.length === 1} onClick={() => setRateRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></td>
+                <table style={{ width: '100%', minWidth: 900, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                  <colgroup><col style={{ width: 34 }} /><col style={{ width: '25%' }} /><col style={{ width: '25%' }} /><col style={{ width: 150 }} /><col style={{ width: '25%' }} /><col style={{ width: 72 }} /></colgroup>
+                  <thead><tr style={{ background: '#C5D9C2', textAlign: 'left' }}>{['#', 'Lãi suất (%)', 'Lãi suất quá hạn (%)', 'Hiệu lực từ', 'Ghi chú', ''].map((label, index) => <th key={index} scope="col" style={{ padding: '9px 8px', borderBottom: '1px solid #AFC9AC', fontWeight: 700 }}>{label}</th>)}</tr></thead>
+                  <tbody>{rateRows.map((row, index) => <tr key={index} style={{ background: '#FBF7E8', borderBottom: '1px solid #E7DFC7' }}>
+                    <td style={{ padding: 4, textAlign: 'center', borderRight: '1px dotted #D8CFB6' }}>{index + 1}</td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Lãi suất dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.rate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, rate: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Lãi suất quá hạn dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.overdueRate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, overdueRate: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Ngày hiệu lực dòng ${index + 1}`} type="date" value={row.effectiveFrom} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, effectiveFrom: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Ghi chú dòng ${index + 1}`} value={row.note} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, note: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, textAlign: 'center' }}><Button aria-label={`Xóa lãi suất dòng ${index + 1}`} disabled={rateRows.length === 1} onClick={() => setRateRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></td>
                   </tr>)}</tbody>
                 </table>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setRateRows(current => [...current, blankRate()])}>Thêm dòng</Button><Button onClick={() => setRateRows([])}>Xóa hết dòng</Button></div>
+              <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setRateRows(current => [...current, blankRate()])}>Thêm dòng</Button><Button onClick={() => setRateRows([blankRate()])}>Xóa hết dòng</Button></div>
             </div> },
             { key: 'repayment', label: isLend ? 'Hình thức thu nợ' : 'Hình thức trả nợ', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', alignContent: 'start' }}>
               <Form.Item name="principalRepayment" label={isLend ? 'Thu gốc' : 'Trả gốc'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
