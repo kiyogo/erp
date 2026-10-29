@@ -4,6 +4,16 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-29] - Quản lý tài khoản và hồ sơ nhân viên trong web cũ
+
+- Chỉ sửa trong `legacy/`: mở rộng form tạo/sửa tài khoản theo hồ sơ nhân viên hiện có, gồm mã, họ tên, ảnh, ngày sinh, giới tính, địa chỉ, điện thoại/email cá nhân, phòng ban, vị trí, quản lý, chức danh, trạng thái lao động, ngày thử việc/chính thức và thông tin công ty. Hồ sơ được tải đầy đủ trước khi sửa; Hủy bỏ bản nháp; Lưu và Lưu và phân quyền đều ghi qua API, thao tác sau mở hồ sơ tài khoản đã lưu.
+- Nối các trường vào API hồ sơ nhân viên hiện có; kiểm tra định dạng ngày/email; cập nhật trạng thái nghỉ việc đồng thời khóa đăng nhập. Vai trò ADMIN/USER được lưu theo kiểm tra máy chủ hiện có; MFA vẫn được nêu đúng là chưa có bộ thực thi máy chủ.
+- Thêm kiểm tra trình duyệt với SQLite tạm: 25 trường/actions, tạo/sửa, tải ảnh, Hủy, tải lại và xác nhận dữ liệu máy chủ; bổ sung test API cho lỗi xác thực, bảo toàn hồ sơ khi cập nhật không hợp lệ và thu hồi đăng nhập khi nghỉ việc.
+- Checklist IDs 20–44 được ghi nhận 25/25 (100% nhóm này); mức sàn tăng từ 73/982 lên 98/982 (10.0%), còn 884 mục chưa được đối chiếu đồng nhất. Chưa thể chốt ngày hoàn thành toàn web cũ.
+- Kiểm tra đạt: API 120/120, web/domain 149/149, PostgreSQL smoke 84 checkpoint, E2E hồ sơ tài khoản, typecheck, API syntax và production build. Bundle JavaScript 5,058.30 kB; còn cảnh báo chunk trên 500 kB.
+
+---
+
 ## [2026-10-29] - Kiểm tra hồ sơ doanh nghiệp trên web cũ
 
 - Chỉ sửa trong `legacy/`: chuyển `aria-label`, `id` và `name` của trường ngày đến DatePicker; hỗ trợ mở bằng bàn phím và đóng bằng Escape để nhãn truy cập được trong hồ sơ công ty.

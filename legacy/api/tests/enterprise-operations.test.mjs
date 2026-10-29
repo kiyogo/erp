@@ -41,7 +41,8 @@ const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${s
 async function request(route, method = 'GET', payload, expected = 200) {
   const response = await fetch(`${base}${route}`, { method, headers, body: payload === undefined ? undefined : JSON.stringify(payload) });
   const body = await response.json();
-  assert.equal(response.status, expected, JSON.stringify(body));
+  if (response.status >= 500) await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(response.status, expected, JSON.stringify({ body, server: response.status >= 500 ? logs : undefined }));
   return body;
 }
 
@@ -84,10 +85,53 @@ test('user administration preserves profile fields, paginates and retains an act
   await request(`/users/${session.user.id}`, 'PATCH', { role: 'USER' }, 422);
   await request(`/users/${session.user.id}`, 'PATCH', { isActive: false }, 422);
   await request('/users', 'POST', { email: 'invalid@example.test', name: 'Invalid role', password: 'Operations-Test-26!Safe', role: 'OWNER' }, 422);
-  const created = (await request('/users', 'POST', { email: 'staff@example.test', name: 'Actual staff', password: 'Operations-Test-26!Safe', role: 'USER', employeeCode: 'STAFF-TEST', department: 'Old office' }, 201)).user;
+  const created = (await request('/users', 'POST', {
+    email: 'staff@example.test', name: 'Actual staff', password: 'Operations-Test-26!Safe', role: 'USER', employeeCode: 'STAFF-TEST',
+    department: 'Old office', position: 'Assistant', phone: '0900000000', status: 'Thử việc',
+    joinDate: '2026-11-01', avatar: 'data:image/png;base64,aGVsbG8=',
+    details: {
+      firstName: 'staff', middleLastName: 'Actual', birthDate: '1998-02-03', gender: 'Nữ',
+      resAddress: 'Hà Nội', personalEmail: 'staff.personal@example.test', manager: session.user.name,
+      managerId: session.user.id, jobTitle: 'Trợ lý', probationDate: '2026-10-01', officialDate: '2026-11-01',
+      workPhone: '02430000000', workEmail: 'staff@example.test',
+    },
+  }, 201)).user;
+  let employeeProfile = (await request(`/employees/${created.id}`)).employee;
+  assert.equal(employeeProfile.status, 'Thử việc');
+  assert.equal(employeeProfile.phone, '0900000000');
+  assert.equal(employeeProfile.avatar, 'data:image/png;base64,aGVsbG8=');
+  assert.equal(employeeProfile.details.firstName, 'staff');
+  assert.equal(employeeProfile.details.middleLastName, 'Actual');
+  assert.equal(employeeProfile.details.birthDate, '1998-02-03');
+  assert.equal(employeeProfile.details.gender, 'Nữ');
+  assert.equal(employeeProfile.details.resAddress, 'Hà Nội');
+  assert.equal(employeeProfile.details.personalEmail, 'staff.personal@example.test');
+  assert.equal(employeeProfile.details.managerId, session.user.id);
+  assert.equal(employeeProfile.details.workEmail, 'staff@example.test');
   await request(`/users/${created.id}`, 'PATCH', { isActive: 'false' }, 422);
-  const updated = (await request(`/users/${created.id}`, 'PATCH', { department: 'Updated office', position: 'Manager' })).user;
+  const updated = (await request(`/users/${created.id}`, 'PATCH', {
+    department: 'Updated office', position: 'Manager', phone: '0911111111', status: 'Chính thức',
+    joinDate: '2026-11-02', details: {
+      firstName: 'Staff', birthDate: '1998-02-04', gender: 'Nam', resAddress: 'Đà Nẵng',
+      personalEmail: 'staff.updated@example.test', workEmail: 'staff@example.test',
+      manager: session.user.name, managerId: session.user.id, jobTitle: 'Quản lý',
+      probationDate: '2026-10-01', officialDate: '2026-11-02', workPhone: '02431111111',
+    },
+  })).user;
   assert.equal(updated.department, 'Updated office'); assert.equal(updated.position, 'Manager'); assert.equal(updated.isActive, true);
+  employeeProfile = (await request(`/employees/${created.id}`)).employee;
+  assert.equal(employeeProfile.status, 'Chính thức');
+  assert.equal(employeeProfile.phone, '0911111111');
+  assert.equal(employeeProfile.joinDate, '2026-11-02');
+  assert.equal(employeeProfile.details.birthDate, '1998-02-04');
+  assert.equal(employeeProfile.details.resAddress, 'Đà Nẵng');
+  assert.equal(employeeProfile.details.personalEmail, 'staff.updated@example.test');
+  assert.equal(employeeProfile.details.jobTitle, 'Quản lý');
+  await request(`/users/${created.id}`, 'PATCH', { details: { birthDate: '31/02/1998' } }, 422);
+  await request(`/users/${created.id}`, 'PATCH', { details: { workEmail: 'not-an-email' } }, 422);
+  await request(`/users/${created.id}`, 'PATCH', { status: 'Đã nghỉ việc', isActive: true }, 422);
+  employeeProfile = (await request(`/employees/${created.id}`)).employee;
+  assert.equal(employeeProfile.details.birthDate, '1998-02-04', 'rejected updates must preserve the previous profile');
   const first = await request('/users?page=1&limit=1'); const second = await request('/users?page=2&limit=1');
   assert.equal(first.pagination.total, 2); assert.equal(first.data.length, 1); assert.equal(second.data.length, 1);
   assert.notEqual(first.data[0].id, second.data[0].id);
@@ -104,6 +148,12 @@ test('user administration preserves profile fields, paginates and retains an act
   for (const route of ['/collections/enterprise_documents', '/admin/backups']) {
     assert.equal((await fetch(`${base}${route}`, { headers: { Authorization: `Bearer ${active.access_token}` } })).status, 403);
   }
+  const retired = await request(`/users/${created.id}`, 'PATCH', { status: 'Đã nghỉ việc' });
+  assert.equal(retired.user.isActive, false);
+  assert.equal((await request(`/employees/${created.id}`)).employee.status, 'Đã nghỉ việc');
+  const retiredLogin = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: created.email, password: 'Operations-Test-26!Safe' }) });
+  assert.equal(retiredLogin.status, 403, 'retirement must revoke account access');
+  await request(`/users/${created.id}`, 'PATCH', { status: 'Chính thức', isActive: true });
 });
 
 test('admin backup endpoints produce a physical ZIP and refuse forged generic snapshots or unsupported restore', async () => {

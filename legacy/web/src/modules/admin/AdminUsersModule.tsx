@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -61,6 +61,40 @@ export function validateAdminUser(values: any, editing = false) {
   return '';
 }
 
+export function buildAdminUserProfilePayload(values: any, avatar: string, users: any[]) {
+  const fullName = String(values.fullName || '').trim();
+  const nameParts = fullName.split(/\s+/).filter(Boolean);
+  const manager = users.find((item) => String(item.key) === String(values.managerId || ''));
+  return {
+    name: fullName,
+    email: String(values.email || '').trim(),
+    role: values.role,
+    employeeCode: String(values.username || '').trim(),
+    password: values.password,
+    department: String(values.department || '').trim(),
+    position: String(values.position || '').trim(),
+    phone: String(values.phone || '').trim(),
+    status: values.status || 'Chính thức',
+    joinDate: String(values.officialDate || ''),
+    avatar,
+    details: {
+      firstName: String(values.firstName || '').trim() || nameParts[nameParts.length - 1] || '',
+      middleLastName: String(values.middleLastName || '').trim() || nameParts.slice(0, -1).join(' '),
+      birthDate: String(values.birthDate || ''),
+      gender: String(values.gender || ''),
+      resAddress: String(values.address || '').trim(),
+      personalEmail: String(values.personalEmail || '').trim(),
+      manager: manager?.fullName || manager?.name || String(values.manager || '').trim(),
+      managerId: manager?.key || String(values.managerId || ''),
+      jobTitle: String(values.jobTitle || values.position || '').trim(),
+      probationDate: String(values.probationDate || ''),
+      officialDate: String(values.officialDate || ''),
+      workPhone: String(values.workPhone || '').trim(),
+      workEmail: String(values.workEmail || values.email || '').trim(),
+    },
+  };
+}
+
 export const AdminUsersModule: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -76,6 +110,10 @@ export const AdminUsersModule: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [passwordTarget, setPasswordTarget] = useState<any>(null);
+  const [avatarValue, setAvatarValue] = useState('');
+  const [profileLoading, setProfileLoading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const assignPermissionsAfterSave = useRef(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -119,23 +157,101 @@ export const AdminUsersModule: React.FC = () => {
     if (saving) return;
     const validation = validateAdminUser(values, Boolean(editingUser));
     if (validation) { message.error(validation); return; }
+    const openPermissionsAfterSave = assignPermissionsAfterSave.current;
+    assignPermissionsAfterSave.current = false;
     setSaving(true);
     try {
-      const payload = {
-        name: String(values.fullName).trim(), email: String(values.email).trim(), role: values.role,
-        department: values.department || '', position: values.position || '',
-      };
-      if (editingUser) await usersApi.update(editingUser.key, payload);
-      else await usersApi.create({ ...payload, employeeCode: String(values.username).trim(), password: values.password });
-      message.success(`Đã ${editingUser ? 'cập nhật' : 'tạo'} tài khoản và hồ sơ nhân sự cho ${values.fullName}.`);
+      const payload = buildAdminUserProfilePayload(values, avatarValue, data);
+      let savedUser: any;
+      if (editingUser) {
+        const { password: _password, ...profilePayload } = payload;
+        const response = await usersApi.update(editingUser.key, profilePayload);
+        savedUser = response.data?.user;
+      } else {
+        const response = await usersApi.create(payload);
+        savedUser = response.data?.user;
+      }
+      message.success(`Đã ${editingUser ? 'cập nhật' : 'tạo'} tài khoản và hồ sơ nhân sự cho ${values.fullName}. Vai trò ${values.role} đã được lưu.`);
       setModalOpen(false);
       form.resetFields();
+      setAvatarValue('');
       await loadData();
+      if (openPermissionsAfterSave && savedUser) {
+        const createdRecord = normalizeAdminUser(savedUser);
+        setSelectedUser(createdRecord);
+        setDrawerOpen(true);
+      }
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể lưu tài khoản.');
     } finally {
       setSaving(false);
     }
+  };
+
+  const openEditUser = async (record: any) => {
+    setProfileLoading(true);
+    try {
+      const response = await employeesApi.getOne(record.key);
+      const employee = response.data?.employee;
+      if (!employee) throw new Error('Không tìm thấy hồ sơ nhân sự.');
+      const details: any = employee.details || {};
+      const manager = data.find((item) => item.key === details.managerId)
+        || data.find((item) => item.fullName === details.manager && item.key !== record.key);
+      setEditingUser(record);
+      setAvatarValue(String(employee.avatar || employee.avatarUrl || ''));
+      form.resetFields();
+      form.setFieldsValue({
+        username: employee.code || employee.employeeCode || record.username,
+        fullName: employee.fullName || employee.name || record.fullName,
+        firstName: details.firstName || '',
+        middleLastName: details.middleLastName || '',
+        email: employee.email || record.email,
+        role: employee.role || record.role,
+        department: employee.department || record.department,
+        position: employee.position || record.position,
+        phone: employee.phone || '',
+        birthDate: details.birthDate || '',
+        gender: details.gender || '',
+        address: details.resAddress || '',
+        personalEmail: details.personalEmail || '',
+        managerId: manager?.key || details.managerId || '',
+        manager: details.manager || '',
+        jobTitle: details.jobTitle || employee.position || '',
+        status: employee.status || 'Chính thức',
+        probationDate: details.probationDate || '',
+        officialDate: employee.joinDate || details.officialDate || '',
+        workPhone: details.workPhone || '',
+        workEmail: details.workEmail || employee.email || '',
+        twoFactor: 'unsupported',
+      });
+      setModalOpen(true);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể tải hồ sơ nhân sự.');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handleAvatarFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      message.error('Tệp ảnh đại diện không đúng định dạng.');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > 2_500_000) {
+      message.error('Ảnh đại diện không được vượt quá 2,5 MB.');
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setAvatarValue(reader.result);
+      else message.error('Không thể đọc tệp ảnh đại diện.');
+    };
+    reader.onerror = () => message.error('Không thể đọc tệp ảnh đại diện.');
+    reader.readAsDataURL(file);
   };
 
   const handleToggleStatus = async (key: string, name: string) => {
@@ -176,6 +292,9 @@ export const AdminUsersModule: React.FC = () => {
   const activeCount = data.filter((u) => u.status === 'Hoạt động').length;
   const mfaCount = data.filter((u) => u.twoFactor).length;
   const adminCount = data.filter((u) => u.role === 'ADMIN').length;
+  const managerOptions = data
+    .filter((item) => item.key !== editingUser?.key && item.isActive && item.role === 'USER')
+    .map((item) => ({ label: `${item.fullName} (${item.username})`, value: item.key }));
 
   const filteredData = filterAdminUsers(data, filterTab, searchText);
 
@@ -403,7 +522,9 @@ export const AdminUsersModule: React.FC = () => {
             onClick={() => {
               form.resetFields();
               setEditingUser(null);
-              form.setFieldsValue({ role: 'USER', twoFactor: 'unsupported' });
+              setAvatarValue('');
+              if (avatarInputRef.current) avatarInputRef.current.value = '';
+              form.setFieldsValue({ role: 'USER', status: 'Chính thức', twoFactor: 'unsupported' });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -428,53 +549,119 @@ export const AdminUsersModule: React.FC = () => {
       <Modal
         title={editingUser ? 'Cập nhật tài khoản người dùng' : 'Tạo Mới Tài Khoản Người Dùng & Phân Quyền'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => {
+          if (saving) return;
+          setModalOpen(false);
+          setAvatarValue('');
+          assignPermissionsAfterSave.current = false;
+        }}
         footer={null}
-        width={560}
+        width={780}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <Form.Item name="username" label="Mã nhân viên / Tên đăng nhập" rules={[{ required: true }]}>
-            <Input disabled={Boolean(editingUser)} placeholder="Ví dụ: NV-001" />
-          </Form.Item>
-          <Form.Item name="fullName" label="Họ và tên người dùng" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Lê Hoàng Yến" />
-          </Form.Item>
-          <Form.Item name="email" label="Email doanh nghiệp" rules={[{ required: true, type: 'email' }]}>
-            <Input placeholder="Ví dụ: yen.lh@kiyovn.enterprise" />
-          </Form.Item>
-          {!editingUser && <Form.Item name="password" label="Mật khẩu khởi tạo" rules={[{ required: true, min: 12, message: 'Tối thiểu 12 ký tự.' }]}>
-            <Input.Password autoComplete="new-password" />
-          </Form.Item>}
-          <Form.Item name="role" label="Vai trò hệ thống" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { label: 'Quản trị viên', value: 'ADMIN' },
-                { label: 'Nhân viên', value: 'USER' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="department" label="Phòng ban trực thuộc">
-            <Select
-              options={departmentOptions}
-              allowClear
-              placeholder={departmentOptions.length ? 'Chọn phòng ban...' : 'Chưa có danh mục phòng ban'}
-            />
-          </Form.Item>
-          <Form.Item name="position" label="Chức danh công việc">
-            <Input placeholder="Ví dụ: Ban Giám Đốc, Kế Toán Trưởng, Trưởng Phòng Nhân Sự..." />
-          </Form.Item>
-          <Form.Item name="twoFactor" label="Chính sách xác thực 2 bước (2FA)" initialValue="unsupported">
-            <Select
-              disabled
-              options={[
-                { label: 'Chưa có bộ thực thi MFA trên máy chủ', value: 'unsupported' },
-              ]}
-            />
-          </Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              {editingUser ? 'Lưu tài khoản' : 'Khởi tạo tài khoản'}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <section style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Thông tin tài khoản</div>
+              <Form.Item name="username" label="Mã nhân viên / Tên đăng nhập" rules={[{ required: true }]}>
+                <Input disabled={Boolean(editingUser)} placeholder="Nhập mã nhân viên" />
+              </Form.Item>
+              <Form.Item name="role" label="Vai trò hệ thống" rules={[{ required: true }]}>
+                <Select options={[{ label: 'Quản trị viên', value: 'ADMIN' }, { label: 'Nhân viên', value: 'USER' }]} />
+              </Form.Item>
+              <Form.Item name="email" label="Email công ty" rules={[{ required: true, type: 'email' }]}>
+                <Input placeholder="Nhập email công ty" />
+              </Form.Item>
+              {!editingUser && <Form.Item name="password" label="Mật khẩu khởi tạo" rules={[{ required: true, min: 12, message: 'Tối thiểu 12 ký tự.' }]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>}
+              <Form.Item name="twoFactor" label="Xác thực hai bước" initialValue="unsupported">
+                <Select disabled options={[{ label: 'Chưa có bộ thực thi MFA trên máy chủ', value: 'unsupported' }]} />
+              </Form.Item>
+            </section>
+
+            <section style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Thông tin nhân viên</div>
+              <Form.Item name="middleLastName" label="Họ và đệm">
+                <Input placeholder="Nhập họ và đệm" />
+              </Form.Item>
+              <Form.Item name="firstName" label="Tên">
+                <Input placeholder="Nhập tên" />
+              </Form.Item>
+              <Form.Item name="fullName" label="Họ và tên đầy đủ" rules={[{ required: true }]}>
+                <Input placeholder="Nhập họ và tên đầy đủ" />
+              </Form.Item>
+              <Form.Item name="birthDate" label="Ngày sinh">
+                <Input type="date" aria-label="Ngày sinh" />
+              </Form.Item>
+              <Form.Item name="gender" label="Giới tính">
+                <Select options={[
+                  { label: 'Nam', value: 'Nam' }, { label: 'Nữ', value: 'Nữ' },
+                  { label: 'Chuyển giới', value: 'Chuyển giới' }, { label: 'Liên giới tính', value: 'Liên giới tính' },
+                ]} />
+              </Form.Item>
+              <Form.Item name="address" label="Địa chỉ">
+                <Input placeholder="Nhập địa chỉ" />
+              </Form.Item>
+              <Form.Item name="phone" label="Điện thoại cá nhân">
+                <Input placeholder="Nhập số điện thoại" />
+              </Form.Item>
+              <Form.Item name="personalEmail" label="Email cá nhân">
+                <Input placeholder="Nhập email cá nhân" />
+              </Form.Item>
+              <div style={{ marginBottom: 14 }}>
+                <label htmlFor="admin-user-avatar" style={{ display: 'block', color: '#475569', fontSize: 12, marginBottom: 5 }}>Ảnh đại diện</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {avatarValue ? <img src={avatarValue} alt="Ảnh đại diện" style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' }} /> : <UserOutlined style={{ fontSize: 28, color: '#94A3B8' }} />}
+                  <input id="admin-user-avatar" ref={avatarInputRef} type="file" accept="image/*" aria-label="Ảnh đại diện" onChange={handleAvatarFile} />
+                  {avatarValue && <Button htmlType="button" onClick={() => { setAvatarValue(''); if (avatarInputRef.current) avatarInputRef.current.value = ''; }}>Xóa ảnh</Button>}
+                </div>
+              </div>
+            </section>
+
+            <section style={{ gridColumn: '1 / -1', border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>Công việc và liên hệ</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                <Form.Item name="department" label="Đơn vị công tác">
+                  <Select options={departmentOptions} allowClear placeholder={departmentOptions.length ? 'Chọn đơn vị công tác' : 'Chưa có danh mục đơn vị'} />
+                </Form.Item>
+                <Form.Item name="position" label="Vị trí công việc">
+                  <Input placeholder="Nhập vị trí công việc" />
+                </Form.Item>
+                <Form.Item name="managerId" label="Quản lý trực tiếp">
+                  <Select options={managerOptions} allowClear showSearch placeholder="Chọn quản lý trực tiếp" />
+                </Form.Item>
+                <Form.Item name="jobTitle" label="Chức danh">
+                  <Input placeholder="Nhập chức danh" />
+                </Form.Item>
+                <Form.Item name="status" label="Trạng thái lao động">
+                  <Select options={[{ label: 'Chính thức', value: 'Chính thức' }, { label: 'Thử việc', value: 'Thử việc' }, { label: 'Đã nghỉ việc', value: 'Đã nghỉ việc' }]} />
+                </Form.Item>
+                <Form.Item name="probationDate" label="Ngày thử việc">
+                  <Input type="date" aria-label="Ngày thử việc" />
+                </Form.Item>
+                <Form.Item name="officialDate" label="Ngày chính thức">
+                  <Input type="date" aria-label="Ngày chính thức" />
+                </Form.Item>
+                <Form.Item name="workPhone" label="Điện thoại cơ quan">
+                  <Input placeholder="Nhập điện thoại cơ quan" />
+                </Form.Item>
+                <Form.Item name="workEmail" label="Email công ty">
+                  <Input placeholder="Nhập email công ty" />
+                </Form.Item>
+              </div>
+            </section>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button disabled={saving} onClick={() => {
+              setModalOpen(false);
+              setAvatarValue('');
+              assignPermissionsAfterSave.current = false;
+            }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} onClick={() => { assignPermissionsAfterSave.current = false; }} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {editingUser ? 'Lưu' : 'Lưu'}
+            </Button>
+            <Button type="primary" htmlType="submit" loading={saving} onClick={() => { assignPermissionsAfterSave.current = true; }} style={{ backgroundColor: '#00796B', borderColor: '#00796B' }}>
+              Lưu và phân quyền
             </Button>
           </div>
         </Form>
@@ -553,7 +740,7 @@ export const AdminUsersModule: React.FC = () => {
               </Button>
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <Button onClick={() => { setEditingUser(selectedUser); form.resetFields(); form.setFieldsValue({ ...selectedUser, twoFactor: 'unsupported' }); setModalOpen(true); }}>Sửa tài khoản</Button>
+              <Button loading={profileLoading} onClick={() => openEditUser(selectedUser)}>Sửa tài khoản</Button>
               <Button danger onClick={() => handleDelete(selectedUser)}>Xóa tài khoản</Button>
             </div>
           </div>

@@ -172,6 +172,29 @@ async function employeeProfileRowByUserId(userId) {
   `).get(userId, userId, userId);
 }
 
+function validateEmployeeProfileDetails(value) {
+  const details = { ...jsonObject(value, 'Thông tin hồ sơ') };
+  for (const field of ['firstName', 'middleLastName', 'gender', 'manager', 'managerId', 'jobTitle', 'workPhone']) {
+    if (Object.hasOwn(details, field)) details[field] = optionalText(details[field], field, field === 'workPhone' ? 32 : 160);
+  }
+  if (Object.hasOwn(details, 'resAddress')) details.resAddress = optionalText(details.resAddress, 'Địa chỉ', 5000);
+  for (const field of ['birthDate', 'probationDate', 'officialDate']) {
+    if (!Object.hasOwn(details, field) || details[field] === '' || details[field] === null) {
+      if (Object.hasOwn(details, field)) details[field] = '';
+    } else {
+      details[field] = requiredIsoDate(details[field], field);
+    }
+  }
+  for (const field of ['personalEmail', 'workEmail']) {
+    if (!Object.hasOwn(details, field) || details[field] === '' || details[field] === null) {
+      if (Object.hasOwn(details, field)) details[field] = '';
+    } else {
+      details[field] = normalizeEmail(details[field]);
+    }
+  }
+  return details;
+}
+
 function publicEmployee(row, actor = null) {
   if (!row) return null;
   return serializeEmployeeDetail(row, row, actor || { role: 'ADMIN' });
@@ -186,7 +209,7 @@ async function ensureEmployeeProfile(user, input = {}) {
   const existing = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
   if (existing) return existing;
   const timestamp = now();
-  const rawDetails = jsonObject(input.details, 'Thông tin hồ sơ');
+  const rawDetails = validateEmployeeProfileDetails(input.details);
   const details = { ...rawDetails };
   const sensitiveKeys = ['idNumber', 'docNumber', 'bankAccount', 'taxCode', 'resAddress'];
   for (const k of sensitiveKeys) {
@@ -285,7 +308,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
   const avatar = changes.avatar === undefined ? profile.avatar_url : optionalText(changes.avatar, 'Ảnh đại diện', 25_000_000);
   
   const currentDetails = parseJsonObject(profile.details_json);
-  const inputDetails = changes.details === undefined ? currentDetails : { ...currentDetails, ...jsonObject(changes.details, 'Thông tin hồ sơ') };
+  const inputDetails = changes.details === undefined ? currentDetails : { ...currentDetails, ...validateEmployeeProfileDetails(changes.details) };
   const details = { ...inputDetails };
   const sensitiveKeys = ['idNumber', 'docNumber', 'bankAccount', 'taxCode', 'resAddress'];
   for (const k of sensitiveKeys) {
@@ -5120,6 +5143,7 @@ async function createUser(input) {
   const employeeCode = suppliedEmployeeCode || await generateEmployeeCode();
   const role = input.role === 'ADMIN' ? 'ADMIN' : input.role === 'USER' ? 'USER' : 'USER';
   if (input.role !== undefined && !['ADMIN', 'USER'].includes(input.role)) throw new HttpError(422, 'Vai trò không hợp lệ.');
+  const employmentStatus = input.status === undefined ? 'Chính thức' : oneOf(input.status, 'Trạng thái nhân sự', EMPLOYMENT_STATUSES);
   const password = validatePassword(input.password);
   if (await getUserByEmail(email)) throw new HttpError(409, 'Email đã tồn tại.');
   if (await db.prepare('SELECT 1 FROM users WHERE employee_code = ? LIMIT 1').get(employeeCode)) {
@@ -5136,9 +5160,9 @@ async function createUser(input) {
   };
   await db.transaction(async () => {
     await db.prepare(`INSERT INTO users (id, email, name, employee_code, role, password_hash, is_active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-      .run(user.id, user.email, user.name, user.employeeCode, user.role, user.passwordHash, user.timestamp, user.timestamp);
-    await ensureEmployeeProfile(user, input);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(user.id, user.email, user.name, user.employeeCode, user.role, user.passwordHash, employmentStatus === 'Đã nghỉ việc' ? 0 : 1, user.timestamp, user.timestamp);
+    await ensureEmployeeProfile(user, { ...input, status: employmentStatus });
     await ensureEmployeeWorkspace(await getUserById(user.id));
   });
   return publicUser(await getUserById(user.id));
@@ -10047,6 +10071,8 @@ async function handleRequest(request, response) {
       const suppliedEmail = payload.email === undefined ? undefined : normalizeEmail(payload.email);
       if (payload.role !== undefined && !['ADMIN', 'USER'].includes(payload.role)) throw new HttpError(422, 'Vai trò không hợp lệ.');
       if (payload.isActive !== undefined && typeof payload.isActive !== 'boolean') throw new HttpError(422, 'Trạng thái hoạt động phải là true hoặc false.');
+      const profileFields = ['phone', 'department', 'position', 'status', 'joinDate', 'salaryBase', 'avatar', 'details'];
+      const profilePatch = Object.fromEntries(profileFields.filter((field) => Object.hasOwn(payload, field)).map((field) => [field, payload[field]]));
       const suppliedHash = payload.password === undefined ? undefined : await hashPassword(validatePassword(payload.password));
       let updatedUser;
       await db.transaction(async () => {
@@ -10054,7 +10080,10 @@ async function handleRequest(request, response) {
         const fresh = await getUserById(id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy tài khoản.');
         const name = suppliedName ?? fresh.name, email = suppliedEmail ?? fresh.email, role = payload.role ?? fresh.role;
-        const isActive = payload.isActive === undefined ? fresh.is_active : payload.isActive ? 1 : 0;
+        if (payload.status === 'Đã nghỉ việc' && payload.isActive === true) {
+          throw new HttpError(422, 'Nhân sự đã nghỉ việc không thể có tài khoản đang hoạt động.');
+        }
+        const isActive = payload.status === 'Đã nghỉ việc' ? 0 : payload.isActive === undefined ? fresh.is_active : payload.isActive ? 1 : 0;
         if (actor.id === id && !isActive) throw new HttpError(422, 'Không thể tự vô hiệu hóa tài khoản đang dùng.');
         const existingEmail = await getUserByEmail(email);
         if (existingEmail && existingEmail.id !== id) throw new HttpError(409, 'Email đã tồn tại.');
@@ -10063,10 +10092,7 @@ async function handleRequest(request, response) {
           .run(name, email, role, isActive, suppliedHash ?? fresh.password_hash, now(), id);
         const updated = await getUserById(id);
         await ensureEmployeeProfile(updated);
-        if (payload.department !== undefined || payload.position !== undefined) await updateEmployeeProfileRecord(id, {
-          ...(payload.department !== undefined ? { department: payload.department } : {}),
-          ...(payload.position !== undefined ? { position: payload.position } : {}),
-        }, { allowIdentityChanges: true });
+        if (Object.keys(profilePatch).length > 0) await updateEmployeeProfileRecord(id, profilePatch, { allowIdentityChanges: true });
         updatedUser = await getUserById(id);
         if (updatedUser.is_active) await ensureEmployeeWorkspace(updatedUser);
         else await cleanupEmptyEmployeeWorkspace(id);
