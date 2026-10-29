@@ -588,7 +588,7 @@ textarea.ant-input {
   padding: 0 !important;
   background-color: var(--antd-bg-container, #ffffff);
   border: 1px solid var(--antd-border, #d9d9d9);
-  border-radius: var(--antd-radius-base, 6px);
+  border-radius: 8px;
   box-shadow: var(--antd-shadow-dropdown, 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05));
   z-index: 100050 !important;
   box-sizing: border-box;
@@ -649,13 +649,13 @@ textarea.ant-input {
 }
 
 .ant-select-dropdown .ant-select-item:first-child {
-  border-top-left-radius: calc(var(--antd-radius-base, 6px) - 1px) !important;
-  border-top-right-radius: calc(var(--antd-radius-base, 6px) - 1px) !important;
+  border-top-left-radius: 7px !important;
+  border-top-right-radius: 7px !important;
 }
 
 .ant-select-dropdown .ant-select-item:last-child {
-  border-bottom-left-radius: calc(var(--antd-radius-base, 6px) - 1px) !important;
-  border-bottom-right-radius: calc(var(--antd-radius-base, 6px) - 1px) !important;
+  border-bottom-left-radius: 7px !important;
+  border-bottom-right-radius: 7px !important;
 }
 
 /* ==========================================
@@ -666,7 +666,7 @@ textarea.ant-input {
   padding: 0;
   background-color: var(--antd-bg-container, #ffffff);
   border: 1px solid var(--antd-border, #d9d9d9);
-  border-radius: var(--antd-radius-base, 6px);
+  border-radius: 8px;
   box-shadow: var(--antd-shadow-dropdown, 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05));
   z-index: 100050;
   box-sizing: border-box;
@@ -965,7 +965,7 @@ textarea.ant-input {
   background: #ffffff !important;
   background-color: #ffffff !important;
   border: 1px solid #E2E8F0 !important;
-  border-radius: 6px !important;
+  border-radius: 8px !important;
   box-shadow: 0 6px 20px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06) !important;
   padding: 2px 2px !important;
   overflow: hidden !important;
@@ -995,7 +995,7 @@ textarea.ant-input {
 .ant-dropdown-menu-submenu-title {
   background: transparent;
   background-color: transparent;
-  border-radius: 6px !important;
+  border-radius: 8px !important;
   margin: 2px 0 !important;
   padding: 7px 12px !important;
   font-size: 13px !important;
