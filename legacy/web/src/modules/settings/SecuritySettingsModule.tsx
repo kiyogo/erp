@@ -30,6 +30,7 @@ export const SecuritySettingsModule: React.FC = () => {
     }
   })();
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [pinStatus, setPinStatus] = useState({ configured: false, updatedAt: '', loading: true, error: false });
 
   useEffect(() => {
     let active = true;
@@ -37,6 +38,11 @@ export const SecuritySettingsModule: React.FC = () => {
       if (active) setTwoFactorEnabled(data.enabled);
     }).catch(() => {
       if (active) setTwoFactorEnabled(false);
+    });
+    authApi.getSecurityPin().then(({ data }) => {
+      if (active) setPinStatus({ ...data, loading: false, error: false });
+    }).catch(() => {
+      if (active) setPinStatus({ configured: false, updatedAt: '', loading: false, error: true });
     });
     return () => { active = false; };
   }, [location.pathname]);
@@ -54,8 +60,11 @@ export const SecuritySettingsModule: React.FC = () => {
 
   // Security PIN State
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [currentSecurityPin, setCurrentSecurityPin] = useState('');
+  const [currentPasswordForPin, setCurrentPasswordForPin] = useState('');
   const [securityPin, setSecurityPin] = useState('');
   const [confirmSecurityPin, setConfirmSecurityPin] = useState('');
+  const [isSavingSecurityPin, setIsSavingSecurityPin] = useState(false);
 
   // Guide Dialog State
   const [isGuideModalOpen, setIsGuideModalOpen] = useState(false);
@@ -102,22 +111,39 @@ export const SecuritySettingsModule: React.FC = () => {
     }
   };
 
-  const handleSavePin = () => {
-    if (!securityPin || securityPin.length < 6) {
-      message.error('Mã PIN bảo mật phải có tối thiểu 6 chữ số!');
+  const handleSavePin = async () => {
+    if (!/^\d{6}$/.test(securityPin)) {
+      message.error('Mã PIN bảo mật phải gồm đúng 6 chữ số!');
       return;
     }
     if (securityPin !== confirmSecurityPin) {
       message.error('Mã xác nhận PIN không trùng khớp!');
       return;
     }
-
-    const updated = dataService.saveEmployeePasskey('EMP-951954', securityPin, passkeyData.deviceType);
-    setPasskeyData(updated);
-    setIsPinModalOpen(false);
-    setSecurityPin('');
-    setConfirmSecurityPin('');
-    message.success('Đã cập nhật Mã PIN bảo mật thành công! Mã PIN có thể dùng để xác thực mọi tính năng trên toàn hệ thống.');
+    if (pinStatus.configured && !/^\d{6}$/.test(currentSecurityPin)) {
+      message.error('Vui lòng nhập mã PIN hiện tại gồm 6 chữ số.');
+      return;
+    }
+    setIsSavingSecurityPin(true);
+    try {
+      const { data } = await authApi.saveSecurityPin({
+        pin: securityPin,
+        confirmPin: confirmSecurityPin,
+        currentPin: pinStatus.configured ? currentSecurityPin : undefined,
+        currentPassword: pinStatus.configured ? undefined : currentPasswordForPin,
+      });
+      setPinStatus({ ...data, loading: false, error: false });
+      setIsPinModalOpen(false);
+      setCurrentSecurityPin('');
+      setCurrentPasswordForPin('');
+      setSecurityPin('');
+      setConfirmSecurityPin('');
+      message.success('Đã lưu mã PIN bảo mật trên máy chủ.');
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || 'Không thể lưu mã PIN bảo mật.');
+    } finally {
+      setIsSavingSecurityPin(false);
+    }
   };
 
   // Đăng ký Passkey thực tế qua WebAuthn FIDO2 API của trình duyệt
@@ -263,19 +289,19 @@ export const SecuritySettingsModule: React.FC = () => {
               <LockOutlined style={{ color: '#009688', fontSize: 18 }} />
               Mã PIN bảo mật cá nhân
             </div>
-            <span style={{ background: '#DCFCE7', color: '#16A34A', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <CheckCircleOutlined /> Đã thiết lập
+            <span style={{ background: pinStatus.configured ? '#DCFCE7' : '#F1F5F9', color: pinStatus.configured ? '#16A34A' : '#64748B', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              {pinStatus.loading ? 'Đang tải...' : pinStatus.error ? 'Không tải được trạng thái' : pinStatus.configured ? <><CheckCircleOutlined /> Đã thiết lập</> : <><CloseCircleOutlined /> Chưa thiết lập</>}
             </span>
           </div>
 
           <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 6, padding: 12, marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ fontSize: 12, color: '#64748B' }}>Trạng thái bảo vệ</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#009688' }}>Đã kích hoạt bảo mật 6 số</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: pinStatus.configured ? '#009688' : '#64748B' }}>{pinStatus.loading ? 'Đang tải trạng thái' : pinStatus.error ? 'Không tải được trạng thái' : pinStatus.configured ? 'Đã thiết lập PIN 6 số' : 'Chưa thiết lập PIN'}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 12, color: '#64748B' }}>Ngày cập nhật</span>
-              <span style={{ fontSize: 12, color: '#475569' }}>{passkeyData?.createdAt || '2026-01-01'}</span>
+              <span style={{ fontSize: 12, color: '#475569' }}>{pinStatus.loading ? 'Đang tải...' : pinStatus.error ? 'Không tải được trạng thái' : pinStatus.updatedAt ? new Date(pinStatus.updatedAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : 'Chưa thiết lập'}</span>
             </div>
           </div>
 
@@ -283,14 +309,17 @@ export const SecuritySettingsModule: React.FC = () => {
             <Button
               type="primary"
               icon={<KeyOutlined />}
+              disabled={pinStatus.loading || pinStatus.error}
               onClick={() => {
+                setCurrentSecurityPin('');
+                setCurrentPasswordForPin('');
                 setSecurityPin('');
                 setConfirmSecurityPin('');
                 setIsPinModalOpen(true);
               }}
               style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
             >
-              Đổi mã PIN bảo mật
+              {pinStatus.loading ? 'Đang tải...' : pinStatus.configured ? 'Đổi mã PIN bảo mật' : 'Thiết lập mã PIN'}
             </Button>
             <Button
               icon={<QuestionCircleOutlined />}
@@ -367,7 +396,7 @@ export const SecuritySettingsModule: React.FC = () => {
         footer={
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Button onClick={() => setIsPinModalOpen(false)}>Hủy</Button>
-            <Button type="primary" onClick={handleSavePin} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" loading={isSavingSecurityPin} onClick={handleSavePin} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu mã PIN
             </Button>
           </div>
@@ -376,8 +405,31 @@ export const SecuritySettingsModule: React.FC = () => {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10 }}>
           <div style={{ background: '#F0FDFA', border: '1px solid #CCFBF1', padding: 12, borderRadius: 6, fontSize: 12.5, color: '#0F766E' }}>
-            <LockOutlined style={{ color: '#009688', marginRight: 6 }} /><strong>Mã PIN bảo mật 6 số</strong> được dùng để xác thực nhanh cho mọi thao tác quan trọng trên web.
+            <LockOutlined style={{ color: '#009688', marginRight: 6 }} /><strong>Mã PIN bảo mật 6 số</strong> được lưu dạng băm trên máy chủ. Khi đổi mã, bạn cần xác nhận mã hiện tại.
           </div>
+
+          {pinStatus.configured && <div>
+            <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
+              Mã PIN hiện tại <span style={{ color: '#EF4444' }}>*</span>
+            </label>
+            <Input.Password
+              placeholder="Nhập mã PIN hiện tại"
+              maxLength={6}
+              value={currentSecurityPin}
+              onChange={e => setCurrentSecurityPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            />
+          </div>}
+
+          {!pinStatus.configured && <div>
+            <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
+              Mật khẩu hiện tại khi đăng nhập bằng mật khẩu
+            </label>
+            <Input.Password
+              placeholder="Bỏ trống nếu vừa đăng nhập bằng Google"
+              value={currentPasswordForPin}
+              onChange={e => setCurrentPasswordForPin(e.target.value)}
+            />
+          </div>}
 
           <div>
             <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
@@ -385,9 +437,9 @@ export const SecuritySettingsModule: React.FC = () => {
             </label>
             <Input.Password
               placeholder="VD: 123456"
-              maxLength={12}
+              maxLength={6}
               value={securityPin}
-              onChange={e => setSecurityPin(e.target.value)}
+              onChange={e => setSecurityPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
             />
           </div>
 
@@ -397,9 +449,9 @@ export const SecuritySettingsModule: React.FC = () => {
             </label>
             <Input.Password
               placeholder="Nhập lại mã PIN mới..."
-              maxLength={12}
+              maxLength={6}
               value={confirmSecurityPin}
-              onChange={e => setConfirmSecurityPin(e.target.value)}
+              onChange={e => setConfirmSecurityPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
             />
           </div>
         </div>
@@ -479,13 +531,7 @@ export const SecuritySettingsModule: React.FC = () => {
               <LockOutlined style={{ color: '#009688' }} /> Mã PIN bảo mật cá nhân là gì?
             </div>
             <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.6 }}>
-              Mã PIN gồm 6 chữ số bí mật của riêng bạn, dùng để xác thực cấp 2 khi thực hiện các tác vụ quan trọng trên toàn hệ thống web:
-              <ul style={{ margin: '6px 0 0 0', paddingLeft: 18, color: '#334155' }}>
-                <li>Ký số văn bản điện tử và phê duyệt hồ sơ</li>
-                <li>Duyệt chi thanh toán và giao dịch tài chính</li>
-                <li>Xem bảng lương và thông tin nhạy cảm</li>
-                <li>Xác nhận biên bản bàn giao tài sản</li>
-              </ul>
+              Mã PIN gồm 6 chữ số và được lưu dưới dạng băm trên máy chủ. Khi đổi mã, bạn cần nhập mã PIN hiện tại.
             </div>
           </div>
 

@@ -62,6 +62,15 @@ try {
   const login = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD });
   token = login.token;
   await request('/auth/profile'); completed++;
+  assert.deepEqual(await request('/auth/security-pin'), { configured: false, updatedAt: '' });
+  await request('/auth/security-pin', 'POST', { pin: '123456', confirmPin: '123456', currentPassword: 'incorrect-password' }, 422);
+  const pinCreated = await request('/auth/security-pin', 'POST', { pin: '123456', confirmPin: '123456', currentPassword: env.SEED_ADMIN_PASSWORD });
+  assert.equal(pinCreated.configured, true);
+  await request('/auth/security-pin', 'POST', { pin: '654321', confirmPin: '654321', currentPin: '000000' }, 422);
+  const pinUpdated = await request('/auth/security-pin', 'POST', { pin: '654321', confirmPin: '654321', currentPin: '123456' });
+  assert.equal(pinUpdated.configured, true);
+  assert.notEqual(pinUpdated.updatedAt, pinCreated.updatedAt);
+  completed += 5;
   const initialUsage = await request('/admin/usage?application=all&period=this_week');
   assert.ok(initialUsage.data.some(item => item.userId === login.user.id && item.loginCount === 1));
   const trackedUsage = await request('/admin/usage/activity', 'POST', { application: 'finance' }, 201);

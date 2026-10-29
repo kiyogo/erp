@@ -434,6 +434,17 @@ async function saveUserTwoFactor(userId, record) {
     .run(randomUUID(), userId, userId, JSON.stringify(record), timestamp, timestamp);
 }
 
+async function getUserSecurityPin(userId) {
+  const row = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'user_security_pin' AND record_key = ? AND owner_id = ? LIMIT 1").get(userId, userId);
+  return row ? parseJsonObject(row.payload_json) : {};
+}
+
+async function saveUserSecurityPin(userId, pinHash) {
+  const timestamp = now();
+  await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'user_security_pin', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at")
+    .run(randomUUID(), userId, userId, JSON.stringify({ pinHash, updatedAt: timestamp }), timestamp, timestamp);
+}
+
 function hashRecoveryCode(code) {
   return createHash('sha256').update(String(code || '').replace(/[^a-z0-9]/gi, '').toUpperCase()).digest('hex');
 }
@@ -5385,11 +5396,11 @@ function loginKey(request, email) {
   return `${request.socket.remoteAddress || 'unknown'}:${email}`;
 }
 
-function enforceLoginRateLimit(key) {
+function enforceLoginRateLimit(key, message = 'Đã thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.') {
   const entry = loginAttempts.get(key);
   const timestamp = Date.now();
   if (!entry || timestamp - entry.windowStart >= LOGIN_WINDOW_MS) return;
-  if (entry.count >= LOGIN_LIMIT) throw new HttpError(429, 'Đã thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.');
+  if (entry.count >= LOGIN_LIMIT) throw new HttpError(429, message);
 }
 
 function recordLoginFailure(key) {
@@ -6270,6 +6281,53 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const security = await getUserTwoFactor(actor.id);
     sendJson(response, 200, { enabled: security.enabled === true, authenticatorConfigured: security.enabled === true, backupCodeCount: Array.isArray(security.recoveryCodeHashes) ? security.recoveryCodeHashes.length : 0 });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/auth/security-pin') {
+    const actor = await requireUser(request);
+    const security = await getUserSecurityPin(actor.id);
+    sendJson(response, 200, { configured: Boolean(security.pinHash), updatedAt: security.updatedAt || '' });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/security-pin') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 16 * 1024);
+    const pin = String(payload.pin || '');
+    if (!/^\d{6}$/.test(pin)) throw new HttpError(422, 'Mã PIN phải gồm đúng 6 chữ số.');
+    if (String(payload.confirmPin || '') !== pin) throw new HttpError(422, 'Mã xác nhận PIN không trùng khớp.');
+    const attemptKey = 'security-pin:' + loginKey(request, actor.id);
+    enforceLoginRateLimit(attemptKey, 'Đã thử xác minh PIN quá nhiều lần. Vui lòng thử lại sau.');
+    const pinHash = await hashPassword(pin);
+    let failure = '';
+    await db.transaction(async () => {
+      if (db.pool) await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get('security-pin:' + actor.id);
+      const current = await getUserSecurityPin(actor.id);
+      if (current.pinHash) {
+        if (!await verifyPassword(String(payload.currentPin || ''), current.pinHash)) {
+          failure = 'Mã PIN hiện tại không chính xác.';
+          return;
+        }
+      } else {
+        const recentGoogleSession = request.authSession.session.method === 'google'
+          && Date.parse(request.authSession.session.loginTime) > Date.now() - 5 * 60_000;
+        const passwordVerified = await verifyPassword(String(payload.currentPassword || ''), actor.password_hash);
+        if (!passwordVerified && !recentGoogleSession) {
+          failure = 'Cần mật khẩu hiện tại hoặc một phiên Google vừa đăng nhập để thiết lập PIN.';
+          return;
+        }
+      }
+      await saveUserSecurityPin(actor.id, pinHash);
+    });
+    if (failure) {
+      recordLoginFailure(attemptKey);
+      throw new HttpError(422, failure);
+    }
+    clearLoginFailures(attemptKey);
+    await recordAuditEvent(actor.id, 'set_security_pin', 'user_security_pin', actor.id);
+    const security = await getUserSecurityPin(actor.id);
+    sendJson(response, 200, { configured: true, updatedAt: security.updatedAt });
     return;
   }
 

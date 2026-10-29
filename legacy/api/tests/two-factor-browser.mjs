@@ -89,6 +89,28 @@ try {
     localStorage.setItem('minepanel_token', accessToken);
     localStorage.setItem('minepanel_user', JSON.stringify(user));
   }, { accessToken: token, user: login.user });
+  await page.goto(webUrl + '/admin/settings/security', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(() => document.body.innerText.includes('Mã PIN bảo mật cá nhân'), { timeout: 30000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Thiết lập mã PIN'), { timeout: 15000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Thiết lập mã PIN').click());
+  await page.waitForSelector('input[placeholder="Bỏ trống nếu vừa đăng nhập bằng Google"]');
+  await page.type('input[placeholder="Bỏ trống nếu vừa đăng nhập bằng Google"]', env.SEED_ADMIN_PASSWORD);
+  await page.waitForSelector('input[placeholder="VD: 123456"]');
+  await page.type('input[placeholder="VD: 123456"]', '123456');
+  await page.type('input[placeholder="Nhập lại mã PIN mới..."]', '123456');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Lưu mã PIN').click());
+  await page.waitForFunction(() => document.body.innerText.includes('Đã lưu mã PIN bảo mật trên máy chủ.'), { timeout: 15000 });
+  const pinStatus = await fetch(apiUrl + '/auth/security-pin', { headers: { Authorization: 'Bearer ' + token } }).then(response => response.json());
+  assert.equal(pinStatus.configured, true);
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Đổi mã PIN bảo mật'), { timeout: 15000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Đổi mã PIN bảo mật').click());
+  await page.waitForSelector('input[placeholder="Nhập mã PIN hiện tại"]');
+  await page.type('input[placeholder="Nhập mã PIN hiện tại"]', '123456');
+  await page.type('input[placeholder="VD: 123456"]', '654321');
+  await page.type('input[placeholder="Nhập lại mã PIN mới..."]', '654321');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Lưu mã PIN').click());
+  await page.waitForFunction(() => document.body.innerText.includes('Đã lưu mã PIN bảo mật trên máy chủ.'), { timeout: 15000 });
+  assert.deepEqual(pageErrors, []);
   await page.goto(`${webUrl}/admin/settings/security/twosv/authenticator`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Tiếp tục'), { timeout: 30000 });
   await page.waitForSelector('img[alt="Mã QR ứng dụng xác thực"]', { timeout: 30000 });
@@ -140,7 +162,7 @@ try {
   assert.equal(sessionsResponse.status, 200, JSON.stringify(sessions));
   assert.ok(sessions.data.some(item => item.current && item.mfaVerified));
   assert.deepEqual(pageErrors, []);
-  console.log(JSON.stringify({ browser: 'Chromium', flow: 'TOTP setup, local QR generation and enforced password-login challenge', checksPassed: 7, evidence: directory }));
+  console.log(JSON.stringify({ browser: 'Chromium', flow: 'server-side PIN setup and update, TOTP setup, local QR generation and enforced password-login challenge', evidence: directory }));
 } finally {
   await browser?.close();
   for (const child of [api, vite]) {

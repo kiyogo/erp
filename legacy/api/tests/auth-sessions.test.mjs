@@ -247,6 +247,35 @@ test('revocation survives API restart and configured Google Workspace domain is 
   assert.equal(allowed.user.role, 'USER');
 });
 
+test('security PIN is stored as a server-side password hash and can only be changed with the current PIN', async () => {
+  const session = await login();
+  assert.deepEqual(await request('/auth/security-pin', 'GET', undefined, 200, session.token), { configured: false, updatedAt: '' });
+  await request('/auth/security-pin', 'POST', { pin: '12345', confirmPin: '12345' }, 422, session.token);
+  await request('/auth/security-pin', 'POST', { pin: '123456', confirmPin: '654321' }, 422, session.token);
+  await request('/auth/security-pin', 'POST', { pin: '123456', confirmPin: '123456', currentPassword: 'wrong-password' }, 422, session.token);
+  const created = await request('/auth/security-pin', 'POST', { pin: '123456', confirmPin: '123456', currentPassword: env.SEED_ADMIN_PASSWORD }, 200, session.token);
+  assert.equal(created.configured, true);
+  const stored = storage.prepare("SELECT payload_json FROM collection_records WHERE scope = 'user_security_pin' AND owner_id = ?").get(session.user.id).payload_json;
+  assert.equal(stored.includes('123456'), false, 'the PIN is not stored in plain text');
+  assert.match(JSON.parse(stored).pinHash, /^scrypt\$/);
+  assert.deepEqual(await request('/auth/security-pin', 'GET', undefined, 200, session.token), created);
+  await request('/auth/security-pin', 'POST', { pin: '654321', confirmPin: '654321', currentPin: '000000' }, 422, session.token);
+  const updated = await request('/auth/security-pin', 'POST', { pin: '654321', confirmPin: '654321', currentPin: '123456' }, 200, session.token);
+  assert.equal(updated.configured, true);
+  assert.notEqual(updated.updatedAt, created.updatedAt);
+  await request('/auth/security-pin', 'POST', { pin: '000000', confirmPin: '000000', currentPin: '123456' }, 422, session.token);
+  for (let attempt = 0; attempt < 7; attempt += 1) {
+    await request('/auth/security-pin', 'POST', { pin: '000000', confirmPin: '000000', currentPin: '000000' }, 422, session.token);
+  }
+  await request('/auth/security-pin', 'POST', { pin: '000000', confirmPin: '000000', currentPin: '000000' }, 429, session.token);
+
+  const googleOnly = await request('/auth/google', 'POST', {
+    credential: googleToken({ email: 'pin-google-' + randomUUID() + '@example.test', hd: 'example.test', sub: randomUUID() }),
+  }, 200, '');
+  const googlePin = await request('/auth/security-pin', 'POST', { pin: '246810', confirmPin: '246810' }, 200, googleOnly.access_token || googleOnly.token);
+  assert.equal(googlePin.configured, true, 'a fresh Google login can set a PIN without a local password');
+});
+
 test('server TOTP enrollment, backup codes and password and Google login challenges are enforced', async () => {
   await stopServer();
   env.GOOGLE_ALLOWED_DOMAIN = '';

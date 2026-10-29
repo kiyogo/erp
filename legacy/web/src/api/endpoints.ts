@@ -5,6 +5,9 @@ export const authApi = {
   loginGoogle:    (data?: any)                      => api.post('/auth/google', data || {}),
   verifyMfaLogin: (challengeToken: string, code: string) => api.post('/auth/2fa/login', { challengeToken, code }),
   getTwoFactor: () => api.get<{ enabled: boolean; authenticatorConfigured: boolean; backupCodeCount: number }>('/auth/2fa'),
+  getSecurityPin: () => api.get<{ configured: boolean; updatedAt: string }>('/auth/security-pin'),
+  saveSecurityPin: (data: { pin: string; confirmPin: string; currentPin?: string; currentPassword?: string }) =>
+    api.post<{ configured: boolean; updatedAt: string }>('/auth/security-pin', data),
   beginTwoFactorSetup: () => api.post<{ secret: string; otpauthUrl: string; expiresAt: string }>('/auth/2fa/enrollment'),
   verifyTwoFactorSetup: (code: string) => api.post<{ enabled: boolean; backupCodes: string[] }>('/auth/2fa/enrollment/verify', { code }),
   disableTwoFactor: (code: string) => api.post<{ enabled: boolean }>('/auth/2fa/disable', { code }),
