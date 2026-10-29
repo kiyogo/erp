@@ -79,6 +79,12 @@ async function raw(route, method = 'GET', payload, token = control.token) {
 async function request(route, method = 'GET', payload, expected = 200, token = control.token) {
   const result = await raw(route, method, payload, token); assert.equal(result.status, expected, JSON.stringify(result.body)); return result.body;
 }
+const profile = (await request('/system/company-profile')).profile;
+await request('/system/company-profile', 'PUT', {
+  ...profile, companyName: 'Doanh nghiệp kiểm thử', taxCode: '0012345678', legalForm: 'llc_single',
+  companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99',
+  fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
+});
 async function createUser(role = 'USER') {
   const id = randomUUID();
   return (await request('/users', 'POST', { email: `${id}@example.test`, name: `Actual ${role}`, password: env.SEED_ADMIN_PASSWORD, employeeCode: `TEST-${id}`, role }, 201)).user;

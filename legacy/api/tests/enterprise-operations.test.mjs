@@ -226,6 +226,12 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(initial.accountingProfileComplete, false);
   assert.ok(initial.accountingProfileMissing.includes('Loại hình pháp nhân'));
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'NO-PROFILE', entryDate: '2026-10-01', description: 'Thiếu hồ sơ', debitAccount: 'TK 642', creditAccount: 'TK 112', amount: 100 }, 409);
+  await request('/collections/finance_advances', 'POST', { record: { key: 'advance-no-profile' } }, 409);
+  for (const [route, payload] of [
+    ['/finance/payments', {}], ['/finance/cash-transactions', {}], ['/finance/internal-transfers', {}],
+    ['/finance/inventory/transactions', {}], ['/finance/payroll/ledger-preview', {}],
+    ['/finance/payroll/adjustment-preview', {}], ['/finance/documents', {}],
+  ]) await request(route, 'POST', payload, 409);
   await request('/system/company-profile', 'PUT', { ...initial, companyName: '' }, 422);
   const bank = (await request('/finance/bank-accounts', 'POST', { bankName: 'Configured Bank', accountNumber: '0012345', accountHolder: 'Configured Company', balance: 0, status: 'Đang hoạt động' }, 201)).account;
   const profile = { ...initial, companyName: 'Doanh nghiệp cấu hình', fullName: 'Tên pháp nhân đầy đủ', shortName: 'DN', companyCode: 'DN-001', taxCode: '0012345678', businessType: 'Công nghệ', establishedDate: '2020-02-29', registrationDate: '2020-03-01', registrationNo: 'DK-001', registrationIssuer: 'Nơi cấp đã nhập', representative: 'Đại diện đã nhập', representativeTitle: 'Giám đốc đã nhập', address: 'Địa chỉ đã nhập', phone: '+84900000000', fax: '0100000000', email: 'office@example.test', website: 'https://example.test/vi', domain: 'portal.example.test', timezone: 'UTC', currency: 'USD', bankAccountId: bank.key, legalForm: 'llc_single', companySize: 'small', industry: 'Công nghệ', accountingRegime: 'TT99', fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction', updatedBy: 'forged' };

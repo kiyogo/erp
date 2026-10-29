@@ -2104,8 +2104,18 @@ async function canReadTaskReportAttachment(actor, fileId) {
   }
 }
 
+const accountingOperationScopes = new Set([
+  'finance_advances', 'finance_cash_transactions', 'finance_costing', 'finance_einvoices', 'finance_equity',
+  'finance_fixed_assets', 'finance_general_ledger', 'finance_internal_transfers', 'finance_inventory',
+  'finance_inventory_transactions', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
+  'finance_payroll_postings', 'finance_prepaid', 'finance_tax',
+]);
+
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (accountingOperationScopes.has(scope) && !['GET', 'HEAD'].includes(request.method)) {
+    await requireAccountingProfile();
+  }
   if (scope === 'finance_general_ledger' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Sổ Cái chỉ được ghi qua API hạch toán có kiểm tra cân đối và kỳ kế toán.');
   }
@@ -8693,6 +8703,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/payments') {
     const actor = await requireUser(request);
+    await requireAccountingProfile();
     const input = await readJson(request, 32 * 1024);
     const beneficiary = requiredText(input.beneficiary, 'Đơn vị thụ hưởng', 200);
     const category = requiredText(input.category, 'Nội dung thanh toán', 500);
@@ -8827,6 +8838,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/cash-transactions') {
     const actor = await requireAdmin(request);
+    await requireAccountingProfile();
     const transaction = validateCashTransaction(await readJson(request));
     transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
     const id = randomUUID();
@@ -8870,6 +8882,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/internal-transfers') {
     const actor = await requireAdmin(request);
+    await requireAccountingProfile();
     await requireSecurityPin(request, actor);
     const input = await readJson(request, 16 * 1024);
     const requestId = requiredText(input.requestId, 'Mã yêu cầu', 100);
@@ -8999,6 +9012,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/inventory/transactions') {
     const actor = await requireAdmin(request);
+    await requireAccountingProfile();
     const result = await createInventoryTransaction(actor, await readJson(request, 512 * 1024));
     sendJson(response, result.replayed ? 200 : 201, result);
     return;
@@ -9425,6 +9439,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && ['/finance/payroll/ledger-preview', '/finance/payroll/ledger-post'].includes(resource)) {
     const actor = await requireAdmin(request);
+    await requireAccountingProfile();
     const input = await readJson(request);
     const period = payrollMonth(input.period);
     if (!period) throw new HttpError(422, 'Kỳ lương không hợp lệ.');
@@ -9466,6 +9481,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && ['/finance/payroll/adjustment-preview', '/finance/payroll/adjustment-post'].includes(resource)) {
     const actor = await requireAdmin(request);
+    await requireAccountingProfile();
     const input = await readJson(request);
     const period = payrollMonth(input.period);
     if (!period) throw new HttpError(422, 'Kỳ lương không hợp lệ.');
@@ -9572,6 +9588,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/documents') {
     const actor = await requireAdmin(request);
+    await requireAccountingProfile();
     const input = await readJson(request);
     const customerId = optionalText(input.customerId, 'Khách hàng', 160);
     if (customerId && input.documentType !== 'sale') throw new HttpError(422, 'Liên kết khách hàng chỉ áp dụng cho chứng từ bán hàng.');

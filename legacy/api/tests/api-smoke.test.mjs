@@ -58,6 +58,12 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
   assert.equal(response.status, expected, JSON.stringify(body));
   return body;
 }
+const profile = (await request('/system/company-profile')).profile;
+await request('/system/company-profile', 'PUT', {
+  ...profile, companyName: 'Doanh nghiệp kiểm thử', taxCode: '0012345678', legalForm: 'llc_single',
+  companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99',
+  fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
+});
 
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
