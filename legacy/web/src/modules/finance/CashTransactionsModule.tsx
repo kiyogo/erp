@@ -577,8 +577,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         onCancel={closeForm}
         footer={<>
           <Button onClick={closeForm}>Đóng</Button>
-          <Button type="primary" onClick={() => { saveAndAddRef.current = false; void form.submit(); }}>Cất</Button>
-          {!editingTransaction && <Button type="primary" onClick={() => { saveAndAddRef.current = true; void form.submit(); }}>Cất và thêm</Button>}
+          <Button type="primary" onClick={() => { saveAndAddRef.current = false; void form.submit(); }}>Lưu</Button>
+          {!editingTransaction && <Button type="primary" onClick={() => { saveAndAddRef.current = true; void form.submit(); }}>Lưu và thêm</Button>}
         </>}
         width="min(1600px, calc(100vw - 32px))"
         bodyStyle={{ minHeight: 0, marginRight: -14, paddingRight: 14, overflowX: 'auto' }}
