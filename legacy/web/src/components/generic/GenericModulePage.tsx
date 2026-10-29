@@ -45,6 +45,9 @@ import { TimesheetSummaryModule } from '../../modules/attendance/TimesheetSummar
 import { TimesheetRawDataModule } from '../../modules/attendance/TimesheetRawDataModule';
 import { ShiftsModule } from '../../modules/attendance/ShiftsModule';
 import { ShiftAssignmentModule } from '../../modules/attendance/ShiftAssignmentModule';
+import { ShiftDetailModule } from '../../modules/attendance/ShiftDetailModule';
+import { ShiftSummaryModule } from '../../modules/attendance/ShiftSummaryModule';
+import { ShiftRegistrationModule } from '../../modules/attendance/ShiftRegistrationModule';
 import { OvertimeModule } from '../../modules/attendance/OvertimeModule';
 import { LeaveRequestsModule } from '../../modules/attendance/LeaveRequestsModule';
 import { LeaveSummaryModule } from '../../modules/attendance/LeaveSummaryModule';
@@ -300,11 +303,9 @@ export const GenericModulePage: React.FC = () => {
   // 6. Attendance
   if (p === '/attendance/overview' || p === '/attendance/monitoring') return <AttendanceOverviewModule />;
   if (p === '/attendance/alerts') return <AttendanceAlertsModule />;
-  if (
-    p === '/attendance/shifts/detail' ||
-    p === '/attendance/shifts/summary' ||
-    p === '/attendance/shifts/registration'
-  ) return <ShiftAssignmentModule />;
+    if (p === '/attendance/shifts/detail') return <ShiftDetailModule />;
+  if (p === '/attendance/shifts/summary') return <ShiftSummaryModule />;
+  if (p === '/attendance/shifts/registration') return <ShiftRegistrationModule />;
   if (p.startsWith('/attendance/shifts')) return <ShiftsModule />;
   if (p === '/attendance/timesheet/summary') return <TimesheetSummaryModule />;
   if (p === '/attendance/timesheet/data') return <TimesheetRawDataModule />;
