@@ -1572,12 +1572,18 @@ export const Select: React.FC<SelectProps> = ({
     }
   }, [open, effectiveShowSearch]);
 
-  // Auto scroll to active item
+  // Keep the selected option visible without moving the list when it is already in view.
   React.useLayoutEffect(() => {
     if (open && dropdownRef.current && !effectiveShowSearch) {
-      const activeEl = dropdownRef.current.querySelector('.ant-select-item-selected') as HTMLElement;
+      const dropdown = dropdownRef.current;
+      const activeEl = dropdown.querySelector('.ant-select-item-selected') as HTMLElement | null;
       if (activeEl) {
-        dropdownRef.current.scrollTop = activeEl.offsetTop - 60;
+        const itemTop = activeEl.offsetTop;
+        const itemBottom = itemTop + activeEl.offsetHeight;
+        const visibleTop = dropdown.scrollTop;
+        const visibleBottom = visibleTop + dropdown.clientHeight;
+        if (itemTop < visibleTop) dropdown.scrollTop = itemTop;
+        else if (itemBottom > visibleBottom) dropdown.scrollTop = itemBottom - dropdown.clientHeight;
       }
     }
   }, [open, effectiveShowSearch]);
