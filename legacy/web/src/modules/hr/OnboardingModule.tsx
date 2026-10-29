@@ -916,9 +916,9 @@ export const OnboardingModule: React.FC = () => {
         bodyStyle={{ padding: 0 }}
       >
         {selectedTask && (
-          <div style={{ display: 'flex', minHeight: 480, maxHeight: 'calc(85vh - 70px)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', minHeight: 480, maxHeight: 'calc(85vh - 70px)', overflow: 'hidden', background: '#FFFFFF' }}>
             {/* CỘT TRÁI: THÔNG TIN NHÂN SỰ & GHI CHÚ */}
-            <div style={{ width: 320, borderRight: '1px solid #E2E8F0', background: '#F8FAFC', display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 14, gap: 12 }}>
+            <div style={{ width: 320, background: '#FFFFFF', display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 14, gap: 12 }}>
               {/* Khối hồ sơ tóm tắt */}
               <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
