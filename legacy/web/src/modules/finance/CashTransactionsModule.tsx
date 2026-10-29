@@ -265,8 +265,9 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       (item.recipientOrPayer || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.account || '').toLowerCase().includes(searchText.toLowerCase());
 
-    if (typeFilter === 'all') return matchSearch;
-    if (typeFilter === 'pending') return matchSearch && item.status === 'Chờ duyệt';
+    if (typeFilter === 'all') return matchSearch && (!pinnedType || item.type === pinnedType);
+    if (typeFilter === 'pending') return matchSearch && item.status === 'Chờ duyệt' && (!pinnedType || item.type === pinnedType);
+    if (pinnedType) return matchSearch && item.type === pinnedType;
     return matchSearch && item.type === typeFilter;
   });
 
@@ -409,7 +410,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             { key: 'Thu', label: 'Phiếu Thu', icon: <ArrowDownOutlined style={{ color: '#10B981' }} /> },
             { key: 'Chi', label: 'Phiếu Chi', icon: <ArrowUpOutlined style={{ color: '#EF4444' }} /> },
             { key: 'pending', label: 'Chờ duyệt', icon: <ClockCircleOutlined style={{ color: '#F59E0B' }} /> },
-          ].map((tab) => (
+          ].filter(tab => !pinnedType || tab.key === pinnedType || tab.key === 'pending').map((tab) => (
             <Button
               key={tab.key}
               size="small"
@@ -447,7 +448,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             onClick={openCreateForm}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
-            Lập phiếu thu / chi
+            {pinnedType === 'Thu' ? 'Lập phiếu thu' : pinnedType === 'Chi' ? 'Lập phiếu chi' : 'Lập phiếu thu / chi'}
           </Button>
         </div>
       </div>
@@ -511,11 +512,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
           <Form.Item label={activeVoucherType === 'Chi' ? 'Loại phiếu chi' : 'Loại phiếu thu'} required>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-              <Form.Item name="category" noStyle rules={[{ required: true, message: 'Hãy chọn loại phiếu.' }]}>
+              <Form.Item name="category" rules={[{ required: true, message: 'Hãy chọn loại phiếu.' }]} style={{ flex: 1, marginBottom: 0 }}>
                 <Select
                   showSearch
                   placeholder={cashCategories[activeVoucherType].length ? 'Chọn loại phiếu' : 'Chưa có loại phiếu; bấm dấu cộng để thêm'}
                   options={cashCategories[activeVoucherType].map(name => ({ label: name, value: name }))}
+                  style={{ width: '100%' }}
                 />
               </Form.Item>
               <Button
