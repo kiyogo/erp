@@ -729,330 +729,390 @@ export const ShiftDetailModule: React.FC = () => {
         pagination={{ pageSize: 10, showSizeChanger: true }}
       />
 
-      {/* MODAL: PHÂN CA CHI TIẾT (ĐÚNG 100% CẤU TRÚC VÀ YÊU CẦU CỦA NGƯỜI DÙNG) */}
+      {/* MODAL: PHÂN CA CHI TIẾT (BỐ CỤC 2 CỘT SIDE-BY-SIDE: XEM TRƯỚC PHÂN CA LUÔN Ở BÊN PHẢI) */}
       <Modal
         title={editingPlan ? 'Chỉnh sửa phân ca chi tiết' : 'Phân ca chi tiết'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
-        width={860}
+        width={1040}
+        style={{ maxWidth: '96vw', top: 35 }}
       >
         <Form
           form={form}
           layout="vertical"
           onFinish={handleSavePlan}
-          style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
         >
-          {/* I. THÔNG TIN CHUNG */}
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-              Thông tin chung
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12 }}>
-              <Form.Item
-                name="name"
-                label="Tên bảng phân ca"
-                required
-                rules={[{ required: true, message: 'Vui lòng nhập tên bảng phân ca' }]}
-                style={{ margin: 0 }}
-              >
-                <Input placeholder="Nhập tên bảng phân ca" style={{ height: 32 }} />
-              </Form.Item>
-
-              <Form.Item
-                name="orgUnit"
-                label="Đơn vị áp dụng"
-                required
-                rules={[{ required: true, message: 'Vui lòng chọn đơn vị áp dụng' }]}
-                style={{ margin: 0 }}
-              >
-                <Select
-                  style={{ height: 32 }}
-                  options={orgUnits.map((u) => ({ label: u, value: u }))}
-                />
-              </Form.Item>
-
-              <Form.Item
-                name="shiftKey"
-                label="Ca làm việc"
-                required
-                rules={[{ required: true, message: 'Vui lòng chọn ca làm việc' }]}
-                style={{ margin: 0 }}
-              >
-                <Select
-                  style={{ height: 32 }}
-                  onChange={(val) => setSelectedShiftKey(val)}
-                  options={shifts.map((s) => ({
-                    label: `${s.shiftName} (${s.shiftCode || 'CA'} · ${s.timeRange || `${s.startTime} - ${s.endTime}`})`,
-                    value: s.key,
-                  }))}
-                />
-              </Form.Item>
-            </div>
-          </div>
-
-          {/* II. THỜI GIAN ÁP DỤNG */}
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-              Thời gian áp dụng
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-              <Form.Item
-                name="startDate"
-                label="Ngày bắt đầu"
-                required
-                rules={[{ required: true, message: 'Vui lòng nhập ngày bắt đầu' }]}
-                style={{ margin: 0 }}
-              >
-                <Input placeholder="29/10/2026" style={{ height: 32 }} />
-              </Form.Item>
-
-              <Form.Item
-                name="endDate"
-                label="Ngày kết thúc"
-                style={{ margin: 0 }}
-              >
-                <Input placeholder="29/10/2026" style={{ height: 32 }} />
-              </Form.Item>
-
-              <Form.Item
-                name="repeatType"
-                label="Lặp theo"
-                initialValue="Tuần"
-                style={{ margin: 0 }}
-              >
-                <Select
-                  style={{ height: 32 }}
-                  options={[
-                    { label: 'Tuần', value: 'Tuần' },
-                    { label: 'Tháng', value: 'Tháng' },
-                    { label: 'Ngày', value: 'Ngày' },
-                  ]}
-                />
-              </Form.Item>
-
-              <Form.Item
-                name="repeatCycle"
-                label="Chu kì lặp"
-                initialValue={1}
-                style={{ margin: 0 }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Input type="number" min={1} defaultValue={1} style={{ width: 80, height: 32 }} />
-                  <span style={{ fontSize: 13, color: '#475569', fontWeight: 600 }}>Tuần</span>
+          {/* BỐ CỤC 2 CỘT: TRÁI LÀ CẤU HÌNH, PHẢI LUÔN LÀ XEM TRƯỚC PHÂN CA */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1.28fr) minmax(360px, 1fr)',
+              gap: 24,
+              alignItems: 'start',
+            }}
+          >
+            {/* CỘT BÊN TRÁI: THIẾT LẬP PHÂN CA */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* I. THÔNG TIN CHUNG */}
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
+                  Thông tin chung
                 </div>
-              </Form.Item>
-            </div>
 
-            {/* Các ngày trong tuần */}
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
-                Ngày áp dụng trong tuần:
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+                  <Form.Item
+                    name="name"
+                    label="Tên bảng phân ca"
+                    required
+                    rules={[{ required: true, message: 'Vui lòng nhập tên bảng phân ca' }]}
+                    style={{ margin: 0 }}
+                  >
+                    <Input placeholder="Nhập tên bảng phân ca" style={{ height: 32 }} />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="orgUnit"
+                    label="Đơn vị áp dụng"
+                    required
+                    rules={[{ required: true, message: 'Vui lòng chọn đơn vị áp dụng' }]}
+                    style={{ margin: 0 }}
+                  >
+                    <Select
+                      style={{ height: 32 }}
+                      options={orgUnits.map((u) => ({ label: u, value: u }))}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="shiftKey"
+                    label="Ca làm việc"
+                    required
+                    rules={[{ required: true, message: 'Vui lòng chọn ca làm việc' }]}
+                    style={{ margin: 0 }}
+                  >
+                    <Select
+                      style={{ height: 32 }}
+                      onChange={(val) => setSelectedShiftKey(val)}
+                      options={shifts.map((s) => ({
+                        label: `${s.shiftName} (${s.shiftCode || 'CA'} · ${s.timeRange || `${s.startTime} - ${s.endTime}`})`,
+                        value: s.key,
+                      }))}
+                    />
+                  </Form.Item>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {[
-                  { num: 2, label: 'Thứ 2' },
-                  { num: 3, label: 'Thứ 3' },
-                  { num: 4, label: 'Thứ 4' },
-                  { num: 5, label: 'Thứ 5' },
-                  { num: 6, label: 'Thứ 6' },
-                  { num: 7, label: 'Thứ 7' },
-                  { num: 8, label: 'Chủ nhật' },
-                ].map((day) => {
-                  const isSelected = selectedDaysOfWeek.includes(day.num);
-                  return (
-                    <Button
-                      key={day.num}
-                      type="button"
-                      size="small"
-                      onClick={() => handleToggleDay(day.num)}
-                      style={{
-                        height: 32,
-                        padding: '0 12px',
-                        backgroundColor: isSelected ? '#E0F2F1' : '#FFFFFF',
-                        borderColor: isSelected ? '#009688' : '#CBD5E1',
-                        color: isSelected ? '#00796B' : '#475569',
-                        fontWeight: isSelected ? 700 : 500,
-                      }}
-                    >
-                      {day.label}
-                    </Button>
-                  );
-                })}
+
+              {/* II. THỜI GIAN ÁP DỤNG */}
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
+                  Thời gian áp dụng
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))', gap: 10 }}>
+                  <Form.Item
+                    name="startDate"
+                    label="Ngày bắt đầu"
+                    required
+                    rules={[{ required: true, message: 'Vui lòng nhập ngày bắt đầu' }]}
+                    style={{ margin: 0 }}
+                  >
+                    <Input placeholder="29/10/2026" style={{ height: 32 }} />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="endDate"
+                    label="Ngày kết thúc"
+                    style={{ margin: 0 }}
+                  >
+                    <Input placeholder="29/10/2026" style={{ height: 32 }} />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="repeatType"
+                    label="Lặp theo"
+                    initialValue="Tuần"
+                    style={{ margin: 0 }}
+                  >
+                    <Select
+                      style={{ height: 32 }}
+                      options={[
+                        { label: 'Tuần', value: 'Tuần' },
+                        { label: 'Tháng', value: 'Tháng' },
+                        { label: 'Ngày', value: 'Ngày' },
+                      ]}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="repeatCycle"
+                    label="Chu kì lặp"
+                    initialValue={1}
+                    style={{ margin: 0 }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Input type="number" min={1} defaultValue={1} style={{ width: 65, height: 32 }} />
+                      <span style={{ fontSize: 13, color: '#475569', fontWeight: 600 }}>Tuần</span>
+                    </div>
+                  </Form.Item>
+                </div>
+
+                {/* Các ngày trong tuần */}
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
+                    Ngày áp dụng trong tuần:
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {[
+                      { num: 2, label: 'Thứ 2' },
+                      { num: 3, label: 'Thứ 3' },
+                      { num: 4, label: 'Thứ 4' },
+                      { num: 5, label: 'Thứ 5' },
+                      { num: 6, label: 'Thứ 6' },
+                      { num: 7, label: 'Thứ 7' },
+                      { num: 8, label: 'Chủ nhật' },
+                    ].map((day) => {
+                      const isSelected = selectedDaysOfWeek.includes(day.num);
+                      return (
+                        <Button
+                          key={day.num}
+                          type="button"
+                          size="small"
+                          onClick={() => handleToggleDay(day.num)}
+                          style={{
+                            height: 32,
+                            padding: '0 10px',
+                            backgroundColor: isSelected ? '#E0F2F1' : '#FFFFFF',
+                            borderColor: isSelected ? '#009688' : '#CBD5E1',
+                            color: isSelected ? '#00796B' : '#475569',
+                            fontWeight: isSelected ? 700 : 500,
+                          }}
+                        >
+                          {day.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Checkbox Bỏ xem trước phân ca */}
+                <div style={{ marginTop: 10 }}>
+                  <Checkbox
+                    checked={skipPreview}
+                    onChange={(e) => setSkipPreview(Boolean(e.target.checked))}
+                  >
+                    Bỏ xem trước phân ca
+                  </Checkbox>
+                </div>
+              </div>
+
+              {/* III. ĐỐI TƯỢNG ÁP DỤNG */}
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
+                  Đối tượng áp dụng
+                </div>
+
+                <RadioGroup
+                  value={targetType}
+                  onChange={(e) => setTargetType(e.target.value)}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Radio value="all_unit">
+                      <span style={{ fontWeight: 600, color: '#0F172A' }}>Toàn đơn vị</span>
+                    </Radio>
+                    <div style={{ fontSize: 12, color: '#64748B', marginLeft: 24 }}>
+                      Các nhân viên khi tiếp nhận hoặc điều chuyển đến đơn vị đã chọn sẽ tự động được phân ca theo thiết lập này.
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Radio value="employees">
+                      <span style={{ fontWeight: 600, color: '#0F172A' }}>Danh sách nhân viên</span>
+                    </Radio>
+                    {targetType === 'employees' && (
+                      <div style={{ marginLeft: 24, marginTop: 4 }}>
+                        <Form.Item name="selectedEmployees" style={{ margin: 0 }}>
+                          <Select
+                            mode="multiple"
+                            placeholder="Chọn nhân viên áp dụng..."
+                            style={{ width: '100%' }}
+                            options={employees.map((emp) => ({
+                              label: `${emp.name} (${emp.code || emp.employeeCode} - ${emp.department})`,
+                              value: emp.code || emp.employeeCode || emp.id,
+                            }))}
+                          />
+                        </Form.Item>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Radio value="departments">
+                      <span style={{ fontWeight: 600, color: '#0F172A' }}>Danh sách phòng ban</span>
+                    </Radio>
+                    {targetType === 'departments' && (
+                      <div style={{ marginLeft: 24, marginTop: 4 }}>
+                        <Form.Item name="selectedDepartments" style={{ margin: 0 }}>
+                          <Select
+                            mode="multiple"
+                            placeholder="Chọn phòng ban áp dụng..."
+                            style={{ width: '100%' }}
+                            options={orgUnits.map((u) => ({ label: u, value: u }))}
+                          />
+                        </Form.Item>
+                      </div>
+                    )}
+                  </div>
+                </RadioGroup>
               </div>
             </div>
 
-            {/* Checkbox Bỏ xem trước phân ca */}
-            <div style={{ marginTop: 10 }}>
-              <Checkbox
-                checked={skipPreview}
-                onChange={(e) => setSkipPreview(Boolean(e.target.checked))}
-              >
-                Bỏ xem trước phân ca
-              </Checkbox>
-            </div>
-          </div>
-
-          {/* III. ĐỐI TƯỢNG ÁP DỤNG */}
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-              Đối tượng áp dụng
-            </div>
-
-            <RadioGroup
-              value={targetType}
-              onChange={(e) => setTargetType(e.target.value)}
-              style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+            {/* CỘT BÊN PHẢI: XEM TRƯỚC PHÂN CA (LUÔN LUÔN HIỆN Ở BÊN PHẢI) */}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                borderLeft: '1px solid #E2E8F0',
+                paddingLeft: 22,
+                minHeight: 460,
+              }}
             >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <Radio value="all_unit">
-                  <span style={{ fontWeight: 600, color: '#0F172A' }}>Toàn đơn vị</span>
-                </Radio>
-                <div style={{ fontSize: 12, color: '#64748B', marginLeft: 24 }}>
-                  Các nhân viên khi tiếp nhận hoặc điều chuyển đến đơn vị đã chọn sẽ tự động được phân ca theo thiết lập này.
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <Radio value="employees">
-                  <span style={{ fontWeight: 600, color: '#0F172A' }}>Danh sách nhân viên</span>
-                </Radio>
-                {targetType === 'employees' && (
-                  <div style={{ marginLeft: 24, marginTop: 4 }}>
-                    <Form.Item name="selectedEmployees" style={{ margin: 0 }}>
-                      <Select
-                        mode="multiple"
-                        placeholder="Chọn nhân viên áp dụng..."
-                        style={{ width: '100%' }}
-                        options={employees.map((emp) => ({
-                          label: `${emp.name} (${emp.code || emp.employeeCode} - ${emp.department})`,
-                          value: emp.code || emp.employeeCode || emp.id,
-                        }))}
-                      />
-                    </Form.Item>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <Radio value="departments">
-                  <span style={{ fontWeight: 600, color: '#0F172A' }}>Danh sách phòng ban</span>
-                </Radio>
-                {targetType === 'departments' && (
-                  <div style={{ marginLeft: 24, marginTop: 4 }}>
-                    <Form.Item name="selectedDepartments" style={{ margin: 0 }}>
-                      <Select
-                        mode="multiple"
-                        placeholder="Chọn phòng ban áp dụng..."
-                        style={{ width: '100%' }}
-                        options={orgUnits.map((u) => ({ label: u, value: u }))}
-                      />
-                    </Form.Item>
-                  </div>
-                )}
-              </div>
-            </RadioGroup>
-          </div>
-
-          {/* IV. XEM TRƯỚC PHÂN CA (10/2026) */}
-          {!skipPreview && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
                   Xem trước phân ca
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#009688' }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#009688' }}>
                   10/2026
                 </div>
               </div>
 
-              {/* Lưới lịch tháng 10/2026 chuẩn */}
-              <div style={{ border: '1px solid #E2E8F0', borderRadius: 6, overflow: 'hidden' }}>
-                {/* Header 7 thứ */}
-                <div
+              {/* Thông tin ca áp dụng hiển thị trên lịch */}
+              <div style={{ fontSize: 12, color: '#64748B', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Ca áp dụng:</span>
+                <span
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(7, 1fr)',
-                    background: '#F8FAFC',
-                    borderBottom: '1px solid #E2E8F0',
-                    textAlign: 'center',
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    background: '#E0F2F1',
+                    color: '#00796B',
                     fontWeight: 700,
-                    fontSize: 12,
-                    color: '#475569',
-                    padding: '8px 0',
+                    fontSize: 11,
                   }}
                 >
-                  <div>Thứ 2</div>
-                  <div>Thứ 3</div>
-                  <div>Thứ 4</div>
-                  <div>Thứ 5</div>
-                  <div>Thứ 6</div>
-                  <div>Thứ 7</div>
-                  <div style={{ color: '#EF4444' }}>CN</div>
+                  {currentShift.shiftCode || 'HC'} - {currentShift.shiftName}
+                </span>
+              </div>
+
+              {skipPreview ? (
+                <div
+                  style={{
+                    border: '1px dashed #CBD5E1',
+                    borderRadius: 6,
+                    padding: '40px 16px',
+                    textAlign: 'center',
+                    color: '#94A3B8',
+                    fontSize: 12.5,
+                    marginTop: 10,
+                  }}
+                >
+                  Đã chọn bỏ xem trước phân ca.
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: '#64748B' }}>
+                    Bỏ chọn ô &ldquo;Bỏ xem trước phân ca&rdquo; ở bên trái để xem lại lịch.
+                  </div>
                 </div>
+              ) : (
+                /* Lưới lịch tháng 10/2026 chuẩn */
+                <div style={{ border: '1px solid #E2E8F0', borderRadius: 6, overflow: 'hidden' }}>
+                  {/* Header 7 thứ */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(7, 1fr)',
+                      background: '#F8FAFC',
+                      borderBottom: '1px solid #E2E8F0',
+                      textAlign: 'center',
+                      fontWeight: 700,
+                      fontSize: 11.5,
+                      color: '#475569',
+                      padding: '8px 0',
+                    }}
+                  >
+                    <div>Thứ 2</div>
+                    <div>Thứ 3</div>
+                    <div>Thứ 4</div>
+                    <div>Thứ 5</div>
+                    <div>Thứ 6</div>
+                    <div>Thứ 7</div>
+                    <div style={{ color: '#EF4444' }}>CN</div>
+                  </div>
 
-                {/* Grid 35 ô ngày */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
-                  {OCTOBER_GRID_DAYS.map((cell, idx) => {
-                    const isOctober = cell.month === 10;
-                    const isActiveWeekday = selectedDaysOfWeek.includes(cell.weekday);
-                    const isAppliedDay = isOctober && isActiveWeekday;
+                  {/* Grid 35 ô ngày */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
+                    {OCTOBER_GRID_DAYS.map((cell, idx) => {
+                      const isOctober = cell.month === 10;
+                      const isActiveWeekday = selectedDaysOfWeek.includes(cell.weekday);
+                      const isAppliedDay = isOctober && isActiveWeekday;
 
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          borderRight: (idx + 1) % 7 === 0 ? 'none' : '1px solid #F1F5F9',
-                          borderBottom: idx >= 28 ? 'none' : '1px solid #F1F5F9',
-                          padding: '6px 4px',
-                          minHeight: 46,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'flex-start',
-                          backgroundColor: isAppliedDay ? '#F0FDF4' : isOctober ? '#FFFFFF' : '#FAFAFA',
-                          color: isOctober ? '#0F172A' : '#94A3B8',
-                          opacity: isOctober ? 1 : 0.45,
-                        }}
-                      >
-                        <span
+                      return (
+                        <div
+                          key={idx}
                           style={{
-                            fontSize: 12,
-                            fontWeight: isAppliedDay ? 700 : 500,
-                            color: cell.weekday === 8 ? '#EF4444' : isOctober ? '#1E293B' : '#94A3B8',
+                            borderRight: (idx + 1) % 7 === 0 ? 'none' : '1px solid #F1F5F9',
+                            borderBottom: idx >= 28 ? 'none' : '1px solid #F1F5F9',
+                            padding: '6px 2px',
+                            minHeight: 46,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'flex-start',
+                            backgroundColor: isAppliedDay ? '#F0FDF4' : isOctober ? '#FFFFFF' : '#FAFAFA',
+                            color: isOctober ? '#0F172A' : '#94A3B8',
+                            opacity: isOctober ? 1 : 0.45,
                           }}
                         >
-                          {cell.day}
-                        </span>
-
-                        {isAppliedDay && (
-                          <div
+                          <span
                             style={{
-                              marginTop: 2,
-                              padding: '1px 6px',
-                              borderRadius: 4,
-                              background: '#E0F2F1',
-                              color: '#00796B',
-                              fontSize: 10,
-                              fontWeight: 700,
-                              whiteSpace: 'nowrap',
+                              fontSize: 11.5,
+                              fontWeight: isAppliedDay ? 700 : 500,
+                              color: cell.weekday === 8 ? '#EF4444' : isOctober ? '#1E293B' : '#94A3B8',
                             }}
                           >
-                            {currentShift.shiftCode || 'HC'}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                            {cell.day}
+                          </span>
+
+                          {isAppliedDay && (
+                            <div
+                              style={{
+                                marginTop: 2,
+                                padding: '1px 5px',
+                                borderRadius: 3,
+                                background: '#E0F2F1',
+                                color: '#00796B',
+                                fontSize: 9.5,
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {currentShift.shiftCode || 'HC'}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
+              )}
+
+              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>
+                Lịch dự kiến áp dụng cho các ngày làm việc trong tháng 10/2026 theo thứ đã chọn.
               </div>
             </div>
-          )}
+          </div>
 
           {/* Footer Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18, borderTop: '1px solid #F1F5F9', paddingTop: 14 }}>
             <Button disabled={saving} onClick={() => setModalOpen(false)} style={{ height: 32 }}>
               Hủy
             </Button>

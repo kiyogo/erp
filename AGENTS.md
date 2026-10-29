@@ -119,6 +119,8 @@ Nhằm đảm bảo giao diện luôn chuẩn xác 100% theo ảnh mẫu và h�
 - **Dữ liệu mẫu dự phòng cho bảng dữ liệu:**
   - Khi triển khai bảng dữ liệu chọn đối tượng từ modal (như danh sách nhân viên hội nhập), luôn chuẩn bị dữ liệu mẫu dự phòng phản ánh đúng thực tế trong ảnh mẫu nếu cơ sở dữ liệu hiện tại đang rỗng hoặc chưa có nhân sự phù hợp, tránh để bảng hiển thị trạng thái "No Data" gây gián đoạn trải nghiệm người dùng.
 
+- **Bố cục xem trước phân ca trong Modal Phân ca chi tiết (Bắt buộc luôn ở bên phải):** Trong modal "Phân ca chi tiết", phần **Xem trước phân ca** (lưới lịch tháng và ca trực) bắt buộc **luôn luôn hiển thị ở cột bên phải** theo bố cục 2 cột (side-by-side: cột trái là Thông tin chung, Thời gian áp dụng và Đối tượng áp dụng; cột phải là Xem trước phân ca). Tuyệt đối **không được bố trí Xem trước phân ca ở phía dưới** các trường nhập liệu.
+
 ## 6. QUY CHUẨN GIAO DIỆN WEB (MENU, THANH CUỘN, FORM VÀ BẢNG)
 
 Toàn bộ hướng dẫn chi tiết và tiêu chuẩn thiết kế giao diện (Menu thả, Thanh cuộn, Dialog, Form và Bảng dữ liệu) được quy định và lưu trữ độc lập tại tài liệu: [docs/WEB_UI_GUIDELINES.md](docs/WEB_UI_GUIDELINES.md).

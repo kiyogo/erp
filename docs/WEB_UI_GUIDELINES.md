@@ -57,6 +57,8 @@ Tài liệu này lưu giữ toàn bộ quy chuẩn giao diện người dùng (U
 
 ---
 
+- **Bố cục xem trước phân ca trong Modal Phân ca chi tiết (Bắt buộc luôn ở bên phải):** Trong modal "Phân ca chi tiết", phần **Xem trước phân ca** (lưới lịch tháng và ca trực) bắt buộc **luôn luôn hiển thị ở cột bên phải** theo bố cục 2 cột (side-by-side: cột trái là Thông tin chung, Thời gian áp dụng và Đối tượng áp dụng; cột phải là Xem trước phân ca). Tuyệt đối **không được bố trí Xem trước phân ca ở phía dưới** các trường nhập liệu.
+
 ## 5. MENU THẢ XUỐNG VÀ DANH SÁCH CHỌN (DROPDOWN & SELECT)
 
 - **Đồng bộ thiết kế:** Menu thao tác, submenu và Select dropdown dùng cùng ngôn ngữ giao diện: nền sáng, viền mảnh, bóng nhẹ, góc bo và trạng thái hover/được chọn nhất quán.
