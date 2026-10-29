@@ -198,7 +198,6 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
             ],
           },
           { id: 'fin-cash-audit', title: 'Kiểm kê', path: '/admin/finance/cash/audit' },
-          { id: 'fin-cash-petty', title: 'Quỹ tiền mặt', path: '/admin/finance/cash/petty' },
           {
             id: 'fin-cash-bank',
             title: 'Ngân hàng',

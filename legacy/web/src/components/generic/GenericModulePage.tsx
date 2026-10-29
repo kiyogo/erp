@@ -55,7 +55,6 @@ import { CashTransactionsModule } from '../../modules/finance/CashTransactionsMo
 import { BankAccountsModule } from '../../modules/finance/BankAccountsModule';
 import { CashFlowModule } from '../../modules/finance/CashFlowModule';
 import { CashCountModule } from '../../modules/finance/CashCountModule';
-import { PettyCashModule } from '../../modules/finance/PettyCashModule';
 import { LoansModule } from '../../modules/finance/LoansModule';
 import { CashForecastModule } from '../../modules/finance/CashForecastModule';
 import { PayrollModule } from '../../modules/finance/PayrollModule';
@@ -321,7 +320,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/finance/overview' || p === '/finance/analysis') return <FinanceOverviewModule />;
   if (p === '/finance/cash/flow') return <CashFlowModule />;
   if (p === '/finance/cash/audit') return <CashCountModule />;
-  if (p === '/finance/cash/petty') return <PettyCashModule />;
+  if (p === '/finance/cash/petty') return <Navigate to="/admin/finance/cash/flow" replace />;
   if (p.startsWith('/finance/cash/loans')) return <LoansModule />;
   if (p === '/finance/cash/forecast') return <CashForecastModule />;
   if (p === '/finance/cash/transfer' || p === '/finance/cash/internal-transfer' || p.startsWith('/finance/internal-transfer')) return <InternalTransferModule />;

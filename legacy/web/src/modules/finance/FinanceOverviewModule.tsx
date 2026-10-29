@@ -138,7 +138,7 @@ export const FinanceOverviewModule: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ margin: 0, color: '#0F172A', fontSize: 20 }}>Tổng quan tài chính</h1>
-          <div style={{ marginTop: 4, color: '#64748B', fontSize: 13 }}>Số liệu được tính từ sổ Thu, Chi và Quỹ tiền mặt đã hoàn thành.</div>
+          <div style={{ marginTop: 4, color: '#64748B', fontSize: 13 }}>Số liệu được tính từ các giao dịch tài chính đã hoàn thành.</div>
         </div>
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadData()}>Làm mới</Button>
       </div>
@@ -230,7 +230,6 @@ export const FinanceOverviewModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button onClick={() => navigate('/admin/finance/cash/income')}>Khoản thu</Button>
           <Button onClick={() => navigate('/admin/finance/cash/expense')}>Khoản chi</Button>
-          <Button onClick={() => navigate('/admin/finance/cash/petty')}>Quỹ tiền mặt</Button>
           <Button onClick={() => navigate('/admin/finance/cash/flow')}>Dòng tiền</Button>
           <Button onClick={() => navigate('/admin/finance/sales')}>Bán hàng</Button>
           <Button onClick={() => navigate('/admin/finance/purchasing')}>Mua hàng</Button>
