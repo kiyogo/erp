@@ -59,7 +59,6 @@ import { LoansModule } from '../../modules/finance/LoansModule';
 import { CashForecastModule } from '../../modules/finance/CashForecastModule';
 import { PayrollModule } from '../../modules/finance/PayrollModule';
 import { InvoicesModule } from '../../modules/finance/InvoicesModule';
-import { DebtsModule } from '../../modules/finance/DebtsModule';
 import { FinanceOverviewModule } from '../../modules/finance/FinanceOverviewModule';
 import { EInvoiceModule } from '../../modules/finance/EInvoiceModule';
 import { DigitalSignatureModule } from '../../modules/finance/DigitalSignatureModule';
@@ -336,7 +335,7 @@ export const GenericModulePage: React.FC = () => {
   if (p.startsWith('/finance/cash/bank')) return <BankAccountsModule />;
   if (p.startsWith('/finance/payments')) return <PaymentsModule />;
   if (p === '/finance/invoices') return <InvoicesModule />;
-  if (p.startsWith('/finance/debts')) return <DebtsModule />;
+  if (p.startsWith('/finance/debts')) return <Navigate to="/admin/finance/overview" replace />;
   if (p.startsWith('/finance/payroll')) return <PayrollModule />;
   if (p.startsWith('/finance/e-invoice')) return <EInvoiceModule />;
   if (p.includes('digital-signature')) return <DigitalSignatureModule />;
@@ -348,6 +347,8 @@ export const GenericModulePage: React.FC = () => {
   if (p.startsWith('/finance/equity')) return <EquityModule />;
   if (p.startsWith('/finance/advances')) return <AdvancesModule />;
   if (p.startsWith('/finance/general')) return <GeneralLedgerModule />;
+  if (p === '/finance/purchasing/reconciliation') return <Navigate to="/admin/finance/purchasing" replace />;
+  if (p === '/finance/sales/debts') return <Navigate to="/admin/finance/sales" replace />;
   if (p.startsWith('/finance/purchasing')) return <PurchasingModule />;
   if (p.startsWith('/finance/sales')) return <SalesModule />;
   if (p.startsWith('/finance/inventory')) return <InventoryModule />;

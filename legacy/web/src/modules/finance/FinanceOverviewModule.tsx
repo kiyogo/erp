@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { Button, Progress, message } from '../../custom-ui';
-import { financeCashApi, FinanceCashTransaction, financeDocumentsApi, FinanceDebt, FinanceDocument } from '../../api/endpoints';
+import { financeCashApi, FinanceCashTransaction, financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 
 interface CategoryTotal {
@@ -24,21 +24,18 @@ export const FinanceOverviewModule: React.FC = () => {
   const navigate = useNavigate();
   const [transactions, setTransactions] = useState<FinanceCashTransaction[]>([]);
   const [documents, setDocuments] = useState<FinanceDocument[]>([]);
-  const [debts, setDebts] = useState<FinanceDebt[]>([]);
   const [inventory, setInventory] = useState<Array<{ key: string; name: string; stockQty: number; unitPrice: number }>>([]);
   const [loading, setLoading] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [cashResponse, documentResponse, debtResponse] = await Promise.all([
+      const [cashResponse, documentResponse] = await Promise.all([
         financeCashApi.getAll(),
         financeDocumentsApi.getAll(),
-        financeDocumentsApi.getDebts(),
       ]);
       setTransactions(cashResponse.data.data);
       setDocuments(documentResponse.data.data);
-      setDebts(debtResponse.data.data);
       try {
         await dataService.refreshGenericData('finance_inventory');
         setInventory(dataService.getGenericData('finance_inventory') as Array<{ key: string; name: string; stockQty: number; unitPrice: number }>);
@@ -48,7 +45,6 @@ export const FinanceOverviewModule: React.FC = () => {
     } catch (error: any) {
       setTransactions([]);
       setDocuments([]);
-      setDebts([]);
       setInventory([]);
       message.error(error?.response?.data?.message || 'Không tải được tổng quan tài chính. Vui lòng thử lại.');
     } finally {
@@ -84,18 +80,6 @@ export const FinanceOverviewModule: React.FC = () => {
     () => validDocuments.filter((document) => document.documentType === 'purchase' || document.subtype.includes('Đầu vào')).reduce((sum, document) => sum + document.amount, 0),
     [validDocuments],
   );
-  const receivable = useMemo(() => debts.filter((debt) => debt.type === 'Phải thu').reduce((sum, debt) => sum + debt.remainingAmount, 0), [debts]);
-  const payable = useMemo(() => debts.filter((debt) => debt.type === 'Phải trả').reduce((sum, debt) => sum + debt.remainingAmount, 0), [debts]);
-  const debtAging = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return (['Phải thu', 'Phải trả'] as const).map(type => {
-      const entries = debts.filter(debt => debt.type === type && debt.remainingAmount > 0);
-      const overdue = entries.filter(debt => debt.dueDate && new Date(`${debt.dueDate}T00:00:00`) < today).reduce((sum, debt) => sum + debt.remainingAmount, 0);
-      const current = entries.reduce((sum, debt) => sum + debt.remainingAmount, 0) - overdue;
-      return { type, overdue, current, total: overdue + current };
-    });
-  }, [debts]);
   const monthlyCash = useMemo(() => {
     const now = new Date();
     return Array.from({ length: 12 }, (_, index) => {
@@ -171,14 +155,6 @@ export const FinanceOverviewModule: React.FC = () => {
           <div style={{ fontSize: 12.5, color: '#64748B' }}>Chi phí mua hàng theo chứng từ</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>{formatMoney(purchaseTotal)}</div>
         </div>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Công nợ phải thu</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>{formatMoney(receivable)}</div>
-        </div>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Công nợ phải trả</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>{formatMoney(payable)}</div>
-        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginBottom: 18 }}>
@@ -208,14 +184,6 @@ export const FinanceOverviewModule: React.FC = () => {
           <div style={{ display: 'flex', gap: 16, fontSize: 12, marginTop: 12 }}><span style={{ color: '#059669' }}>● Thu hoàn thành</span><span style={{ color: '#F97316' }}>● Chi hoàn thành</span></div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
-          <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 14 }}>Công nợ theo hạn thanh toán</div>
-          {debtAging.map(item => <div key={item.type} style={{ padding: '12px 0', borderBottom: '1px solid #E2E8F0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, marginBottom: 8 }}>{item.type}<span>{formatMoney(item.total)}</span></div>
-            <Progress percent={item.total ? Math.round(item.overdue / item.total * 100) : 0} strokeColor="#FB923C" showInfo={false} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748B', marginTop: 4 }}><span>Quá hạn {formatMoney(item.overdue)}</span><span>Trong hạn {formatMoney(item.current)}</span></div>
-          </div>)}
-        </div>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
           <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 8 }}>Hàng hóa tồn kho</div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>{formatMoney(inventoryValue)}</div>
           <div style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>Giá trị theo tồn kho × đơn giá bán trên danh mục</div>
@@ -233,7 +201,6 @@ export const FinanceOverviewModule: React.FC = () => {
           <Button onClick={() => navigate('/admin/finance/cash/flow')}>Dòng tiền</Button>
           <Button onClick={() => navigate('/admin/finance/sales')}>Bán hàng</Button>
           <Button onClick={() => navigate('/admin/finance/purchasing')}>Mua hàng</Button>
-          <Button onClick={() => navigate('/admin/finance/debts')}>Công nợ</Button>
           <Button onClick={() => navigate('/admin/finance/invoices')}>Hóa đơn</Button>
         </div>
       </div>

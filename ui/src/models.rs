@@ -1164,67 +1164,6 @@ pub const ADMIN_NAV_TREE: &[NavNode] = &[
             ),
             node(
                 item(
-                    "fin-debts",
-                    "Công nợ",
-                    "/admin/finance/debts",
-                    "📒",
-                    NavGroup::Finance,
-                ),
-                &[
-                    node(
-                        item(
-                            "fin-debt-recv",
-                            "Công nợ phải thu",
-                            "/admin/finance/debts/receivable",
-                            "📥",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                    node(
-                        item(
-                            "fin-debt-pay",
-                            "Công nợ phải trả",
-                            "/admin/finance/debts/payable",
-                            "📤",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                    node(
-                        item(
-                            "fin-debt-recon",
-                            "Đối chiếu công nợ",
-                            "/admin/finance/debts/reconciliation",
-                            "🔍",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                    node(
-                        item(
-                            "fin-debt-aging",
-                            "Tuổi nợ",
-                            "/admin/finance/debts/aging",
-                            "⏳",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                    node(
-                        item(
-                            "fin-debt-remind",
-                            "Nhắc nợ",
-                            "/admin/finance/debts/reminders",
-                            "🔔",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                ],
-            ),
-            node(
-                item(
                     "fin-payments",
                     "Thanh toán",
                     "/admin/finance/payments",
@@ -1548,16 +1487,6 @@ pub const ADMIN_NAV_TREE: &[NavNode] = &[
                     ),
                     node(
                         item(
-                            "fin-pur-recon",
-                            "Đối chiếu công nợ",
-                            "/admin/finance/purchasing/reconciliation",
-                            "🔍",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                    node(
-                        item(
                             "fin-pur-charts",
                             "Biểu đồ",
                             "/admin/finance/purchasing/charts",
@@ -1653,16 +1582,6 @@ pub const ADMIN_NAV_TREE: &[NavNode] = &[
                             "Xử lý hóa đơn đầu ra",
                             "/admin/finance/sales/output-invoices",
                             "🔎",
-                            NavGroup::Finance,
-                        ),
-                        &[],
-                    ),
-                    node(
-                        item(
-                            "fin-sale-debt",
-                            "Công nợ",
-                            "/admin/finance/sales/debts",
-                            "📒",
                             NavGroup::Finance,
                         ),
                         &[],

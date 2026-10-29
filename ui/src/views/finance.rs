@@ -2227,15 +2227,6 @@ fn finance_columns(path: &str) -> &'static [(&'static str, &'static str)] {
             ("Hạn hoàn ứng", "settleDeadline"),
             ("Trạng thái", "status"),
         ],
-        _ if suffix.starts_with("debts") => &[
-            ("Đối tác", "partnerName"),
-            ("Phân loại", "type"),
-            ("Tổng phát sinh", "totalAmount"),
-            ("Đã thanh toán", "paidAmount"),
-            ("Còn nợ", "remainingAmount"),
-            ("Hạn thanh toán", "dueDate"),
-            ("Trạng thái", "status"),
-        ],
         _ if suffix.starts_with("purchasing")
             || suffix.starts_with("sales")
             || suffix == "invoices" =>

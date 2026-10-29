@@ -36,7 +36,6 @@ const PurchasingDocumentsModule: React.FC = () => {
   const isContracts = currentPath === '/finance/purchasing/contracts';
   const isReturns = currentPath === '/finance/purchasing/returns';
   const isInputInvoices = currentPath === '/finance/purchasing/input-invoices';
-  const isReconciliation = currentPath === '/finance/purchasing/reconciliation';
 
   const loadData = async () => {
     setLoading(true);
@@ -65,10 +64,9 @@ const PurchasingDocumentsModule: React.FC = () => {
         (item.description || '').toLowerCase().includes(keyword);
       if (isContracts) return matchSearch && item.subtype === 'Hợp đồng mua';
       if (isInputInvoices) return matchSearch && item.subtype === 'Hóa đơn đầu vào';
-      if (isReconciliation) return matchSearch && item.remainingAmount > 0;
       return matchSearch;
     });
-  }, [data, searchText, isContracts, isInputInvoices, isReconciliation]);
+  }, [data, searchText, isContracts, isInputInvoices]);
 
   const validData = data.filter((item) => item.status !== 'Đã hủy');
   const totalSpend = validData.reduce((sum, item) => sum + item.amount, 0);

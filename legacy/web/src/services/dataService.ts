@@ -21,7 +21,6 @@ import {
   type EmployeeProposal,
   type FinanceCashTransaction,
   type FinanceBankAccount,
-  type FinanceDebt,
   type ApiNotification,
 } from '../api/endpoints';
 
@@ -240,17 +239,6 @@ export interface PayrollRecord {
   status: 'Đã chi trả' | 'Chưa chi trả' | 'Chờ duyệt' | string;
 }
 
-export interface DebtRecord {
-  key: string;
-  partnerName: string;
-  type: 'Phải thu' | 'Phải trả';
-  totalAmount: number;
-  paidAmount: number;
-  remainingAmount: number;
-  dueDate: string;
-  status: 'Đúng hạn' | 'Quá hạn' | 'Đã thanh toán' | string;
-}
-
 export interface LeaveRequest {
   key: string;
   code: string;
@@ -401,7 +389,6 @@ interface DataStore {
   proposals: Proposal[];
   cashTransactions: CashTransaction[];
   bankAccounts: BankAccount[];
-  debts: DebtRecord[];
   payroll: PayrollRecord[];
   leaveRequests: LeaveRequest[];
   assets: AssetRecord[];
@@ -421,7 +408,6 @@ const EMPTY_DATA: DataStore = {
   proposals: [],
   cashTransactions: [],
   bankAccounts: [],
-  debts: [],
   payroll: [],
   leaveRequests: [],
   assets: [],
@@ -518,7 +504,6 @@ class DataService {
         propsRes,
         cashRes,
         banksRes,
-        debtsRes,
         notifRes,
       ] = await Promise.allSettled([
         employeesApi.getAll(),
@@ -526,7 +511,6 @@ class DataService {
         employeeProposalsApi.getAll(),
         financeCashApi.getAll(),
         financeBankAccountsApi.getAll(),
-        financeDocumentsApi.getDebts(),
         notificationsApi.getAll(),
       ]);
 
@@ -606,19 +590,6 @@ class DataService {
           branch: b?.branch || '',
           balance: b?.balance || 0,
           status: b?.status || 'Hoạt động',
-        }));
-      }
-
-      if (debtsRes.status === 'fulfilled' && debtsRes.value.data?.data) {
-        this.data.debts = debtsRes.value.data.data.map((d: FinanceDebt) => ({
-          key: d.key,
-          partnerName: d.partnerName,
-          type: d.type,
-          totalAmount: d.totalAmount,
-          paidAmount: d.paidAmount,
-          remainingAmount: d.remainingAmount,
-          dueDate: d.dueDate,
-          status: d.status,
         }));
       }
 
@@ -962,16 +933,6 @@ class DataService {
       status: acc?.status || 'Hoạt động',
     }).then(() => this.notify()).catch(() => {});
     this.logAction('Thêm mới', 'Tài chính', `Thêm tài khoản ngân hàng: ${acc?.bankName || ''}`);
-  }
-
-  // 7. Debts (financeDocumentsApi)
-  public getDebts(): DebtRecord[] {
-    return [...this.data.debts];
-  }
-
-  public addDebt(debt: Omit<DebtRecord, 'key'>) {
-    const newDebt = { ...debt, key: String(Date.now()) };
-    this.data.debts = [newDebt, ...this.data.debts];
   }
 
   // 8. Payroll (Collections: payroll)

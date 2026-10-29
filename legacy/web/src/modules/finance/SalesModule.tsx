@@ -47,7 +47,6 @@ export const SalesModule: React.FC = () => {
   const isQuotes = currentPath === '/finance/sales/quotes';
   const isContracts = currentPath === '/finance/sales/contracts';
   const isOutputInvoices = currentPath === '/finance/sales/output-invoices';
-  const isDebts = currentPath === '/finance/sales/debts';
 
   const loadData = async () => {
     setLoading(true);
@@ -96,10 +95,9 @@ export const SalesModule: React.FC = () => {
         (item.description || '').toLowerCase().includes(keyword);
       if (isQuotes) return matchSearch && item.subtype === 'Báo giá';
       if (isContracts) return matchSearch && item.subtype !== 'Báo giá';
-      if (isDebts) return matchSearch && item.remainingAmount > 0;
       return matchSearch;
     });
-  }, [data, searchText, isQuotes, isContracts, isDebts]);
+  }, [data, searchText, isQuotes, isContracts]);
 
   const totalSales = data.filter((item) => item.status !== 'Đã hủy').reduce((sum, item) => sum + item.amount, 0);
   const totalCollected = data.filter((item) => item.status !== 'Đã hủy').reduce((sum, item) => sum + item.paidAmount, 0);
@@ -272,7 +270,7 @@ export const SalesModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <Input
               prefix={<SearchOutlined style={{ color: '#bbb' }} />}
-              placeholder={isDebts ? 'Tìm công nợ khách hàng...' : 'Tìm mã chứng từ, khách hàng, nội dung...'}
+              placeholder="Tìm mã chứng từ, khách hàng, nội dung..."
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
               style={{ width: 340, borderRadius: 6 }}

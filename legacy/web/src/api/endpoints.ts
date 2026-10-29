@@ -602,23 +602,11 @@ export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmou
   requestId?: string;
 };
 
-export type FinanceDebt = {
-  key: string;
-  partnerName: string;
-  type: 'Phải thu' | 'Phải trả';
-  totalAmount: number;
-  paidAmount: number;
-  remainingAmount: number;
-  dueDate: string;
-  status: 'Đúng hạn' | 'Quá hạn';
-};
-
 export const financeDocumentsApi = {
   getAll: (params?: { documentType?: FinanceDocument['documentType']; subtype?: string }) => api.get<{ data: FinanceDocument[] }>('/finance/documents', { params }),
   create: (data: CreateFinanceDocument) => api.post<{ document: FinanceDocument; replayed?: boolean }>('/finance/documents', data),
   previewSalePromotions: (data: { customerId: string; promotionKeys: string[]; subtype: string; status: string; amount: number; documentDate: string; vatRate: number; vatAmount: number }) =>
     api.post<SalePromotionPreview>('/finance/sales/promotion-preview', data),
-  getDebts: () => api.get<{ data: FinanceDebt[] }>('/finance/debts'),
   linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
 };
 

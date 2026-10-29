@@ -9968,38 +9968,6 @@ async function handleRequest(request, response) {
     return;
   }
 
-  if (request.method === 'GET' && resource === '/finance/debts') {
-    await requireAdmin(request);
-    const rows = await db.prepare(`
-      SELECT
-        CASE
-          WHEN document_type = 'purchase' OR (document_type = 'invoice' AND subtype LIKE '%Đầu vào%') THEN 'Phải trả'
-          ELSE 'Phải thu'
-        END AS type,
-        partner_name,
-        SUM(amount) AS total_amount,
-        SUM(paid_amount) AS paid_amount,
-        MAX(COALESCE(due_date, document_date)) AS due_date
-      FROM finance_documents
-      WHERE status <> 'Đã hủy'
-      GROUP BY type, partner_name
-      HAVING SUM(amount - paid_amount) > 0
-      ORDER BY due_date ASC, partner_name ASC
-    `).all();
-    const debts = rows.map((row, index) => ({
-      key: `${row.type}-${row.partner_name}-${index}`,
-      partnerName: row.partner_name,
-      type: row.type,
-      totalAmount: financeStoredInteger(row.total_amount),
-      paidAmount: financeStoredInteger(row.paid_amount),
-      remainingAmount: Math.max(0, financeStoredInteger(row.total_amount) - financeStoredInteger(row.paid_amount)),
-      dueDate: row.due_date,
-      status: Date.parse(`${row.due_date}T00:00:00.000Z`) < Date.now() ? 'Quá hạn' : 'Đúng hạn',
-    }));
-    sendJson(response, 200, { data: debts });
-    return;
-  }
-
   if (request.method === 'GET' && resource === '/finance/bank-accounts') {
     await requireAdmin(request);
     const rows = await db.prepare('SELECT * FROM finance_bank_accounts ORDER BY created_at DESC').all();

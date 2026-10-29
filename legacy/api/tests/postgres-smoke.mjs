@@ -507,9 +507,6 @@ try {
   assert.equal(pgDiscountSaved.body.document.amount, 900);
   assert.equal(typeof pgDiscountSaved.body.document.paidAmount, 'number');
   assert.equal(typeof pgDiscountSaved.body.document.vatAmount, 'number');
-  const pgDebt = (await request('/finance/debts')).data.find((item) => item.partnerName === promotionCustomer.name && item.type === 'Phải thu');
-  assert.equal(typeof pgDebt.totalAmount, 'number');
-  assert.equal(typeof pgDebt.paidAmount, 'number');
   assert.equal((await request('/finance/documents', 'POST', { ...pgDiscountSale, promotionFingerprint: pgPreview.fingerprint, requestId: pgDiscountSaved.requestId })).replayed, true);
   assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === pgDiscountSaved.body.document.key).discountAmount, 100);
   await request('/collections/finance_sale_promotions', 'PUT', { records: [] }, 409); completed++;
