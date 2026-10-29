@@ -39,6 +39,8 @@ export const PayrollModule: React.FC = () => {
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [paymentRows, setPaymentRows] = useState<PayrollRecord[]>([]);
   const [insuranceLoaded, setInsuranceLoaded] = useState(false);
+  const [insuranceDialog, setInsuranceDialog] = useState(false);
+  const [insuranceAmount, setInsuranceAmount] = useState(0);
   const [accountingSheetKey, setAccountingSheetKey] = useState('');
 
   const loadData = () => {
@@ -291,13 +293,16 @@ export const PayrollModule: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'end', gap: 12, flexWrap: 'wrap' }}>
             <label>Phương thức thanh toán<Select value={paymentMethod} onChange={setPaymentMethod} options={['Tiền mặt', 'Tiền gửi'].map((value) => ({ value, label: value }))} /></label>
             <label>Ngày nộp bảo hiểm<Input type="date" value={paymentDate} onChange={(e: any) => setPaymentDate(e.target.value)} /></label>
-            <Button type="primary" onClick={() => setInsuranceLoaded(true)}>Lấy dữ liệu</Button>
+            <Button type="primary" onClick={() => { setInsuranceAmount(employerInsurance + employeeInsurance); setInsuranceLoaded(true); }}>Lấy dữ liệu</Button>
           </div>
           {insuranceLoaded && <div className="transparent-table-card"><KTable dataSource={[
-            { key: 'bhxh', item: 'BHXH', due: periodData.reduce((sum, item) => sum + Math.round(item.baseSalary * 0.17), 0) },
-            { key: 'bhyt', item: 'BHYT', due: periodData.reduce((sum, item) => sum + Math.round(item.baseSalary * 0.03), 0) },
-            { key: 'bhtn', item: 'BHTN', due: periodData.reduce((sum, item) => sum + Math.round(item.baseSalary * 0.01), 0) },
-          ]} columns={[{ title: 'Khoản phải nộp', dataIndex: 'item', key: 'item' }, { title: 'Số phải nộp', dataIndex: 'due', key: 'due', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` }, { title: 'Số nộp lần này', key: 'pay', render: (_: any, row: any) => <Input type="number" min={0} defaultValue={row.due} /> }]} /></div>}
+            { key: 'insurance-total', item: 'BHXH, BHYT, BHTN', due: employerInsurance + employeeInsurance },
+          ]} columns={[{ title: 'Khoản phải nộp', dataIndex: 'item', key: 'item' }, { title: 'Số phải nộp', dataIndex: 'due', key: 'due', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` }, { title: 'Số nộp lần này', key: 'pay', render: () => <Input type="number" min={0} value={insuranceAmount} onChange={(event: any) => setInsuranceAmount(Math.max(0, Number(event.target.value) || 0))} /> }]} /><div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px' }}><span>Tổng</span><span>{(employerInsurance + employeeInsurance).toLocaleString('vi-VN')} ₫</span><span>{insuranceAmount.toLocaleString('vi-VN')} ₫</span></div><div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 12px 12px' }}><Button type="primary" onClick={() => setInsuranceDialog(true)}>Nộp bảo hiểm</Button></div></div>}
+          <Modal title="Nộp bảo hiểm" open={insuranceDialog} onCancel={() => setInsuranceDialog(false)} onOk={() => {
+            const rows = dataService.getGenericData('finance_payroll_insurance_payments');
+            dataService.saveGenericData('finance_payroll_insurance_payments', [{ key: String(Date.now()), period: selectedMonth, method: paymentMethod, date: paymentDate, dueAmount: employerInsurance + employeeInsurance, paidAmount: insuranceAmount, createdAt: new Date().toISOString() }, ...rows]);
+            setInsuranceDialog(false); message.success('Đã lưu thông tin nộp bảo hiểm.');
+          }} okText="Nộp bảo hiểm" cancelText="Hủy" width={460}><div>Phương thức thanh toán: {paymentMethod}</div><div>Ngày nộp bảo hiểm: {paymentDate}</div><div>Số tiền nộp: {insuranceAmount.toLocaleString('vi-VN')} ₫</div></Modal>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 16 }}>
               <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Ước tính doanh nghiệp đóng</div>

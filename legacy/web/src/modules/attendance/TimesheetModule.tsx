@@ -14,6 +14,7 @@ import { Button, Input, Select, message, Tag, Drawer, Card, Tooltip } from '../.
 import { dataService, Employee } from '../../services/dataService';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceDate, attendanceDaySummary, monthDayCount } from './attendanceRules';
+import { TimesheetBoardDialog } from './TimesheetBoardDialog';
 
 export const TimesheetModule: React.FC = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -146,6 +147,7 @@ export const TimesheetModule: React.FC = () => {
             </span>
           </div>
 
+          <TimesheetBoardDialog />
           <Button icon={<DownloadOutlined />} onClick={() => downloadFile(`Bang_cham_cong_${selectedMonth}.xlsx`, generateValidXlsxBlob([['Mã NV', 'Nhân viên', 'Phòng ban', ...daysInMonth.map((day) => `${selectedMonth}-${String(day).padStart(2, '0')}`), 'Ngày có cặp điểm danh', 'OT duyệt'], ...filteredEmployees.map((employee) => [employee.code, employee.name, employee.department, ...daysInMonth.map((day) => getAttendanceStatus(day, employee).code), daysInMonth.reduce((sum, day) => sum + getAttendanceStatus(day, employee).days, 0), employeeOtHours(employee)])]))}>
             Xuất Excel
           </Button>

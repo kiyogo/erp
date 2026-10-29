@@ -3,6 +3,7 @@ import { collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceDate, attendanceNumber, employeeAttendanceFields, monthDayCount } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
+import { TimesheetBoardDialog } from './TimesheetBoardDialog';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -288,6 +289,7 @@ export const TimesheetSummaryModule: React.FC = () => {
             allowClear
           />
 
+          <TimesheetBoardDialog summary />
           <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_hop_cong.xlsx', generateValidXlsxBlob([['Tháng', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Công chuẩn', 'Công thực tế', 'Phép hưởng lương', 'Không lương', 'OT thường', 'OT cuối tuần', 'Ngày tính lương', 'Trạng thái'], ...filteredData.map((item) => [item.month || '', item.employeeCode, item.employeeName, item.department, item.standardDays, item.actualDays, item.paidLeaveDays, item.unpaidLeaveDays, item.otHoursWeekday, item.otHoursWeekend, item.totalPayDays, item.status])]))}>
             Xuất Excel
           </Button>

@@ -239,6 +239,10 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
         path: '/admin/finance/payroll',
         children: [
           { id: 'fin-pay-att', title: 'Tổng hợp chấm công', path: '/admin/finance/payroll/attendance' },
+          { id: 'fin-pay-timesheet', title: 'Chấm công', path: '/admin/attendance/timesheet', children: [
+            { id: 'fin-pay-timesheet-detail', title: 'Bảng chấm công chi tiết', path: '/admin/attendance/timesheet/detail' },
+            { id: 'fin-pay-timesheet-summary', title: 'Bảng chấm công tổng hợp', path: '/admin/attendance/timesheet/summary' },
+          ] },
           { id: 'fin-pay-calc', title: 'Tính lương', path: '/admin/finance/payroll/calculate' },
           { id: 'fin-pay-acc', title: 'Hạch toán chi phí', path: '/admin/finance/payroll/accounting' },
           { id: 'fin-pay-disb', title: 'Trả lương', path: '/admin/finance/payroll/disburse' },
