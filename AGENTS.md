@@ -61,10 +61,19 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
 - **Chuẩn giao diện Modal / Dialog:**
   - Khoảng cách lề viền và khoảng cách giữa các khối chức năng (form rows, grid, actions) trong dialog tuân theo chuẩn 14px.
   - Các phần tử form control bên trong (như ô chọn Multi-Select, Input, Tags) giữ khoảng cách nhỏ gọn (row-gap 3px, column-gap 4px, margin 0) để đảm bảo tính thẩm mỹ, thanh thoát và không bị giãn dòng cách xa nhau.
+- **Quy chuẩn kích thước khung nhập và nút bấm (100% bắt buộc kể từ giờ về sau):**
+  - **Chiều cao chuẩn 32px:** Toàn bộ 100% các khung nhập liệu (`Input`, `Select`, `DatePicker`, `InputNumber`) và các nút bấm (`Button`, khung bấm) trong toàn hệ thống web bắt buộc phải có chiều cao chuẩn đồng nhất là **`32px`** (`height: 32px; box-sizing: border-box;`).
+  - **Đệm trong (Padding):** Ô nhập liệu dùng `padding: 4px 11px`; nút bấm dùng `padding: 4px 12px` (hoặc `4px 15px`).
+  - **Bo góc (Border Radius):** Đạt chuẩn `6px` đồng bộ với token hệ thống.
+  - **Cỡ chữ (Font Size):** Chuẩn `14px` (line-height: `1.5` hoặc `22px`).
+  - **Nút icon đơn lẻ:** Chuẩn vuông `32px x 32px` (`.ant-btn-square-icon`).
+  - **Tuyệt đối không dùng `size="small"` (24px) tùy tiện:** Tránh làm lệch chiều cao giữa nút bấm và các ô nhập liệu 32px trong cùng một hàng hoặc cùng một khối chức năng.
+  - **Không nhân bản biểu tượng dấu cộng:** Không để nút vừa có `icon={<PlusOutlined />}` vừa có chữ `+ Thêm`, dẫn đến hiển thị lỗi `+ + Thêm`.
 - **Ngôn ngữ và thẩm mỹ:**
   - Giao diện và thông báo sử dụng Tiếng Việt chuẩn mực, chuyên nghiệp.
   - Giữ gìn tính toàn vẹn của mã nguồn, chú thích (comments) và cấu trúc hiện hữu của dự án.
   - Tuyệt đối không chứa emoji / icon trong commit message, nội dung tệp và tài liệu dự án.
+  - Toàn bộ chữ trong giao diện web phải dùng nét thường; không dùng chữ đậm (`bold`, `font-weight: 500/600/700/800`, thẻ `<b>` hoặc `<strong>`) để nhấn mạnh. Phân cấp nội dung bằng kích thước chữ, màu sắc và khoảng cách.
 
 ---
 
@@ -84,6 +93,17 @@ Nhằm đảm bảo giao diện luôn chuẩn xác 100% theo ảnh mẫu và h�
 - **Không để rò rỉ khung nhập liệu (input frames) thừa vào giao diện:**
   - Khi cần tạo form ngầm để phục vụ kiểm thử tự động hoặc xử lý logic nền, chỉ sử dụng thẻ `<Form form={form} onFinish={...} style={{ display: 'none' }} />` với 0 phần tử con (children).
   - Tuyệt đối không chèn các thẻ `<Form.Item>` và `<Input>` con vào form ngầm vì các class CSS có thể khiến các ô nhập liệu bị hiển thị ra ngoài giao diện, tạo ra các khung trống kỳ dị bên dưới bảng dữ liệu.
+
+- **100% không được tạo nền (background) hoặc khung hộp thừa cho các nhóm trường trong Form/Modal:**
+  - Tuyệt đối không tạo các khung viền có nền xám (như `background: '#F8FAFC'`, `border: '1px solid #E2E8F0'`) để bọc các nhóm trường form hoặc cụm checkbox/radio bên trong dialog/modal.
+  - Toàn bộ các trường và nhóm trường phải đặt trực tiếp trên nền phẳng trắng tự nhiên của Modal, phân cách bằng tiêu đề nhóm hoặc khoảng cách đệm tự nhiên (`gap`), không tạo hộp lồng hộp làm nặng nề giao diện.
+
+- **Không hiển thị ghi chú định dạng `(...)` ở tiêu đề / nhãn trường (Label):**
+  - Tuyệt đối không đưa các chỉ dẫn định dạng như `(HH:mm - HH:mm)`, `(DD/MM/YYYY)`, v.v. vào trong tiêu đề hoặc nhãn trường. Mọi chỉ dẫn định dạng bắt buộc phải đặt trong thuộc tính `placeholder` của ô nhập liệu (ví dụ: `placeholder="08:00 - 17:30"`).
+  - Dấu ngoặc đơn `(...)` ở tiêu đề chỉ được phép dùng cho đơn vị đo lường (ví dụ: `(phút)`, `(%)`, `(tháng)`). Ngoài ra không được hiển thị bất kỳ nội dung nào khác trong dấu ngoặc đơn ở tiêu đề.
+
+- **Tuyệt đối không dùng ký tự `&` trong tiêu đề:**
+  - Không sử dụng ký tự `&` trong tiêu đề nhóm, nhãn form hoặc tiêu đề dialog (ví dụ: không viết `Thiết lập chấm công & chế độ ca`, chỉ ghi rõ ràng là `Thiết lập chấm công`). Khi cần liên kết nội dung thì sử dụng từ nối tiếng Việt chuẩn `và` hoặc dùng dấu phẩy `,`.
 
 - **Kích thước và tỷ lệ hiển thị của Modal / Dialog:**
   - Kích thước modal phải vừa vặn, chuẩn xác theo tỷ lệ của ảnh mẫu (ví dụ: `width: 780px`, khoảng cách đỉnh màn hình `top: 50px`, giới hạn `maxWidth: '95vw'`).

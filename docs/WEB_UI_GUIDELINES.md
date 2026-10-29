@@ -27,6 +27,14 @@ Tài liệu này lưu giữ toàn bộ quy chuẩn giao diện người dùng (U
 - **Khoảng cách Dialog chuẩn 14px:** Trong dialog/modal, lề và khoảng cách giữa các khối lớn như tiêu đề, nội dung, nhóm form và chân trang theo chuẩn 14px.
 - **Bố cục điều khiển compact:** Các control nằm cùng hàng hoặc cùng cụm giữ bố cục gọn: khoảng cách hàng 3px, cột 4px, margin mặc định bằng 0 khi áp dụng quy tắc form compact.
 - **Căn thẳng hàng và tỷ lệ:** Các cột, nhãn và ô nhập trong cùng một vùng phải thẳng hàng; khoảng cách dọc giữa các hàng nhất quán. Không để một nhóm trường bị dồn, tràn khỏi dialog hoặc có chiều rộng khác bất thường.
+- **Quy chuẩn kích thước khung nhập và nút bấm (100% bắt buộc kể từ giờ về sau):**
+  - **Chiều cao chuẩn 32px:** Toàn bộ 100% các khung nhập liệu (`Input`, `Select`, `DatePicker`, `InputNumber`) và các nút bấm (`Button`, khung bấm) trong toàn hệ thống web bắt buộc phải có chiều cao chuẩn đồng nhất là **`32px`** (`height: 32px; box-sizing: border-box;`).
+  - **Đệm trong (Padding):** Ô nhập liệu dùng `padding: 4px 11px`; nút bấm dùng `padding: 4px 12px` (hoặc `4px 15px`).
+  - **Bo góc (Border Radius):** Đạt chuẩn `6px` đồng bộ với token hệ thống.
+  - **Cỡ chữ (Font Size):** Chuẩn `14px` (line-height: `1.5` hoặc `22px`).
+  - **Nút icon đơn lẻ:** Chuẩn vuông `32px x 32px` (`.ant-btn-square-icon`).
+  - **Tuyệt đối không dùng `size="small"` (24px) tùy tiện:** Tránh làm lệch chiều cao giữa nút bấm và các ô nhập liệu 32px trong cùng một hàng hoặc cùng một khối chức năng.
+  - **Không nhân bản biểu tượng dấu cộng:** Không để nút vừa có `icon={<PlusOutlined />}` vừa có chữ `+ Thêm`, dẫn đến hiển thị lỗi `+ + Thêm`.
 - **Quy chuẩn nút bấm:**
   - Nút chỉ có biểu tượng dấu cộng dùng dạng vuông (`.ant-btn-square-icon` 32x32px).
   - Nút chọn dạng chữ có thể dùng biểu tượng vuông nếu đúng vai trò chọn.
@@ -41,6 +49,9 @@ Tài liệu này lưu giữ toàn bộ quy chuẩn giao diện người dùng (U
 - **Vị trí thanh cuộn Dialog:** Thanh cuộn dialog là thanh cuộn trình duyệt/native, nằm sát cạnh phải vùng dialog. Không dùng canvas hoặc thanh giả phủ lên nội dung. Thanh cuộn xuất hiện/biến mất không làm thay đổi chiều rộng trang hoặc đẩy nội dung ngang.
 - **Loại bỏ khoảng trắng thừa:** Không để vùng trắng thừa bên dưới nội dung hoặc nút hành động. Footer phải thuộc dialog và bám theo bố cục hiện hành.
 - **Tránh viền gạch ngang thừa:** Không thêm khung viền hoặc divider cho header, body, footer nếu thiết kế hiện tại không cần. Không chèn form ẩn có control hiển thị rò rỉ ra ngoài.
+- **100% không tạo nền hộp xám hoặc viền thừa bao quanh nhóm trường:** Tuyệt đối không tạo các khung viền có nền xám (như `background: '#F8FAFC'`, `border: '1px solid #E2E8F0'`) để bọc các nhóm trường form hoặc cụm checkbox/radio bên trong dialog/modal. Toàn bộ các trường và nhóm trường phải đặt trực tiếp trên nền phẳng trắng tự nhiên của Modal, phân cách bằng tiêu đề nhóm hoặc khoảng cách đệm tự nhiên (`gap`), không tạo hộp lồng hộp làm nặng nề giao diện.
+- **Không hiển thị ghi chú định dạng `(...)` ở tiêu đề / nhãn trường:** Tuyệt đối không đưa các chỉ dẫn định dạng như `(HH:mm - HH:mm)`, `(DD/MM/YYYY)`, v.v. vào trong tiêu đề hoặc nhãn trường. Mọi chỉ dẫn định dạng bắt buộc phải đặt trong thuộc tính `placeholder` của ô nhập liệu (ví dụ: `placeholder="08:00 - 17:30"`). Dấu ngoặc đơn `(...)` ở tiêu đề chỉ được phép dùng cho đơn vị đo lường (ví dụ: `(phút)`, `(%)`, `(tháng)`). Ngoài ra không được hiển thị bất kỳ nội dung nào khác trong dấu ngoặc đơn ở tiêu đề.
+- **Tuyệt đối không dùng ký tự `&` trong tiêu đề:** Không sử dụng ký tự `&` trong tiêu đề nhóm, nhãn form hoặc tiêu đề dialog (ví dụ: không viết `Thiết lập chấm công & chế độ ca`, chỉ ghi rõ ràng là `Thiết lập chấm công`). Khi cần liên kết nội dung thì sử dụng từ nối tiếng Việt chuẩn `và` hoặc dùng dấu phẩy `,`.
 - **Nội dung phức hợp:** Khi nội dung dialog có tab, bảng, form hoặc upload, mỗi vùng vẫn dùng đúng component hiện có và không tạo thêm dialog lồng thay cho luồng đã có.
 
 ---

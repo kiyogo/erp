@@ -5,7 +5,7 @@ import { filesApi, financeCashApi, financePaymentsApi, FinanceCashTransaction, F
 import { dataService } from '../../services/dataService';
 import { Button, Input, message, Modal, Select, Tag } from '../../custom-ui';
 
-type CountLine = { denomination: number; quantity: number; note: string };
+type CountLine = { key: string; denomination: number; quantity: number; note: string };
 type CountFile = { id: string; name: string; size: number; mimeType?: string };
 type CashCount = {
   key: string; code: string; purpose: string; countDate: string; currency: string; reference: string;
@@ -23,7 +23,7 @@ const denominations = [500000, 200000, 100000, 50000, 20000, 10000, 5000, 2000, 
 const cashCountCode = (index: number) => `KKQ${String(index).padStart(5, '0')}`;
 const nextCashCountCode = (rows: CashCount[]) => cashCountCode(Math.max(0, ...rows.map(row => Number(/^KKQ(\d+)$/i.exec(row.code || '')?.[1]) || 0)) + 1);
 const money = (amount: number) => `${Number(amount || 0).toLocaleString('vi-VN')} ₫`;
-const blankLines = (): CountLine[] => denominations.map(denomination => ({ denomination, quantity: 0, note: `Loại mệnh giá ${denomination}` }));
+const blankLines = (): CountLine[] => denominations.map(denomination => ({ key: `denomination-${denomination}`, denomination, quantity: 0, note: `Loại mệnh giá ${denomination}` }));
 const dateText = (value?: string) => value ? new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString('vi-VN') : '—';
 
 export const CashCountModule: React.FC = () => {
@@ -32,6 +32,9 @@ export const CashCountModule: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmDate, setConfirmDate] = useState(today());
+  const [confirmCurrency, setConfirmCurrency] = useState('VND');
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState('');
   const [referenceSearchBy, setReferenceSearchBy] = useState('code');
@@ -88,19 +91,30 @@ export const CashCountModule: React.FC = () => {
   const openCreate = () => {
     const date = today();
     const code = nextCashCountCode(records);
+    setConfirmDate(date);
+    setConfirmCurrency('VND');
     setEditing(null);
     setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', bookBalance: bookBalanceAt(date), reconciliation: '', reason: '', conclusion: '', resolved: false, status: 'Đã ghi nhận' });
     setLines(blankLines());
     setSavedFiles([]);
     setRemovedFiles([]);
     setPendingFiles([]);
+    setConfirmOpen(true);
+  };
+
+  const confirmCreate = () => {
+    setField('countDate', confirmDate);
+    setField('currency', confirmCurrency);
+    setField('purpose', `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(confirmDate)}`);
+    setField('bookBalance', bookBalanceAt(confirmDate));
+    setConfirmOpen(false);
     setOpen(true);
   };
 
   const openEdit = (record: CashCount) => {
     setEditing(record);
     setDraft({ ...record });
-    setLines(record.lines?.length ? record.lines.map(line => ({ ...line })) : blankLines());
+    setLines(record.lines?.length ? record.lines.map((line, index) => ({ ...line, key: line.key || `saved-${record.key}-${index}` })) : blankLines());
     setSavedFiles(record.attachments || []);
     setRemovedFiles([]);
     setPendingFiles([]);
@@ -108,7 +122,7 @@ export const CashCountModule: React.FC = () => {
   };
 
   const setField = (name: keyof CashCount, value: any) => setDraft(current => ({ ...current, [name]: value }));
-  const setLine = (index: number, name: keyof CountLine, value: any) => setLines(current => current.map((line, i) => i === index ? { ...line, [name]: name === 'denomination' || name === 'quantity' ? Number(value) : value } : line));
+  const setLine = (key: string, name: keyof CountLine, value: any) => setLines(current => current.map(line => line.key === key ? { ...line, [name]: name === 'denomination' || name === 'quantity' ? Number(value) : value } : line));
 
   const addFiles = (files: File[]) => {
     const total = [...savedFiles, ...pendingFiles].reduce((sum, file) => sum + Number(file.size || 0), 0) + files.reduce((sum, file) => sum + file.size, 0);
@@ -198,6 +212,15 @@ export const CashCountModule: React.FC = () => {
     { title: '', key: 'choose', width: 90, render: (_: unknown, row: FinanceCashTransaction) => <Button size="small" onClick={() => { setField('reference', row.code); setReferenceOpen(false); }}>Chọn</Button> },
   ];
 
+  const lineColumns = [
+    { title: '#', key: 'number', width: 48, render: (_: unknown, _line: CountLine, index: number) => index + 1 },
+    { title: 'Mệnh giá', dataIndex: 'denomination', key: 'denomination', width: 190, render: (value: number, line: CountLine) => <Input aria-label={`Mệnh giá dòng ${line.key}`} type="number" min={0} step={1000} value={value} onChange={event => setLine(line.key, 'denomination', event.target.value)} style={{ width: '100%', height: 32, boxSizing: 'border-box' }} /> },
+    { title: 'Số lượng', dataIndex: 'quantity', key: 'quantity', width: 160, render: (value: number, line: CountLine) => <Input aria-label={`Số lượng dòng ${line.key}`} type="number" min={0} step={1} value={value} onChange={event => setLine(line.key, 'quantity', event.target.value)} style={{ width: '100%', height: 32, boxSizing: 'border-box' }} /> },
+    { title: 'Số tiền', key: 'amount', width: 180, render: (_: unknown, line: CountLine) => money(line.denomination * line.quantity) },
+    { title: 'Diễn giải', dataIndex: 'note', key: 'note', render: (value: string, line: CountLine) => <Input aria-label={`Diễn giải dòng ${line.key}`} value={value} onChange={event => setLine(line.key, 'note', event.target.value)} style={{ width: '100%', height: 32, boxSizing: 'border-box' }} /> },
+    { title: '', key: 'actions', width: 88, render: (_: unknown, line: CountLine) => <Button aria-label="Xóa dòng" onClick={() => setLines(current => current.filter(item => item.key !== line.key))} style={{ height: 32 }}>Xóa</Button> },
+  ];
+
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
@@ -207,7 +230,7 @@ export const CashCountModule: React.FC = () => {
 
       <KTable dataSource={sortedRecords} columns={columns} loading={loading} rowKey="key" pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có phiếu kiểm kê quỹ.' }} />
 
-      <Modal title={`${editing ? 'Sửa' : 'Thêm'} phiếu kiểm kê quỹ${draft.code ? ` ${draft.code}` : ''}`} open={open} onCancel={close} footer={null} width="min(1120px, calc(100vw - 32px))">
+      <Modal title={`Kiểm kê quỹ${draft.code ? ` ${draft.code}` : ''}`} open={open} onCancel={close} footer={null} width="min(1380px, calc(100vw - 24px))">
         <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 14px' }}>
             <label style={labelStyle}>Mục đích<Input value={draft.purpose || ''} onChange={event => setField('purpose', event.target.value)} /></label>
@@ -221,21 +244,8 @@ export const CashCountModule: React.FC = () => {
           </div>
 
           <div><strong>Kết quả kiểm kê thực tế</strong></div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-              <colgroup><col style={{ width: 44 }} /><col style={{ width: 150 }} /><col style={{ width: 130 }} /><col style={{ width: 160 }} /><col /><col style={{ width: 80 }} /></colgroup>
-              <thead><tr style={{ background: '#C5D9C2', textAlign: 'left' }}>{['#', 'Mệnh giá', 'Số lượng', 'Số tiền', 'Diễn giải', ''].map((heading, index) => <th key={index} scope="col" style={{ padding: '9px 8px', borderBottom: '1px solid #AFC9AC' }}>{heading}</th>)}</tr></thead>
-              <tbody>{lines.map((line, index) => <tr key={index} style={{ background: '#FBF7E8', borderBottom: '1px solid #E7DFC7' }}>
-                <td style={cellStyle}>{index + 1}</td>
-                <td style={cellStyle}><Input aria-label={`Mệnh giá dòng ${index + 1}`} type="number" min={0} step={1000} value={line.denomination} onChange={event => setLine(index, 'denomination', event.target.value)} /></td>
-                <td style={cellStyle}><Input aria-label={`Số lượng dòng ${index + 1}`} type="number" min={0} step={1} value={line.quantity} onChange={event => setLine(index, 'quantity', event.target.value)} /></td>
-                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 600 }}>{money(line.denomination * line.quantity)}</td>
-                <td style={cellStyle}><Input aria-label={`Diễn giải dòng ${index + 1}`} value={line.note} onChange={event => setLine(index, 'note', event.target.value)} /></td>
-                <td style={cellStyle}><Button size="small" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></td>
-              </tr>)}</tbody>
-            </table>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setLines(current => [...current, { denomination: 0, quantity: 0, note: '' }])}>Thêm dòng</Button><Button onClick={() => setLines([])}>Xóa hết dòng</Button></div>
+          <KTable dataSource={lines} columns={lineColumns} rowKey="key" pagination={false} scroll={{ x: 1120 }} enableColumnResizing={false} />
+          <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setLines(current => [...current, { key: crypto.randomUUID(), denomination: 0, quantity: 0, note: '' }])}>Thêm dòng</Button><Button onClick={() => setLines([])}>Xóa hết dòng</Button></div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '3px 14px' }}>
             <label style={labelStyle}>I. Số dư theo sổ kế toán tiền mặt<Input type="number" min={0} value={draft.bookBalance ?? bookBalance} onChange={event => setField('bookBalance', Number(event.target.value))} /></label>
@@ -259,6 +269,14 @@ export const CashCountModule: React.FC = () => {
         </div>
       </Modal>
 
+      <Modal title="Kiểm kê quỹ" open={confirmOpen} onCancel={() => setConfirmOpen(false)} footer={null} width={480}>
+        <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
+          <label style={labelStyle}>Đến ngày<Input type="date" value={confirmDate} onChange={event => setConfirmDate(event.target.value)} /></label>
+          <label style={labelStyle}>Loại tiền<Select value={confirmCurrency} onChange={setConfirmCurrency} options={[{ label: 'VND', value: 'VND' }]} style={{ width: '100%' }} /></label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={() => setConfirmOpen(false)}>Hủy</Button><Button type="primary" onClick={confirmCreate}>Đồng ý</Button></div>
+        </div>
+      </Modal>
+
       <Modal title="Chọn chứng từ tham chiếu" open={referenceOpen} onCancel={() => setReferenceOpen(false)} footer={null} width="min(1200px, calc(100vw - 32px))">
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 10, margin: '14px 0' }}><label style={labelStyle}>Tìm theo<Select value={referenceSearchBy} onChange={setReferenceSearchBy} options={[{ label: 'Số chứng từ', value: 'code' }, { label: 'Diễn giải', value: 'description' }, { label: 'Đối tượng', value: 'party' }]} /></label><label style={labelStyle}>Giá trị<Input prefix={<SearchOutlined />} value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} /></label><label style={labelStyle}>Từ<Input type="date" value={referenceFrom} onChange={event => setReferenceFrom(event.target.value)} /></label><label style={labelStyle}>Đến<Input type="date" value={referenceTo} onChange={event => setReferenceTo(event.target.value)} /></label><Button onClick={() => { void financeCashApi.getAll().then(response => setTransactions(response.data.data)).catch(() => message.error('Không tải được chứng từ thu chi.')); }}>Lấy dữ liệu</Button></div>
         <KTable dataSource={referenceRows} columns={refColumns} rowKey="key" pagination={{ pageSize: 10 }} locale={{ emptyText: 'Không có chứng từ thu chi.' }} />
@@ -268,4 +286,3 @@ export const CashCountModule: React.FC = () => {
 };
 
 const labelStyle: React.CSSProperties = { display: 'grid', gap: 4, alignContent: 'start', color: '#334155', fontSize: 12, fontWeight: 600 };
-const cellStyle: React.CSSProperties = { padding: 4, borderRight: '1px dotted #D8CFB6' };

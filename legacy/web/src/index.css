@@ -2314,3 +2314,8 @@ td.ant-table-column-sort {
   max-height: 1px !important;
   padding: 0 !important;
 }
+
+html body,
+html body *:not(#ui-font-weight-normal) {
+  font-weight: 400 !important;
+}

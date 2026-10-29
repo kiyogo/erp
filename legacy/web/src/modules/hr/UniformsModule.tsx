@@ -549,9 +549,9 @@ export const UniformsModule: React.FC = () => {
           ].map((tab) => (
             <Button
               key={tab.key}
-              size="small"
               onClick={() => setStatusFilter(tab.key)}
               style={{
+                height: 32,
                 backgroundColor: statusFilter === tab.key ? '#E0F2F1' : '#FFFFFF',
                 borderColor: statusFilter === tab.key ? '#009688' : '#CBD5E1',
                 color: statusFilter === tab.key ? '#00796B' : '#475569',
@@ -569,11 +569,15 @@ export const UniformsModule: React.FC = () => {
             placeholder="Tìm theo tên nhân viên, phòng ban, đợt cấp phát..."
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 280 }}
+            style={{ width: 280, height: 32 }}
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách cấp phát đồng phục')}>
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => message.success('Đã xuất danh sách cấp phát đồng phục')}
+            style={{ height: 32 }}
+          >
             Xuất Excel
           </Button>
 
@@ -581,7 +585,7 @@ export const UniformsModule: React.FC = () => {
             type="primary"
             icon={<PlusOutlined />}
             onClick={handleOpenCreateModal}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
+            style={{ backgroundColor: '#009688', borderColor: '#009688', height: 32 }}
           >
             Thêm đợt cấp phát
           </Button>
@@ -614,6 +618,7 @@ export const UniformsModule: React.FC = () => {
                 placeholder="Nhập tên đợt cấp phát..."
                 value={batchName}
                 onChange={e => setBatchName(e.target.value)}
+                style={{ height: 32 }}
               />
             </div>
 
@@ -625,7 +630,7 @@ export const UniformsModule: React.FC = () => {
               <Select
                 value={batchPeriod}
                 onChange={val => setBatchPeriod(val)}
-                style={{ width: '100%' }}
+                style={{ width: '100%', height: 32 }}
                 options={[
                   { label: 'Kỳ 1', value: 'Kỳ 1' },
                   { label: 'Kỳ 2', value: 'Kỳ 2' },
@@ -644,7 +649,7 @@ export const UniformsModule: React.FC = () => {
               <Select
                 value={batchItemType}
                 onChange={val => setBatchItemType(val)}
-                style={{ width: '100%' }}
+                style={{ width: '100%', height: 32 }}
                 options={[
                   { label: 'Áo Polo Doanh Nghiệp KIYOVN', value: 'Áo Polo Doanh Nghiệp KIYOVN' },
                   { label: 'Áo Sơ Mi & Vest Đồng Phục Công Sở Cao Cấp', value: 'Áo Sơ Mi & Vest Đồng Phục' },
@@ -662,7 +667,7 @@ export const UniformsModule: React.FC = () => {
               <Select
                 value={batchDepartment}
                 onChange={val => setBatchDepartment(val)}
-                style={{ width: '100%' }}
+                style={{ width: '100%', height: 32 }}
                 options={[
                   { label: 'Tất cả đơn vị', value: 'Tất cả đơn vị' },
                   ...deptOptions,
@@ -679,6 +684,7 @@ export const UniformsModule: React.FC = () => {
                 value={batchYear}
                 onChange={e => setBatchYear(e.target.value)}
                 placeholder="2026"
+                style={{ height: 32 }}
               />
             </div>
 
@@ -690,7 +696,7 @@ export const UniformsModule: React.FC = () => {
               <Select
                 value={batchStatus}
                 onChange={val => setBatchStatus(val)}
-                style={{ width: '100%' }}
+                style={{ width: '100%', height: 32 }}
                 options={[
                   { label: 'Chưa thực hiện', value: 'Chưa thực hiện' },
                   { label: 'Đang cấp phát', value: 'Đang cấp phát' },
@@ -708,27 +714,26 @@ export const UniformsModule: React.FC = () => {
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <Button
-                  size="small"
                   icon={<PlusOutlined />}
                   onClick={() => {
                     setSelectedPickerKeys([]);
                     setEmployeePickerOpen(true);
                   }}
-                  style={{ color: '#009688', borderColor: '#009688' }}
+                  style={{ color: '#009688', borderColor: '#009688', height: 32 }}
                 >
-                  + Thêm
+                  Thêm
                 </Button>
                 <Button
-                  size="small"
                   icon={<UploadOutlined />}
                   onClick={handleImportExcel}
+                  style={{ height: 32 }}
                 >
                   Nhập khẩu
                 </Button>
                 <Button
-                  size="small"
                   icon={<UsergroupAddOutlined />}
                   onClick={handleBatchAddEmployees}
+                  style={{ height: 32 }}
                 >
                   Thêm hàng loạt
                 </Button>
@@ -766,7 +771,6 @@ export const UniformsModule: React.FC = () => {
                         <td style={{ padding: '8px 10px', color: '#64748B' }}>{emp.department}</td>
                         <td style={{ padding: '8px 10px' }}>
                           <Select
-                            size="small"
                             value={emp.size}
                             onChange={val => updateEmployeeSize(emp.id, val)}
                             options={[
@@ -776,27 +780,26 @@ export const UniformsModule: React.FC = () => {
                               { label: 'XL', value: 'XL' },
                               { label: 'XXL', value: 'XXL' },
                             ]}
-                            style={{ width: 75 }}
+                            style={{ width: 85, height: 32 }}
                           />
                         </td>
                         <td style={{ padding: '8px 10px' }}>
                           <Input
-                            size="small"
                             type="number"
                             min={1}
                             max={10}
                             value={emp.quantity}
                             onChange={e => updateEmployeeQuantity(emp.id, Number(e.target.value) || 1)}
-                            style={{ width: 60 }}
+                            style={{ width: 65, height: 32 }}
                           />
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                           <Button
-                            size="small"
                             type="text"
                             danger
                             icon={<DeleteOutlined />}
                             onClick={() => removeParticipatingEmployee(emp.id)}
+                            style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                           />
                         </td>
                       </tr>
@@ -814,12 +817,11 @@ export const UniformsModule: React.FC = () => {
                 Tài liệu đính kèm {attachments.length > 0 && `(${attachments.length})`}
               </div>
               <Button
-                size="small"
                 icon={<PlusOutlined />}
                 onClick={handleUploadAttachment}
-                style={{ color: '#009688', borderColor: '#009688' }}
+                style={{ color: '#009688', borderColor: '#009688', height: 32 }}
               >
-                + Thêm
+                Thêm
               </Button>
             </div>
 
@@ -841,11 +843,11 @@ export const UniformsModule: React.FC = () => {
                       <span style={{ color: '#94A3B8', fontSize: 11 }}>({att.size})</span>
                     </div>
                     <Button
-                      size="small"
                       type="text"
                       danger
                       icon={<DeleteOutlined />}
                       onClick={() => removeAttachment(att.id)}
+                      style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                     />
                   </div>
                 ))}
@@ -855,14 +857,14 @@ export const UniformsModule: React.FC = () => {
 
           {/* CHÂN DIALOG (FOOTER) */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 6 }}>
-            <Button onClick={() => setModalOpen(false)}>
+            <Button onClick={() => setModalOpen(false)} style={{ height: 32 }}>
               Hủy
             </Button>
             <Button
               type="primary"
               onClick={handleSaveBatch}
               loading={saving}
-              style={{ backgroundColor: '#009688', borderColor: '#009688' }}
+              style={{ backgroundColor: '#009688', borderColor: '#009688', height: 32 }}
             >
               Lưu
             </Button>
@@ -886,7 +888,7 @@ export const UniformsModule: React.FC = () => {
               placeholder="Tìm kiếm nhân viên..."
               value={pickerSearch}
               onChange={e => setPickerSearch(e.target.value)}
-              style={{ flex: 1, minWidth: 200 }}
+              style={{ flex: 1, minWidth: 200, height: 32 }}
               allowClear
             />
             <Select
@@ -894,7 +896,7 @@ export const UniformsModule: React.FC = () => {
               value={pickerDept || undefined}
               onChange={val => setPickerDept(val || '')}
               allowClear
-              style={{ width: 200 }}
+              style={{ width: 200, height: 32 }}
               options={[{ label: 'Tất cả đơn vị', value: '' }, ...deptOptions]}
             />
           </div>
@@ -958,12 +960,12 @@ export const UniformsModule: React.FC = () => {
               Đã chọn: <strong>{selectedPickerKeys.length}</strong> nhân sự
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button onClick={() => setEmployeePickerOpen(false)}>Hủy</Button>
+              <Button onClick={() => setEmployeePickerOpen(false)} style={{ height: 32 }}>Hủy</Button>
               <Button
                 type="primary"
                 onClick={confirmSelectEmployees}
                 disabled={selectedPickerKeys.length === 0}
-                style={{ backgroundColor: '#009688', borderColor: '#009688' }}
+                style={{ backgroundColor: '#009688', borderColor: '#009688', height: 32 }}
               >
                 Xác nhận
               </Button>

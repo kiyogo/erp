@@ -72,14 +72,14 @@ const DEFAULT_SHIFTS: EnterpriseWorkShift[] = [
   {
     key: 'shift-sang-02',
     shiftCode: 'CA-SANG',
-    shiftName: 'Ca sáng sản xuất & vận hành',
+    shiftName: 'Ca sáng sản xuất và vận hành',
     timeRange: '06:00 - 14:00',
     startTime: '06:00',
     endTime: '14:00',
     workingHours: 8,
     workUnits: 1,
     breakTime: '11:00 - 11:30',
-    applicableTo: 'Khối Dự án & Vận hành',
+    applicableTo: 'Khối Dự án và Vận hành',
     allowGraceMinutes: 10,
     nightAllowancePct: 0,
     shiftCategory: 'Ca kíp',
@@ -91,14 +91,14 @@ const DEFAULT_SHIFTS: EnterpriseWorkShift[] = [
   {
     key: 'shift-chieu-03',
     shiftCode: 'CA-CHIEU',
-    shiftName: 'Ca chiều sản xuất & dịch vụ',
+    shiftName: 'Ca chiều sản xuất và dịch vụ',
     timeRange: '14:00 - 22:00',
     startTime: '14:00',
     endTime: '22:00',
     workingHours: 8,
     workUnits: 1,
     breakTime: '18:00 - 18:30',
-    applicableTo: 'Khối Dự án & Vận hành',
+    applicableTo: 'Khối Dự án và Vận hành',
     allowGraceMinutes: 10,
     nightAllowancePct: 0,
     shiftCategory: 'Ca kíp',
@@ -110,14 +110,14 @@ const DEFAULT_SHIFTS: EnterpriseWorkShift[] = [
   {
     key: 'shift-dem-04',
     shiftCode: 'CA-DEM',
-    shiftName: 'Ca đêm trực kỹ thuật & bảo trì',
+    shiftName: 'Ca đêm trực kỹ thuật và bảo trì',
     timeRange: '22:00 - 06:00',
     startTime: '22:00',
     endTime: '06:00',
     workingHours: 8,
     workUnits: 1,
     breakTime: '02:00 - 02:30',
-    applicableTo: 'Phòng Kỹ thuật & Công nghệ',
+    applicableTo: 'Phòng Kỹ thuật và Công nghệ',
     allowGraceMinutes: 10,
     nightAllowancePct: 30,
     shiftCategory: 'Ca đêm',
@@ -136,7 +136,7 @@ const DEFAULT_SHIFTS: EnterpriseWorkShift[] = [
     workingHours: 8,
     workUnits: 1,
     breakTime: '12:00 - 13:30',
-    applicableTo: 'Phòng Kinh doanh & Tiếp thị',
+    applicableTo: 'Phòng Kinh doanh và Tiếp thị',
     allowGraceMinutes: 30,
     nightAllowancePct: 0,
     shiftCategory: 'Linh hoạt',
@@ -451,7 +451,7 @@ export const ShiftsModule: React.FC = () => {
 
   const columns = [
     {
-      title: 'Mã & Tên ca làm việc',
+      title: 'Mã, tên ca làm việc',
       key: 'shiftName',
       render: (_: any, record: EnterpriseWorkShift) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -503,7 +503,7 @@ export const ShiftsModule: React.FC = () => {
       },
     },
     {
-      title: 'Giờ công & Ngày công',
+      title: 'Giờ công, ngày công',
       key: 'workingHours',
       width: 170,
       render: (_: any, record: EnterpriseWorkShift) => (
@@ -518,7 +518,7 @@ export const ShiftsModule: React.FC = () => {
       ),
     },
     {
-      title: 'Dung sai & Chế độ',
+      title: 'Dung sai, phụ cấp',
       key: 'allowGraceMinutes',
       width: 180,
       render: (_: any, record: EnterpriseWorkShift) => (
@@ -637,15 +637,15 @@ export const ShiftsModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ca hành chính chuẩn (8h)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ca hành chính chuẩn</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
             {adminShifts} Ca
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Khối văn phòng & quản lý</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Khối văn phòng, quản lý</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ca kíp & làm thêm đêm</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ca kíp, làm thêm đêm</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
             {specialShifts} Ca
           </div>
@@ -755,7 +755,7 @@ export const ShiftsModule: React.FC = () => {
             <Form.Item name="shiftCode" label="Mã ca" rules={[{ required: true, message: 'Vui lòng nhập mã ca' }]}>
               <Input placeholder="Ví dụ: HC, SANG, DEM" />
             </Form.Item>
-            <Form.Item name="timeRange" label="Khung giờ ca (HH:mm - HH:mm)" rules={[{ required: true, message: 'Vui lòng nhập khung giờ' }]}>
+            <Form.Item name="timeRange" label="Khung giờ ca" rules={[{ required: true, message: 'Vui lòng nhập khung giờ' }]}>
               <Input placeholder="08:00 - 17:30" suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />} />
             </Form.Item>
             <Form.Item name="shiftCategory" label="Nhóm ca" initialValue="Hành chính" rules={[{ required: true }]}>
@@ -792,8 +792,8 @@ export const ShiftsModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ marginTop: 10, padding: '12px 14px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>Thiết lập chấm công & chế độ ca:</div>
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>Thiết lập chấm công</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
               <Form.Item name="deductNoIn" valuePropName="checked" initialValue={true} style={{ margin: 0 }}>
                 <Checkbox>Trừ công nếu thiếu giờ vào</Checkbox>
@@ -821,7 +821,7 @@ export const ShiftsModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Thông Số Ca */}
       <Drawer
-        title="Chi Tiết Ca Làm Việc & Chính Sách Chấm Công"
+        title="Chi tiết ca làm việc"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={520}
@@ -848,7 +848,7 @@ export const ShiftsModule: React.FC = () => {
             {/* Shift Rules Card */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
-                Thông Số Chấm Công &amp; Quy Đổi Ngày Công:
+                Thông số chấm công:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -927,7 +927,7 @@ export const ShiftsModule: React.FC = () => {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ fontSize: 13, color: '#64748B' }}>
-            Mô tả ca làm việc bằng ngôn ngữ tự nhiên (ví dụ: &quot;Ca hành chính sáng 8h đến 12h, chiều 13h30 đến 17h30, đi muộn tối đa 15 phút, tính 1 công&quot;):
+            Mô tả ca làm việc bằng ngôn ngữ tự nhiên (ví dụ: &ldquo;Ca hành chính sáng 8h đến 12h, chiều 13h30 đến 17h30, đi muộn tối đa 15 phút, tính 1 công&rdquo;):
           </div>
           <Input.TextArea
             rows={4}
