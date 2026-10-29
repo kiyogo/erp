@@ -47,9 +47,21 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
 
 ## 4. NGUYÊN TẮC GIAO DIỆN & LOGIC HỆ THỐNG
 
+- **Tuân thủ kiến trúc và phong cách giao diện hiện tại:**
+  - Mọi tính năng thêm mới bắt buộc phải làm đúng theo giao diện và kiến trúc giao diện hiện tại của dự án.
+  - Nếu web đã có trang, menu, dialog/modal, form, bảng hoặc thành phần phù hợp thì phải dùng và mở rộng thành phần đó theo đúng kiến trúc hiện hữu; không tạo bản giao diện trùng lặp.
+  - Không tự ý tạo trang, menu, dialog/modal, kiểu điều hướng hoặc mẫu giao diện mới nếu người dùng chưa yêu cầu rõ.
+- **Quy tắc về yêu cầu, nút bấm và tính năng chưa rõ:**
+  - Trước khi triển khai, phải xác định rõ mục đích, hành vi, dữ liệu đầu vào/đầu ra, quyền sử dụng và ảnh hưởng liên kết của từng nút hoặc tính năng mới.
+  - Nếu một trong các điểm trên chưa rõ hoặc không thể xác minh từ yêu cầu, ảnh chụp hay hành vi hiện có của web, không được tự suy đoán hoặc thêm tính năng; phải hỏi người dùng để làm rõ phần còn thiếu.
+  - Sau khi triển khai, phải giải thích đầy đủ tính năng đã thêm: vị trí truy cập, cách sử dụng, trường bắt buộc/tùy chọn và kiểm tra dữ liệu, quyền và trạng thái, thao tác thêm/sửa/xóa, liên kết và ảnh hưởng tới các phần khác.
+- **Tổng hợp ảnh chụp giao diện:**
+  - Khi người dùng cung cấp nhiều ảnh chụp của cùng một giao diện/chức năng, phải đối chiếu và tổng hợp các chi tiết thành một giao diện thống nhất, dùng lại kiến trúc và thành phần có sẵn của web.
+  - Xem các ảnh là những trạng thái hoặc góc nhìn bổ sung của cùng giao diện nếu ngữ cảnh cho thấy chúng thuộc cùng một luồng; không tạo giao diện/trang riêng cho từng ảnh và không tự thêm chi tiết không có căn cứ. Nếu ảnh mâu thuẫn hoặc không đủ thông tin để xác định hành vi, phải hỏi người dùng.
 - **Chuẩn giao diện Modal / Dialog:**
   - Khoảng cách lề viền và khoảng cách giữa các khối chức năng (form rows, grid, actions) trong dialog tuân theo chuẩn 14px.
   - Các phần tử form control bên trong (như ô chọn Multi-Select, Input, Tags) giữ khoảng cách nhỏ gọn (row-gap 3px, column-gap 4px, margin 0) để đảm bảo tính thẩm mỹ, thanh thoát và không bị giãn dòng cách xa nhau.
 - **Ngôn ngữ và thẩm mỹ:**
   - Giao diện và thông báo sử dụng Tiếng Việt chuẩn mực, chuyên nghiệp.
   - Giữ gìn tính toàn vẹn của mã nguồn, chú thích (comments) và cấu trúc hiện hữu của dự án.
+  - Tuyệt đối không chứa emoji / icon trong commit message, nội dung tệp và tài liệu dự án.
