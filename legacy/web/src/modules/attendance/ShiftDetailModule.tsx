@@ -9,12 +9,9 @@ import {
   EyeOutlined,
   ClockCircleOutlined,
   CalendarOutlined,
-  TeamOutlined,
-  CheckCircleOutlined,
   ApartmentOutlined,
-  UserOutlined,
+  CheckCircleOutlined,
   MenuOutlined,
-  InfoCircleOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import {
@@ -30,7 +27,6 @@ import {
   Checkbox,
   Radio,
   RadioGroup,
-  DatePicker,
 } from '../../custom-ui';
 import { collectionsApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
@@ -59,7 +55,7 @@ export interface EnterpriseShiftPlan {
   createdAt?: string;
 }
 
-const DEFAULT_COMPANY = 'CÔNG TY TNHH XÂY DỰNG KINH SỞ';
+const DEFAULT_COMPANY = 'CÔNG TY TNHH XÂY DỰNG KINH SỞ'.normalize('NFC');
 
 const DEFAULT_SHIFTS_FALLBACK = [
   { key: 'shift-hc', shiftCode: 'HC', shiftName: 'Ca hành chính chuẩn', timeRange: '08:00 - 17:30' },
@@ -72,7 +68,7 @@ const INITIAL_PLANS: EnterpriseShiftPlan[] = [
   {
     key: 'plan-01',
     code: 'PC-2026-001',
-    name: 'Phân ca hành chính chuẩn - CÔNG TY TNHH XÂY DỰNG KINH SỞ',
+    name: `Phân ca hành chính T10/2026 - ${DEFAULT_COMPANY}`,
     orgUnit: DEFAULT_COMPANY,
     shiftKey: 'shift-hc',
     shiftName: 'Ca hành chính chuẩn',
@@ -92,7 +88,7 @@ const INITIAL_PLANS: EnterpriseShiftPlan[] = [
   {
     key: 'plan-02',
     code: 'PC-2026-002',
-    name: 'Phân ca sáng vận hành trạm trộn - CÔNG TY TNHH XÂY DỰNG KINH SỞ',
+    name: `Phân ca sáng vận hành trạm trộn - ${DEFAULT_COMPANY}`,
     orgUnit: DEFAULT_COMPANY,
     shiftKey: 'shift-sang',
     shiftName: 'Ca sáng sản xuất và vận hành',
@@ -113,7 +109,7 @@ const INITIAL_PLANS: EnterpriseShiftPlan[] = [
   {
     key: 'plan-03',
     code: 'PC-2026-003',
-    name: 'Phân ca chiều bảo trì cơ giới - CÔNG TY TNHH XÂY DỰNG KINH SỞ',
+    name: `Phân ca chiều bảo trì cơ giới - ${DEFAULT_COMPANY}`,
     orgUnit: DEFAULT_COMPANY,
     shiftKey: 'shift-chieu',
     shiftName: 'Ca chiều sản xuất và dịch vụ',
@@ -133,8 +129,8 @@ const INITIAL_PLANS: EnterpriseShiftPlan[] = [
   },
 ];
 
-// Calendar Grid Constants for 10/2026
-// Days as requested: 28, 29, 30 (Sep), 1..31 (Oct), 1 (Nov)
+// Calendar Grid for 10/2026
+// Days: 28, 29, 30 (Sep), 1..31 (Oct), 1 (Nov)
 const OCTOBER_GRID_DAYS = [
   { day: 28, month: 9, weekday: 2 },
   { day: 29, month: 9, weekday: 3 },
@@ -227,9 +223,10 @@ export const ShiftDetailModule: React.FC = () => {
       const empList = dataService.getEmployees();
       setEmployees(empList);
 
-      // 3. Load Org Units
+      // 3. Load Org Units (Ensure DEFAULT_COMPANY is first and normalized)
       const fetchedUnits = await dataService.fetchOrgUnitsList().catch(() => []);
-      const mergedUnits = Array.from(new Set([DEFAULT_COMPANY, ...fetchedUnits]));
+      const normalizedFetched = fetchedUnits.map((u) => String(u || '').normalize('NFC').trim()).filter(Boolean);
+      const mergedUnits = Array.from(new Set([DEFAULT_COMPANY, ...normalizedFetched]));
       setOrgUnits(mergedUnits);
 
       // 4. Load Plans
@@ -326,7 +323,7 @@ export const ShiftDetailModule: React.FC = () => {
 
     form.setFieldsValue({
       name: plan.name,
-      orgUnit: plan.orgUnit || DEFAULT_COMPANY,
+      orgUnit: (plan.orgUnit || DEFAULT_COMPANY).normalize('NFC'),
       shiftKey: plan.shiftKey,
       startDate: plan.startDate || '29/10/2026',
       endDate: plan.endDate || '29/10/2026',
@@ -349,7 +346,7 @@ export const ShiftDetailModule: React.FC = () => {
         key: editingPlan ? editingPlan.key : `plan-${Date.now()}`,
         code: editingPlan ? editingPlan.code : `PC-2026-${String(data.length + 1).padStart(3, '0')}`,
         name: values.name,
-        orgUnit: values.orgUnit || DEFAULT_COMPANY,
+        orgUnit: (values.orgUnit || DEFAULT_COMPANY).normalize('NFC'),
         shiftKey: shiftObj.key,
         shiftName: shiftObj.shiftName,
         shiftCode: shiftObj.shiftCode || 'CA',
@@ -443,11 +440,6 @@ export const ShiftDetailModule: React.FC = () => {
       message.error('Không thể xuất file Excel.');
     }
   };
-
-  // Find active shift object for preview
-  const currentShift = useMemo(() => {
-    return shifts.find((s) => s.key === selectedShiftKey) || DEFAULT_SHIFTS_FALLBACK[0];
-  }, [shifts, selectedShiftKey]);
 
   const columns = [
     {
@@ -614,7 +606,7 @@ export const ShiftDetailModule: React.FC = () => {
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header (Đúng chuẩn như admin/hr/employees) */}
+      {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng số bảng phân ca</div>
@@ -686,7 +678,7 @@ export const ShiftDetailModule: React.FC = () => {
           <Select
             value={orgFilter}
             onChange={setOrgFilter}
-            style={{ width: 220, height: 32 }}
+            style={{ width: 240, height: 32 }}
             options={[
               { label: 'Tất cả đơn vị', value: 'all' },
               ...orgUnits.map((u) => ({ label: u, value: u })),
@@ -729,13 +721,13 @@ export const ShiftDetailModule: React.FC = () => {
         pagination={{ pageSize: 10, showSizeChanger: true }}
       />
 
-      {/* MODAL: PHÂN CA CHI TIẾT (BỐ CỤC 2 CỘT SIDE-BY-SIDE: XEM TRƯỚC PHÂN CA LUÔN Ở BÊN PHẢI) */}
+      {/* MODAL: PHÂN CA CHI TIẾT (CHUẨN 100% CẤU TRÚC VÀ YÊU CẦU NGƯỜI DÙNG) */}
       <Modal
         title={editingPlan ? 'Chỉnh sửa phân ca chi tiết' : 'Phân ca chi tiết'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
-        width={1180}
+        width={960}
         style={{ maxWidth: '96vw', top: 35 }}
       >
         <Form
@@ -743,24 +735,24 @@ export const ShiftDetailModule: React.FC = () => {
           layout="vertical"
           onFinish={handleSavePlan}
         >
-          {/* BỐ CỤC 2 CỘT: TRÁI LÀ CẤU HÌNH, PHẢI LUÔN LÀ XEM TRƯỚC PHÂN CA */}
+          {/* BỐ CỤC 2 CỘT TỰ NHIÊN: KHÔNG CÓ BẤT KỲ ĐƯỜNG KẺ THẲNG NGĂN CÁCH NÀO */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1.3fr) minmax(460px, 1fr)',
-              gap: 32,
+              gridTemplateColumns: 'minmax(0, 1.35fr) minmax(360px, 1fr)',
+              gap: 28,
               alignItems: 'start',
             }}
           >
-            {/* CỘT BÊN TRÁI: THIẾT LẬP PHÂN CA */}
+            {/* CỘT TRÁI: CẤU HÌNH THÔNG TIN VÀ ĐỐI TƯỢNG */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {/* I. THÔNG TIN CHUNG */}
               <div>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
                   Thông tin chung
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <Form.Item
                     name="name"
                     label="Tên bảng phân ca"
@@ -768,18 +760,19 @@ export const ShiftDetailModule: React.FC = () => {
                     rules={[{ required: true, message: 'Vui lòng nhập tên bảng phân ca' }]}
                     style={{ margin: 0 }}
                   >
-                    <Input placeholder="Nhập tên bảng phân ca" style={{ height: 32 }} />
+                    <Input placeholder="Nhập tên bảng phân ca" style={{ height: 32, width: '100%' }} />
                   </Form.Item>
 
                   <Form.Item
                     name="orgUnit"
                     label="Đơn vị áp dụng"
                     required
+                    initialValue={DEFAULT_COMPANY}
                     rules={[{ required: true, message: 'Vui lòng chọn đơn vị áp dụng' }]}
                     style={{ margin: 0 }}
                   >
                     <Select
-                      style={{ height: 32 }}
+                      style={{ height: 32, width: '100%' }}
                       options={orgUnits.map((u) => ({ label: u, value: u }))}
                     />
                   </Form.Item>
@@ -792,10 +785,10 @@ export const ShiftDetailModule: React.FC = () => {
                     style={{ margin: 0 }}
                   >
                     <Select
-                      style={{ height: 32 }}
+                      style={{ height: 32, width: '100%' }}
                       onChange={(val) => setSelectedShiftKey(val)}
                       options={shifts.map((s) => ({
-                        label: `${s.shiftName} (${s.shiftCode || 'CA'} · ${s.timeRange || `${s.startTime} - ${s.endTime}`})`,
+                        label: `${s.shiftName} (${s.timeRange || `${s.startTime} - ${s.endTime}`})`,
                         value: s.key,
                       }))}
                     />
@@ -805,15 +798,16 @@ export const ShiftDetailModule: React.FC = () => {
 
               {/* II. THỜI GIAN ÁP DỤNG */}
               <div>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
                   Thời gian áp dụng
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))', gap: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                   <Form.Item
                     name="startDate"
                     label="Ngày bắt đầu"
                     required
+                    initialValue="29/10/2026"
                     rules={[{ required: true, message: 'Vui lòng nhập ngày bắt đầu' }]}
                     style={{ margin: 0 }}
                   >
@@ -823,6 +817,7 @@ export const ShiftDetailModule: React.FC = () => {
                   <Form.Item
                     name="endDate"
                     label="Ngày kết thúc"
+                    initialValue="29/10/2026"
                     style={{ margin: 0 }}
                   >
                     <Input placeholder="29/10/2026" style={{ height: 32 }} />
@@ -851,48 +846,50 @@ export const ShiftDetailModule: React.FC = () => {
                     style={{ margin: 0 }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <Input type="number" min={1} defaultValue={1} style={{ width: 65, height: 32 }} />
+                      <Input type="number" min={1} defaultValue={1} style={{ width: 80, height: 32 }} />
                       <span style={{ fontSize: 13, color: '#475569', fontWeight: 600 }}>Tuần</span>
                     </div>
                   </Form.Item>
                 </div>
 
-                {/* Các ngày trong tuần */}
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
-                    Ngày áp dụng trong tuần:
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {[
-                      { num: 2, label: 'Thứ 2' },
-                      { num: 3, label: 'Thứ 3' },
-                      { num: 4, label: 'Thứ 4' },
-                      { num: 5, label: 'Thứ 5' },
-                      { num: 6, label: 'Thứ 6' },
-                      { num: 7, label: 'Thứ 7' },
-                      { num: 8, label: 'Chủ nhật' },
-                    ].map((day) => {
-                      const isSelected = selectedDaysOfWeek.includes(day.num);
-                      return (
-                        <Button
-                          key={day.num}
-                          type="button"
-                          size="small"
-                          onClick={() => handleToggleDay(day.num)}
-                          style={{
-                            height: 32,
-                            padding: '0 10px',
-                            backgroundColor: isSelected ? '#E0F2F1' : '#FFFFFF',
-                            borderColor: isSelected ? '#009688' : '#CBD5E1',
-                            color: isSelected ? '#00796B' : '#475569',
-                            fontWeight: isSelected ? 700 : 500,
-                          }}
-                        >
-                          {day.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
+                {/* Thứ 2 - Chủ nhật: 7 nút đều nhau trên 1 hàng */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 5 }}>
+                  {[
+                    { num: 2, label: 'Thứ 2' },
+                    { num: 3, label: 'Thứ 3' },
+                    { num: 4, label: 'Thứ 4' },
+                    { num: 5, label: 'Thứ 5' },
+                    { num: 6, label: 'Thứ 6' },
+                    { num: 7, label: 'Thứ 7' },
+                    { num: 8, label: 'Chủ nhật' },
+                  ].map((day) => {
+                    const isSelected = selectedDaysOfWeek.includes(day.num);
+                    return (
+                      <button
+                        key={day.num}
+                        type="button"
+                        onClick={() => handleToggleDay(day.num)}
+                        style={{
+                          height: 32,
+                          padding: 0,
+                          borderRadius: 6,
+                          border: isSelected ? '1px solid #009688' : '1px solid #CBD5E1',
+                          backgroundColor: isSelected ? '#E0F2F1' : '#FFFFFF',
+                          color: isSelected ? '#00796B' : '#475569',
+                          fontWeight: isSelected ? 700 : 500,
+                          fontSize: 12,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          transition: 'all 0.15s ease',
+                          outline: 'none',
+                        }}
+                      >
+                        {day.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Checkbox Bỏ xem trước phân ca */}
@@ -908,25 +905,25 @@ export const ShiftDetailModule: React.FC = () => {
 
               {/* III. ĐỐI TƯỢNG ÁP DỤNG */}
               <div>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 10 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
                   Đối tượng áp dụng
                 </div>
 
                 <RadioGroup
                   value={targetType}
                   onChange={(e) => setTargetType(e.target.value)}
-                  style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
                 >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div>
                     <Radio value="all_unit">
                       <span style={{ fontWeight: 600, color: '#0F172A' }}>Toàn đơn vị</span>
                     </Radio>
-                    <div style={{ fontSize: 12, color: '#64748B', marginLeft: 24 }}>
+                    <div style={{ fontSize: 12, color: '#64748B', marginLeft: 24, marginTop: 2 }}>
                       Các nhân viên khi tiếp nhận hoặc điều chuyển đến đơn vị đã chọn sẽ tự động được phân ca theo thiết lập này.
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div>
                     <Radio value="employees">
                       <span style={{ fontWeight: 600, color: '#0F172A' }}>Danh sách nhân viên</span>
                     </Radio>
@@ -947,7 +944,7 @@ export const ShiftDetailModule: React.FC = () => {
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div>
                     <Radio value="departments">
                       <span style={{ fontWeight: 600, color: '#0F172A' }}>Danh sách phòng ban</span>
                     </Radio>
@@ -968,17 +965,16 @@ export const ShiftDetailModule: React.FC = () => {
               </div>
             </div>
 
-            {/* CỘT BÊN PHẢI: XEM TRƯỚC PHÂN CA (LUÔN LUÔN HIỆN Ở BÊN PHẢI) */}
+            {/* CỘT PHẢI: XEM TRƯỚC PHÂN CA (LUÔN Ở BÊN PHẢI) */}
             <div
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 12,
-                minHeight: 480,
+                gap: 10,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A' }}>
                   Xem trước phân ca
                 </div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: '#009688' }}>
@@ -986,42 +982,21 @@ export const ShiftDetailModule: React.FC = () => {
                 </div>
               </div>
 
-              {/* Thông tin ca áp dụng hiển thị trên lịch */}
-              <div style={{ fontSize: 12, color: '#64748B', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>Ca áp dụng:</span>
-                <span
-                  style={{
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    background: '#E0F2F1',
-                    color: '#00796B',
-                    fontWeight: 700,
-                    fontSize: 11,
-                  }}
-                >
-                  {currentShift.shiftCode || 'HC'} - {currentShift.shiftName}
-                </span>
-              </div>
-
               {skipPreview ? (
                 <div
                   style={{
                     border: '1px dashed #CBD5E1',
                     borderRadius: 6,
-                    padding: '40px 16px',
+                    padding: '36px 16px',
                     textAlign: 'center',
                     color: '#94A3B8',
                     fontSize: 12.5,
-                    marginTop: 10,
                   }}
                 >
                   Đã chọn bỏ xem trước phân ca.
-                  <div style={{ marginTop: 6, fontSize: 11.5, color: '#64748B' }}>
-                    Bỏ chọn ô &ldquo;Bỏ xem trước phân ca&rdquo; ở bên trái để xem lại lịch.
-                  </div>
                 </div>
               ) : (
-                /* Lưới lịch tháng 10/2026 chuẩn */
+                /* Lưới lịch tháng 10/2026 chuẩn: Chỉ hiện số ngày, ngày áp dụng được highlight nhẹ */
                 <div style={{ border: '1px solid #E2E8F0', borderRadius: 6, overflow: 'hidden' }}>
                   {/* Header 7 thứ */}
                   <div
@@ -1031,10 +1006,10 @@ export const ShiftDetailModule: React.FC = () => {
                       background: '#F8FAFC',
                       borderBottom: '1px solid #E2E8F0',
                       textAlign: 'center',
-                      fontWeight: 700,
-                      fontSize: 12.5,
+                      fontWeight: 600,
+                      fontSize: 12,
                       color: '#475569',
-                      padding: '10px 0',
+                      padding: '8px 0',
                     }}
                   >
                     <div>Thứ 2</div>
@@ -1047,7 +1022,7 @@ export const ShiftDetailModule: React.FC = () => {
                   </div>
 
                   {/* Grid 35 ô ngày */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', padding: 4, gap: 2 }}>
                     {OCTOBER_GRID_DAYS.map((cell, idx) => {
                       const isOctober = cell.month === 10;
                       const isActiveWeekday = selectedDaysOfWeek.includes(cell.weekday);
@@ -1057,61 +1032,36 @@ export const ShiftDetailModule: React.FC = () => {
                         <div
                           key={idx}
                           style={{
-                            borderRight: (idx + 1) % 7 === 0 ? 'none' : '1px solid #F1F5F9',
-                            borderBottom: idx >= 28 ? 'none' : '1px solid #F1F5F9',
-                            padding: '8px 3px',
-                            minHeight: 52,
+                            height: 38,
                             display: 'flex',
-                            flexDirection: 'column',
                             alignItems: 'center',
-                            justifyContent: 'flex-start',
-                            backgroundColor: isAppliedDay ? '#F0FDF4' : isOctober ? '#FFFFFF' : '#FAFAFA',
-                            color: isOctober ? '#0F172A' : '#94A3B8',
-                            opacity: isOctober ? 1 : 0.45,
+                            justifyContent: 'center',
+                            borderRadius: 4,
+                            backgroundColor: isAppliedDay ? '#E0F2F1' : 'transparent',
+                            color: isAppliedDay
+                              ? '#00796B'
+                              : !isOctober
+                              ? '#CBD5E1'
+                              : cell.weekday === 8
+                              ? '#EF4444'
+                              : '#1E293B',
+                            fontWeight: isAppliedDay ? 700 : 500,
+                            fontSize: 13,
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: 12.5,
-                              fontWeight: isAppliedDay ? 700 : 500,
-                              color: cell.weekday === 8 ? '#EF4444' : isOctober ? '#1E293B' : '#94A3B8',
-                            }}
-                          >
-                            {cell.day}
-                          </span>
-
-                          {isAppliedDay && (
-                            <div
-                              style={{
-                                marginTop: 3,
-                                padding: '2px 6px',
-                                borderRadius: 3,
-                                background: '#E0F2F1',
-                                color: '#00796B',
-                                fontSize: 10.5,
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {currentShift.shiftCode || 'HC'}
-                            </div>
-                          )}
+                          {cell.day}
                         </div>
                       );
                     })}
                   </div>
                 </div>
               )}
-
-              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>
-                Lịch dự kiến áp dụng cho các ngày làm việc trong tháng 10/2026 theo thứ đã chọn.
-              </div>
             </div>
           </div>
 
-          {/* Footer Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
-            <Button disabled={saving} onClick={() => setModalOpen(false)} style={{ height: 32 }}>
+          {/* Footer Actions: KHÔNG CÓ BẤT KỲ ĐƯỜNG KẺ THẲNG NÀO */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+            <Button disabled={saving} onClick={() => setModalOpen(false)} style={{ height: 32, padding: '0 16px' }}>
               Hủy
             </Button>
             <Button
@@ -1119,7 +1069,7 @@ export const ShiftDetailModule: React.FC = () => {
               htmlType="submit"
               loading={saving}
               disabled={saving}
-              style={{ backgroundColor: '#009688', borderColor: '#009688', height: 32 }}
+              style={{ backgroundColor: '#009688', borderColor: '#009688', height: 32, padding: '0 16px' }}
             >
               {editingPlan ? 'Lưu thay đổi' : 'Lưu bảng phân ca'}
             </Button>
