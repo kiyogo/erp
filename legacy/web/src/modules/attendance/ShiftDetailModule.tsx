@@ -871,7 +871,7 @@ export const ShiftDetailModule: React.FC = () => {
                 </div>
 
                 {/* Thứ 2 - Chủ nhật: 7 nút đều nhau trên 1 hàng */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, marginBottom: 14 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
                   {[
                     { num: 2, label: 'Thứ 2' },
                     { num: 3, label: 'Thứ 3' },
@@ -910,11 +910,12 @@ export const ShiftDetailModule: React.FC = () => {
                   })}
                 </div>
 
-                {/* Checkbox Bỏ xem trước phân ca */}
-                <div style={{ marginBottom: 4 }}>
+                {/* Checkbox Bỏ xem trước phân ca: Khoảng cách rộng rãi 20px, không bị dính sát hay đè nút */}
+                <div style={{ marginTop: 20, marginBottom: 20, display: 'flex', alignItems: 'center' }}>
                   <Checkbox
                     checked={skipPreview}
                     onChange={(e) => setSkipPreview(Boolean(e.target.checked))}
+                    style={{ fontSize: 13, color: '#334155' }}
                   >
                     Bỏ xem trước phân ca
                   </Checkbox>
