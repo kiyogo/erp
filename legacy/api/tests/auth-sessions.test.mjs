@@ -87,6 +87,19 @@ function googleToken(extra = {}) {
   return `${header}.${body}.${sign('RSA-SHA256', Buffer.from(`${header}.${body}`), privateKey).toString('base64url')}`;
 }
 
+function totpCode(secret) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const character of secret) bits += alphabet.indexOf(character).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) bytes.push(parseInt(bits.slice(offset, offset + 8), 2));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
+
 test('logins issue unique persistent sessions with actual IP, agent, expiry and current-session marker', async () => {
   const first = await login();
   const second = await login();
@@ -232,4 +245,60 @@ test('revocation survives API restart and configured Google Workspace domain is 
   await request('/auth/google', 'POST', { credential: googleToken() }, 403, '');
   const allowed = await request('/auth/google', 'POST', { credential: googleToken({ email: 'workspace@example.test', hd: 'example.test', sub: 'workspace-user' }) }, 200, '');
   assert.equal(allowed.user.role, 'USER');
+});
+
+test('server TOTP enrollment, backup codes and password and Google login challenges are enforced', async () => {
+  await stopServer();
+  env.GOOGLE_ALLOWED_DOMAIN = '';
+  await startServer();
+  const session = await login();
+  const setup = await request('/auth/2fa/enrollment', 'POST', {}, 200, session.token);
+  assert.match(setup.secret, /^[A-Z2-7]{32}$/);
+  assert.match(setup.otpauthUrl, /^otpauth:\/\/totp\//);
+  assert.equal(setup.otpauthUrl.includes(env.SEED_ADMIN_EMAIL), false, 'the user label is URL encoded');
+  const storedPending = storage.prepare("SELECT payload_json FROM collection_records WHERE scope = 'user_two_factor_auth' AND owner_id = ?").get(session.user.id);
+  assert.ok(storedPending);
+  assert.equal(storedPending.payload_json.includes(setup.secret), false, 'pending secret is encrypted at rest');
+  await request('/auth/2fa/enrollment/verify', 'POST', { code: '000000' }, 422, session.token);
+  const enabled = await request('/auth/2fa/enrollment/verify', 'POST', { code: totpCode(setup.secret) }, 200, session.token);
+  assert.equal(enabled.enabled, true);
+  assert.equal(enabled.backupCodes.length, 10);
+  const storedEnabled = storage.prepare("SELECT payload_json FROM collection_records WHERE scope = 'user_two_factor_auth' AND owner_id = ?").get(session.user.id).payload_json;
+  assert.equal(storedEnabled.includes(setup.secret), false, 'active secret is encrypted at rest');
+  assert.equal(storedEnabled.includes(enabled.backupCodes[0]), false, 'recovery codes are hashed at rest');
+  assert.equal((await request('/auth/2fa', 'GET', undefined, 200, session.token)).backupCodeCount, 10);
+  assert.equal((await request('/admin/sessions', 'GET', undefined, 200, session.token)).data.find(row => row.key === claimsOf(session.token).sid).mfaVerified, true);
+  await request('/auth/profile', 'GET', undefined, 401, control.token);
+
+  const passwordChallenge = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD }, 200, '');
+  assert.equal(passwordChallenge.mfaRequired, true);
+  assert.equal(passwordChallenge.access_token, undefined);
+  await request('/auth/2fa/login', 'POST', { challengeToken: passwordChallenge.challengeToken, code: '000000' }, 401, '');
+  const passwordSession = await request('/auth/2fa/login', 'POST', { challengeToken: passwordChallenge.challengeToken, code: totpCode(setup.secret) }, 200, '');
+  await request('/auth/profile', 'GET', undefined, 200, passwordSession.access_token);
+
+  const googleChallenge = await request('/auth/google', 'POST', { credential: googleToken() }, 200, '');
+  assert.equal(googleChallenge.mfaRequired, true);
+  const googleSession = await request('/auth/2fa/login', 'POST', { challengeToken: googleChallenge.challengeToken, code: enabled.backupCodes[0] }, 200, '');
+  await request('/auth/profile', 'GET', undefined, 200, googleSession.access_token);
+  assert.equal((await request('/auth/2fa', 'GET', undefined, 200, googleSession.access_token)).backupCodeCount, 9, 'a recovery code can only be used once');
+  const rotatedCodes = await request('/auth/2fa/recovery-codes', 'POST', { code: totpCode(setup.secret) }, 200, googleSession.access_token);
+  assert.equal(rotatedCodes.backupCodes.length, 10);
+  const rotatedChallenge = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD }, 200, '');
+  await request('/auth/2fa/login', 'POST', { challengeToken: rotatedChallenge.challengeToken, code: enabled.backupCodes[1] }, 401, '');
+  await request('/auth/2fa/login', 'POST', { challengeToken: rotatedChallenge.challengeToken, code: totpCode(setup.secret) }, 200, '');
+
+  await request('/auth/2fa/disable', 'POST', { code: '000000' }, 422, googleSession.access_token);
+  await request('/auth/2fa/disable', 'POST', { code: totpCode(setup.secret) }, 200, googleSession.access_token);
+  assert.equal((await request('/auth/2fa', 'GET', undefined, 200, googleSession.access_token)).enabled, false);
+  assert.ok((await login()).token, 'password login returns to normal after MFA is disabled');
+
+  const secondSetup = await request('/auth/2fa/enrollment', 'POST', {}, 200, googleSession.access_token);
+  await request('/auth/2fa/enrollment/verify', 'POST', { code: totpCode(secondSetup.secret) }, 200, googleSession.access_token);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const challenge = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD }, 200, '');
+    await request('/auth/2fa/login', 'POST', { challengeToken: challenge.challengeToken, code: 'not-a-code' }, 401, '');
+  }
+  const lockedChallenge = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD }, 200, '');
+  await request('/auth/2fa/login', 'POST', { challengeToken: lockedChallenge.challengeToken, code: totpCode(secondSetup.secret) }, 429, '');
 });

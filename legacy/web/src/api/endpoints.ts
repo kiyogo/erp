@@ -3,6 +3,12 @@ import api from './axios';
 export const authApi = {
   login:          (email: string, password: string) => api.post('/auth/login', { email, password }),
   loginGoogle:    (data?: any)                      => api.post('/auth/google', data || {}),
+  verifyMfaLogin: (challengeToken: string, code: string) => api.post('/auth/2fa/login', { challengeToken, code }),
+  getTwoFactor: () => api.get<{ enabled: boolean; authenticatorConfigured: boolean; backupCodeCount: number }>('/auth/2fa'),
+  beginTwoFactorSetup: () => api.post<{ secret: string; otpauthUrl: string; expiresAt: string }>('/auth/2fa/enrollment'),
+  verifyTwoFactorSetup: (code: string) => api.post<{ enabled: boolean; backupCodes: string[] }>('/auth/2fa/enrollment/verify', { code }),
+  disableTwoFactor: (code: string) => api.post<{ enabled: boolean }>('/auth/2fa/disable', { code }),
+  rotateRecoveryCodes: (code: string) => api.post<{ backupCodes: string[] }>('/auth/2fa/recovery-codes', { code }),
   getGoogleConfig: () => api.get<{ configured: boolean; clientId: string; allowedDomain: string }>('/auth/google/config'),
   logout: (token: string) => api.post<{ loggedOut: boolean }>('/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } }),
   getProfile:     ()                                 => api.get('/auth/profile'),

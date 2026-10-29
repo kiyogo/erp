@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import QRCode from 'qrcode';
 import {
   KeyOutlined,
   MobileOutlined,
@@ -22,14 +23,12 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Modal, message, Tag, Switch } from '../../custom-ui';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { authApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import {
   getUser2FAState,
   saveUser2FAState,
   cleanupLegacyGlobal2FAKeys,
-  verifyTOTP,
-  generateTOTP,
-  generateBackupCodes,
   TwoFactorPasskey,
   TwoFactorDevice,
 } from '../../utils/twoFactorAuth';
@@ -60,29 +59,32 @@ export const TwoStepVerificationModule: React.FC = () => {
   const [initialState] = useState(() => getUser2FAState(userKey, realUserPhone, realUserEmail));
 
   // Trạng thái 2FA của chính người dùng hiện tại (Mặc định khi tạo mới là TẮT)
-  const [isEnabled, setIsEnabled] = useState<boolean>(initialState.isEnabled);
-  const [secretKey] = useState<string>(initialState.secretKey);
-  const [backupCodes, setBackupCodes] = useState<string[]>(initialState.backupCodes);
+  const [isEnabled, setIsEnabled] = useState(false);
+  const [secretKey, setSecretKey] = useState('');
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
+  const [backupCodeCount, setBackupCodeCount] = useState(0);
+  const [securityLoaded, setSecurityLoaded] = useState(false);
+  const [securityLoading, setSecurityLoading] = useState(false);
   const [passkeys, setPasskeys] = useState<TwoFactorPasskey[]>(initialState.passkeys);
   const [devices, setDevices] = useState<TwoFactorDevice[]>(initialState.devices);
   const [phoneNumber, setPhoneNumber] = useState<string>(initialState.phoneNumber);
   const [smsOtpEnabled, setSmsOtpEnabled] = useState<boolean>(initialState.smsOtpEnabled);
   const [emailOtpEnabled, setEmailOtpEnabled] = useState<boolean>(initialState.emailOtpEnabled);
-  const [authenticatorConfigured, setAuthenticatorConfigured] = useState<boolean>(initialState.authenticatorConfigured);
+  const [authenticatorConfigured, setAuthenticatorConfigured] = useState(false);
 
   const [setupStep, setSetupStep] = useState<1 | 2 | 3>(1);
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Live OTP Code cho Authenticator (hỗ trợ hiển thị gợi ý kiểm thử real-time)
-  const [liveOtp, setLiveOtp] = useState<string>('');
-  const [countdown, setCountdown] = useState<number>(30);
-
   const [tempPhone, setTempPhone] = useState(phoneNumber);
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [newPasskeyName, setNewPasskeyName] = useState('');
   const [isAddPasskeyModalOpen, setIsAddPasskeyModalOpen] = useState(false);
+  const [disableOtp, setDisableOtp] = useState('');
+  const [recoveryOtp, setRecoveryOtp] = useState('');
+  const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
 
   const isEmployee = location.pathname.startsWith('/employee');
   const isAdminPath = location.pathname.startsWith('/admin');
@@ -105,28 +107,39 @@ export const TwoStepVerificationModule: React.FC = () => {
   const subRoute = rawSubPath === 'backup_codes' ? 'backup-codes' : rawSubPath;
 
   const emailAddress = realUserEmail;
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
-    `otpauth://totp/KIYO%20Enterprise:${encodeURIComponent(emailAddress || 'User')}?secret=${secretKey}&issuer=KIYO%20Enterprise`
-  )}`;
-
-  // Cập nhật live OTP code mỗi giây khi ở bước xác nhận Authenticator
   useEffect(() => {
-    let timer: any;
-    const updateCode = async () => {
-      const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
-      setCountdown(remaining);
-      const code = await generateTOTP(secretKey, 0);
-      setLiveOtp(code);
-    };
+    let active = true;
+    setSecurityLoaded(false);
+    authApi.getTwoFactor().then(({ data }) => {
+      if (!active) return;
+      setIsEnabled(data.enabled);
+      setAuthenticatorConfigured(data.authenticatorConfigured);
+      setBackupCodeCount(data.backupCodeCount);
+      setSecurityLoaded(true);
+    }).catch(() => {
+      if (active) {
+        setSecurityLoaded(true);
+        message.error('Không tải được trạng thái xác minh hai bước từ máy chủ.');
+      }
+    });
+    return () => { active = false; };
+  }, [userKey, location.pathname]);
 
-    if (subRoute === 'authenticator' && setupStep === 2) {
-      void updateCode();
-      timer = setInterval(updateCode, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [subRoute, setupStep, secretKey]);
+  useEffect(() => {
+    if (!securityLoaded || isEnabled || subRoute !== 'authenticator' || secretKey) return;
+    let active = true;
+    setSecurityLoading(true);
+    authApi.beginTwoFactorSetup().then(async ({ data }) => {
+      const qr = await QRCode.toDataURL(data.otpauthUrl, { width: 180, margin: 1 });
+      if (active) {
+        setSecretKey(data.secret);
+        setQrDataUrl(qr);
+      }
+    }).catch((error: any) => {
+      if (active) message.error(error?.response?.data?.message || 'Không thể bắt đầu thiết lập ứng dụng xác thực.');
+    }).finally(() => { if (active) setSecurityLoading(false); });
+    return () => { active = false; };
+  }, [securityLoaded, isEnabled, subRoute, secretKey]);
 
   const handleOtpDigitChange = (index: number, value: string) => {
     const char = value.slice(-1);
@@ -188,10 +201,20 @@ export const TwoStepVerificationModule: React.FC = () => {
   };
 
   const handleRegenerateCodes = () => {
-    const newCodes = generateBackupCodes(10);
-    setBackupCodes(newCodes);
-    saveUser2FAState(userKey, { backupCodes: newCodes });
-    message.success('Đã tạo 10 mã khôi phục dự phòng mới thành công!');
+    setRecoveryOtp('');
+    setRecoveryDialogOpen(true);
+  };
+
+  const confirmRegenerateCodes = async () => {
+    try {
+      const { data } = await authApi.rotateRecoveryCodes(recoveryOtp.trim());
+      setBackupCodes(data.backupCodes);
+      setBackupCodeCount(data.backupCodes.length);
+      setRecoveryDialogOpen(false);
+      message.success('Đã tạo mã dự phòng mới. Hãy lưu lại vì mã chỉ hiển thị một lần.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tạo lại mã dự phòng.');
+    }
   };
 
   const handleVerifyOtp = async () => {
@@ -201,21 +224,20 @@ export const TwoStepVerificationModule: React.FC = () => {
       return;
     }
 
-    const isValid = await verifyTOTP(secretKey, cleanOtp);
-    if (!isValid) {
-      setOtpError('Mã OTP không chính xác hoặc đã hết hiệu lực. Vui lòng kiểm tra lại ứng dụng Authenticator.');
-      return;
+    setSecurityLoading(true);
+    try {
+      const { data } = await authApi.verifyTwoFactorSetup(cleanOtp);
+      setOtpError('');
+      setAuthenticatorConfigured(true);
+      setIsEnabled(true);
+      setBackupCodes(data.backupCodes);
+      setBackupCodeCount(data.backupCodes.length);
+      setSetupStep(3);
+    } catch (error: any) {
+      setOtpError(error?.response?.data?.message || 'Mã OTP không chính xác hoặc đã hết hiệu lực.');
+    } finally {
+      setSecurityLoading(false);
     }
-
-    setOtpError('');
-    setAuthenticatorConfigured(true);
-    setIsEnabled(true);
-    saveUser2FAState(userKey, {
-      authenticatorConfigured: true,
-      isEnabled: true,
-      secretKey,
-    });
-    setSetupStep(3);
   };
 
   const handleCompleteSetup = () => {
@@ -226,58 +248,28 @@ export const TwoStepVerificationModule: React.FC = () => {
   };
 
   const handleToggle2FA = () => {
-    if (isEnabled) {
-      Modal.confirm({
-        title: 'Tắt Xác minh 2 bước?',
-        content:
-          'Tài khoản của bạn sẽ chỉ được bảo vệ bằng mật khẩu. Bạn có chắc chắn muốn tắt tính năng bảo mật hai lớp này không?',
-        okText: 'Tắt xác minh',
-        cancelText: 'Hủy',
-        okButtonProps: { danger: true, style: { borderRadius: 8 } },
-        cancelButtonProps: { style: { borderRadius: 8 } },
-        onOk: () => {
-          setIsEnabled(false);
-          saveUser2FAState(userKey, { isEnabled: false });
-          message.info('Đã tắt Xác minh 2 bước.');
-        },
-      });
-    } else {
-      const hasConfiguredMethod =
-        authenticatorConfigured ||
-        emailOtpEnabled ||
-        (smsOtpEnabled && Boolean(phoneNumber)) ||
-        passkeys.length > 0;
+    navigate(`${basePath}/authenticator`);
+  };
 
-      if (!hasConfiguredMethod) {
-        Modal.confirm({
-          title: 'Kích hoạt Xác minh 2 bước',
-          content: (
-            <div>
-              <div style={{ color: '#475569', marginBottom: 12 }}>
-                Tài khoản chưa có phương thức xác minh nào được kích hoạt. Bạn có thể bật nhanh <strong>Email OTP</strong> với email ({emailAddress || 'công việc'}) hoặc thiết lập <strong>Authenticator App</strong>.
-              </div>
-            </div>
-          ),
-          okText: 'Bật nhanh Email OTP',
-          cancelText: 'Cài Authenticator App',
-          okButtonProps: { style: { backgroundColor: '#009688', borderColor: '#009688', borderRadius: 8 } },
-          cancelButtonProps: { style: { borderRadius: 8 } },
-          onOk: () => {
-            setEmailOtpEnabled(true);
-            setIsEnabled(true);
-            saveUser2FAState(userKey, { emailOtpEnabled: true, isEnabled: true });
-            message.success('Đã bật xác thực Email OTP và kích hoạt Xác minh 2 bước!');
-          },
-          onCancel: () => {
-            navigate(`${basePath}/authenticator`);
-          },
-        });
-        return;
-      }
-
-      setIsEnabled(true);
-      saveUser2FAState(userKey, { isEnabled: true });
-      message.success('Đã bật Xác minh 2 bước cho tài khoản.');
+  const handleDisableTwoFactor = async () => {
+    if (!/^\d{6}$/.test(disableOtp.trim())) {
+      message.error('Vui lòng nhập mã gồm 6 chữ số từ ứng dụng xác thực.');
+      return;
+    }
+    setSecurityLoading(true);
+    try {
+      await authApi.disableTwoFactor(disableOtp.trim());
+      setIsEnabled(false);
+      setAuthenticatorConfigured(false);
+      setBackupCodeCount(0);
+      setBackupCodes([]);
+      setDisableOtp('');
+      message.success('Đã tắt xác minh hai bước cho tài khoản.');
+      navigate(basePath);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tắt xác minh hai bước.');
+    } finally {
+      setSecurityLoading(false);
     }
   };
 
@@ -472,6 +464,24 @@ export const TwoStepVerificationModule: React.FC = () => {
     flexDirection: 'column',
     alignItems: 'flex-start',
   };
+
+  if (subRoute === 'authenticator' && isEnabled && setupStep !== 3) {
+    return (
+      <div style={centeredContainerStyle}>
+        <div style={{ width: '100%', maxWidth: 680, marginBottom: 12 }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(basePath)} style={{ borderRadius: 8, fontWeight: 500 }}>Quay lại Bước thứ hai</Button>
+        </div>
+        <div style={{ width: '100%', maxWidth: 680, background: '#FFFFFF', borderRadius: 8, border: '1px solid #E2E8F0', padding: 24, boxSizing: 'border-box' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <QrcodeOutlined style={{ color: '#009688' }} /> Authenticator App đã bật
+          </div>
+          <p style={{ color: '#475569', fontSize: 13, lineHeight: 1.6 }}>Đăng nhập mật khẩu và Google đều cần mã từ ứng dụng xác thực. Nhập mã hiện tại để tắt tính năng này.</p>
+          <Input value={disableOtp} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setDisableOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" maxLength={6} placeholder="Mã xác minh 6 chữ số" />
+          <Button danger loading={securityLoading} onClick={() => void handleDisableTwoFactor()} style={{ marginTop: 14 }}>Tắt xác minh hai bước</Button>
+        </div>
+      </div>
+    );
+  }
 
   // Render Sub-Route 1: Passkeys Page
   if (subRoute === 'passkeys') {
@@ -731,7 +741,7 @@ export const TwoStepVerificationModule: React.FC = () => {
                     borderRadius: 8,
                   }}
                 >
-                  <img src={qrUrl} alt="2FA QR Code" style={{ width: 160, height: 160, display: 'block' }} />
+                  {qrDataUrl ? <img src={qrDataUrl} alt="Mã QR ứng dụng xác thực" style={{ width: 160, height: 160, display: 'block' }} /> : <div style={{ width: 160, height: 160, display: 'grid', placeItems: 'center', color: '#64748B', fontSize: 12, textAlign: 'center' }}>{securityLoading ? 'Đang tạo mã cấu hình...' : 'Chưa tạo được mã QR'}</div>}
                 </div>
                 <div style={{ marginTop: 12, textAlign: 'center' }}>
                   <div style={{ fontSize: 12, color: '#64748B', marginBottom: 4 }}>Nếu không thể quét mã, hãy nhập khóa bí mật:</div>
@@ -801,12 +811,7 @@ export const TwoStepVerificationModule: React.FC = () => {
                   </div>
                 )}
                 <div style={{ fontSize: 12, color: '#64748B', textAlign: 'center', marginTop: 12, background: '#F0FDFA', border: '1px solid #CCFBF1', borderRadius: 6, padding: '6px 12px' }}>
-                  <span>Mẹo: Quét mã bằng Google Authenticator / Authy để nhận mã OTP thực tế.</span>
-                  {liveOtp && (
-                    <div style={{ marginTop: 4, fontSize: 11.5, color: '#0F766E' }}>
-                      Mã OTP hợp lệ hiện tại: <strong style={{ letterSpacing: '1px', fontSize: 13 }}>{liveOtp}</strong> (còn {countdown}s)
-                    </div>
-                  )}
+                  <span>Quét mã bằng ứng dụng xác thực như Google Authenticator hoặc Authy. Mã OTP chỉ được máy chủ xác minh.</span>
                 </div>
               </div>
 
@@ -1058,17 +1063,18 @@ export const TwoStepVerificationModule: React.FC = () => {
             <div style={{ textAlign: 'center', padding: '32px 16px', background: '#F8FAFC', borderRadius: 8, border: '1px dashed #CBD5E1', marginBottom: 20 }}>
               <NumberOutlined style={{ fontSize: 38, color: '#94A3B8', marginBottom: 12 }} />
               <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>
-                Chưa có mã khôi phục dự phòng
+                {backupCodeCount > 0 ? `Còn ${backupCodeCount} mã dự phòng` : 'Chưa có mã khôi phục dự phòng'}
               </div>
               <div style={{ fontSize: 13, color: '#64748B', maxWidth: 440, margin: '0 auto 16px', lineHeight: 1.5 }}>
-                Mã dự phòng dùng để đăng nhập khi bạn không thể truy cập ứng dụng Authenticator hoặc không nhận được tin nhắn xác thực. Mỗi mã chỉ dùng được 1 lần.
+                {backupCodeCount > 0 ? 'Máy chủ chỉ lưu bản băm nên không thể hiển thị lại các mã đã tạo. Bạn có thể tạo bộ mã mới; các mã cũ sẽ mất hiệu lực.' : 'Mã dự phòng dùng để đăng nhập khi bạn không thể truy cập ứng dụng Authenticator. Mỗi mã chỉ dùng được 1 lần.'}
               </div>
               <Button
                 type="primary"
                 onClick={handleRegenerateCodes}
+                disabled={!isEnabled}
                 style={{ backgroundColor: '#009688', borderColor: '#009688', borderRadius: 8, fontWeight: 600, padding: '0 20px' }}
               >
-                Tạo 10 mã dự phòng
+                {backupCodeCount > 0 ? 'Tạo bộ mã mới' : 'Tạo 10 mã dự phòng'}
               </Button>
             </div>
           ) : (
@@ -1124,6 +1130,17 @@ export const TwoStepVerificationModule: React.FC = () => {
             </>
           )}
         </div>
+        <Modal
+          title="Tạo lại mã dự phòng"
+          open={recoveryDialogOpen}
+          onCancel={() => setRecoveryDialogOpen(false)}
+          onOk={() => void confirmRegenerateCodes()}
+          okText="Xác nhận và tạo mã"
+          cancelText="Hủy"
+        >
+          <p>Nhập mã 6 chữ số từ ứng dụng xác thực. Các mã dự phòng hiện tại sẽ bị thu hồi.</p>
+          <Input.Password value={recoveryOtp} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setRecoveryOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" maxLength={6} placeholder="Mã xác minh 6 chữ số" />
+        </Modal>
       </div>
     );
   }

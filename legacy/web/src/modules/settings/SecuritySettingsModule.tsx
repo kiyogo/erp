@@ -29,15 +29,17 @@ export const SecuritySettingsModule: React.FC = () => {
       return null;
     }
   })();
-  const userKey = sessionUser?.id || sessionUser?.email || 'default_user';
-  const [twoFactorEnabled, setTwoFactorEnabled] = useState(() => {
-    return localStorage.getItem(`2fa_${userKey}_enabled`) === 'true' || localStorage.getItem('kiyovn_2sv_enabled') === 'true';
-  });
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
 
   useEffect(() => {
-    const is2fa = localStorage.getItem(`2fa_${userKey}_enabled`) === 'true' || localStorage.getItem('kiyovn_2sv_enabled') === 'true';
-    setTwoFactorEnabled(is2fa);
-  }, [userKey, location.pathname]);
+    let active = true;
+    authApi.getTwoFactor().then(({ data }) => {
+      if (active) setTwoFactorEnabled(data.enabled);
+    }).catch(() => {
+      if (active) setTwoFactorEnabled(false);
+    });
+    return () => { active = false; };
+  }, [location.pathname]);
 
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -98,13 +100,6 @@ export const SecuritySettingsModule: React.FC = () => {
     } finally {
       setIsSubmittingPassword(false);
     }
-  };
-
-  const handleToggle2FA = () => {
-    const next = !twoFactorEnabled;
-    setTwoFactorEnabled(next);
-    dataService.logAction('Cấu hình 2FA', 'Bảo mật', `${next ? 'Bật' : 'Tắt'} xác thực 2 yếu tố`);
-    message.success(`Đã ${next ? 'bật' : 'tắt'} xác thực 2 bước 2FA thành công`);
   };
 
   const handleSavePin = () => {

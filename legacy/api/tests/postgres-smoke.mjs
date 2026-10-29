@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import pg from 'pg';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,18 @@ let server;
 let created = false;
 let logs = '';
 let completed = 0;
+function totpCode(secret) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const character of secret) bits += alphabet.indexOf(character).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) bytes.push(parseInt(bits.slice(offset, offset + 8), 2));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
 try {
   await admin.query(`CREATE DATABASE "${database}"`);
   created = true;
@@ -797,6 +809,16 @@ try {
   const pgPurchaseRaceSaved = (await request(`/collections/finance_purchase_requests/${pgPurchaseRaceRequest.key}`)).record;
   assert.equal(pgPurchaseRaceSaved.status, 'Đã xác định nhà cung cấp');
   assert.equal(pgPurchaseRaceSaved.history.length, 2); completed++;
+  const totpSetup = await request('/auth/2fa/enrollment', 'POST', {});
+  const totpEnabled = await request('/auth/2fa/enrollment/verify', 'POST', { code: totpCode(totpSetup.secret) });
+  assert.equal(totpEnabled.backupCodes.length, 10);
+  const pgMfaChallenge = await request('/auth/login', 'POST', { email: env.SEED_ADMIN_EMAIL, password: env.SEED_ADMIN_PASSWORD }, 200);
+  assert.equal(pgMfaChallenge.mfaRequired, true);
+  const pgMfaSession = await request('/auth/2fa/login', 'POST', { challengeToken: pgMfaChallenge.challengeToken, code: totpCode(totpSetup.secret) }, 200);
+  token = pgMfaSession.access_token;
+  assert.equal((await request('/admin/sessions')).data.find(item => item.key === JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')).sid).mfaVerified, true);
+  await request('/auth/2fa/disable', 'POST', { code: totpCode(totpSetup.secret) });
+  completed += 5;
   const sessions = await request('/admin/sessions');
   const current = sessions.data.find(item => item.current);
   assert.ok(current);

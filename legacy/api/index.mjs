@@ -375,6 +375,93 @@ function decryptSetting(value) {
   }
 }
 
+function encodeBase32(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const byte of value) bits += byte.toString(2).padStart(8, '0');
+  let output = '';
+  for (let offset = 0; offset < bits.length; offset += 5) {
+    output += alphabet[parseInt(bits.slice(offset, offset + 5).padEnd(5, '0'), 2)];
+  }
+  return output;
+}
+
+function decodeBase32(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(value || '').toUpperCase().replace(/=+$/, '');
+  let bits = '';
+  for (const character of clean) {
+    const index = alphabet.indexOf(character);
+    if (index < 0) return Buffer.alloc(0);
+    bits += index.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) bytes.push(parseInt(bits.slice(offset, offset + 8), 2));
+  return Buffer.from(bytes);
+}
+
+function createTotp(secret, timestamp = Date.now()) {
+  const key = decodeBase32(secret);
+  if (!key.length) return '';
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(timestamp / 30_000)));
+  const digest = createHmac('sha1', key).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const number = (digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000;
+  return String(number).padStart(6, '0');
+}
+
+function verifyTotp(secret, value, timestamp = Date.now()) {
+  const candidate = String(value || '').trim();
+  if (!/^\d{6}$/.test(candidate)) return false;
+  const supplied = Buffer.from(candidate);
+  return [-1, 0, 1].some(offset => {
+    const expected = Buffer.from(createTotp(secret, timestamp + offset * 30_000));
+    return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+  });
+}
+
+async function getUserTwoFactor(userId) {
+  const row = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'user_two_factor_auth' AND record_key = ? AND owner_id = ? LIMIT 1").get(userId, userId);
+  return row ? parseJsonObject(row.payload_json) : {};
+}
+
+async function saveUserTwoFactor(userId, record) {
+  const timestamp = now();
+  await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+    VALUES (?, 'user_two_factor_auth', ?, ?, ?, ?, ?)
+    ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`)
+    .run(randomUUID(), userId, userId, JSON.stringify(record), timestamp, timestamp);
+}
+
+function hashRecoveryCode(code) {
+  return createHash('sha256').update(String(code || '').replace(/[^a-z0-9]/gi, '').toUpperCase()).digest('hex');
+}
+
+function createRecoveryCodes(count = 10) {
+  return Array.from({ length: count }, () => {
+    const raw = randomBytes(5).toString('hex').toUpperCase();
+    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+  });
+}
+
+async function createMfaChallenge(user, request, method, profile) {
+  const security = await getUserTwoFactor(user.id);
+  if (!security.enabled || !security.secretEncrypted) {
+    const token = await createToken(user, request, method);
+    return { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: publicUser(user, profile) };
+  }
+
+  const challengeToken = randomBytes(32).toString('base64url');
+  const timestamp = now();
+  const key = createHash('sha256').update(challengeToken).digest('hex');
+  const challenge = { kind: 'mfa_login_challenge', userId: user.id, method, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), attempts: 0 };
+  await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+    VALUES (?, 'mfa_login_challenges', ?, ?, ?, ?, ?)`)
+    .run(randomUUID(), key, user.id, JSON.stringify(challenge), timestamp, timestamp);
+  return { mfaRequired: true, challengeToken, user: publicUser(user, profile), expiresIn: 300 };
+}
+
 async function getEmailConfig() {
   const raw = await getSystemSetting('email_config');
   const stored = parseJsonObject(raw);
@@ -1475,20 +1562,20 @@ function publicProposal(row) {
   };
 }
 
-async function createToken(user, request, method = 'password') {
+async function createToken(user, request, method = 'password', mfaVerified = false) {
   const issuedAt = Math.floor(Date.now() / 1000);
   const sessionId = randomUUID();
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = base64url(JSON.stringify({ sub: user.id, role: user.role, scope: 'access', sid: sessionId, iat: issuedAt, exp: issuedAt + TOKEN_TTL_SECONDS }));
   const signature = createHmac('sha256', jwtSecret).update(`${header}.${payload}`).digest('base64url');
-  await saveAuthSession(user, sessionId, request, issuedAt, issuedAt + TOKEN_TTL_SECONDS, method);
+  await saveAuthSession(user, sessionId, request, issuedAt, issuedAt + TOKEN_TTL_SECONDS, method, mfaVerified);
   return `${header}.${payload}.${signature}`;
 }
 
-async function saveAuthSession(user, key, request, issuedAt, expiresAt, method) {
+async function saveAuthSession(user, key, request, issuedAt, expiresAt, method, mfaVerified = false) {
   const timestamp = now();
   const session = {
-    kind: 'auth_session', key, userId: user.id, method,
+    kind: 'auth_session', key, userId: user.id, method, mfaVerified,
     ip: String(request.socket.remoteAddress || '').replace(/^::ffff:/, ''),
     userAgent: String(request.headers['user-agent'] || '').slice(0, 1024),
     loginTime: new Date(issuedAt * 1000).toISOString(), lastActive: timestamp,
@@ -1514,7 +1601,7 @@ function publicAuthSession(record, user, currentKey) {
     ip, ipType: local ? 'Mạng nội bộ / Loopback' : ip ? 'Mạng ngoài' : 'Chưa xác định',
     device, browser, userAgent: agent, location: 'Chưa xác định',
     loginTime: record.loginTime, lastActive: record.lastActive, expiresAt: record.expiresAt,
-    mfaVerified: false, method: record.method, tlsProtocol: record.tlsProtocol || '', cipher: record.cipher || '',
+    mfaVerified: record.mfaVerified === true, method: record.method, tlsProtocol: record.tlsProtocol || '', cipher: record.cipher || '',
     status: record.revokedAt ? 'Đã thu hồi' : expired ? 'Đã hết hạn' : idle ? 'Treo / Chờ thao tác' : 'Đang hoạt động',
     revokedAt: record.revokedAt || '', revokedBy: record.revokedBy || '', revokeReason: record.revokeReason || '',
     current: record.key === currentKey,
@@ -5250,6 +5337,10 @@ async function requireUser(request) {
   if (!session || session.kind !== 'auth_session' || session.revokedAt || Date.parse(session.expiresAt) <= Date.now()) {
     throw new HttpError(401, 'Phiên đăng nhập đã hết hạn hoặc bị thu hồi. Vui lòng đăng nhập lại.');
   }
+  const security = await getUserTwoFactor(user.id);
+  if (security.enabled && session.mfaVerified !== true) {
+    throw new HttpError(401, 'Tài khoản đã bật xác minh hai bước. Vui lòng đăng nhập lại và hoàn tất xác minh.');
+  }
   if (Date.parse(session.lastActive) < Date.now() - 30_000) {
     const timestamp = now();
     // Compare the stored revision so a concurrent activity update cannot overwrite revocation.
@@ -5258,6 +5349,18 @@ async function requireUser(request) {
   }
   request.authSession = { row, key, session };
   return user;
+}
+
+async function markCurrentSessionMfaVerified(request) {
+  const row = request.authSession?.row;
+  if (!row) return;
+  const session = publicCollectionRecord(row);
+  const updated = { ...session, mfaVerified: true };
+  const timestamp = now();
+  await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+    .run(JSON.stringify(updated), timestamp, row.id, row.payload_json);
+  request.authSession.session = updated;
+  request.authSession.row = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(row.id);
 }
 
 async function requireAdmin(request) {
@@ -6009,14 +6112,7 @@ async function handleRequest(request, response) {
     }
 
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
-    const token = await createToken(user, request);
-    sendJson(response, 200, {
-      token,
-      access_token: token,
-      token_type: 'Bearer',
-      expires_in: TOKEN_TTL_SECONDS,
-      user: publicUser(user, profile),
-    });
+    sendJson(response, 200, await createMfaChallenge(user, request, 'password', profile));
     return;
   }
 
@@ -6099,14 +6195,141 @@ async function handleRequest(request, response) {
     await db.prepare('UPDATE employee_profiles SET details_json = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(linkedDetails), timestamp, user.id);
 
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
-    const token = await createToken(user, request, 'google');
-    sendJson(response, 200, {
-      token,
-      access_token: token,
-      token_type: 'Bearer',
-      expires_in: TOKEN_TTL_SECONDS,
-      user: publicUser(user, profile),
+    sendJson(response, 200, await createMfaChallenge(user, request, 'google', profile));
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/2fa/login') {
+    const payload = await readJson(request, 16 * 1024);
+    const challengeToken = requiredText(payload.challengeToken, 'Phiên xác minh', 128);
+    const code = requiredText(payload.code, 'Mã xác minh', 64);
+    const key = createHash('sha256').update(challengeToken).digest('hex');
+    const preview = await db.prepare("SELECT owner_id FROM collection_records WHERE scope = 'mfa_login_challenges' AND record_key = ? LIMIT 1").get(key);
+    const attemptKey = loginKey(request, preview?.owner_id || `challenge:${key}`);
+    enforceLoginRateLimit(attemptKey);
+    let failure = '';
+    let user = null;
+    let method = 'password';
+    await db.transaction(async () => {
+      if (db.pool) await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(`mfa-login:${key}`);
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'mfa_login_challenges' AND record_key = ? LIMIT 1").get(key);
+      const challenge = row ? parseJsonObject(row.payload_json) : null;
+      if (!challenge || challenge.kind !== 'mfa_login_challenge' || Date.parse(challenge.expiresAt) <= Date.now()) {
+        if (row) await db.prepare('DELETE FROM collection_records WHERE id = ?').run(row.id);
+        failure = 'Phiên xác minh đã hết hạn. Vui lòng đăng nhập lại.';
+        return;
+      }
+      if (Number(challenge.attempts || 0) >= 5) {
+        await db.prepare('DELETE FROM collection_records WHERE id = ?').run(row.id);
+        failure = 'Phiên xác minh đã bị khóa do nhập sai quá nhiều lần. Vui lòng đăng nhập lại.';
+        return;
+      }
+      if (db.pool) await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(`mfa-user:${challenge.userId}`);
+      user = await getUserById(challenge.userId);
+      const security = user && await getUserTwoFactor(user.id);
+      if (!user?.is_active || !security?.enabled || !security.secretEncrypted) {
+        await db.prepare('DELETE FROM collection_records WHERE id = ?').run(row.id);
+        failure = 'Phiên xác minh không còn hợp lệ. Vui lòng đăng nhập lại.';
+        user = null;
+        return;
+      }
+      const secret = decryptSetting(security.secretEncrypted);
+      const validTotp = verifyTotp(secret, code);
+      const normalizedCode = String(code).replace(/[^a-z0-9]/gi, '').toUpperCase();
+      const codeHash = hashRecoveryCode(normalizedCode);
+      const recoveryIndex = Array.isArray(security.recoveryCodeHashes) ? security.recoveryCodeHashes.indexOf(codeHash) : -1;
+      const validRecoveryCode = recoveryIndex >= 0 && /^[A-Z0-9-]{8,16}$/i.test(code);
+      if (!validTotp && !validRecoveryCode) {
+        const updated = { ...challenge, attempts: Number(challenge.attempts || 0) + 1 };
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+          .run(JSON.stringify(updated), now(), row.id);
+        failure = 'Mã xác minh không chính xác hoặc đã hết hiệu lực.';
+        user = null;
+        return;
+      }
+      if (validRecoveryCode) {
+        const recoveryCodeHashes = [...security.recoveryCodeHashes];
+        recoveryCodeHashes.splice(recoveryIndex, 1);
+        await saveUserTwoFactor(user.id, { ...security, recoveryCodeHashes });
+      }
+      method = challenge.method === 'google' ? 'google' : 'password';
+      await db.prepare('DELETE FROM collection_records WHERE id = ?').run(row.id);
     });
+    if (failure) {
+      if (failure.startsWith('Mã xác minh')) recordLoginFailure(attemptKey);
+      throw new HttpError(401, failure);
+    }
+    clearLoginFailures(attemptKey);
+    const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
+    const token = await createToken(user, request, method, true);
+    sendJson(response, 200, { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: publicUser(user, profile) });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/auth/2fa') {
+    const actor = await requireUser(request);
+    const security = await getUserTwoFactor(actor.id);
+    sendJson(response, 200, { enabled: security.enabled === true, authenticatorConfigured: security.enabled === true, backupCodeCount: Array.isArray(security.recoveryCodeHashes) ? security.recoveryCodeHashes.length : 0 });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/2fa/enrollment') {
+    const actor = await requireUser(request);
+    const security = await getUserTwoFactor(actor.id);
+    if (security.enabled) throw new HttpError(409, 'Xác minh hai bước đã được bật cho tài khoản này.');
+    const secret = encodeBase32(randomBytes(20));
+    const pendingExpiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    await saveUserTwoFactor(actor.id, { ...security, enabled: false, pendingSecretEncrypted: encryptSetting(secret), pendingExpiresAt });
+    const label = encodeURIComponent(`KIYOVN:${actor.email}`);
+    const issuer = encodeURIComponent('KIYOVN Enterprise');
+    sendJson(response, 200, { secret, otpauthUrl: `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`, expiresAt: pendingExpiresAt });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/2fa/enrollment/verify') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 16 * 1024);
+    const code = requiredText(payload.code, 'Mã xác minh', 6);
+    const security = await getUserTwoFactor(actor.id);
+    if (!security.pendingSecretEncrypted || Date.parse(security.pendingExpiresAt || '') <= Date.now()) throw new HttpError(410, 'Yêu cầu thiết lập đã hết hạn. Vui lòng quét lại mã cấu hình.');
+    const secret = decryptSetting(security.pendingSecretEncrypted);
+    if (!verifyTotp(secret, code)) throw new HttpError(422, 'Mã xác minh không chính xác hoặc đã hết hiệu lực.');
+    const recoveryCodes = createRecoveryCodes();
+    await saveUserTwoFactor(actor.id, {
+      enabled: true,
+      secretEncrypted: security.pendingSecretEncrypted,
+      recoveryCodeHashes: recoveryCodes.map(hashRecoveryCode),
+      pendingSecretEncrypted: '',
+      pendingExpiresAt: '',
+    });
+    await markCurrentSessionMfaVerified(request);
+    await recordAuditEvent(actor.id, 'enable_totp', 'user_security_2fa', actor.id);
+    sendJson(response, 200, { enabled: true, backupCodes: recoveryCodes });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/2fa/disable') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 16 * 1024);
+    const code = requiredText(payload.code, 'Mã xác minh', 6);
+    const security = await getUserTwoFactor(actor.id);
+    if (!security.enabled || !verifyTotp(decryptSetting(security.secretEncrypted), code)) throw new HttpError(422, 'Mã xác minh không chính xác hoặc xác minh hai bước chưa được bật.');
+    await saveUserTwoFactor(actor.id, { enabled: false, secretEncrypted: '', recoveryCodeHashes: [], pendingSecretEncrypted: '', pendingExpiresAt: '' });
+    await recordAuditEvent(actor.id, 'disable_totp', 'user_security_2fa', actor.id);
+    sendJson(response, 200, { enabled: false });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/2fa/recovery-codes') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 16 * 1024);
+    const code = requiredText(payload.code, 'Mã xác minh', 6);
+    const security = await getUserTwoFactor(actor.id);
+    if (!security.enabled || !verifyTotp(decryptSetting(security.secretEncrypted), code)) throw new HttpError(422, 'Mã xác minh không chính xác hoặc xác minh hai bước chưa được bật.');
+    const recoveryCodes = createRecoveryCodes();
+    await saveUserTwoFactor(actor.id, { ...security, recoveryCodeHashes: recoveryCodes.map(hashRecoveryCode) });
+    await recordAuditEvent(actor.id, 'rotate_recovery_codes', 'user_security_2fa', actor.id);
+    sendJson(response, 200, { backupCodes: recoveryCodes });
     return;
   }
 

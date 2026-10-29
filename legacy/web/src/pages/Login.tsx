@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Typography, Alert, Modal } from '../custom-ui';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { User, useAuth } from '../context/AuthContext';
 import { authApi } from '../api/endpoints';
 
 const { Title, Text } = Typography;
@@ -12,8 +12,11 @@ const Login: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [mfaChallenge, setMfaChallenge] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaUser, setMfaUser] = useState<User | null>(null);
   const navigate = useNavigate();
-  const { login, loginWithGoogle } = useAuth();
+  const { login, loginWithGoogle, verifyMfaLogin } = useAuth();
   const [googleModalOpen, setGoogleModalOpen] = useState(false);
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleButton, setGoogleButton] = useState<HTMLDivElement | null>(null);
@@ -56,9 +59,15 @@ const Login: React.FC = () => {
           setLoading(true);
           setError('');
           try {
-            const user = await loginWithGoogle({ credential: response.credential });
+            const result = await loginWithGoogle({ credential: response.credential });
             setGoogleModalOpen(false);
-            navigate(user.role.toUpperCase() === 'ADMIN' ? '/admin/dashboard' : '/employee/home');
+            if (result.mfaRequired) {
+              setMfaChallenge(result.challengeToken);
+              setMfaUser(result.user);
+              setMfaCode('');
+            } else {
+              navigate(result.user.role.toUpperCase() === 'ADMIN' ? '/admin/dashboard' : '/employee/home');
+            }
           } catch (err: any) {
             setGoogleModalOpen(false);
             setError(err?.response?.data?.message || err?.message || 'Không thể đăng nhập bằng Google.');
@@ -80,30 +89,25 @@ const Login: React.FC = () => {
     setLoading(true);
     setError('');
 
-    const targetEmail = email.trim();
-    const targetPassword = password.trim();
-
-    if (!targetEmail || !targetPassword) {
-      setError('Vui lòng nhập đầy đủ tài khoản/email và mật khẩu');
-      setLoading(false);
-      return;
-    }
-
     try {
-      await login(targetEmail, targetPassword);
-      const rawUser = localStorage.getItem('minepanel_user');
-      let role = '';
-      if (rawUser) {
-        try {
-          role = (JSON.parse(rawUser)?.role || '').toUpperCase();
-        } catch {}
+      if (mfaChallenge) {
+        if (!mfaCode.trim()) throw new Error('Vui lòng nhập mã xác minh.');
+        const user = await verifyMfaLogin(mfaChallenge, mfaCode.trim());
+        navigate(user.role.toUpperCase() === 'ADMIN' ? '/admin/dashboard' : '/employee/home');
+        return;
       }
-      const isAdmin = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'SYSTEM_ADMIN' || role === 'HR_MANAGER' || role === 'MANAGER';
-      if (isAdmin) {
-        navigate('/admin/dashboard');
-      } else {
-        navigate('/employee/home');
+
+      const targetEmail = email.trim();
+      const targetPassword = password.trim();
+      if (!targetEmail || !targetPassword) throw new Error('Vui lòng nhập đầy đủ tài khoản/email và mật khẩu.');
+      const result = await login(targetEmail, targetPassword);
+      if (result.mfaRequired) {
+        setMfaChallenge(result.challengeToken);
+        setMfaUser(result.user);
+        setMfaCode('');
+        return;
       }
+      navigate(result.user.role.toUpperCase() === 'ADMIN' ? '/admin/dashboard' : '/employee/home');
     } catch (err: any) {
       const serverMessage = err?.response?.data?.message || err?.message;
       setError(typeof serverMessage === 'string' && serverMessage.trim()
@@ -112,6 +116,13 @@ const Login: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const cancelMfaChallenge = () => {
+    setMfaChallenge('');
+    setMfaCode('');
+    setMfaUser(null);
+    setError('');
   };
 
   const handleGoogleLogin = async () => {
@@ -179,7 +190,7 @@ const Login: React.FC = () => {
         </div>
 
         <Text style={{ color: '#757575', fontSize: 13, display: 'block', marginBottom: 20 }}>
-          Hệ thống Quản lý Doanh nghiệp KIYOVN
+          {mfaChallenge ? `Xác minh đăng nhập${mfaUser?.email ? ` · ${mfaUser.email}` : ''}` : 'Hệ thống Quản lý Doanh nghiệp KIYOVN'}
         </Text>
 
         {error && (
@@ -187,6 +198,24 @@ const Login: React.FC = () => {
         )}
 
         <form onSubmit={handleSubmit} autoComplete="off">
+          {mfaChallenge ? (
+            <div style={{ marginBottom: 16 }}>
+              <label htmlFor="login-mfa-code" style={{ display: 'block', fontSize: 13, color: '#374151', marginBottom: 6 }}>Mã từ ứng dụng xác thực hoặc mã dự phòng</label>
+              <input
+                id="login-mfa-code"
+                type="text"
+                inputMode="text"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 16))}
+                placeholder="Nhập mã xác minh"
+                autoComplete="one-time-code"
+                maxLength={16}
+                required
+                autoFocus
+                style={{ width: '100%', height: 40, border: '1px solid #D9D9D9', borderRadius: 6, padding: '0 12px', boxSizing: 'border-box', fontSize: 14 }}
+              />
+            </div>
+          ) : <>
           <div style={{ marginBottom: 16 }}>
             <div
               style={{
@@ -249,6 +278,7 @@ const Login: React.FC = () => {
               />
             </div>
           </div>
+          </>}
 
           <button
             type="submit"
@@ -273,17 +303,19 @@ const Login: React.FC = () => {
             onMouseEnter={(e) => (e.currentTarget.style.background = '#00796B')}
             onMouseLeave={(e) => (e.currentTarget.style.background = '#009688')}
           >
-            {loading ? 'Đang xác thực...' : 'Đăng nhập hệ thống'}
+            {loading ? 'Đang xác thực...' : mfaChallenge ? 'Xác minh và tiếp tục' : 'Đăng nhập hệ thống'}
           </button>
         </form>
 
-        <div style={{ margin: '18px 0 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        {mfaChallenge && <button type="button" onClick={cancelMfaChallenge} style={{ width: '100%', marginTop: 10, border: 'none', background: 'transparent', color: '#64748B', cursor: 'pointer', fontSize: 13 }}>Quay lại đăng nhập</button>}
+
+        {!mfaChallenge && <div style={{ margin: '18px 0 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ flex: 1, height: 1, background: '#E5E7EB' }} />
           <span style={{ fontSize: 12, color: '#9CA3AF' }}>Hoặc</span>
           <div style={{ flex: 1, height: 1, background: '#E5E7EB' }} />
-        </div>
+        </div>}
 
-        <button
+        {!mfaChallenge && <button
           type="button"
           onClick={handleGoogleLogin}
           disabled={loading}
@@ -315,7 +347,7 @@ const Login: React.FC = () => {
           <span style={{ fontSize: 13.5, fontWeight: 500, color: '#374151' }}>
             Đăng nhập bằng Google
           </span>
-        </button>
+        </button>}
 
         <Text style={{ display: 'block', textAlign: 'center', marginTop: 20, color: '#9CA3AF', fontSize: 12 }}>
           KIYOVN Enterprise v2.0 · © 2026

@@ -16,12 +16,17 @@ interface AuthCtx {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  loginWithGoogle: (data?: any) => Promise<User>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  loginWithGoogle: (data?: any) => Promise<LoginResult>;
+  verifyMfaLogin: (challengeToken: string, code: string) => Promise<User>;
   establishSession: (token: string, user: unknown) => void;
   logout: () => void;
   isLoggedIn: boolean;
 }
+
+export type LoginResult =
+  | { mfaRequired: true; challengeToken: string; user: User }
+  | { mfaRequired: false; user: User };
 
 const TOKEN_KEY = 'minepanel_token';
 const USER_KEY = 'minepanel_user';
@@ -85,6 +90,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(initialSession?.token ?? null);
   const [loading, setLoading] = useState(true);
 
+  const saveAuthenticatedSession = useCallback((accessToken: string, authenticatedUser: User) => {
+    setToken(accessToken);
+    setUser(authenticatedUser);
+    persistSession(accessToken, authenticatedUser);
+    void dataService.syncInitialData();
+  }, []);
+
+  const readLoginResult = (data: unknown): LoginResult => {
+    const payload = data as Record<string, unknown> | undefined;
+    const authenticatedUser = getResponseUser(payload);
+    if (!authenticatedUser) throw new Error('Máy chủ trả về thông tin tài khoản không hợp lệ.');
+    if (payload?.mfaRequired === true) {
+      const challengeToken = typeof payload.challengeToken === 'string' ? payload.challengeToken : '';
+      if (!challengeToken) throw new Error('Máy chủ trả về phiên xác minh MFA không hợp lệ.');
+      return { mfaRequired: true, challengeToken, user: authenticatedUser };
+    }
+    const accessToken = typeof payload?.access_token === 'string'
+      ? payload.access_token
+      : typeof payload?.token === 'string'
+        ? payload.token
+        : '';
+    if (!accessToken) throw new Error('Máy chủ trả về phiên đăng nhập không hợp lệ.');
+    saveAuthenticatedSession(accessToken, authenticatedUser);
+    return { mfaRequired: false, user: authenticatedUser };
+  };
+
   useEffect(() => {
     let active = true;
 
@@ -130,53 +161,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [initialSession?.token]);
 
   const login = useCallback(async (email: string, password: string) => {
-    try {
-      const response = await authApi.login(email, password);
-      const payload = response.data as Record<string, unknown> | undefined;
-      const accessToken = typeof payload?.access_token === 'string'
-        ? payload.access_token
-        : typeof payload?.token === 'string'
-          ? payload.token
-          : '';
-      const authenticatedUser = getResponseUser(payload);
-
-      if (!accessToken || !authenticatedUser) {
-        throw new Error('Máy chủ trả về phiên đăng nhập không hợp lệ.');
-      }
-
-      setToken(accessToken);
-      setUser(authenticatedUser);
-      persistSession(accessToken, authenticatedUser);
-      void dataService.syncInitialData();
-    } catch (err: any) {
-      throw err;
-    }
-  }, []);
+    const response = await authApi.login(email, password);
+    return readLoginResult(response.data);
+  }, [saveAuthenticatedSession]);
 
   const loginWithGoogle = useCallback(async (googleData?: any) => {
-    try {
-      const response = await authApi.loginGoogle(googleData || {});
-      const payload = response.data as Record<string, unknown> | undefined;
-      const accessToken = typeof payload?.access_token === 'string'
-        ? payload.access_token
-        : typeof payload?.token === 'string'
-          ? payload.token
-          : '';
-      const authenticatedUser = getResponseUser(payload);
+    const response = await authApi.loginGoogle(googleData || {});
+    return readLoginResult(response.data);
+  }, [saveAuthenticatedSession]);
 
-      if (!accessToken || !authenticatedUser) {
-        throw new Error('Máy chủ trả về phiên đăng nhập Google không hợp lệ.');
-      }
-
-      setToken(accessToken);
-      setUser(authenticatedUser);
-      persistSession(accessToken, authenticatedUser);
-      void dataService.syncInitialData();
-      return authenticatedUser;
-    } catch (err: any) {
-      throw err;
-    }
-  }, []);
+  const verifyMfaLogin = useCallback(async (challengeToken: string, code: string) => {
+    const response = await authApi.verifyMfaLogin(challengeToken, code);
+    const result = readLoginResult(response.data);
+    if (result.mfaRequired) throw new Error('Máy chủ yêu cầu xác minh MFA thêm lần nữa.');
+    return result.user;
+  }, [saveAuthenticatedSession]);
 
   const establishSession = useCallback((accessToken: string, candidate: unknown) => {
     const authenticatedUser = normalizeUser(candidate);
@@ -197,7 +196,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [token]);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, loginWithGoogle, establishSession, logout, isLoggedIn: Boolean(token && user) }}>
+    <AuthContext.Provider value={{ user, token, loading, login, loginWithGoogle, verifyMfaLogin, establishSession, logout, isLoggedIn: Boolean(token && user) }}>
       {children}
     </AuthContext.Provider>
   );
