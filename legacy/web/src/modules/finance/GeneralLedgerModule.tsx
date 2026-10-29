@@ -11,9 +11,9 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag } from '../../custom-ui';
-import { collectionsApi } from '../../api/endpoints';
+import { generalLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
-import { buildQuarterClosingLines, calculateQuarterLedger, summarizeLedgerAccounts } from './ledgerCalculations';
+import { buildQuarterClosingLines, calculateQuarterLedger, getFiscalQuarterPeriod, summarizeLedgerAccounts } from './ledgerCalculations';
 
 interface LedgerEntry {
   key: string;
@@ -43,9 +43,9 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [data, setData] = useState<LedgerEntry[]>(INITIAL_ENTRIES);
   const [advanceData, setAdvanceData] = useState<any[]>([]);
   const [selectedQuarter, setSelectedQuarter] = useState(() => {
-    const today = new Date();
-    return `${today.getFullYear()}-Q${Math.floor(today.getMonth() / 3) + 1}`;
+    return getFiscalQuarterPeriod(new Date(), 1, 1);
   });
+  const [fiscalYearStart, setFiscalYearStart] = useState({ month: 1, day: 1, ready: false });
 
   useEffect(() => {
     const list = dataService.getGenericData('finance_general_ledger');
@@ -61,6 +61,17 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
     return unsub;
   }, []);
 
+  useEffect(() => {
+    void systemApi.getCompanyProfile().then(({ data: response }) => {
+      const month = Number(response.profile.fiscalYearStartMonth);
+      const day = Number(response.profile.fiscalYearStartDay);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        setFiscalYearStart({ month, day, ready: Boolean(response.profile.accountingProfileComplete) });
+        setSelectedQuarter(getFiscalQuarterPeriod(new Date(), month, day));
+      }
+    }).catch(() => {});
+  }, []);
+
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -71,16 +82,19 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const balancedLedger = data.every((item) => Boolean(item.debitAccount && item.creditAccount) && Number.isFinite(Number(item.amount)) && Number(item.amount) > 0)
     && Math.abs(totalDebits - totalCredits) < 0.5;
   const accountSummary = summarizeLedgerAccounts(data);
-  const quarterSummary = calculateQuarterLedger(data, selectedQuarter);
-  const { year: yearText, quarter: quarterText, startMonth: quarterStartMonth, records: quarterLedgerData, revenue, expenses, netResult } = quarterSummary;
+  const quarterSummary = calculateQuarterLedger(data, selectedQuarter, fiscalYearStart.month, fiscalYearStart.day);
+  const { year: yearText, quarter: quarterText, records: quarterLedgerData, revenue, expenses, netResult } = quarterSummary;
   const quarterDebits = quarterSummary.debits;
   const quarterCredits = quarterSummary.credits;
   const quarterClosed = data.some((item) => item.sourceReference === `period-close:${selectedQuarter}`);
 
+  const currentFiscalPeriod = getFiscalQuarterPeriod(new Date(), fiscalYearStart.month, fiscalYearStart.day);
+  const [currentFiscalYear, currentFiscalQuarter] = currentFiscalPeriod.split('-Q').map(Number);
   const quarterOptions = Array.from({ length: 8 }, (_, index) => {
-    const year = new Date().getFullYear() - Math.floor((7 - index) / 4);
-    const quarter = ((7 - index) % 4) + 1;
-    return { label: `Quý ${quarter}/${year}`, value: `${year}-Q${quarter}` };
+    const serial = currentFiscalYear * 4 + currentFiscalQuarter - 1 - (7 - index);
+    const year = Math.floor(serial / 4);
+    const quarter = serial % 4 + 1;
+    return { label: `Quý ${quarter} · Năm tài chính bắt đầu ${year}`, value: `${year}-Q${quarter}` };
   });
 
   const handleCreate = async (values: any) => {
@@ -106,7 +120,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       status: 'Đã ghi sổ cái',
     };
     try {
-      await collectionsApi.create('finance_general_ledger', newItem);
+      await generalLedgerApi.createEntry(newItem);
       await dataService.refreshGenericData('finance_general_ledger');
       message.success(`Đã hạch toán chứng từ: ${values.voucherCode}`);
       setModalOpen(false);
@@ -161,9 +175,6 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       message.warning(`Quý ${quarterText}/${yearText} chưa có bút toán đã ghi sổ để kết chuyển.`);
       return;
     }
-    const sourceReference = `period-close:${selectedQuarter}`;
-    const quarterEnd = new Date(Number(yearText), quarterStartMonth + 2, 0);
-    const closingDate = `${yearText}-${String(quarterEnd.getMonth() + 1).padStart(2, '0')}-${String(quarterEnd.getDate()).padStart(2, '0')}`;
     const lines = buildQuarterClosingLines(quarterSummary);
     if (lines.length === 0) {
       message.warning('Không có phát sinh doanh thu hoặc chi phí đủ điều kiện kết chuyển trong quý này.');
@@ -171,45 +182,16 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
     }
     Modal.confirm({
       title: `Ghi bút toán kết chuyển quý ${quarterText}/${yearText}?`,
-      content: `Sẽ tạo ${lines.length} bút toán dựa trên Sổ Cái đang lưu. Hãy đối chiếu báo cáo trước khi xác nhận.`,
+      content: `Sẽ tính và ghi bút toán trong máy chủ cho quý ${quarterText}/${yearText}. Kỳ tài chính kết thúc ngày ${quarterSummary.endDate}. Hãy đối chiếu số liệu trước khi xác nhận.`,
       okText: 'Ghi kết chuyển',
       cancelText: 'Hủy',
       onOk: async () => {
-        const createdKeys: string[] = [];
         try {
-          const current = await dataService.refreshGenericData('finance_general_ledger');
-          if (current.some((entry: any) => entry.sourceReference === sourceReference)) {
-            message.warning(`Quý ${quarterText}/${yearText} đã có bút toán kết chuyển.`);
-            return;
-          }
-          let author = 'Người dùng hiện tại';
-          try {
-            const user = JSON.parse(localStorage.getItem('minepanel_user') || 'null');
-            author = user?.name || user?.fullName || user?.email || author;
-          } catch { /* Use the generic signed-in label when cached identity data is malformed. */ }
-          for (const [index, line] of lines.entries()) {
-            const key = `closing:${selectedQuarter}:${index + 1}`;
-            await collectionsApi.create('finance_general_ledger', {
-              key,
-              voucherCode: `KC-${selectedQuarter.replace('-', '')}-${index + 1}`,
-              entryDate: closingDate,
-              ...line,
-              author,
-              status: 'Đã ghi sổ cái',
-              sourceModule: 'general_ledger_close',
-              sourceReference,
-            });
-            createdKeys.push(key);
-          }
+          const result = await generalLedgerApi.closeQuarter(selectedQuarter);
           await dataService.refreshGenericData('finance_general_ledger');
-          message.success(`Đã ghi ${createdKeys.length} bút toán kết chuyển quý ${quarterText}/${yearText}.`);
+          message.success(`Máy chủ đã ghi ${result.data.entries} bút toán kết chuyển quý ${quarterText}/${yearText}.`);
         } catch (error: any) {
-          const rollback = await Promise.allSettled(createdKeys.map((key) => collectionsApi.remove('finance_general_ledger', key)));
-          const rollbackFailed = rollback.some((result) => result.status === 'rejected');
-          if (!rollbackFailed && createdKeys.length > 0) await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
-          message.error(rollbackFailed
-            ? 'Kết chuyển gặp lỗi và chưa thể hoàn tác toàn bộ. Cần đối chiếu Sổ Cái trước khi chạy lại.'
-            : error?.response?.data?.message || 'Không thể ghi bút toán kết chuyển.');
+          message.error(error?.response?.data?.message || 'Không thể ghi bút toán kết chuyển.');
         }
       },
     });
@@ -313,7 +295,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button onClick={() => message.info(`${quarterLedgerData.length} bút toán · Phát sinh Nợ ${quarterDebits.toLocaleString('vi-VN')} ₫ · Phát sinh Có ${quarterCredits.toLocaleString('vi-VN')} ₫`)}>Kiểm tra số dư</Button>
-              <Button type="primary" icon={<FileSyncOutlined />} onClick={closeQuarter} disabled={quarterLedgerData.length === 0 || quarterClosed} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              <Button type="primary" icon={<FileSyncOutlined />} onClick={closeQuarter} disabled={!fiscalYearStart.ready || quarterLedgerData.length === 0 || quarterClosed} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 {quarterClosed ? 'Đã kết chuyển' : 'Chạy Kết Chuyển Tự Động'}
               </Button>
             </div>

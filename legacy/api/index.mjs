@@ -712,9 +712,64 @@ async function getGoogleConfig() {
   return { clientId, clientKey: clientId, allowedDomain, configured: Boolean(clientId), enforceGoogleLogin: enforce ? '100' : 'optional', redirectUri: saved.redirectUri || '', clientSecret: '', environmentOverride: Boolean(process.env.GOOGLE_CLIENT_ID?.trim()) };
 }
 
+const ACCOUNTING_PROFILE_FIELDS = [
+  ['companyName', 'Tên doanh nghiệp'],
+  ['taxCode', 'Mã số thuế'],
+  ['legalForm', 'Loại hình pháp nhân'],
+  ['companySize', 'Quy mô doanh nghiệp'],
+  ['industry', 'Ngành nghề'],
+  ['accountingRegime', 'Chế độ kế toán'],
+  ['fiscalYearStartMonth', 'Tháng bắt đầu năm tài chính'],
+  ['fiscalYearStartDay', 'Ngày bắt đầu năm tài chính'],
+  ['vatMethod', 'Phương pháp thuế GTGT'],
+];
+
+function accountingProfileMissing(profile) {
+  const missing = ACCOUNTING_PROFILE_FIELDS.filter(([field]) => profile[field] === '' || profile[field] === null || profile[field] === undefined)
+    .map(([, label]) => label);
+  const allowedValues = new Map([
+    ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'other']],
+    ['companySize', ['micro', 'small', 'medium', 'large']],
+    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'other']],
+    ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
+  ]);
+  for (const [field, allowed] of allowedValues) {
+    const [, label] = ACCOUNTING_PROFILE_FIELDS.find(([name]) => name === field) || [field, field];
+    if (profile[field] && !allowed.includes(profile[field]) && !missing.includes(label)) missing.push(label);
+  }
+  if (profile.legalForm === 'other' && !profile.legalFormOther) missing.push('Mô tả loại hình pháp nhân');
+  if (profile.accountingRegime === 'other' && !profile.accountingRegimeOther) missing.push('Mô tả chế độ kế toán');
+  if (profile.vatMethod === 'other' && !profile.vatMethodOther) missing.push('Mô tả phương pháp thuế GTGT');
+  const month = Number(profile.fiscalYearStartMonth);
+  const day = Number(profile.fiscalYearStartDay);
+  const validStartDate = Number.isInteger(month) && month >= 1 && month <= 12 && Number.isInteger(day) && day >= 1 && day <= new Date(Date.UTC(2024, month, 0)).getUTCDate();
+  if ((profile.fiscalYearStartMonth !== null || profile.fiscalYearStartDay !== null) && !validStartDate && !missing.includes('Tháng bắt đầu năm tài chính')) {
+    missing.push('Ngày bắt đầu năm tài chính');
+  }
+  return missing;
+}
+
 async function getCompanyProfile() {
   const row = await db.prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'company_profile'").get();
-  return { companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', ...parseJsonObject(row?.setting_value) };
+  const profile = {
+    companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '',
+    establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '',
+    address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '',
+    legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '',
+    fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '',
+    ...parseJsonObject(row?.setting_value),
+  };
+  profile.accountingProfileMissing = accountingProfileMissing(profile);
+  profile.accountingProfileComplete = profile.accountingProfileMissing.length === 0;
+  return profile;
+}
+
+async function requireAccountingProfile() {
+  const profile = await getCompanyProfile();
+  if (!profile.accountingProfileComplete) {
+    throw new HttpError(409, `Cần hoàn tất Hồ sơ kế toán trước khi ghi nhận nghiệp vụ: ${profile.accountingProfileMissing.join(', ')}.`);
+  }
+  return profile;
 }
 
 async function verifyGoogleIdentityCredential(credential) {
@@ -2051,6 +2106,14 @@ async function canReadTaskReportAttachment(actor, fileId) {
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'finance_general_ledger' && !['GET', 'HEAD'].includes(request.method)) {
+    throw new HttpError(409, 'Sổ Cái chỉ được ghi qua API hạch toán có kiểm tra cân đối và kỳ kế toán.');
+  }
+  if (['finance_tax', 'finance_einvoices'].includes(scope) && !['GET', 'HEAD'].includes(request.method)) {
+    await requireAccountingProfile();
+    if (scope === 'finance_tax' && request.method !== 'POST') throw new HttpError(409, 'Hồ sơ thuế chỉ được tạo mới tại đây; trạng thái nộp thuế cần tích hợp hoặc chứng từ đối chiếu.');
+    if (scope === 'finance_einvoices' && !['POST', 'DELETE'].includes(request.method)) throw new HttpError(409, 'Hóa đơn chỉ được lưu thành nháp cho đến khi có kết nối nhà cung cấp đã xác minh.');
+  }
   if (scope.startsWith('dropdown_') && !['GET', 'HEAD'].includes(request.method) && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được thay đổi danh mục dùng chung.');
   }
@@ -2113,6 +2176,43 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Bản ghi phải là một đối tượng JSON.');
   }
   let record = { ...value };
+  if (scope === 'finance_tax') {
+    record.code = requiredText(record.code || record.key, 'Mã hồ sơ thuế', 80);
+    if (!current) {
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) LIMIT 1").get(record.code);
+      if (duplicate) throw new HttpError(409, 'Mã hồ sơ thuế đã tồn tại.');
+    }
+    record.taxType = oneOf(record.taxType, 'Loại thuế', ['Thuế GTGT', 'Thuế TNDN tạm tính', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài']);
+    record.period = requiredText(record.period, 'Kỳ kê khai', 120);
+    record.taxAuthority = optionalText(record.taxAuthority, 'Cơ quan thuế quản lý', 300);
+    record.deadline = requiredIsoDate(record.deadline, 'Hạn nộp');
+    if (record.amountPayable === '' || record.amountPayable === null || record.amountPayable === undefined) throw new HttpError(422, 'Nhập số tiền thuế phải nộp.');
+    record.amountPayable = Number(record.amountPayable);
+    if (!Number.isFinite(record.amountPayable) || record.amountPayable < 0 || record.amountPayable > 1_000_000_000_000_000) throw new HttpError(422, 'Số tiền thuế phải nộp không hợp lệ.');
+    record.amountPaid = 0;
+    record.status = 'Chờ nộp thuế';
+  }
+  if (scope === 'finance_einvoices') {
+    record.invoiceNumber = requiredText(record.invoiceNumber, 'Mã bản nháp hóa đơn', 80);
+    if (!current) {
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_einvoices' AND LOWER(json_extract(payload_json, '$.invoiceNumber')) = LOWER(?) LIMIT 1").get(record.invoiceNumber);
+      if (duplicate) throw new HttpError(409, 'Mã bản nháp hóa đơn đã tồn tại.');
+    }
+    record.buyerName = requiredText(record.buyerName, 'Tên người mua', 300);
+    record.buyerTaxCode = optionalText(record.buyerTaxCode, 'Mã số thuế người mua', 32);
+    record.issueDate = requiredIsoDate(record.issueDate, 'Ngày lập bản nháp');
+    record.totalAmount = Number(record.totalAmount);
+    if (!Number.isFinite(record.totalAmount) || record.totalAmount <= 0 || record.totalAmount > 1_000_000_000_000_000) throw new HttpError(422, 'Tổng tiền hàng phải lớn hơn 0 và nằm trong giới hạn cho phép.');
+    const vatRate = oneOf(record.vatRate, 'Thuế suất GTGT', ['0%', '5%', '8%', '10%', 'Không chịu thuế']);
+    const rate = vatRate === 'Không chịu thuế' ? 0 : Number(vatRate.replace('%', ''));
+    record.vatRate = vatRate;
+    record.vatAmount = Math.round(record.totalAmount * rate / 100);
+    record.finalAmount = record.totalAmount + record.vatAmount;
+    record.status = 'Hóa đơn nháp';
+    record.externalStatus = 'Chưa gửi nhà cung cấp';
+    delete record.cqtCode;
+    delete record.signature;
+  }
   if (scope === 'tickets') {
     const at = now();
     if (current) {
@@ -7206,6 +7306,122 @@ async function handleRequest(request, response) {
     if (backupMatch[2] === 'restore' && request.method === 'POST') throw new HttpError(409, 'Khôi phục tự động chưa được hỗ trợ. Hãy kiểm tra bản sao lưu và lập kế hoạch khôi phục ngoại tuyến.');
   }
 
+  if (request.method === 'POST' && resource === '/finance/general-ledger/entries') {
+    const actor = await requireUser(request);
+    const profile = await requireAccountingProfile();
+    const payload = await readJson(request, 64 * 1024);
+    const voucherCode = requiredText(payload.voucherCode, 'Số chứng từ', 80);
+    const entryDate = requiredIsoDate(payload.entryDate, 'Ngày hạch toán');
+    const description = requiredText(payload.description, 'Nội dung diễn giải', 1_000);
+    const debitAccount = requiredText(payload.debitAccount, 'Tài khoản Nợ', 24);
+    const creditAccount = requiredText(payload.creditAccount, 'Tài khoản Có', 24);
+    const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
+    if (!accountPattern.test(debitAccount) || !accountPattern.test(creditAccount)) throw new HttpError(422, 'Mã tài khoản phải là mã số trong hệ thống tài khoản đã chọn.');
+    if (debitAccount.replace(/\s+/g, '').toUpperCase() === creditAccount.replace(/\s+/g, '').toUpperCase()) throw new HttpError(422, 'Tài khoản Nợ và Có phải khác nhau.');
+    const amount = Number(payload.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000_000_000 || Math.round(amount * 100) !== amount * 100) {
+      throw new HttpError(422, 'Số tiền phải lớn hơn 0 và không quá 2 chữ số thập phân.');
+    }
+    const key = requiredText(payload.key || randomUUID(), 'Khóa bút toán', 160);
+    const record = {
+      key, voucherCode, entryDate, description, debitAccount, creditAccount, amount,
+      author: actor.name, authorId: actor.id, status: 'Đã ghi sổ cái',
+      sourceModule: 'manual_journal', sourceReference: `manual:${key}`,
+      accountingRegime: profile.accountingRegime, createdAt: now(),
+    };
+    const timestamp = now();
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND (LOWER(record_key) = LOWER(?) OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?)) LIMIT 1").get(key, voucherCode);
+      if (duplicate) throw new HttpError(409, 'Khóa hoặc số chứng từ đã tồn tại trong Sổ Cái.');
+      const closed = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceModule') = 'general_ledger_close'").all();
+      for (const row of closed) {
+        const sourceReference = parseJsonObject(row.payload_json).sourceReference;
+        const match = /^period-close:(\d{4}-Q[1-4])$/.exec(String(sourceReference || ''));
+        if (!match) continue;
+        const [, fiscalYear, quarter] = /^(\d{4})-Q([1-4])$/.exec(match[1]);
+        const startMonth = Number(profile.fiscalYearStartMonth);
+        const startDay = Number(profile.fiscalYearStartDay);
+        const start = new Date(Date.UTC(Number(fiscalYear), startMonth - 1 + (Number(quarter) - 1) * 3, startDay)).toISOString().slice(0, 10);
+        const end = new Date(Date.UTC(Number(fiscalYear), startMonth - 1 + Number(quarter) * 3, startDay)).toISOString().slice(0, 10);
+        if (entryDate >= start && entryDate < end) throw new HttpError(409, 'Kỳ tài chính đã kết chuyển; không thể ghi thêm bút toán vào kỳ đã khóa.');
+      }
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), key, actor.id, JSON.stringify(record), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'post_manual_journal', 'finance_general_ledger', key, { voucherCode, amount, accountingRegime: profile.accountingRegime });
+    });
+    sendJson(response, 201, { record });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/general-ledger/close') {
+    const actor = await requireUser(request);
+    const profile = await requireAccountingProfile();
+    const payload = await readJson(request, 16 * 1024);
+    const period = requiredText(payload.period, 'Kỳ kết chuyển', 16);
+    const match = /^(\d{4})-Q([1-4])$/.exec(period);
+    if (!match) throw new HttpError(422, 'Kỳ kết chuyển phải theo dạng YYYY-Q1 đến YYYY-Q4.');
+    const fiscalYear = Number(match[1]);
+    const quarter = Number(match[2]);
+    const startMonth = Number(profile.fiscalYearStartMonth);
+    const startDay = Number(profile.fiscalYearStartDay);
+    const startDate = new Date(Date.UTC(fiscalYear, startMonth - 1 + (quarter - 1) * 3, startDay)).toISOString().slice(0, 10);
+    const endExclusive = new Date(Date.UTC(fiscalYear, startMonth - 1 + quarter * 3, startDay)).toISOString().slice(0, 10);
+    const endDate = new Date(Date.parse(`${endExclusive}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+    let created = [];
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_general_ledger'").all();
+      const records = rows.map(publicCollectionRecord).filter(Boolean);
+      const sourceReference = `period-close:${period}`;
+      if (records.some((record) => record.sourceReference === sourceReference)) throw new HttpError(409, 'Kỳ này đã được kết chuyển.');
+      const quarterRecords = records.filter((record) => record.status === 'Đã ghi sổ cái' && record.entryDate >= startDate && record.entryDate < endExclusive);
+      const accounts = new Map();
+      for (const item of quarterRecords) {
+        const amount = Number(item.amount);
+        if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(422, 'Sổ Cái có số tiền không hợp lệ; chưa thể kết chuyển.');
+        for (const [side, field] of [['debit', 'debitAccount'], ['credit', 'creditAccount']]) {
+          const code = /(?:TK\s*)?(\d{3,6})/i.exec(String(item[field] || ''))?.[1] || '';
+          if (!code) continue;
+          const movement = accounts.get(code) || { debit: 0, credit: 0 };
+          movement[side] += amount;
+          accounts.set(code, movement);
+        }
+      }
+      const movements = Array.from(accounts.entries());
+      const revenue = movements.filter(([code]) => ['5', '7'].includes(code[0])).reduce((sum, [, sides]) => sum + sides.credit - sides.debit, 0);
+      const expenses = movements.filter(([code]) => ['6', '8'].includes(code[0])).reduce((sum, [, sides]) => sum + sides.debit - sides.credit, 0);
+      const netResult = revenue - expenses;
+      const lines = [];
+      for (const [code, sides] of movements) {
+        const netRevenue = sides.credit - sides.debit;
+        if (['5', '7'].includes(code[0]) && netRevenue > 0) lines.push({ description: `Kết chuyển doanh thu TK ${code} quý ${quarter}/${fiscalYear}`, debitAccount: `TK ${code}`, creditAccount: 'TK 911', amount: netRevenue });
+        else if (['5', '7'].includes(code[0]) && netRevenue < 0) lines.push({ description: `Kết chuyển số dư Nợ TK ${code} quý ${quarter}/${fiscalYear}`, debitAccount: 'TK 911', creditAccount: `TK ${code}`, amount: Math.abs(netRevenue) });
+        const netExpense = sides.debit - sides.credit;
+        if (['6', '8'].includes(code[0]) && netExpense > 0) lines.push({ description: `Kết chuyển chi phí TK ${code} quý ${quarter}/${fiscalYear}`, debitAccount: 'TK 911', creditAccount: `TK ${code}`, amount: netExpense });
+        else if (['6', '8'].includes(code[0]) && netExpense < 0) lines.push({ description: `Kết chuyển số dư Có TK ${code} quý ${quarter}/${fiscalYear}`, debitAccount: `TK ${code}`, creditAccount: 'TK 911', amount: Math.abs(netExpense) });
+      }
+      if (netResult > 0) lines.push({ description: `Kết chuyển lãi quý ${quarter}/${fiscalYear}`, debitAccount: 'TK 911', creditAccount: 'TK 4212', amount: netResult });
+      else if (netResult < 0) lines.push({ description: `Kết chuyển lỗ quý ${quarter}/${fiscalYear}`, debitAccount: 'TK 4212', creditAccount: 'TK 911', amount: Math.abs(netResult) });
+      if (!quarterRecords.length || !lines.length) throw new HttpError(422, 'Kỳ chưa có bút toán đã ghi sổ đủ điều kiện kết chuyển.');
+      created = lines.map((line, index) => {
+        const key = `closing:${period}:${index + 1}`;
+        return {
+          key, voucherCode: `KC-${period.replace('-', '')}-${index + 1}`, entryDate: endDate,
+          ...line, author: actor.name, authorId: actor.id, status: 'Đã ghi sổ cái',
+          sourceModule: 'general_ledger_close', sourceReference, accountingRegime: profile.accountingRegime, createdAt: now(),
+        };
+      });
+      const timestamp = now();
+      const insert = await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`);
+      for (const record of created) await insert.run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'close_financial_quarter', 'finance_general_ledger', period, { entries: created.length, startDate, endDate, accountingRegime: profile.accountingRegime });
+    });
+    sendJson(response, 201, { period, startDate, endDate, entries: created.length, records: created });
+    return;
+  }
+
   const collectionMatch = /^\/collections\/([^/]+)$/.exec(resource);
   const collectionRecordMatch = /^\/collections\/([^/]+)\/([^/]+)$/.exec(resource);
 
@@ -7617,6 +7833,7 @@ async function handleRequest(request, response) {
         if (scope === 'asset_maintenances' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        if (scope === 'finance_einvoices' && publicCollectionRecord(fresh)?.status !== 'Hóa đơn nháp') throw new HttpError(409, 'Chỉ được xóa hóa đơn nháp chưa gửi nhà cung cấp.');
         const current = publicCollectionRecord(fresh) || {};
         if (scope === 'asset_todos' && (fresh.updated_at !== existing.updated_at || fresh.payload_json !== existing.payload_json)) {
           throw new HttpError(409, 'Nhiệm vụ vừa được cập nhật; vui lòng tải lại trước khi sửa.');
@@ -10430,7 +10647,28 @@ async function handleRequest(request, response) {
       const current = await getCompanyProfile();
       if ((current.updatedAt && payload.updatedAt !== current.updatedAt) || (current.revision && payload.revision !== current.revision)) throw new HttpError(409, 'Thông tin công ty đã được thay đổi. Vui lòng tải lại trước khi lưu.');
       profile = {};
-      for (const field of ['companyName', 'fullName', 'shortName', 'companyCode', 'taxCode', 'businessType', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'address', 'phone', 'fax', 'email', 'website', 'domain', 'bankAccountId']) profile[field] = optionalText(payload[field], 'Thông tin công ty', field === 'address' ? 1000 : 300);
+      for (const field of ['companyName', 'fullName', 'shortName', 'companyCode', 'taxCode', 'businessType', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'address', 'phone', 'fax', 'email', 'website', 'domain', 'bankAccountId', 'legalFormOther', 'industry', 'accountingRegimeOther', 'vatMethodOther']) profile[field] = optionalText(payload[field], 'Thông tin công ty', field === 'address' ? 1000 : 300);
+      for (const [field, allowed] of [
+        ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'other']],
+        ['companySize', ['micro', 'small', 'medium', 'large']],
+        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'other']],
+        ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
+      ]) {
+        const raw = payload[field];
+        profile[field] = raw ? oneOf(raw, field, allowed) : '';
+      }
+      for (const field of ['fiscalYearStartMonth', 'fiscalYearStartDay']) {
+        const raw = payload[field];
+        profile[field] = raw === '' || raw === null || raw === undefined ? null : Number(raw);
+        if (profile[field] !== null && !Number.isInteger(profile[field])) throw new HttpError(422, 'Ngày bắt đầu năm tài chính không hợp lệ.');
+      }
+      if (profile.fiscalYearStartMonth !== null && (profile.fiscalYearStartMonth < 1 || profile.fiscalYearStartMonth > 12)) throw new HttpError(422, 'Tháng bắt đầu năm tài chính phải từ 1 đến 12.');
+      if (profile.fiscalYearStartDay !== null && (profile.fiscalYearStartDay < 1 || profile.fiscalYearStartDay > 31)) throw new HttpError(422, 'Ngày bắt đầu năm tài chính phải từ 1 đến 31.');
+      if ((profile.fiscalYearStartMonth === null) !== (profile.fiscalYearStartDay === null)) throw new HttpError(422, 'Cần khai báo cả tháng và ngày bắt đầu năm tài chính.');
+      if (profile.fiscalYearStartMonth !== null && profile.fiscalYearStartDay !== null) {
+        const maxDay = new Date(Date.UTC(2024, profile.fiscalYearStartMonth, 0)).getUTCDate();
+        if (profile.fiscalYearStartDay > maxDay) throw new HttpError(422, 'Ngày bắt đầu năm tài chính không tồn tại trong tháng đã chọn.');
+      }
       profile.companyName = requiredText(profile.companyName, 'Tên công ty', 300);
       if (profile.email) profile.email = normalizeEmail(profile.email);
       for (const field of ['establishedDate', 'registrationDate']) profile[field] = payload[field] ? requiredIsoDate(payload[field], 'Ngày đăng ký / thành lập') : '';
@@ -10448,11 +10686,22 @@ async function handleRequest(request, response) {
       }
       profile.timezone = oneOf(payload.timezone || 'Asia/Ho_Chi_Minh', 'Múi giờ hiển thị', ['Asia/Ho_Chi_Minh', 'UTC']);
       profile.currency = oneOf(payload.currency || 'VND', 'Tiền tệ hiển thị', ['VND', 'USD']);
+      if (profile.legalForm !== 'other') profile.legalFormOther = '';
+      if (profile.accountingRegime !== 'other') profile.accountingRegimeOther = '';
+      if (profile.vatMethod !== 'other') profile.vatMethodOther = '';
+      const accountingFields = ['legalForm', 'legalFormOther', 'companySize', 'industry', 'accountingRegime', 'accountingRegimeOther', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'vatMethodOther'];
+      const accountingProfileChanged = accountingFields.some(field => JSON.stringify(profile[field] ?? null) !== JSON.stringify(current[field] ?? null));
+      if (current.accountingProfileComplete && accountingProfileChanged) {
+        const existingLedgerEntry = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' LIMIT 1").get();
+        if (existingLedgerEntry) throw new HttpError(409, 'Không thể đổi chế độ kế toán, quy mô hoặc kỳ tài chính khi Sổ Cái đã có dữ liệu. Cần quy trình chuyển đổi và đối chiếu riêng.');
+      }
       if (profile.bankAccountId && !await db.prepare("SELECT id FROM finance_bank_accounts WHERE id = ? AND status = 'Đang hoạt động'").get(profile.bankAccountId)) throw new HttpError(422, 'Tài khoản ngân hàng không tồn tại hoặc đã ngừng hoạt động.');
       profile.updatedAt = now(); profile.updatedBy = actor.name; profile.revision = Number(current.revision || 0) + 1;
       await db.prepare("INSERT INTO system_settings (setting_key, setting_value, updated_at) VALUES ('company_profile', ?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").run(JSON.stringify(profile), profile.updatedAt);
       await recordAuditEvent(actor.id, 'update', 'company_profile', 'company_profile');
     });
+    profile.accountingProfileMissing = accountingProfileMissing(profile);
+    profile.accountingProfileComplete = profile.accountingProfileMissing.length === 0;
     sendJson(response, 200, { profile }); return;
   }
 

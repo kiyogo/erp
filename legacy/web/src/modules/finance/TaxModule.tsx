@@ -63,9 +63,11 @@ export const TaxModule: React.FC = () => {
 
   const totalPayable = data.reduce((sum, item) => sum + item.amountPayable, 0);
   const totalPaid = data.reduce((sum, item) => sum + item.amountPaid, 0);
-  const totalPending = totalPayable - totalPaid;
+  const totalPending = Math.max(0, totalPayable - totalPaid);
+  const declaredTaxTypes = Array.from(new Set(data.map(item => item.taxType).filter(Boolean)));
+  const deadlineRows = data.filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.deadline || '')).sort((a, b) => a.deadline.localeCompare(b.deadline));
 
-  const handleCreate = (values: any) => {
+  const handleCreate = async (values: any) => {
     const payable = Number(values.amountPayable) || 0;
     const newTax: TaxFiling = {
       ...values,
@@ -74,19 +76,15 @@ export const TaxModule: React.FC = () => {
       amountPaid: 0,
       status: 'Chờ nộp thuế',
     };
-    const nextItems = [newTax, ...data]; setData(nextItems); dataService.saveGenericData('finance_tax', nextItems);
-    message.success(`Đã thêm kỳ kê khai thuế mới: ${values.taxType} - ${values.period}`);
-    setModalOpen(false);
-    form.resetFields();
-  };
-
-  const handlePayTax = (record: TaxFiling) => {
-    setData(
-      data.map((d) =>
-        d.key === record.key ? { ...d, amountPaid: d.amountPayable, status: 'Đã nộp đủ' as const } : d
-      )
-    );
-    message.success(`Đã xác nhận nộp ${record.amountPayable.toLocaleString('vi-VN')} ₫ tiền thuế ${record.taxType}`);
+    try {
+      const saved = await dataService.createGenericRecord('finance_tax', newTax);
+      setData(current => [saved, ...current]);
+      message.success(`Đã lưu hồ sơ thuế ${values.taxType} - ${values.period} ở trạng thái chờ nộp.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu hồ sơ thuế.');
+    }
   };
 
   const filteredData = data.filter(
@@ -101,13 +99,13 @@ export const TaxModule: React.FC = () => {
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng số thuế phải nộp năm 2026</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng nghĩa vụ theo hồ sơ đã lưu</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
             {totalPayable.toLocaleString('vi-VN')} ₫
           </div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã nộp vào Ngân sách Nhà nước</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã ghi nhận trong dữ liệu nội bộ</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
             {totalPaid.toLocaleString('vi-VN')} ₫
           </div>
@@ -120,33 +118,35 @@ export const TaxModule: React.FC = () => {
         </div>
       </div>
 
+      <Alert
+        message="Hồ sơ trong web chưa được gửi cơ quan thuế"
+        description="Các bản ghi ở đây chỉ là dữ liệu nội bộ. Web hiện chưa kết nối eTax hoặc dịch vụ xác nhận thanh toán, nên không thể đánh dấu một khoản thuế là đã nộp."
+        type="warning"
+        showIcon
+        style={{ marginBottom: 16 }}
+      />
+
       {/* VIEW: TYPES (Danh mục các loại sắc thuế doanh nghiệp) */}
       {isTypes && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Mục Các Sắc Thuế Doanh Nghiệp Áp Dụng</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => message.info('Đăng ký sắc thuế mới với CQT')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => message.warning('Chức năng đăng ký sắc thuế cần kết nối cơ quan thuế; chưa có xác nhận trực tuyến.')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Thêm sắc thuế
             </Button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-            {[
-              { name: 'Thuế Giá trị gia tăng', code: '1701', rate: '8% - 10%', method: 'Khấu trừ theo Quý', status: 'Bắt buộc' },
-              { name: 'Thuế Thu nhập Doanh nghiệp', code: '1052', rate: '20%', method: 'Tạm nộp Quý & Quyết toán năm', status: 'Bắt buộc' },
-              { name: 'Thuế Thu nhập Cá nhân', code: '1001', rate: 'Lũy tiến 5% - 35%', method: 'Khấu trừ theo Tháng/Quý', status: 'Bắt buộc' },
-              { name: 'Lệ phí Môn bài', code: '2862', rate: '2.000.000 ₫/năm', method: 'Nộp 1 lần đầu năm', status: 'Đã hoàn thành' },
-              { name: 'Thuế Nhà thầu Nước ngoài', code: '1054', rate: '5% VAT + 5% TNDN', method: 'Theo từng lần phát sinh', status: 'Áp dụng' },
-            ].map((tax, idx) => (
-              <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            {declaredTaxTypes.map((taxType) => (
+              <Card key={taxType} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <strong style={{ color: '#009688', fontSize: 14 }}>Tiểu mục {tax.code}</strong>
-                  <Tag color="success">{tax.status}</Tag>
+                  <strong style={{ color: '#009688', fontSize: 14 }}>Theo hồ sơ đã nhập</strong>
+                  <Tag color="warning">Chưa xác minh</Tag>
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A', marginBottom: 4 }}>{tax.name}</div>
-                <div style={{ fontSize: 12.5, color: '#2563EB', fontWeight: 600, marginBottom: 6 }}>Thuế suất: {tax.rate}</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>Phương thức: {tax.method}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A', marginBottom: 4 }}>{taxType}</div>
+                <div style={{ fontSize: 12, color: '#64748B' }}>Mức thuế và kỳ kê khai cần xác nhận theo hồ sơ doanh nghiệp và quy định áp dụng.</div>
               </Card>
             ))}
+            {!declaredTaxTypes.length && <div style={{ color: '#64748B', padding: 16 }}>Chưa có sắc thuế nào được khai báo trong hồ sơ nội bộ.</div>}
           </div>
         </div>
       )}
@@ -155,25 +155,21 @@ export const TaxModule: React.FC = () => {
       {isPeriods && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Các Kỳ Kê Khai Thuế Năm Tài Chính 2026</h3>
-            <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất lịch các kỳ kê khai')}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Kỳ kê khai theo hồ sơ nội bộ</h3>
+            <Button icon={<DownloadOutlined />} disabled title="Chưa có dữ liệu kỳ kê khai đã xác nhận">
               Xuất Danh Sách Kỳ Kê Khai
             </Button>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                { id: '1', period: 'Quý III / 2026', type: 'Thuế GTGT & TNDN tạm nộp', start: '01/07/2026', end: '30/09/2026', deadline: '30/10/2026', status: 'Đang thu thập hóa đơn' },
-                { id: '2', period: 'Tháng 08 / 2026', type: 'Thuế TNCN khấu trừ chi trả lương', start: '01/08/2026', end: '31/08/2026', deadline: '20/09/2026', status: 'Sắp đến hạn' },
-                { id: '3', period: 'Quý II / 2026', type: 'Thuế GTGT & TNDN tạm nộp', start: '01/04/2026', end: '30/06/2026', deadline: '30/07/2026', status: 'Đã hoàn tất quyết toán' },
-              ]}
+              dataSource={data.map(item => ({ ...item, type: item.taxType }))}
               columns={[
                 { title: 'Kỳ kê khai', dataIndex: 'period', key: 'period', render: (p: string) => <strong>{p}</strong> },
                 { title: 'Sắc thuế áp dụng', dataIndex: 'type', key: 'type' },
-                { title: 'Thời gian kỳ', key: 'time', render: (_: any, r: any) => `${r.start} ➔ ${r.end}` },
-                { title: 'Hạn chót nộp CQT', dataIndex: 'deadline', key: 'deadline', render: (d: string) => <strong style={{ color: '#DC2626' }}>{d}</strong> },
+                { title: 'Thời gian kỳ', dataIndex: 'period', key: 'time' },
+                { title: 'Hạn chót đã khai báo', dataIndex: 'deadline', key: 'deadline', render: (d: string) => <strong style={{ color: '#DC2626' }}>{d || 'Chưa khai báo'}</strong> },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s.includes('hoàn tất') ? 'success' : s.includes('Sắp') ? 'warning' : 'processing'}>{s}</Tag> },
-                { title: 'Thao tác', key: 'act', render: () => <Button size="small">Xem tờ khai</Button> },
+                { title: 'Thao tác', key: 'act', render: () => <Button size="small" disabled>Chưa có tờ khai điện tử</Button> },
               ]}
             />
           </div>
@@ -184,27 +180,24 @@ export const TaxModule: React.FC = () => {
       {isDeadlines && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Lịch Trình Hạn Chót Nộp Tờ Khai &amp; Nộp Thuế Năm 2026</h3>
-            <Button icon={<CalendarOutlined />} onClick={() => message.info('Đã đồng bộ lịch thuế vào Google Calendar!')}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Hạn chót đã khai báo</h3>
+            <Button icon={<CalendarOutlined />} disabled title="Chưa tích hợp lịch ngoài">
               Đồng bộ Lịch
             </Button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-            {[
-              { deadline: '20/09/2026', title: 'Nộp Tờ khai & Tiền thuế TNCN Tháng 08/2026', scope: 'Thuế TNCN khấu trừ chi trả thu nhập', status: 'Còn 24 ngày', level: 'warning' },
-              { deadline: '30/10/2026', title: 'Nộp Tờ khai GTGT Quý 3/2026', scope: 'Thuế GTGT theo quý + Báo cáo BC26', status: 'Còn 64 ngày', level: 'processing' },
-              { deadline: '30/10/2026', title: 'Tạm nộp Thuế TNDN Quý 3/2026', scope: 'Nghĩa vụ tạm nộp TNDN', status: 'Còn 64 ngày', level: 'processing' },
-              { deadline: '30/01/2027', title: 'Nộp Lệ phí Môn bài Năm 2027', scope: 'Bậc 2: 2.000.000 ₫/năm', status: 'Định kỳ năm', level: 'default' },
-            ].map((dl, idx) => (
-              <Card key={idx} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            {deadlineRows.map((item) => {
+              const days = Math.ceil((Date.parse(`${item.deadline}T00:00:00`) - Date.now()) / 86_400_000);
+              return <Card key={item.key} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <strong style={{ color: '#DC2626', fontSize: 14 }}>Hạn: {dl.deadline}</strong>
-                  <Tag color={dl.level as any}>{dl.status}</Tag>
+                  <strong style={{ color: '#DC2626', fontSize: 14 }}>Hạn: {item.deadline}</strong>
+                  <Tag color={days < 0 ? 'error' : days <= 7 ? 'warning' : 'processing'}>{days < 0 ? `Quá hạn ${Math.abs(days)} ngày` : days === 0 ? 'Đến hạn hôm nay' : `Còn ${days} ngày`}</Tag>
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A', marginBottom: 6 }}>{dl.title}</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>{dl.scope}</div>
-              </Card>
-            ))}
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A', marginBottom: 6 }}>{item.taxType} · {item.period}</div>
+                <div style={{ fontSize: 12, color: '#64748B' }}>Hạn do người dùng khai báo; chưa đồng bộ với CQT.</div>
+              </Card>;
+            })}
+            {!deadlineRows.length && <div style={{ color: '#64748B', padding: 16 }}>Chưa có hạn nộp được khai báo.</div>}
           </div>
         </div>
       )}
@@ -214,17 +207,13 @@ export const TaxModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Giấy Nộp Tiền Vào Ngân Sách Nhà Nước</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => message.info('Mở lập lệnh nộp thuế điện tử eTax')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" icon={<PlusOutlined />} disabled title="Chưa tích hợp eTax hoặc ngân hàng" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lập giấy nộp tiền eTax
             </Button>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                { id: '1', code: 'C102-2026-081', chapter: '754', itemCode: '1701 - Thuế GTGT', kbn: 'KBNN Cầu Giấy', bank: 'Vietcombank - Cầu Giấy', amount: 145000000, date: '2026-07-28', status: 'CQT đã gạch nợ' },
-                { id: '2', code: 'C102-2026-082', chapter: '754', itemCode: '1052 - Thuế TNDN', kbn: 'KBNN Cầu Giấy', bank: 'Vietcombank - Cầu Giấy', amount: 88000000, date: '2026-07-28', status: 'CQT đã gạch nợ' },
-                { id: '3', code: 'C102-2026-083', chapter: '754', itemCode: '1001 - Thuế TNCN', kbn: 'KBNN Cầu Giấy', bank: 'BIDV - Hà Nội', amount: 42500000, date: '2026-08-18', status: 'CQT đã gạch nợ' },
-              ]}
+              dataSource={[]}
               columns={[
                 { title: 'Mã số chứng từ', dataIndex: 'code', key: 'code', render: (c: string) => <strong>{c}</strong> },
                 { title: 'Chương & Tiểu mục', key: 'sec', render: (_: any, r: any) => <div><strong>{r.itemCode}</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>Chương: {r.chapter}</div></div> },
@@ -244,20 +233,17 @@ export const TaxModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Alert
             message="Cảnh báo an toàn thuế đầu vào"
-            description="Hệ thống tự động tra cứu mã số thuế của tất cả nhà cung cấp đầu vào với Danh sách 524 Doanh nghiệp rủi ro cao của Tổng cục Thuế để ngăn ngừa rủi ro hóa đơn bất hợp pháp."
+            description="Web chưa kết nối danh sách cảnh báo hoặc API tra cứu mã số thuế của cơ quan thuế; không thể xác nhận trạng thái thuế hay tự động chặn hóa đơn."
             type="warning"
             showIcon
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Doanh Nghiệp Có Cảnh Báo Rủi Ro Thuế</h3>
-            <Input prefix={<SearchOutlined style={{ color: '#bbb' }} />} placeholder="Tra cứu MST hoặc tên công ty rủi ro..." style={{ width: 340, borderRadius: 6 }} allowClear />
+            <Input prefix={<SearchOutlined style={{ color: '#bbb' }} />} placeholder="Chưa kết nối nguồn tra cứu thuế" style={{ width: 340, borderRadius: 6 }} allowClear disabled />
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[
-                { id: '1', taxCode: '0108992113', name: 'Công Ty TNHH Thương Mại Toàn Cầu Nam Phát', reason: 'Không hoạt động tại địa chỉ đăng ký kinh doanh', date: '2026-05-12', action: 'Chặn ghi nhận hóa đơn đầu vào', risk: 'Rất cao' },
-                { id: '2', taxCode: '0314567891', name: 'Công Ty CP Dịch Vụ Tiếp Vận Á Châu Minh', reason: 'Có dấu hiệu mua bán hóa đơn bất hợp pháp', date: '2026-06-20', action: 'Chặn ghi nhận hóa đơn đầu vào', risk: 'Rất cao' },
-              ]}
+              dataSource={[]}
               columns={[
                 { title: 'Mã số thuế', dataIndex: 'taxCode', key: 'taxCode', render: (t: string) => <code style={{ color: '#DC2626', fontWeight: 700 }}>{t}</code> },
                 { title: 'Tên doanh nghiệp vi phạm', dataIndex: 'name', key: 'name', render: (n: string) => <strong>{n}</strong> },
@@ -360,11 +346,11 @@ export const TaxModule: React.FC = () => {
                     <Button
                       size="small"
                       type={record.status === 'Đã nộp đủ' ? 'default' : 'primary'}
-                      disabled={record.status === 'Đã nộp đủ'}
-                      onClick={() => handlePayTax(record)}
+                      disabled
+                      title="Chưa có kết nối eTax hoặc xác minh chứng từ thanh toán"
                       style={record.status !== 'Đã nộp đủ' ? { backgroundColor: '#009688', borderColor: '#009688' } : {}}
                     >
-                      {record.status === 'Đã nộp đủ' ? 'Đã hoàn thành' : 'Nộp thuế'}
+                      {record.status === 'Đã nộp đủ' ? 'Đã ghi nhận' : 'Chưa kết nối eTax'}
                     </Button>
                   ),
                 },
@@ -385,13 +371,13 @@ export const TaxModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã hồ sơ thuế" initialValue={`TAX-2026-0${data.length + 1}`} rules={[{ required: true }]}>
+            <Form.Item name="code" label="Mã hồ sơ thuế" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="taxType" label="Loại thuế" initialValue="Thuế GTGT">
+            <Form.Item name="taxType" label="Loại thuế" rules={[{ required: true, message: 'Chọn loại thuế' }]}>
               <Select
                 options={[
-                  { label: 'Thuế GTGT', value: 'Thuế GTGT (VAT)' },
+                  { label: 'Thuế GTGT', value: 'Thuế GTGT' },
                   { label: 'Thuế TNDN tạm tính', value: 'Thuế TNDN tạm tính' },
                   { label: 'Thuế TNCN khấu trừ', value: 'Thuế TNCN khấu trừ' },
                   { label: 'Lệ phí Môn bài', value: 'Lệ phí Môn bài' },
@@ -400,17 +386,17 @@ export const TaxModule: React.FC = () => {
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="period" label="Kỳ kê khai" initialValue="Quý III / 2026" rules={[{ required: true }]}>
+            <Form.Item name="period" label="Kỳ kê khai" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="amountPayable" label="Số tiền phải nộp (VNĐ)" initialValue={50000000} rules={[{ required: true }]}>
+            <Form.Item name="amountPayable" label="Số tiền phải nộp (VNĐ)" rules={[{ required: true }]}>
               <Input type="number" min={0} step={1000000} />
             </Form.Item>
           </div>
-          <Form.Item name="taxAuthority" label="Cơ quan thuế quản lý" initialValue="Chi cục Thuế Quận Cầu Giấy">
+          <Form.Item name="taxAuthority" label="Cơ quan thuế quản lý">
             <Input />
           </Form.Item>
-          <Form.Item name="deadline" label="Hạn chót nộp" initialValue="2026-10-30" rules={[{ required: true }]}>
+          <Form.Item name="deadline" label="Hạn chót nộp" rules={[{ required: true }]}>
             <Input type="date" />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>

@@ -46,3 +46,17 @@ test('quarter closing lines clear income and expense balances and transfer the a
   ]);
   assert.equal(lines.reduce((sum, line) => sum + line.amount, 0), 2000);
 });
+
+test('fiscal quarters follow the configured non-calendar year start', () => {
+  assert.equal(ledger.getFiscalQuarterPeriod(new Date('2026-10-01T12:00:00Z'), 10, 1), '2026-Q1');
+  assert.equal(ledger.getFiscalQuarterPeriod(new Date('2027-01-01T12:00:00Z'), 10, 1), '2026-Q2');
+  const result = ledger.calculateQuarterLedger([
+    { entryDate: '2026-09-30', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 99 },
+    { entryDate: '2026-10-01', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 100 },
+    { entryDate: '2026-12-31', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 200 },
+    { entryDate: '2027-01-01', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 300 },
+  ], '2026-Q1', 10, 1);
+  assert.equal(result.startDate, '2026-10-01');
+  assert.equal(result.endDate, '2026-12-31');
+  assert.deepEqual(result.records.map(record => record.amount), [100, 200]);
+});

@@ -211,6 +211,12 @@ export type CompanyProfile = {
   establishedDate: string; registrationDate: string; registrationNo: string; registrationIssuer: string;
   representative: string; representativeTitle: string; address: string; phone: string; fax: string; email: string; website: string;
   domain: string; timezone: 'Asia/Ho_Chi_Minh' | 'UTC'; currency: 'VND' | 'USD'; bankAccountId: string;
+  legalForm: '' | 'private_enterprise' | 'llc_single' | 'llc_multiple' | 'joint_stock' | 'partnership' | 'household_business' | 'cooperative' | 'branch' | 'other';
+  legalFormOther: string; companySize: '' | 'micro' | 'small' | 'medium' | 'large'; industry: string;
+  accountingRegime: '' | 'TT99' | 'TT133' | 'TT132' | 'other'; accountingRegimeOther: string;
+  fiscalYearStartMonth: number | null; fiscalYearStartDay: number | null;
+  vatMethod: '' | 'deduction' | 'direct_revenue' | 'direct_added_value' | 'other'; vatMethodOther: string;
+  accountingProfileComplete?: boolean; accountingProfileMissing?: string[];
   updatedAt?: string; updatedBy?: string; revision?: number;
 };
 
@@ -1048,6 +1054,13 @@ export const collectionsApi = {
     api.patch<{ record: T }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`, { patch }),
   remove: (scope: string, recordKey: string) =>
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
+};
+
+export const generalLedgerApi = {
+  createEntry: (record: { key?: string; voucherCode: string; entryDate: string; description: string; debitAccount: string; creditAccount: string; amount: number }) =>
+    api.post<{ record: Record<string, any> }>('/finance/general-ledger/entries', record),
+  closeQuarter: (period: string) =>
+    api.post<{ period: string; startDate: string; endDate: string; entries: number; records: Record<string, any>[] }>('/finance/general-ledger/close', { period }),
 };
 
 export const documentNotesApi = {

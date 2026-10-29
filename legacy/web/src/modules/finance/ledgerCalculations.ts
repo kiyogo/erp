@@ -9,6 +9,35 @@ export type LedgerCalculationRecord = {
 export type AccountMovement = { account: string; debit: number; credit: number };
 export type ClosingLine = { description: string; debitAccount: string; creditAccount: string; amount: number };
 
+export function getFiscalQuarterDates(period: string, startMonth = 1, startDay = 1) {
+  const match = /^(\d{4})-Q([1-4])$/.exec(period);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const quarter = Number(match[2]);
+  const start = new Date(Date.UTC(year, startMonth - 1 + (quarter - 1) * 3, startDay));
+  const endExclusive = new Date(Date.UTC(year, startMonth - 1 + quarter * 3, startDay));
+  const end = new Date(endExclusive.getTime() - 86_400_000);
+  const toIso = (value: Date) => value.toISOString().slice(0, 10);
+  return { year: String(year), quarter: String(quarter), startDate: toIso(start), endDate: toIso(end), endExclusive: toIso(endExclusive) };
+}
+
+export function getFiscalQuarterPeriod(date: Date, startMonth = 1, startDay = 1) {
+  const dateKey = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())).toISOString().slice(0, 10);
+  let fiscalYear = date.getFullYear();
+  for (let quarter = 1; quarter <= 4; quarter++) {
+    const period = `${fiscalYear}-Q${quarter}`;
+    const dates = getFiscalQuarterDates(period, startMonth, startDay)!;
+    if (dateKey >= dates.startDate && dateKey < dates.endExclusive) return period;
+  }
+  fiscalYear--;
+  for (let quarter = 1; quarter <= 4; quarter++) {
+    const period = `${fiscalYear}-Q${quarter}`;
+    const dates = getFiscalQuarterDates(period, startMonth, startDay)!;
+    if (dateKey >= dates.startDate && dateKey < dates.endExclusive) return period;
+  }
+  return `${date.getFullYear()}-Q1`;
+}
+
 export function summarizeLedgerAccounts(records: LedgerCalculationRecord[]): AccountMovement[] {
   const accounts = new Map<string, AccountMovement>();
   for (const record of records) {
@@ -27,14 +56,13 @@ export function summarizeLedgerAccounts(records: LedgerCalculationRecord[]): Acc
   return Array.from(accounts.values());
 }
 
-export function calculateQuarterLedger(records: LedgerCalculationRecord[], period: string) {
+export function calculateQuarterLedger(records: LedgerCalculationRecord[], period: string, startMonth = 1, startDay = 1) {
   const match = /^(\d{4})-Q([1-4])$/.exec(period);
-  if (!match) return { year: '', quarter: '', startMonth: 0, records: [], accounts: new Map<string, { debit: number; credit: number }>(), revenue: 0, expenses: 0, netResult: 0, debits: 0, credits: 0 };
+  const dates = getFiscalQuarterDates(period, startMonth, startDay);
+  if (!match || !dates) return { year: '', quarter: '', startMonth: 0, startDay: 0, startDate: '', endDate: '', endExclusive: '', records: [], accounts: new Map<string, { debit: number; credit: number }>(), revenue: 0, expenses: 0, netResult: 0, debits: 0, credits: 0 };
   const [, year, quarter] = match;
-  const startMonth = (Number(quarter) - 1) * 3 + 1;
   const quarterRecords = records.filter((record) => {
-    const month = Number(record.entryDate?.slice(5, 7));
-    return record.status === 'Đã ghi sổ cái' && record.entryDate?.startsWith(`${year}-`) && month >= startMonth && month < startMonth + 3;
+    return record.status === 'Đã ghi sổ cái' && Boolean(record.entryDate) && record.entryDate! >= dates.startDate && record.entryDate! < dates.endExclusive;
   });
   const accounts = new Map<string, { debit: number; credit: number }>();
   for (const record of quarterRecords) {
@@ -56,7 +84,9 @@ export function calculateQuarterLedger(records: LedgerCalculationRecord[], perio
   return {
     year,
     quarter,
-    startMonth,
+    startMonth: Number(startMonth),
+    startDay: Number(startDay),
+    ...dates,
     records: quarterRecords,
     accounts,
     revenue,
