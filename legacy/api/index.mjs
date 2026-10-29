@@ -2158,7 +2158,7 @@ async function canReadTaskReportAttachment(actor, fileId) {
 }
 
 const accountingOperationScopes = new Set([
-  'finance_advances', 'finance_cash_transactions', 'finance_costing', 'finance_einvoices', 'finance_equity',
+  'finance_advances', 'finance_cash_transactions', 'finance_cash_counts', 'finance_costing', 'finance_einvoices', 'finance_equity',
   'finance_fixed_assets', 'finance_general_ledger', 'finance_internal_transfers', 'finance_inventory',
   'finance_inventory_transactions', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
   'finance_payroll_postings', 'finance_prepaid', 'finance_tax',
