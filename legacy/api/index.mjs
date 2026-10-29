@@ -730,7 +730,7 @@ function accountingProfileMissing(profile) {
   const allowedValues = new Map([
     ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'state_owned_enterprise', 'public_company', 'foreign_invested', 'nonprofit_organization', 'public_unit', 'foreign_representative_office', 'other']],
     ['companySize', ['micro', 'small', 'medium', 'large', 'not_applicable']],
-    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', 'other']],
+    ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT152', 'other']],
     ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
   ]);
   for (const [field, allowed] of allowedValues) {
@@ -755,14 +755,31 @@ function accountingProfileMissing(profile) {
 
 function allowedAccountingRegimes(profile) {
   const specialRegime = ['other'];
+  const fiscalYearStart = accountingFiscalYearStartDate(profile);
+  const microRegimes = fiscalYearStart ? [fiscalYearStart >= '2026-07-01' ? 'TT58' : 'TT132'] : ['TT132', 'TT58'];
   if (profile.legalForm === 'household_business') return ['TT152', ...specialRegime];
   if (profile.legalForm === 'cooperative') return ['TT24', ...(profile.companySize === 'large' ? ['TT133'] : []), ...specialRegime];
   if (['state_owned_enterprise', 'public_company'].includes(profile.legalForm)) return ['TT99', ...specialRegime];
   if (['nonprofit_organization', 'public_unit', 'foreign_representative_office'].includes(profile.legalForm)) return specialRegime;
-  if (profile.legalForm === 'branch' || profile.legalForm === 'other') return ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', ...specialRegime];
-  if (profile.companySize === 'micro') return ['TT99', 'TT133', 'TT132', ...specialRegime];
+  if (profile.legalForm === 'branch' || profile.legalForm === 'other') return ['TT99', 'TT133', ...microRegimes, 'TT24', 'TT152', ...specialRegime];
+  if (profile.companySize === 'micro') return ['TT99', 'TT133', ...microRegimes, ...specialRegime];
   if (['small', 'medium'].includes(profile.companySize)) return ['TT99', 'TT133', ...specialRegime];
   return ['TT99', ...specialRegime];
+}
+
+function accountingFiscalYearStartDate(profile, businessDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date())) {
+  const month = Number(profile.fiscalYearStartMonth);
+  const day = Number(profile.fiscalYearStartDay);
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+  const makeDate = (year) => {
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return `${year}-${String(month).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
+  };
+  const year = Number(businessDate.slice(0, 4));
+  const startThisYear = makeDate(year);
+  return businessDate >= startThisYear ? startThisYear : makeDate(year - 1);
 }
 
 async function getCompanyProfile() {
@@ -10684,7 +10701,7 @@ async function handleRequest(request, response) {
       for (const [field, allowed] of [
         ['legalForm', ['private_enterprise', 'llc_single', 'llc_multiple', 'joint_stock', 'partnership', 'household_business', 'cooperative', 'branch', 'state_owned_enterprise', 'public_company', 'foreign_invested', 'nonprofit_organization', 'public_unit', 'foreign_representative_office', 'other']],
         ['companySize', ['micro', 'small', 'medium', 'large', 'not_applicable']],
-        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', 'other']],
+        ['accountingRegime', ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT152', 'other']],
         ['vatMethod', ['deduction', 'direct_revenue', 'direct_added_value', 'other']],
       ]) {
         const raw = payload[field];
@@ -10692,9 +10709,6 @@ async function handleRequest(request, response) {
       }
       if (payload.cooperativeUsesTT133 !== undefined && typeof payload.cooperativeUsesTT133 !== 'boolean') throw new HttpError(422, 'Xác nhận điều kiện áp dụng TT133 phải là giá trị đúng hoặc sai.');
       profile.cooperativeUsesTT133 = profile.legalForm === 'cooperative' && profile.accountingRegime === 'TT133' && payload.cooperativeUsesTT133 === true;
-      if (profile.accountingRegime && profile.legalForm && profile.companySize && !allowedAccountingRegimes(profile).includes(profile.accountingRegime)) {
-        throw new HttpError(422, 'Chế độ kế toán không phù hợp với loại hình hoặc quy mô đã chọn. Hãy xác nhận lại chế độ áp dụng.');
-      }
       for (const field of ['fiscalYearStartMonth', 'fiscalYearStartDay']) {
         const raw = payload[field];
         profile[field] = raw === '' || raw === null || raw === undefined ? null : Number(raw);
@@ -10706,6 +10720,9 @@ async function handleRequest(request, response) {
       if (profile.fiscalYearStartMonth !== null && profile.fiscalYearStartDay !== null) {
         const maxDay = new Date(Date.UTC(2024, profile.fiscalYearStartMonth, 0)).getUTCDate();
         if (profile.fiscalYearStartDay > maxDay) throw new HttpError(422, 'Ngày bắt đầu năm tài chính không tồn tại trong tháng đã chọn.');
+      }
+      if (profile.accountingRegime && profile.legalForm && profile.companySize && !allowedAccountingRegimes(profile).includes(profile.accountingRegime)) {
+        throw new HttpError(422, 'Chế độ kế toán không phù hợp với loại hình, quy mô hoặc kỳ tài chính đã chọn. Hãy xác nhận lại chế độ áp dụng.');
       }
       profile.companyName = requiredText(profile.companyName, 'Tên công ty', 300);
       if (profile.email) profile.email = normalizeEmail(profile.email);
@@ -10728,10 +10745,19 @@ async function handleRequest(request, response) {
       if (profile.accountingRegime !== 'other') profile.accountingRegimeOther = '';
       if (profile.vatMethod !== 'other') profile.vatMethodOther = '';
       const accountingFields = ['legalForm', 'legalFormOther', 'companySize', 'industry', 'accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'vatMethodOther'];
-      const accountingProfileChanged = accountingFields.some(field => JSON.stringify(profile[field] ?? null) !== JSON.stringify(current[field] ?? null));
-      if (current.accountingProfileComplete && accountingProfileChanged) {
-        const existingLedgerEntry = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' LIMIT 1").get();
-        if (existingLedgerEntry) throw new HttpError(409, 'Không thể đổi chế độ kế toán, quy mô hoặc kỳ tài chính khi Sổ Cái đã có dữ liệu. Cần quy trình chuyển đổi và đối chiếu riêng.');
+      const changedAccountingFields = accountingFields.filter(field => JSON.stringify(profile[field] ?? null) !== JSON.stringify(current[field] ?? null));
+      const currentAccountingBasisConfigured = Boolean(current.legalForm && current.companySize && current.industry && current.accountingRegime && current.fiscalYearStartMonth && current.fiscalYearStartDay);
+      if (changedAccountingFields.length && currentAccountingBasisConfigured) {
+        const existingLedgerEntries = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all();
+        if (existingLedgerEntries.length) {
+          const regimeOnlyChange = changedAccountingFields.every(field => ['accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133'].includes(field));
+          const fiscalYearStart = accountingFiscalYearStartDate(current);
+          const activeYearHasEntries = !fiscalYearStart || existingLedgerEntries.some(row => {
+            const entryDate = parseJsonObject(row.payload_json).entryDate;
+            return typeof entryDate !== 'string' || entryDate >= fiscalYearStart;
+          });
+          if (!regimeOnlyChange || activeYearHasEntries) throw new HttpError(409, 'Không thể đổi hồ sơ kế toán khi Sổ Cái có dữ liệu trong kỳ hiện tại. Chỉ được chuyển chế độ tại đầu kỳ mới sau khi đối chiếu kỳ trước.');
+        }
       }
       if (profile.bankAccountId && !await db.prepare("SELECT id FROM finance_bank_accounts WHERE id = ? AND status = 'Đang hoạt động'").get(profile.bankAccountId)) throw new HttpError(422, 'Tài khoản ngân hàng không tồn tại hoặc đã ngừng hoạt động.');
       profile.updatedAt = now(); profile.updatedBy = actor.name; profile.revision = Number(current.revision || 0) + 1;

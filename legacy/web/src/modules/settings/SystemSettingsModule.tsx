@@ -31,22 +31,37 @@ export const SystemSettingsModule: React.FC = () => {
   const changeAccountingBasis = <K extends 'legalForm' | 'companySize'>(field: K, value: CompanyProfile[K]) => setProfile(previous => ({ ...previous, [field]: value, accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false }));
   const changeAccountingRegime = (value: CompanyProfile['accountingRegime']) => setProfile(previous => ({ ...previous, accountingRegime: value, accountingRegimeOther: '', cooperativeUsesTT133: false }));
   const regimeChoices = (() => {
-    const all = ['TT99', 'TT133', 'TT132', 'TT24', 'TT152', 'other'] as const;
+    const all = ['TT99', 'TT133', 'TT132', 'TT58', 'TT24', 'TT152', 'other'] as const;
     const labels = {
       TT99: 'Thông tư 99/2025/TT-BTC',
       TT133: 'Thông tư 133/2016/TT-BTC',
-      TT132: 'Thông tư 132/2018/TT-BTC (doanh nghiệp siêu nhỏ)',
+      TT132: 'Thông tư 132/2018/TT-BTC (kỳ bắt đầu trước 01/07/2026)',
+      TT58: 'Thông tư 58/2026/TT-BTC (kỳ bắt đầu từ 01/07/2026)',
       TT24: 'Thông tư 24/2017/TT-BTC (hợp tác xã)',
       TT152: 'Thông tư 152/2025/TT-BTC (hộ kinh doanh, cá nhân kinh doanh)',
       other: 'Chế độ khác / đặc thù',
     };
+    const fiscalYearStart = (() => {
+      const month = Number(profile.fiscalYearStartMonth);
+      const day = Number(profile.fiscalYearStartDay);
+      if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+      const today = new Date();
+      const makeDate = (year: number) => {
+        const lastDay = new Date(year, month, 0).getDate();
+        return `${year}-${String(month).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
+      };
+      const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const startThisYear = makeDate(today.getFullYear());
+      return todayString >= startThisYear ? startThisYear : makeDate(today.getFullYear() - 1);
+    })();
+    const microRegimes = fiscalYearStart ? (fiscalYearStart >= '2026-07-01' ? ['TT58' as const] : ['TT132' as const]) : ['TT132' as const, 'TT58' as const];
     let values: readonly (typeof all[number])[];
     if (profile.legalForm === 'household_business') values = ['TT152', 'other'];
     else if (profile.legalForm === 'cooperative') values = ['TT24', ...(profile.companySize === 'large' ? ['TT133' as const] : []), 'other'];
     else if (['state_owned_enterprise', 'public_company'].includes(profile.legalForm)) values = ['TT99', 'other'];
     else if (['nonprofit_organization', 'public_unit', 'foreign_representative_office'].includes(profile.legalForm)) values = ['other'];
-    else if (['branch', 'other'].includes(profile.legalForm)) values = all;
-    else if (profile.companySize === 'micro') values = ['TT99', 'TT133', 'TT132', 'other'];
+    else if (['branch', 'other'].includes(profile.legalForm)) values = ['TT99', 'TT133', ...microRegimes, 'TT24', 'TT152', 'other'];
+    else if (profile.companySize === 'micro') values = ['TT99', 'TT133', ...microRegimes, 'other'];
     else if (['small', 'medium'].includes(profile.companySize)) values = ['TT99', 'TT133', 'other'];
     else values = ['TT99', 'other'];
     return values.map(value => ({ value, label: labels[value] }));
@@ -235,7 +250,7 @@ export const SystemSettingsModule: React.FC = () => {
               </label>
               {profile.vatMethod === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả phương pháp GTGT<Input aria-label="Mô tả phương pháp GTGT khác" value={profile.vatMethodOther} onChange={event => changeProfile('vatMethodOther', event.target.value)} /></label>}
             </div>
-            <div style={{ color: '#64748B', fontSize: 12 }}>Hộ kinh doanh chọn TT152. Hợp tác xã chọn TT24; chỉ hợp tác xã quy mô lớn mới được chọn TT133 khi có nhiều giao dịch mà TT24 chưa quy định. TT132 chỉ dành cho doanh nghiệp siêu nhỏ; TT133 chỉ dành cho doanh nghiệp nhỏ và vừa đủ điều kiện. Xác nhận theo hồ sơ pháp lý trước khi ghi sổ.</div>
+            <div style={{ color: '#64748B', fontSize: 12 }}>Hộ kinh doanh chọn TT152. Hợp tác xã chọn TT24; chỉ hợp tác xã quy mô lớn mới được chọn TT133 khi có nhiều giao dịch mà TT24 chưa quy định. Doanh nghiệp siêu nhỏ chọn TT132 hoặc TT58 theo ngày bắt đầu năm tài chính; TT133 chỉ dành cho doanh nghiệp nhỏ và vừa đủ điều kiện. Xác nhận theo hồ sơ pháp lý trước khi ghi sổ.</div>
           </div>
         )}
         {activeTab === 'legal' && (
