@@ -60,7 +60,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
     if (!createDialogOpen) return;
     setEditingContact(null);
     form.resetFields();
-    setBankRows([]);
+    setBankRows([{ accountNumber: '', bankName: '', branch: '', province: '' }]);
     setAddressRows([]);
     setCustomRows(Array.from({ length: 5 }, (_, index) => ({ name: `Trường mở rộng ${index + 1}`, value: '' })));
     form.setFieldsValue({ type: type === 'all' ? 'customer' : type, status: 'Đang hoạt động', debtBalance: 0, totalValue: 0, creditLimit: 0 });
@@ -177,7 +177,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
   const openEdit = (contact: CrmContact) => {
     setEditingContact(contact);
     form.setFieldsValue({ ...contact });
-    setBankRows(contact.details?.bankAccounts?.length ? contact.details.bankAccounts.map(row => ({ ...row })) : []);
+    setBankRows(contact.details?.bankAccounts?.length ? contact.details.bankAccounts.map(row => ({ ...row })) : [{ accountNumber: '', bankName: '', branch: '', province: '' }]);
     setAddressRows(contact.details?.addresses?.length ? [...contact.details.addresses] : []);
     setCustomRows(contact.details?.customFields?.length ? contact.details.customFields.map(row => ({ ...row })) : Array.from({ length: 5 }, (_, index) => ({ name: `Trường mở rộng ${index + 1}`, value: '' })));
     setDrawerOpen(false);
@@ -295,7 +295,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
             onClick={() => {
               setEditingContact(null);
               form.resetFields();
-              setBankRows([]);
+              setBankRows([{ accountNumber: '', bankName: '', branch: '', province: '' }]);
               setAddressRows([]);
               setCustomRows(Array.from({ length: 5 }, (_, index) => ({ name: `Trường mở rộng ${index + 1}`, value: '' })));
               form.setFieldsValue({ type: type === 'all' ? 'customer' : type, status: 'Đang hoạt động', debtBalance: 0, totalValue: 0, creditLimit: 0 });
@@ -313,9 +313,9 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
       </div>
 
       </>}
-      <Modal title={editingContact ? 'Cập nhật đối tác' : 'Thông tin khách hàng'} open={modalOpen} onCancel={closeContactDialog} footer={null} width="min(1120px, calc(100vw - 32px))">
+      <Modal className="crm-contact-dialog" title={editingContact ? 'Cập nhật đối tác' : 'Thông tin khách hàng'} open={modalOpen} onCancel={closeContactDialog} footer={null} width="min(1120px, calc(100vw - 32px))">
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(250px, 1.1fr) minmax(220px, 1fr) minmax(260px, 1fr)', gap: 14, alignItems: 'center' }}>
+          <div className="crm-contact-header-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 14, alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
               <Form.Item name={['details', 'entityKind']} initialValue="organization" style={{ marginBottom: 0, flex: 1 }}>
                 <Select options={[{ label: 'Tổ chức', value: 'organization' }, { label: 'Cá nhân', value: 'person' }]} />
@@ -330,7 +330,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
             </div>
             <Form.Item name="name" label="Tên khách hàng / đối tác" rules={[{ required: true, whitespace: true }]} style={{ marginBottom: 0 }}><Input /></Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '3px 14px', marginTop: 10 }}>
+          <div className="crm-contact-fields-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '3px 14px', marginTop: 10 }}>
             <Form.Item name="taxCode" label="Mã số thuế">
               <Input />
             </Form.Item>
@@ -346,7 +346,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
             <Form.Item name={['details', 'customerGroup']} label="Nhóm khách hàng"><Input /></Form.Item>
             <Form.Item name="address" label="Địa chỉ"><Input /></Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px' }}>
+          <div className="crm-contact-fields-grid crm-contact-money-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px' }}>
             <Form.Item name="creditLimit" label="Hạn mức">
               <Input type="number" min={0} />
             </Form.Item>
@@ -361,13 +361,13 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
           <Form.Item name="status" initialValue="Đang hoạt động" style={{ display: 'none' }}><Select options={statusOptions} /></Form.Item>
           <Form.Item name="accountManager" style={{ display: 'none' }}><Input /></Form.Item>
           <Tabs items={[
-            { key: 'contact', label: 'Thông tin liên hệ', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8 }}><Form.Item name={['details', 'salutation']} label="Xưng hô"><Select options={['Anh', 'Bà', 'Bạn', 'Chị', 'Miss', 'Ông'].map(value => ({ label: value, value }))} /></Form.Item><Form.Item name={['details', 'personalName']} label="Họ và tên"><Input /></Form.Item></div>
+            { key: 'contact', label: 'Thông tin liên hệ', children: <div className="crm-contact-tab-panel crm-contact-tab-grid">
+              <div className="crm-contact-salutation-grid"><Form.Item name={['details', 'salutation']} label="Xưng hô"><Select options={['Anh', 'Bà', 'Bạn', 'Chị', 'Miss', 'Ông'].map(value => ({ label: value, value }))} /></Form.Item><Form.Item name={['details', 'personalName']} label="Họ và tên"><Input /></Form.Item></div>
               <div><Form.Item name={['details', 'invoiceRecipientName']} label="Người nhận hóa đơn điện tử"><Input /></Form.Item><Form.Item name={['details', 'invoiceRecipientEmails']} label="Email nhận hóa đơn"><Input placeholder="Có thể nhập nhiều email, phân cách bằng dấu ;" /></Form.Item></div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}><Form.Item name={['details', 'citizenId']} label="Số CMND/Thẻ căn cước"><Input /></Form.Item><Form.Item name={['details', 'idIssueDate']} label="Ngày cấp"><Input type="date" /></Form.Item><Form.Item name={['details', 'idIssuePlace']} label="Nơi cấp"><Input /></Form.Item><Form.Item name={['details', 'passportNo']} label="Số hộ chiếu"><Input /></Form.Item></div>
+              <div className="crm-contact-id-grid"><Form.Item name={['details', 'citizenId']} label="Số CMND/Thẻ căn cước"><Input /></Form.Item><Form.Item name={['details', 'idIssueDate']} label="Ngày cấp"><Input type="date" /></Form.Item><Form.Item name={['details', 'idIssuePlace']} label="Nơi cấp"><Input /></Form.Item><Form.Item name={['details', 'passportNo']} label="Số hộ chiếu"><Input /></Form.Item></div>
               <div><Form.Item name={['details', 'invoiceRecipientPhone']} label="Điện thoại nhận hóa đơn"><Input /></Form.Item><Form.Item name={['details', 'socialInsuranceCode']} label="Mã số ĐVQHNS / BHXH"><Input /></Form.Item></div>
             </div> },
-            { key: 'payment', label: 'Điều khoản thanh toán', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 220px))', gap: 14, alignContent: 'start' }}>
+            { key: 'payment', label: 'Điều khoản thanh toán', children: <div className="crm-contact-tab-panel crm-contact-payment-grid">
               <Form.Item label="Điều khoản thanh toán"><div style={{ display: 'flex', gap: 4 }}><Form.Item name={['details', 'paymentTerm']} style={{ flex: 1, marginBottom: 0 }}><Select showSearch placeholder="Chọn điều khoản" options={paymentTerms.map(term => ({ value: term.code, label: `${term.code} · ${term.name}` }))} onChange={(value: string) => { const term = paymentTerms.find(item => item.code === value); if (term) form.setFieldsValue({ details: { ...form.getFieldValue('details'), creditDays: term.creditDays } }); }} /></Form.Item><Button aria-label="Thêm điều khoản thanh toán" icon={<PlusOutlined />} onClick={() => { paymentTermForm.resetFields(); setPaymentTermOpen(true); }} /></div></Form.Item>
               <Form.Item name={['details', 'creditDays']} label="Số ngày được nợ"><Input type="number" min={0} /></Form.Item>
               <Form.Item name={['details', 'maxDebt']} label="Số nợ tối đa"><Input type="number" min={0} /></Form.Item>
@@ -375,14 +375,14 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
               <Form.Item name={['details', 'memberType']} label="Loại thành viên"><Select options={['Thành viên chính thức', 'Thành viên liên kết góp vốn', 'Thành viên liên kết không góp vốn'].map(value => ({ label: value, value }))} /></Form.Item>
               <Form.Item name={['details', 'memberGroup']} label="Đội, tổ"><Input /></Form.Item>
             </div> },
-            { key: 'banks', label: 'Tài khoản ngân hàng', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1', overflowX: 'auto' }}>
-              <div style={{ minWidth: 720, display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1.2fr 2fr 40px', gap: 6, fontWeight: 700, background: '#C5D9C2', padding: 7 }}><span>Số tài khoản</span><span>Tên ngân hàng</span><span>Chi nhánh</span><span>Tỉnh/TP của ngân hàng</span><span /></div>
-              {bankRows.map((row, index) => <div key={index} style={{ minWidth: 720, display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1.2fr 2fr 40px', gap: 6, padding: '6px 0' }}>{(['accountNumber', 'bankName', 'branch', 'province'] as const).map(field => <Input key={field} aria-label={`${field} ngân hàng ${index + 1}`} value={row[field]} onChange={event => setBankRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, [field]: event.target.value } : item))} />)}<Button aria-label={`Xóa tài khoản ngân hàng ${index + 1}`} onClick={() => setBankRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>×</Button></div>)}
-              <Button onClick={() => setBankRows(current => [...current, { accountNumber: '', bankName: '', branch: '', province: '' }])}>Thêm dòng</Button><Button style={{ marginLeft: 8 }} onClick={() => setBankRows([])}>Xóa hết dòng</Button>
+            { key: 'banks', label: 'Tài khoản ngân hàng', children: <div className="crm-contact-tab-panel crm-bank-panel">
+              <div className="crm-bank-grid crm-bank-header"><span>Số tài khoản</span><span>Tên ngân hàng</span><span>Chi nhánh</span><span>Tỉnh/TP của ngân hàng</span><span /></div>
+              {bankRows.map((row, index) => <div key={index} className="crm-bank-grid crm-bank-row">{(['accountNumber', 'bankName', 'branch', 'province'] as const).map(field => <Input key={field} aria-label={`${field} ngân hàng ${index + 1}`} value={row[field]} onChange={event => setBankRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, [field]: event.target.value } : item))} />)}<Button aria-label={`Xóa tài khoản ngân hàng ${index + 1}`} onClick={() => setBankRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>×</Button></div>)}
+              <div className="crm-bank-actions"><Button onClick={() => setBankRows(current => [...current, { accountNumber: '', bankName: '', branch: '', province: '' }])}>Thêm dòng</Button><Button onClick={() => setBankRows([])}>Xóa hết dòng</Button></div>
             </div> },
-            { key: 'addresses', label: 'Địa chỉ khác', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><Checkbox checked={form.getFieldValue(['details', 'sameAsCustomer'])} onChange={event => form.setFieldsValue({ details: { ...form.getFieldValue('details'), sameAsCustomer: event.target.checked } })}>Giống địa chỉ khách hàng</Checkbox>{addressRows.map((value, index) => <div key={index} style={{ display: 'flex', gap: 8, marginTop: 8 }}><Input value={value} onChange={event => setAddressRows(current => current.map((row, rowIndex) => rowIndex === index ? event.target.value : row))} /><Button onClick={() => setAddressRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></div>)}<Button style={{ marginTop: 8 }} onClick={() => setAddressRows(current => [...current, ''])}>Thêm dòng</Button><Button style={{ margin: '8px 0 0 8px' }} onClick={() => setAddressRows([])}>Xóa hết dòng</Button></div> },
-            { key: 'notes', label: 'Ghi chú', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><Form.Item name={['details', 'note']} label="Ghi chú"><Input.TextArea rows={7} /></Form.Item></div> },
-            { key: 'custom', label: 'Thông tin bổ sung', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><div style={{ color: '#64748B', fontStyle: 'italic', marginBottom: 8 }}>Thông tin bổ sung dùng để quản lý trường dữ liệu riêng của đơn vị.</div>{customRows.map((row, index) => <div key={index} style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 8, marginBottom: 6 }}><Input value={row.name} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, name: event.target.value } : item))} /><Input value={row.value} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, value: event.target.value } : item))} /></div>)}</div> },
+            { key: 'addresses', label: 'Địa chỉ khác', children: <div className="crm-contact-tab-panel"><Checkbox checked={form.getFieldValue(['details', 'sameAsCustomer'])} onChange={event => form.setFieldsValue({ details: { ...form.getFieldValue('details'), sameAsCustomer: event.target.checked } })}>Giống địa chỉ khách hàng</Checkbox>{addressRows.map((value, index) => <div key={index} style={{ display: 'flex', gap: 8, marginTop: 8 }}><Input value={value} onChange={event => setAddressRows(current => current.map((row, rowIndex) => rowIndex === index ? event.target.value : row))} /><Button onClick={() => setAddressRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></div>)}<Button style={{ marginTop: 8 }} onClick={() => setAddressRows(current => [...current, ''])}>Thêm dòng</Button><Button style={{ margin: '8px 0 0 8px' }} onClick={() => setAddressRows([])}>Xóa hết dòng</Button></div> },
+            { key: 'notes', label: 'Ghi chú', children: <div className="crm-contact-tab-panel"><Form.Item name={['details', 'note']} label="Ghi chú"><Input.TextArea rows={7} /></Form.Item></div> },
+            { key: 'custom', label: 'Thông tin bổ sung', children: <div className="crm-contact-tab-panel"><div style={{ color: '#64748B', fontStyle: 'italic', marginBottom: 8 }}>Thông tin bổ sung dùng để quản lý trường dữ liệu riêng của đơn vị.</div>{customRows.map((row, index) => <div key={index} className="crm-custom-field-row"><Input value={row.name} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, name: event.target.value } : item))} /><Input value={row.value} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, value: event.target.value } : item))} /></div>)}</div> },
           ]} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={closeContactDialog}>Hủy</Button>
