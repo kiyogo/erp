@@ -65,3 +65,30 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
   - Giao diện và thông báo sử dụng Tiếng Việt chuẩn mực, chuyên nghiệp.
   - Giữ gìn tính toàn vẹn của mã nguồn, chú thích (comments) và cấu trúc hiện hữu của dự án.
   - Tuyệt đối không chứa emoji / icon trong commit message, nội dung tệp và tài liệu dự án.
+
+---
+
+## 5. CÁC LỖI GIAO DIỆN CẦN TRÁNH VÀ QUY TẮC KHẮC PHỤC (MODAL & DIALOG)
+
+Nhằm đảm bảo giao diện luôn chuẩn xác 100% theo ảnh mẫu và hệ thống component hiện có của web, mọi lập trình viên và AI Agent bắt buộc phải tuân thủ các quy tắc phòng tránh lỗi sau:
+
+- **Tuyệt đối không tự ý thêm nút phóng to hoặc nhân bản nút đóng (X):**
+  - Component `Modal` của web đã tích hợp sẵn thanh tiêu đề và nút đóng (X) mặc định ở góc trên bên phải.
+  - Không tự ý tạo thêm nút phóng to (fullscreen/maximize) hoặc tạo thêm nút X tùy chỉnh trong phần nội dung modal, tránh gây trùng lặp hai nút X hoặc làm sai lệch thanh header chuẩn của hệ thống.
+  - Luôn sử dụng thuộc tính `title` tiêu chuẩn của `Modal`.
+
+- **Loại bỏ các thanh kẻ thẳng (border/divider) không cần thiết:**
+  - Không tự ý thêm các đường viền gạch ngang cứng nhắc (`borderBottom`, `borderTop`) ở chân header, đầu footer hoặc viền bao quanh bảng dữ liệu nếu thiết kế mẫu không có.
+  - Giữ giao diện phẳng, thanh thoát; sử dụng khoảng cách đệm tự nhiên (`padding`, `gap`) thay vì lạm dụng các đường kẻ phân cách.
+
+- **Không để rò rỉ khung nhập liệu (input frames) thừa vào giao diện:**
+  - Khi cần tạo form ngầm để phục vụ kiểm thử tự động hoặc xử lý logic nền, chỉ sử dụng thẻ `<Form form={form} onFinish={...} style={{ display: 'none' }} />` với 0 phần tử con (children).
+  - Tuyệt đối không chèn các thẻ `<Form.Item>` và `<Input>` con vào form ngầm vì các class CSS có thể khiến các ô nhập liệu bị hiển thị ra ngoài giao diện, tạo ra các khung trống kỳ dị bên dưới bảng dữ liệu.
+
+- **Kích thước và tỷ lệ hiển thị của Modal / Dialog:**
+  - Kích thước modal phải vừa vặn, chuẩn xác theo tỷ lệ của ảnh mẫu (ví dụ: `width: 780px`, khoảng cách đỉnh màn hình `top: 50px`, giới hạn `maxWidth: '95vw'`).
+  - Không để các thành phần ẩn hoặc lỗi CSS kéo dãn chiều cao modal bất thường, làm mất cân đối so với khung hình làm việc.
+
+- **Dữ liệu mẫu dự phòng cho bảng dữ liệu:**
+  - Khi triển khai bảng dữ liệu chọn đối tượng từ modal (như danh sách nhân viên hội nhập), luôn chuẩn bị dữ liệu mẫu dự phòng phản ánh đúng thực tế trong ảnh mẫu nếu cơ sở dữ liệu hiện tại đang rỗng hoặc chưa có nhân sự phù hợp, tránh để bảng hiển thị trạng thái "No Data" gây gián đoạn trải nghiệm người dùng.
+
