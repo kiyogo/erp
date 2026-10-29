@@ -474,6 +474,7 @@ export type FinanceCashTransaction = {
   voucherDate?: string;
   currency?: 'VND';
   reference?: string;
+  staffEmployeeCode?: string;
   payerName?: string;
   counterpartyAddress?: string;
   attachmentCount?: number;
@@ -493,7 +494,7 @@ export type FinanceCashTransaction = {
   updatedAt: string;
 };
 
-export type FinanceCashJournalLine = { description: string; debitAccount: string; creditAccount: string; amount: number };
+export type FinanceCashJournalLine = { description: string; debitAccount: string; creditAccount: string; amount: number; business?: string };
 export type FinanceCashAttachment = { id: string; name: string; size: number; mimeType?: string };
 
 export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };

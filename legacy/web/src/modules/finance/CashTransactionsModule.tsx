@@ -18,6 +18,8 @@ import {
   crmContactsApi,
   employeesApi,
   financeCashApi,
+  financeDocumentsApi,
+  FinanceDocument,
   financePaymentsApi,
   FinanceCashTransaction,
   FinancePaymentAccount,
@@ -29,6 +31,7 @@ import {
 } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { EmployeeQuickCreateDialog } from '../hr/EmployeeQuickCreateDialog';
+import { CRMContactsModule } from '../crm/CRMContactsModule';
 
 export type EnterpriseCashTransaction = FinanceCashTransaction;
 
@@ -51,12 +54,20 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
   const [employeeCreateOpen, setEmployeeCreateOpen] = useState(false);
+  const [contactCreateOpen, setContactCreateOpen] = useState(false);
+  const [referenceOpen, setReferenceOpen] = useState(false);
+  const [referenceSearch, setReferenceSearch] = useState('');
+  const [referenceType, setReferenceType] = useState('all');
+  const [referenceFrom, setReferenceFrom] = useState('');
+  const [referenceTo, setReferenceTo] = useState('');
+  const [referenceDocuments, setReferenceDocuments] = useState<FinanceDocument[]>([]);
   const [orgUnitOptions, setOrgUnitOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [positionOptions, setPositionOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [workStatusOptions, setWorkStatusOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [savedAttachments, setSavedAttachments] = useState<FinanceCashAttachment[]>([]);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const saveAndAddRef = useRef(false);
   const [journalLines, setJournalLines] = useState<FinanceCashJournalLine[]>([]);
 
   const isTypePinned = typeFilterDefault === 'Thu' || typeFilterDefault === 'Chi';
@@ -102,6 +113,11 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       setWorkStatusOptions(statuses.filter(item => item.isActive !== false).map(item => ({ label: item.name, value: item.name })));
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!referenceOpen) return;
+    void financeDocumentsApi.getAll().then(response => setReferenceDocuments(response.data.data)).catch(() => { setReferenceDocuments([]); message.error('Không tải được chứng từ mua bán và hóa đơn.'); });
+  }, [referenceOpen]);
 
   useEffect(() => {
     setTypeFilter(typeFilterDefault);
@@ -221,6 +237,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       voucherDate: values.voucherDate,
       currency: values.currency || 'VND',
       reference: values.reference || '',
+      staffEmployeeCode: values.staffEmployeeCode || '',
       payerName: values.payerName || '',
       counterpartyAddress: values.counterpartyAddress || '',
       attachmentCount: Number(values.attachmentCount) || 0,
@@ -243,9 +260,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         const response = await financeCashApi.create(formattedValues);
         message.success(`Đã lập phiếu ${response.data.transaction.code}`);
       }
+      const addAnother = saveAndAddRef.current;
+      saveAndAddRef.current = false;
       closeForm();
       if (selectedTransaction?.key === editingTransaction?.key) setSelectedTransaction(null);
       await loadData();
+      if (addAnother) openCreateForm();
     } catch (error: any) {
       await Promise.all(uploadedAttachments.map(file => filesApi.remove(file.id).catch(() => {})));
       message.error(error?.response?.data?.message || 'Không thể lưu phiếu thu chi. Vui lòng kiểm tra lại dữ liệu.');
@@ -303,6 +323,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       department: transaction.department,
       partyRef,
       recipientOrPayer: transaction.recipientOrPayer,
+      staffEmployeeCode: transaction.staffEmployeeCode || '',
       payerName: transaction.payerName || '',
       counterpartyAddress: transaction.counterpartyAddress || '',
       attachmentCount: transaction.attachmentCount || 0,
@@ -345,13 +366,14 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   });
 
   const activeVoucherType: 'Thu' | 'Chi' = form.getFieldValue('type') === 'Chi' ? 'Chi' : 'Thu';
+  const accountCodes = Array.from(new Set(data.flatMap(item => (item.journalLines || []).flatMap(line => [line.debitAccount, line.creditAccount])).filter(Boolean))).sort();
   const journalColumns = [
     { title: '#', key: 'lineNumber', width: 44, render: (_: any, record: any) => record.lineIndex + 1 },
     { title: 'Diễn giải', key: 'description', render: (_: any, record: any) => <Input aria-label={`Diễn giải hạch toán dòng ${record.lineIndex + 1}`} value={record.description} onChange={event => updateJournalLine(record.lineIndex, 'description', event.target.value)} maxLength={500} /> },
-    { title: 'TK Nợ', key: 'debitAccount', width: 150, render: (_: any, record: any) => <Input aria-label={`Tài khoản Nợ dòng ${record.lineIndex + 1}`} value={record.debitAccount} onChange={event => updateJournalLine(record.lineIndex, 'debitAccount', event.target.value)} placeholder="Ví dụ: 1111" maxLength={24} /> },
-    { title: 'TK Có', key: 'creditAccount', width: 150, render: (_: any, record: any) => <Input aria-label={`Tài khoản Có dòng ${record.lineIndex + 1}`} value={record.creditAccount} onChange={event => updateJournalLine(record.lineIndex, 'creditAccount', event.target.value)} placeholder="Nhập mã TK" maxLength={24} /> },
+    { title: 'TK Nợ', key: 'debitAccount', width: 150, render: (_: any, record: any) => <Input aria-label={`Tài khoản Nợ dòng ${record.lineIndex + 1}`} list="cash-account-codes" value={record.debitAccount} onChange={event => updateJournalLine(record.lineIndex, 'debitAccount', event.target.value)} placeholder="Ví dụ: 1111" maxLength={24} /> },
+    { title: 'TK Có', key: 'creditAccount', width: 150, render: (_: any, record: any) => <Input aria-label={`Tài khoản Có dòng ${record.lineIndex + 1}`} list="cash-account-codes" value={record.creditAccount} onChange={event => updateJournalLine(record.lineIndex, 'creditAccount', event.target.value)} placeholder="Nhập mã TK" maxLength={24} /> },
     { title: 'Số tiền', key: 'amount', width: 170, render: (_: any, record: any) => <Input aria-label={`Số tiền hạch toán dòng ${record.lineIndex + 1}`} type="number" min={0} step={1} value={record.amount} onChange={event => updateJournalLine(record.lineIndex, 'amount', Number(event.target.value) || 0)} /> },
-    { title: 'Nghiệp vụ', key: 'business', render: (_: any, record: any) => <span>{record.business || ''}</span> },
+    { title: 'Nghiệp vụ', key: 'business', render: (_: any, record: any) => <Input aria-label={`Nghiệp vụ dòng ${record.lineIndex + 1}`} value={record.business || ''} maxLength={500} onChange={event => updateJournalLine(record.lineIndex, 'business', event.target.value)} /> },
     { title: '', key: 'actions', width: 48, render: (_: any, record: any) => <Button aria-label={`Xóa dòng hạch toán ${record.lineIndex + 1}`} icon={<DeleteOutlined />} disabled={journalLines.length <= 1} onClick={() => { const next = journalLines.filter((_, lineIndex) => lineIndex !== record.lineIndex); setJournalLines(next); form.setFieldsValue({ amount: next.reduce((sum, row) => sum + (Number(row.amount) || 0), 0) }); }} /> },
   ];
   function updateJournalLine(index: number, field: keyof FinanceCashJournalLine, value: string | number) {
@@ -549,20 +571,18 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
       {/* MODAL: Lập phiếu thu / chi */}
       <Modal
-        title={null}
-        className="cash-voucher-fullscreen"
+        title={`${activeVoucherType === 'Chi' ? 'Phiếu chi' : 'Phiếu thu'}${editingTransaction ? ` ${editingTransaction.code}` : ''}`}
+        className="cash-voucher-dialog"
         open={modalOpen}
         onCancel={closeForm}
         footer={null}
-        width="100vw"
-        style={{ maxWidth: '100vw', height: '100vh', maxHeight: '100vh', margin: 0, borderRadius: 0, padding: 14, gap: 8 }}
-        bodyStyle={{ minHeight: 0, marginRight: -14, paddingRight: 0, overflowX: 'auto' }}
+        width="min(1600px, calc(100vw - 32px))"
+        bodyStyle={{ minHeight: 0, marginRight: -14, paddingRight: 14, overflowX: 'auto' }}
       >
-        <Form form={form} layout="vertical" onFinish={handleSave} style={{ minWidth: 0, paddingRight: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, minHeight: 42, margin: '-4px -8px 0', padding: '4px 8px', background: '#E5EAE9' }}>
-            <strong style={{ fontSize: 22, whiteSpace: 'nowrap' }}>{editingTransaction ? `${activeVoucherType === 'Chi' ? 'Phiếu chi' : 'Phiếu thu'} ${editingTransaction.code}` : `Phiếu ${activeVoucherType === 'Chi' ? 'chi' : 'thu'}`}</strong>
-            <Form.Item name="type" noStyle rules={[{ required: true }]}>
-              <Select disabled={Boolean(editingTransaction) || isTypePinned} style={{ width: 330 }} onChange={() => { setPartyRefValue('other'); form.setFieldsValue({ partyRef: 'other', recipientOrPayer: '' }); }} options={[{ label: 'Phiếu thu tiền', value: 'Thu' }, { label: 'Phiếu chi tiền', value: 'Chi' }]} />
+        <Form form={form} layout="vertical" onFinish={handleSave} style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 14 }}>
+            <Form.Item name="type" style={{ marginBottom: 0 }} rules={[{ required: true }]}>
+              <Select disabled={Boolean(editingTransaction) || isTypePinned} style={{ width: 180 }} onChange={() => { setPartyRefValue('other'); form.setFieldsValue({ partyRef: 'other', recipientOrPayer: '' }); }} options={[{ label: 'Phiếu thu tiền', value: 'Thu' }, { label: 'Phiếu chi tiền', value: 'Chi' }]} />
             </Form.Item>
             <Form.Item label={null} required style={{ margin: 0, flex: 1, maxWidth: 520 }}>
               <div style={{ display: 'flex', gap: 4 }}>
@@ -574,9 +594,9 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             </Form.Item>
           </div>
 
-          <div style={{ margin: '0 -8px 14px', padding: '10px 8px 6px', background: '#E5EAE9', display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(240px, 2.8fr) minmax(145px, 1fr) minmax(145px, 1fr) minmax(150px, 1.2fr)', columnGap: 10, rowGap: 0, alignItems: 'start' }}>
-            <Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Mã nhà cung cấp' : 'Mã khách hàng'} rules={[{ required: true, message: 'Hãy chọn đối tượng.' }]} style={{ marginBottom: 6 }}>
-              <Select showSearch onChange={(value: string) => {
+          <div style={{ marginBottom: 14, display: 'grid', gridTemplateColumns: 'minmax(230px, 1fr) minmax(300px, 2.5fr) minmax(170px, 1fr) minmax(170px, 1fr)', gridTemplateAreas: '"party name date total" "payer address voucherDate total" "staff reason documents code" "reference source account status" "department sourceDocument sourceDocument ."', columnGap: 14, rowGap: 3, alignItems: 'start' }}>
+            <Form.Item label={activeVoucherType === 'Chi' ? 'Mã nhà cung cấp' : 'Mã khách hàng'} style={{ marginBottom: 6, gridArea: 'party' }}>
+              <div style={{ display: 'flex', gap: 4 }}><Form.Item name="partyRef" style={{ flex: 1, minWidth: 0, marginBottom: 0 }} rules={[{ required: true, message: 'Hãy chọn đối tượng.' }]}><Select showSearch onChange={(value: string) => {
                 setPartyRefValue(value);
                 if (value === 'other') { form.setFieldsValue({ recipientOrPayer: '', counterpartyAddress: '' }); return; }
                 if (value.startsWith('contact:')) {
@@ -586,28 +606,31 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
                   const employee = employees.find(item => (item.employeeCode || item.code) === value.slice('employee:'.length));
                   form.setFieldsValue({ recipientOrPayer: employee?.name || employee?.fullName || '', counterpartyAddress: '' });
                 }
-              }} options={partyOptionsFor(form.getFieldValue('type'))} />
+              }} options={partyOptionsFor(form.getFieldValue('type'))} /></Form.Item><Button aria-label={activeVoucherType === 'Chi' ? 'Thêm nhà cung cấp' : 'Thêm khách hàng'} icon={<PlusOutlined />} onClick={() => setContactCreateOpen(true)} /></div>
             </Form.Item>
-            <Form.Item name="recipientOrPayer" label="Tên khách hàng / nhà cung cấp" rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên đối tượng.' }]} style={{ marginBottom: 6 }}><Input /></Form.Item>
-            <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]} style={{ marginBottom: 6 }}><Input type="date" /></Form.Item>
-            <Form.Item name="voucherDate" label={activeVoucherType === 'Chi' ? 'Ngày phiếu chi' : 'Ngày phiếu thu'} rules={[{ required: true }]} style={{ marginBottom: 6 }}><Input type="date" /></Form.Item>
-            <Form.Item name="amount" label={activeVoucherType === 'Chi' ? 'Tổng tiền chi' : 'Tổng tiền thu'} rules={[{ required: true }]} style={{ marginBottom: 6 }}><Input type="number" min={1} step={1} /></Form.Item>
+            <Form.Item name="recipientOrPayer" label={activeVoucherType === 'Chi' ? 'Tên nhà cung cấp / đối tượng' : 'Tên khách hàng / đối tượng'} rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên đối tượng.' }]} style={{ marginBottom: 6, gridArea: 'name' }}><Input /></Form.Item>
+            <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]} style={{ marginBottom: 6, gridArea: 'date' }}><Input type="date" /></Form.Item>
+            <Form.Item name="voucherDate" label={activeVoucherType === 'Chi' ? 'Ngày phiếu chi' : 'Ngày phiếu thu'} rules={[{ required: true }]} style={{ marginBottom: 6, gridArea: 'voucherDate' }}><Input type="date" /></Form.Item>
+            <Form.Item name="amount" label={activeVoucherType === 'Chi' ? 'Tổng tiền chi' : 'Tổng tiền thu'} rules={[{ required: true }]} style={{ marginBottom: 6, gridArea: 'total' }}><Input type="number" min={1} step={1} /></Form.Item>
 
-            <Form.Item name="payerName" label={activeVoucherType === 'Chi' ? 'Người nhận' : 'Người nộp'} style={{ marginBottom: 6 }}><Input /></Form.Item>
-            <Form.Item name="counterpartyAddress" label="Địa chỉ" style={{ marginBottom: 6 }}><Input /></Form.Item>
-            <Form.Item name="source" label="Nguồn tiền" rules={[{ required: true }]} style={{ marginBottom: 6 }}><Select disabled={Boolean(editingTransaction && editingTransaction.status !== 'Chờ duyệt')} onChange={(value: 'bank' | 'petty') => { setSourceFilter(value); form.setFieldsValue({ source: value, sourceAccountId: undefined }); }} options={[{ label: 'Tiền gửi ngân hàng', value: 'bank' }, { label: 'Quỹ tiền mặt', value: 'petty' }]} /></Form.Item>
-            <Form.Item name="sourceAccountId" label={sourceFilter === 'petty' ? 'Quỹ tiền mặt' : 'Tài khoản ngân hàng'} rules={[{ required: true, message: 'Hãy chọn tài khoản nguồn.' }]} style={{ marginBottom: 6 }}><Select placeholder={activeCashAccounts.length ? 'Chọn tài khoản' : 'Chưa có tài khoản'} options={activeCashAccounts.map(account => ({ value: account.key, label: `${account.name} · ${Number(account.balance).toLocaleString('vi-VN')} ₫` }))} /></Form.Item>
-            <Form.Item label="Kèm theo" style={{ marginBottom: 6 }}><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Form.Item name="attachmentCount" noStyle><Input type="number" min={0} step={1} placeholder="Số lượng" /></Form.Item><span style={{ whiteSpace: 'nowrap' }}>chứng từ gốc</span></div></Form.Item>
+            <Form.Item name="payerName" label={activeVoucherType === 'Chi' ? 'Người nhận' : 'Người nộp'} style={{ marginBottom: 6, gridArea: 'payer' }}><Input /></Form.Item>
+            <Form.Item name="counterpartyAddress" label="Địa chỉ" style={{ marginBottom: 6, gridArea: 'address' }}><Input /></Form.Item>
+            <Form.Item name="source" label="Nguồn tiền" rules={[{ required: true }]} style={{ marginBottom: 6, gridArea: 'source' }}><Select disabled={Boolean(editingTransaction && editingTransaction.status !== 'Chờ duyệt')} onChange={(value: 'bank' | 'petty') => { setSourceFilter(value); form.setFieldsValue({ source: value, sourceAccountId: undefined }); }} options={[{ label: 'Tiền gửi ngân hàng', value: 'bank' }, { label: 'Quỹ tiền mặt', value: 'petty' }]} /></Form.Item>
+            <Form.Item name="sourceAccountId" label={sourceFilter === 'petty' ? 'Quỹ tiền mặt' : 'Tài khoản ngân hàng'} rules={[{ required: true, message: 'Hãy chọn tài khoản nguồn.' }]} style={{ marginBottom: 6, gridArea: 'account' }}><Select placeholder={activeCashAccounts.length ? 'Chọn tài khoản' : 'Chưa có tài khoản'} options={activeCashAccounts.map(account => ({ value: account.key, label: `${account.name} · ${Number(account.balance).toLocaleString('vi-VN')} ₫` }))} /></Form.Item>
+            <Form.Item label="Kèm theo" style={{ marginBottom: 6, gridArea: 'documents' }}><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Form.Item name="attachmentCount" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><Input type="number" min={0} step={1} placeholder="Số lượng" /></Form.Item><span style={{ whiteSpace: 'nowrap' }}>chứng từ gốc</span></div></Form.Item>
 
-            <Form.Item name="reference" label="Tham chiếu" style={{ marginBottom: 6 }}><Input maxLength={500} placeholder="Mã tham chiếu" /></Form.Item>
-            <Form.Item name="sourceDocument" label="Chứng từ gốc" style={{ marginBottom: 6 }}><Input maxLength={500} /></Form.Item>
-            <Form.Item name="department" label="Phòng ban" style={{ marginBottom: 6 }}><Input placeholder="Phòng ban liên quan" /></Form.Item>
-            <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]} style={{ marginBottom: 6 }}><Select disabled={Boolean(editingTransaction)} options={[{ label: 'Đã hoàn thành', value: 'Đã hoàn thành' }, { label: 'Chờ duyệt', value: 'Chờ duyệt' }]} /></Form.Item>
-            <Form.Item name="note" label="Ghi chú" style={{ marginBottom: 6 }}><Input.TextArea rows={1} placeholder="Ghi chú" /></Form.Item>
+            <Form.Item label="Nhân viên" style={{ marginBottom: 6, gridArea: 'staff' }}><div style={{ display: 'flex', gap: 4 }}><Form.Item name="staffEmployeeCode" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><Select showSearch placeholder="Chọn nhân viên" options={employees.map(employee => ({ value: employee.employeeCode || employee.code, label: `${employee.name || employee.fullName} (${employee.employeeCode || employee.code})` }))} /></Form.Item><Button aria-label="Thêm nhân viên" icon={<PlusOutlined />} onClick={() => setEmployeeCreateOpen(true)} /></div></Form.Item>
+            <Form.Item label="Tham chiếu" style={{ marginBottom: 6, gridArea: 'reference' }}><div style={{ display: 'flex', gap: 4 }}><Form.Item name="reference" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><Input maxLength={500} placeholder="Mã tham chiếu" /></Form.Item><Button onClick={() => { setReferenceSearch(''); setReferenceOpen(true); }}>Chọn</Button></div></Form.Item>
+            <Form.Item name="sourceDocument" label="Chứng từ gốc" style={{ marginBottom: 6, gridArea: 'sourceDocument' }}><Input maxLength={500} /></Form.Item>
+            <Form.Item name="department" label="Phòng ban" style={{ marginBottom: 6, gridArea: 'department' }}><Input placeholder="Phòng ban liên quan" /></Form.Item>
+            <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]} style={{ marginBottom: 6, gridArea: 'status' }}><Select disabled={Boolean(editingTransaction)} options={[{ label: 'Đã hoàn thành', value: 'Đã hoàn thành' }, { label: 'Chờ duyệt', value: 'Chờ duyệt' }]} /></Form.Item>
+            <Form.Item label={activeVoucherType === 'Chi' ? 'Số phiếu chi' : 'Số phiếu thu'} style={{ marginBottom: 6, gridArea: 'code' }}><Input value={editingTransaction?.code || 'Tự cấp khi lưu'} disabled /></Form.Item>
+            <Form.Item name="note" label={activeVoucherType === 'Chi' ? 'Lý do chi' : 'Lý do nộp'} style={{ marginBottom: 6, gridArea: 'reason' }}><Input.TextArea rows={1} placeholder="Ghi chú" /></Form.Item>
           </div>
 
+          <datalist id="cash-account-codes">{accountCodes.map(code => <option key={code} value={code} />)}</datalist>
           <div style={{ margin: '4px 0 14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}><strong>Hạch toán</strong><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Loại tiền<Form.Item name="currency" noStyle rules={[{ required: true }]}><Select style={{ width: 110 }} options={[{ label: 'VND', value: 'VND' }]} /></Form.Item></div></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}><strong>Hạch toán</strong><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Loại tiền<Form.Item name="currency" style={{ marginBottom: 0 }} rules={[{ required: true }]}><Select style={{ width: 110 }} options={[{ label: 'VND', value: 'VND' }]} /></Form.Item></div></div>
             <div style={{ overflowX: 'auto' }}><KTable dataSource={journalLines.map((line, lineIndex) => ({ ...line, lineIndex, key: String(lineIndex) }))} columns={journalColumns} pagination={{ pageSize: 20 }} disableCache /></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setJournalLines(current => [...current, { description: '', debitAccount: '', creditAccount: '', amount: 0 }])}>Thêm dòng</Button><Button onClick={() => { setJournalLines([]); form.setFieldsValue({ amount: 0 }); }}>Xóa hết dòng</Button></div>
@@ -631,7 +654,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               const totalSize = savedAttachments.reduce((sum, file) => sum + Number(file.size || 0), 0) + attachmentFiles.reduce((sum, file) => sum + file.size, 0) + incoming.reduce((sum, file) => sum + file.size, 0);
               if (savedAttachments.length + attachmentFiles.length + incoming.length > 20 || totalSize > 5 * 1024 * 1024) message.error('Tệp vượt quá giới hạn 20 tệp hoặc tổng dung lượng 5 MB.');
               else setAttachmentFiles(current => [...current, ...incoming]);
-            }} style={{ border: '1px dashed #86A883', padding: '16px 20px', color: '#64748B', cursor: 'pointer', maxWidth: 500, textAlign: 'center', background: '#FAFCFA' }}>Kéo/thả tệp vào đây hoặc bấm để chọn</div>
+            }} style={{ border: '1px dashed #D9D9D9', borderRadius: 6, padding: '16px 20px', color: '#64748B', cursor: 'pointer', maxWidth: 500, textAlign: 'center' }}>Kéo/thả tệp vào đây hoặc bấm để chọn</div>
             {[...savedAttachments.map(file => ({ ...file, stored: true as const, file: undefined as File | undefined })), ...attachmentFiles.map(file => ({ id: `local-${file.name}-${file.lastModified}`, name: file.name, size: file.size, stored: false as const, file }))].map(item => {
               const lastModified = item.file?.lastModified;
               return <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}><PaperClipOutlined /><span>{item.name} · {(item.size / 1024).toFixed(0)} KB</span><Button aria-label={`Bỏ tệp ${item.name}`} onClick={() => item.stored ? setSavedAttachments(current => current.filter(file => file.id !== item.id)) : setAttachmentFiles(current => current.filter(file => !(file.name === item.name && file.lastModified === lastModified)))}>Bỏ</Button></div>;
@@ -640,11 +663,40 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button onClick={closeForm}>Đóng</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              {editingTransaction ? 'Lưu thay đổi' : `Lập phiếu ${activeVoucherType === 'Chi' ? 'chi' : 'thu'}`}
-            </Button>
+            <Button type="primary" htmlType="submit" onClick={() => { saveAndAddRef.current = false; }}>Cất</Button>
+            {!editingTransaction && <Button type="primary" htmlType="submit" onClick={() => { saveAndAddRef.current = true; }}>Cất và thêm</Button>}
           </div>
         </Form>
+      </Modal>
+
+      <CRMContactsModule type={activeVoucherType === 'Chi' ? 'supplier' : 'customer'} createDialogOpen={contactCreateOpen} onCreateDialogClose={() => setContactCreateOpen(false)} onCreated={contact => {
+        setContacts(current => [...current.filter(item => item.key !== contact.key), contact]);
+        const ref = `contact:${contact.type}:${contact.key}`;
+        setPartyRefValue(ref);
+        form.setFieldsValue({ partyRef: ref, recipientOrPayer: contact.name, counterpartyAddress: contact.address || '' });
+      }} />
+
+      <Modal title="Chọn chứng từ tham chiếu" open={referenceOpen} onCancel={() => setReferenceOpen(false)} footer={null} width="min(1200px, calc(100vw - 32px))">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Select style={{ width: 180 }} value={referenceType} onChange={setReferenceType} options={[{ label: 'Tất cả chứng từ', value: 'all' }, { label: 'Phiếu thu / chi', value: 'cash' }, { label: 'Bán hàng', value: 'sale' }, { label: 'Mua hàng', value: 'purchase' }, { label: 'Hóa đơn', value: 'invoice' }]} />
+          <Input aria-label="Từ ngày" type="date" value={referenceFrom} onChange={event => setReferenceFrom(event.target.value)} style={{ width: 160 }} />
+          <Input aria-label="Đến ngày" type="date" value={referenceTo} onChange={event => setReferenceTo(event.target.value)} style={{ width: 160 }} />
+          <Input placeholder="Tìm số chứng từ, diễn giải hoặc đối tượng" value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} style={{ width: 300 }} />
+        </div>
+        <KTable dataSource={[
+          ...data.filter(item => item.key !== editingTransaction?.key).map(item => ({ key: `cash:${item.key}`, type: 'cash', code: item.code, date: item.date, voucherDate: item.voucherDate || item.date, category: item.category, recipientOrPayer: item.recipientOrPayer, debitAccount: (item.journalLines || []).map(line => line.debitAccount).filter(Boolean).join(', '), creditAccount: (item.journalLines || []).map(line => line.creditAccount).filter(Boolean).join(', '), amount: item.amount })),
+          ...referenceDocuments.map(item => ({ key: `${item.documentType}:${item.key}`, type: item.documentType, code: item.code, date: item.documentDate, voucherDate: item.documentDate, category: item.description, recipientOrPayer: item.partnerName, debitAccount: '', creditAccount: '', amount: item.amount })),
+        ].filter(item => (referenceType === 'all' || item.type === referenceType) && (!referenceFrom || item.date >= referenceFrom) && (!referenceTo || item.date <= referenceTo) && `${item.code} ${item.category} ${item.recipientOrPayer}`.toLocaleLowerCase().includes(referenceSearch.toLocaleLowerCase()))} columns={ [
+          { title: 'Ngày hạch toán', dataIndex: 'date', key: 'date' },
+          { title: 'Ngày chứng từ', dataIndex: 'voucherDate', key: 'voucherDate' },
+          { title: 'Số chứng từ', dataIndex: 'code', key: 'code' },
+          { title: 'Diễn giải', dataIndex: 'category', key: 'category' },
+          { title: 'Đối tượng', dataIndex: 'recipientOrPayer', key: 'recipientOrPayer' },
+          { title: 'TK Nợ', dataIndex: 'debitAccount', key: 'debitAccount' },
+          { title: 'TK Có', dataIndex: 'creditAccount', key: 'creditAccount' },
+          { title: 'Số tiền', dataIndex: 'amount', key: 'amount', render: (amount: number) => Number(amount).toLocaleString('vi-VN') },
+          { title: '', key: 'select', render: (_: unknown, item: { code: string }) => <Button onClick={() => { form.setFieldsValue({ reference: item.code }); setReferenceOpen(false); }}>Chọn</Button> },
+        ]} pagination={{ pageSize: 20 }} disableCache />
       </Modal>
 
       <EmployeeQuickCreateDialog
@@ -659,9 +711,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             setEmployees(refreshed);
             const created = refreshed.find(employee => employee.id === createdEmployee.id) || createdEmployee;
             if (created) {
-              const ref = `employee:${created.employeeCode || created.code}`;
-              setPartyRefValue(ref);
-              form.setFieldsValue({ partyRef: ref, recipientOrPayer: created.name || created.fullName });
+              form.setFieldsValue({ staffEmployeeCode: created.employeeCode || created.code });
             }
           }).catch(() => message.error('Đã tạo nhân viên nhưng không tải lại được danh sách.'));
         }}

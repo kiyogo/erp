@@ -33,7 +33,7 @@ const statusOptions = [
   { label: 'Tạm dừng', value: 'Tạm dừng' },
 ];
 
-export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = 'all' }) => {
+export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpen?: boolean; onCreateDialogClose?: () => void; onCreated?: (contact: CrmContact) => void }> = ({ type = 'all', createDialogOpen, onCreateDialogClose, onCreated }) => {
   const navigate = useNavigate();
   const [data, setData] = useState<CrmContact[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,6 +55,19 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
   useEffect(() => {
     setTypeFilter(type);
   }, [type]);
+
+  useEffect(() => {
+    if (!createDialogOpen) return;
+    setEditingContact(null);
+    form.resetFields();
+    setBankRows([]);
+    setAddressRows([]);
+    setCustomRows(Array.from({ length: 5 }, (_, index) => ({ name: `Trường mở rộng ${index + 1}`, value: '' })));
+    form.setFieldsValue({ type: type === 'all' ? 'customer' : type, status: 'Đang hoạt động', debtBalance: 0, totalValue: 0, creditLimit: 0 });
+    setModalOpen(true);
+  }, [createDialogOpen, type]);
+
+  const closeContactDialog = () => { setModalOpen(false); setEditingContact(null); onCreateDialogClose?.(); };
 
   const loadData = async () => {
     setLoading(true);
@@ -146,12 +159,12 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
         setSelectedContact(response.data.contact);
         message.success('Đã cập nhật hồ sơ đối tác.');
       } else {
-        await crmContactsApi.create({ ...fields, type: values.type });
+        const response = await crmContactsApi.create({ ...fields, type: values.type });
+        onCreated?.(response.data.contact);
         const createdTypeLabel = typeMeta[values.type as CrmContactType]?.label.toLowerCase() || 'đối tác';
         message.success(`Đã lưu ${createdTypeLabel} vào dữ liệu hệ thống.`);
       }
-      setModalOpen(false);
-      setEditingContact(null);
+      closeContactDialog();
       form.resetFields();
       await loadData();
     } catch (error: any) {
@@ -219,7 +232,8 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
   ];
 
   return (
-    <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+    <div style={{ padding: onCreateDialogClose ? 0 : '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+      {!onCreateDialogClose && <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 20, color: '#0F172A' }}>{pageTitle}</h1>
@@ -298,7 +312,8 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
         <KTable dataSource={visibleData} columns={columns} loading={loading} pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có dữ liệu đối tác.' }} />
       </div>
 
-      <Modal title={editingContact ? 'Cập nhật đối tác' : 'Thông tin khách hàng'} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingContact(null); }} footer={null} width="min(1120px, calc(100vw - 32px))">
+      </>}
+      <Modal title={editingContact ? 'Cập nhật đối tác' : 'Thông tin khách hàng'} open={modalOpen} onCancel={closeContactDialog} footer={null} width="min(1120px, calc(100vw - 32px))">
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(250px, 1.1fr) minmax(220px, 1fr) minmax(260px, 1fr)', gap: 14, alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -370,7 +385,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter }> = ({ type = '
             { key: 'custom', label: 'Thông tin bổ sung', children: <div style={{ minHeight: 190, padding: 10, border: '1px solid #CBD5E1' }}><div style={{ color: '#64748B', fontStyle: 'italic', marginBottom: 8 }}>Thông tin bổ sung dùng để quản lý trường dữ liệu riêng của đơn vị.</div>{customRows.map((row, index) => <div key={index} style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 8, marginBottom: 6 }}><Input value={row.name} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, name: event.target.value } : item))} /><Input value={row.value} onChange={event => setCustomRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, value: event.target.value } : item))} /></div>)}</div> },
           ]} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => { setModalOpen(false); setEditingContact(null); }}>Hủy</Button>
+            <Button onClick={closeContactDialog}>Hủy</Button>
             <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               {editingContact ? 'Lưu thay đổi' : 'Lưu đối tác'}
             </Button>
