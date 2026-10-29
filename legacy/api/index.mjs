@@ -8303,6 +8303,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/internal-transfers') {
     const actor = await requireAdmin(request);
+    await requireSecurityPin(request, actor);
     const input = await readJson(request, 16 * 1024);
     const requestId = requiredText(input.requestId, 'Mã yêu cầu', 100);
     if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) throw new HttpError(422, 'Mã yêu cầu không hợp lệ.');
@@ -8366,6 +8367,7 @@ async function handleRequest(request, response) {
   const transferCancelMatch = /^\/finance\/internal-transfers\/([^/]+)\/cancel$/.exec(resource);
   if (transferCancelMatch && request.method === 'POST') {
     const actor = await requireAdmin(request);
+    await requireSecurityPin(request, actor);
     const key = requiredText(decodeURIComponent(transferCancelMatch[1]), 'Mã lệnh', 160);
     const reason = requiredText((await readJson(request, 16 * 1024)).reason, 'Lý do hủy', 1000);
     let transfer;

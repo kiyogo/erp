@@ -531,9 +531,18 @@ try {
   const source = await bank(100000);
   const destination = await bank(0);
   const transferInput = { requestId: randomUUID(), sourceAccountId: source.key, destinationAccountId: destination.key, amount: 1000, fee: 0, purpose: 'PG transfer', transferDate: new Date().toISOString().slice(0, 10), transferMethod: 'Ghi sổ nội bộ' };
+  const missingTransferPin = await fetch(`${base}/finance/internal-transfers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(transferInput) });
+  assert.equal(missingTransferPin.status, 428);
+  assert.equal((await missingTransferPin.json()).code, 'SECURITY_PIN_REQUIRED');
+  const invalidTransferPin = await fetch(`${base}/finance/internal-transfers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': '000000' }, body: JSON.stringify(transferInput) });
+  assert.equal(invalidTransferPin.status, 403);
   const transfer = await request('/finance/internal-transfers', 'POST', transferInput, 201);
   assert.equal((await request('/finance/internal-transfers', 'POST', transferInput)).replayed, true);
-  await request(`/finance/internal-transfers/${transfer.transfer.key}/cancel`, 'POST', { reason: 'PG cancellation' }); completed++;
+  const cancelRoute = `/finance/internal-transfers/${transfer.transfer.key}/cancel`;
+  const missingCancelPin = await fetch(`${base}${cancelRoute}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ reason: 'PG cancellation' }) });
+  assert.equal(missingCancelPin.status, 428);
+  assert.equal((await missingCancelPin.json()).code, 'SECURITY_PIN_REQUIRED');
+  await request(cancelRoute, 'POST', { reason: 'PG cancellation' }); completed++;
   const paymentSource = await bank(200000);
   const payment = (await request('/finance/payments', 'POST', {
     beneficiary: 'PG supplier payment', bankAccountInfo: 'PG account reference', category: 'PostgreSQL payment workflow',

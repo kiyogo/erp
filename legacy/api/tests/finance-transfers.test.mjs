@@ -48,12 +48,14 @@ const loginResponse = await fetch(`${base}/auth/login`, { method: 'POST', header
 assert.equal(loginResponse.status, 200);
 const session = await loginResponse.json();
 const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token || session.token}` };
-async function request(route, method = 'GET', payload, expected = 200) {
-  const response = await fetch(`${base}${route}`, { method, headers, body: payload === undefined ? undefined : JSON.stringify(payload) });
+async function request(route, method = 'GET', payload, expected = 200, headerOverrides = {}) {
+  const response = await fetch(`${base}${route}`, { method, headers: { ...headers, ...headerOverrides }, body: payload === undefined ? undefined : JSON.stringify(payload) });
   const body = await response.json();
   assert.equal(response.status, expected, JSON.stringify(body));
   return body;
 }
+await request('/auth/security-pin', 'POST', { pin: '789012', confirmPin: '789012', currentPassword: env.SEED_ADMIN_PASSWORD });
+headers['X-Security-Pin'] = '789012';
 async function bank(balance = 100_000, status = 'Đang hoạt động', bankName = `Test ${randomUUID()}`) {
   return (await request('/finance/bank-accounts', 'POST', { bankName, accountNumber: randomUUID(), accountHolder: 'Test Company', branch: '', balance, status }, 201)).account;
 }
@@ -81,6 +83,26 @@ test('only authenticated administrators may read or record transfers', async () 
     assert.equal((await fetch(`${base}/finance/internal-transfers`, { method, headers: userHeaders, body: method === 'POST' ? '{}' : undefined })).status, 403);
   }
   assert.equal((await fetch(`${base}/collections/finance_internal_transfers`, { method: 'POST', headers: userHeaders, body: '{"record":{"key":"fake"}}' })).status, 403);
+});
+
+test('recording and canceling a transfer require the configured security PIN', async () => {
+  const source = await bank(10_000);
+  const destination = await bank(0);
+  const input = payload(source, destination, { amount: 4000 });
+  const before = storage.prepare('SELECT COUNT(*) AS n FROM finance_cash_transactions').get().n;
+  await request('/finance/internal-transfers', 'POST', input, 428, { 'X-Security-Pin': '' });
+  await request('/finance/internal-transfers', 'POST', input, 403, { 'X-Security-Pin': '000000' });
+  assert.equal(storage.prepare('SELECT COUNT(*) AS n FROM finance_cash_transactions').get().n, before);
+  assert.equal(await balance(source.key), 10_000);
+  const { transfer } = await request('/finance/internal-transfers', 'POST', input, 201);
+  const cancelRoute = `/finance/internal-transfers/${encodeURIComponent(transfer.key)}/cancel`;
+  await request(cancelRoute, 'POST', { reason: 'PIN challenge' }, 428, { 'X-Security-Pin': '' });
+  await request(cancelRoute, 'POST', { reason: 'Invalid PIN' }, 403, { 'X-Security-Pin': '000000' });
+  assert.equal((await request('/finance/internal-transfers')).data.find(item => item.key === transfer.key).status, 'Thành công');
+  const { transfer: canceled } = await request(cancelRoute, 'POST', { reason: 'Verified PIN' });
+  assert.equal(canceled.status, 'Đã hủy');
+  assert.equal(await balance(source.key), 10_000);
+  assert.equal(await balance(destination.key), 0);
 });
 
 test('invalid amounts, accounts, dates and overdrafts leave the ledger unchanged', async () => {
