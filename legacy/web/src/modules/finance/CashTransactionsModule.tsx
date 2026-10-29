@@ -542,6 +542,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         onCancel={closeForm}
         footer={null}
         width="min(1600px, calc(100vw - 24px))"
+        bodyStyle={{ marginRight: -14, paddingRight: 14 }}
       >
         <Form form={form} layout="vertical" onFinish={handleSave}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
