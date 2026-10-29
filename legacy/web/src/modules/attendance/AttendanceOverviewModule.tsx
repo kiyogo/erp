@@ -6,7 +6,7 @@ import {
   DownOutlined,
 } from '@ant-design/icons';
 import { message } from '../../custom-ui';
-import { employeesApi, systemApi, type EnterpriseEmployee, type CompanyProfile } from '../../api/endpoints';
+import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
 import { dataService, type LeaveRequest } from '../../services/dataService';
 import { attendanceDate } from './attendanceRules';
 
@@ -124,7 +124,7 @@ export const AttendanceOverviewModule: React.FC = () => {
   const [timesheets, setTimesheets] = useState<any[]>([]);
   const [overtime, setOvertime] = useState<any[]>([]);
   const [rawLogs, setRawLogs] = useState<any[]>([]);
-  const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
+  const [orgUnits, setOrgUnits] = useState<any[]>([]);
   const [syncing, setSyncing] = useState(false);
 
   // Period filters for top cards
@@ -143,14 +143,14 @@ export const AttendanceOverviewModule: React.FC = () => {
         ts,
         ot,
         raw,
-        compRes,
+        units,
       ] = await Promise.all([
         employeesApi.getAll().catch(() => ({ data: { data: [] } })),
         dataService.refreshGenericData('leave_requests').catch(() => []),
         dataService.refreshGenericData('employee_timesheets').catch(() => []),
         dataService.refreshGenericData('attendance_overtime').catch(() => []),
         dataService.refreshGenericData('attendance_raw_data').catch(() => []),
-        systemApi.getCompanyProfile().catch(() => null),
+        dataService.refreshGenericData('business_org_units').catch(() => []),
       ]);
 
       setEmployees(employeeRes?.data?.data || []);
@@ -158,9 +158,7 @@ export const AttendanceOverviewModule: React.FC = () => {
       setTimesheets(Array.isArray(ts) ? ts : []);
       setOvertime(Array.isArray(ot) ? ot : []);
       setRawLogs(Array.isArray(raw) ? raw : []);
-      if (compRes?.data?.profile) {
-        setCompanyProfile(compRes.data.profile);
-      }
+      setOrgUnits(Array.isArray(units) ? units : (dataService.getGenericData('business_org_units') || []));
     } catch {
       message.error('Không thể tải tổng quan chấm công.');
     } finally {
@@ -174,12 +172,24 @@ export const AttendanceOverviewModule: React.FC = () => {
       setLeaveRequests(dataService.getLeaveRequests());
       setTimesheets(dataService.getEmployeeTimesheets());
       setOvertime(dataService.getEmployeeOvertime());
+      setOrgUnits(dataService.getGenericData('business_org_units') || []);
     });
     return unsub;
   }, []);
 
-  // Company Name Header Display
-  const companyName = companyProfile?.companyName?.trim() || companyProfile?.fullName?.trim() || 'CÔNG TY TNHH XÂY DỰNG KINH SỞ';
+  // Organization Unit Display: taken from admin/business/org-units; if none exists, do not display
+  const orgUnitName = useMemo(() => {
+    const list = Array.isArray(orgUnits) ? orgUnits : [];
+    const active = list.filter((u: any) => u && u.status !== 'Tạm ngưng' && u.name);
+    if (active.length === 0) return '';
+    // Find primary / root org unit
+    const root = active.find((u: any) => !u.parentUnit || u.parentUnit === 'root' || u.parentUnit === '-' || u.parentUnit === '');
+    return (root?.name || active[0]?.name || '').trim();
+  }, [orgUnits]);
+
+  // Subtitle formatters: if orgUnitName exists: `${orgUnitName} - (range)`, otherwise: `(range)`
+  const orgMonthSubtitle = orgUnitName ? `${orgUnitName} - ${dateRanges.monthRangeText}` : dateRanges.monthRangeText;
+  const orgRollingSubtitle = orgUnitName ? `${orgUnitName} - ${dateRanges.rollingWeeksText}` : dateRanges.rollingWeeksText;
 
   // ===== Real Data Calculations =====
 
@@ -697,9 +707,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.monthRangeText}`}
+              title={orgMonthSubtitle}
             >
-              {companyName} - {dateRanges.monthRangeText}
+              {orgMonthSubtitle}
             </div>
           </div>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -731,9 +741,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.monthRangeText}`}
+              title={orgMonthSubtitle}
             >
-              {companyName} - {dateRanges.monthRangeText}
+              {orgMonthSubtitle}
             </div>
           </div>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -768,9 +778,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.rollingWeeksText}`}
+              title={orgRollingSubtitle}
             >
-              {companyName} - {dateRanges.rollingWeeksText}
+              {orgRollingSubtitle}
             </div>
             <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>Đơn vị tính: Số lần</div>
           </div>
@@ -803,9 +813,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.monthRangeText}`}
+              title={orgMonthSubtitle}
             >
-              {companyName} - {dateRanges.monthRangeText}
+              {orgMonthSubtitle}
             </div>
             <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>Đơn vị tính: Số lần</div>
           </div>
@@ -865,9 +875,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.monthRangeText}`}
+              title={orgMonthSubtitle}
             >
-              {companyName} - {dateRanges.monthRangeText}
+              {orgMonthSubtitle}
             </div>
             <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>Đơn vị tính: Giờ</div>
           </div>
@@ -900,9 +910,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.rollingWeeksText}`}
+              title={orgRollingSubtitle}
             >
-              {companyName} - {dateRanges.rollingWeeksText}
+              {orgRollingSubtitle}
             </div>
             <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>Đơn vị tính: Giờ</div>
           </div>
@@ -935,9 +945,9 @@ export const AttendanceOverviewModule: React.FC = () => {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={`${companyName} - ${dateRanges.monthRangeText}`}
+              title={orgMonthSubtitle}
             >
-              {companyName} - {dateRanges.monthRangeText}
+              {orgMonthSubtitle}
             </div>
           </div>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
