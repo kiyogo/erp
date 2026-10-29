@@ -51,6 +51,11 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
   - Mọi tính năng thêm mới bắt buộc phải làm đúng theo giao diện và kiến trúc giao diện hiện tại của dự án.
   - Tuyệt đối không tự ý tạo thêm bất kỳ giao diện mới, trang mới hoặc kiểu mẫu khác biệt nào khi người dùng không yêu cầu.
   - Triển khai chuẩn xác theo các thành phần hiện hành của hệ thống (menu, dialog/modal, form, bảng dữ liệu,...).
+  - Những giao diện nào đã có trong web rồi thì bắt buộc phải lấy luôn giao diện đó, không tạo nên giao diện mới.
+- **Quy tắc về nút bấm và tính năng chưa rõ ràng:**
+  - Những nút bấm, tính năng nào chưa rõ, chưa biết thì tuyệt đối không được tự ý thêm vào hệ thống.
+  - Bắt buộc phải hỏi lại người dùng để làm rõ yêu cầu trước khi triển khai.
+  - Phải giải thích được rõ ràng và đầy đủ tất cả các tính năng sau khi đã thêm.
 - **Tổng hợp ảnh chụp giao diện:**
   - Khi người dùng cung cấp nhiều ảnh chụp cho cùng một giao diện hoặc một chức năng, AI Agent phải phân tích, đối chiếu và tổng hợp tất cả các chi tiết từ các ảnh lại để xây dựng thành 1 giao diện duy nhất, hoàn chỉnh, đồng nhất và đúng chuẩn giao diện web hiện tại.
 - **Chuẩn giao diện Modal / Dialog:**
