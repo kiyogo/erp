@@ -243,7 +243,6 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
           { id: 'fin-pay-acc', title: 'Hạch toán chi phí', path: '/admin/finance/payroll/accounting' },
           { id: 'fin-pay-disb', title: 'Trả lương', path: '/admin/finance/payroll/disburse' },
           { id: 'fin-pay-ins', title: 'Nộp bảo hiểm', path: '/admin/finance/payroll/insurance' },
-          { id: 'fin-pay-tax', title: 'Khấu trừ thuế TNCN', path: '/admin/finance/payroll/tax' },
         ],
       },
       {

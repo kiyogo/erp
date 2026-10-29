@@ -29,7 +29,7 @@ export function filterPayrollForMonth(records: PayrollRecord[], month: string): 
   return wanted ? records.filter((record) => normalizePayrollMonth(record.month) === wanted) : [];
 }
 
-export function payrollReportRows(records: PayrollRecord[], report: 'payroll' | 'attendance' | 'insurance' | 'tax', month: string): Array<Array<string | number | null>> {
+export function payrollReportRows(records: PayrollRecord[], report: 'payroll' | 'attendance' | 'insurance', month: string): Array<Array<string | number | null>> {
   if (report === 'attendance') {
     return [
       ['Kỳ lương', month],
@@ -44,17 +44,10 @@ export function payrollReportRows(records: PayrollRecord[], report: 'payroll' | 
       ...records.map((record) => [record.employeeCode, record.employeeName, record.baseSalary, Math.round(record.baseSalary * 0.08), Math.round(record.baseSalary * 0.015), Math.round(record.baseSalary * 0.01), record.insuranceDeduction, Math.round(record.baseSalary * 0.215)]),
     ];
   }
-  if (report === 'tax') {
-    return [
-      ['Kỳ lương', month],
-      ['Mã nhân viên', 'Họ tên', 'Thu nhập trước khấu trừ', 'Khấu trừ bảo hiểm', 'Thuế TNCN đã tính trong hồ sơ lương'],
-      ...records.map((record) => [record.employeeCode, record.employeeName, record.baseSalary + record.allowance + record.bonus, record.insuranceDeduction, record.taxDeduction]),
-    ];
-  }
   return [
     ['Kỳ lương', month],
-    ['Mã nhân viên', 'Họ tên', 'Phòng ban', 'Lương cơ sở', 'Ngày công', 'Phụ cấp', 'Thưởng', 'Khấu trừ bảo hiểm', 'Khấu trừ thuế', 'Thực lĩnh', 'Trạng thái'],
-    ...records.map((record) => [record.employeeCode, record.employeeName, record.department, record.baseSalary, record.workDays, record.allowance, record.bonus, record.insuranceDeduction, record.taxDeduction, record.netSalary, record.status]),
+    ['Mã nhân viên', 'Họ tên', 'Phòng ban', 'Lương cơ sở', 'Ngày công', 'Phụ cấp', 'Thưởng', 'Khấu trừ bảo hiểm', 'Thực lĩnh', 'Trạng thái'],
+    ...records.map((record) => [record.employeeCode, record.employeeName, record.department, record.baseSalary, record.workDays, record.allowance, record.bonus, record.insuranceDeduction, record.netSalary, record.status]),
   ];
 }
 

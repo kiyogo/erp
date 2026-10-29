@@ -336,6 +336,7 @@ export const GenericModulePage: React.FC = () => {
   if (p.startsWith('/finance/payments')) return <PaymentsModule />;
   if (p === '/finance/invoices') return <InvoicesModule />;
   if (p.startsWith('/finance/debts')) return <Navigate to="/admin/finance/overview" replace />;
+  if (p === '/finance/payroll/tax') return <Navigate to="/admin/finance/payroll" replace />;
   if (p.startsWith('/finance/payroll')) return <PayrollModule />;
   if (p.startsWith('/finance/e-invoice')) return <EInvoiceModule />;
   if (p.includes('digital-signature')) return <DigitalSignatureModule />;
