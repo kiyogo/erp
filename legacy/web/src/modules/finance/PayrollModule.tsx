@@ -205,7 +205,7 @@ export const PayrollModule: React.FC = () => {
     cancelText: 'Hủy',
     onOk: async () => {
       try {
-        await dataService.updatePayrollStatus(record.key, 'Đã chi trả');
+        await dataService.updatePayrollStatus(record.key, 'Đã chi trả', { paymentMethod, paymentDate });
         loadData();
         message.success(`Đã ghi nhận trạng thái chi trả cho ${record.employeeName}.`);
       } catch (error: any) {
@@ -367,13 +367,12 @@ export const PayrollModule: React.FC = () => {
               dataSource={paymentRows}
               columns={[
                 { title: 'Mã NV', dataIndex: 'employeeCode', key: 'employeeCode', render: (c: string) => <strong>{c}</strong> },
+                { title: 'Tên nhân viên', dataIndex: 'employeeName', key: 'employeeName' },
+                { title: 'Đơn vị', dataIndex: 'department', key: 'department' },
                 { title: 'Số còn phải trả', dataIndex: 'netSalary', key: 'remaining', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Số trả', key: 'payAmount', render: (_: any, record: PayrollRecord) => <Input type="number" min={0} max={record.netSalary} defaultValue={record.netSalary} /> },
-                { title: 'Tên người thụ hưởng', dataIndex: 'employeeName', key: 'employeeName', render: (n: string) => <strong style={{ color: '#1E293B' }}>{n}</strong> },
-                { title: 'Ngân hàng & Số tài khoản', key: 'bank', render: (_: any, r: PayrollRecord) => { const account = getEmployeeBankAccount(r.employeeCode); return account ? <div><strong>{account.bankName}</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>{account.accountNumber}</div></div> : <Tag color="warning">Chưa có tài khoản đã duyệt</Tag>; } },
-                { title: 'Số tiền chi trả', dataIndex: 'netSalary', key: 'netSalary', render: (v: number) => <strong style={{ color: '#16A34A', fontSize: 13.5 }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Nội dung chuyển khoản', key: 'msg', render: (_: any, r: PayrollRecord) => `Luong ${selectedMonth.replace('/', '-')} ${r.employeeName}` },
-                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s === 'Đã chi trả' ? 'success' : 'warning'}>{s}</Tag> },
+                { title: 'Số trả', dataIndex: 'netSalary', key: 'payAmount', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+                { title: 'Số tài khoản', key: 'account', render: (_: any, r: PayrollRecord) => getEmployeeBankAccount(r.employeeCode)?.accountNumber || '—' },
+                { title: 'Tên ngân hàng', key: 'bank', render: (_: any, r: PayrollRecord) => getEmployeeBankAccount(r.employeeCode)?.bankName || '—' },
                 {
                   title: 'Thao tác',
                   key: 'act',
@@ -385,6 +384,7 @@ export const PayrollModule: React.FC = () => {
                 },
               ]}
             />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 28, padding: '10px 12px' }}><span>Tổng</span><span>Số còn phải trả: {paymentRows.reduce((sum, row) => sum + row.netSalary, 0).toLocaleString('vi-VN')} ₫</span><span>Số trả: {paymentRows.reduce((sum, row) => sum + row.netSalary, 0).toLocaleString('vi-VN')} ₫</span></div>
           </div>
         </div>
       )}

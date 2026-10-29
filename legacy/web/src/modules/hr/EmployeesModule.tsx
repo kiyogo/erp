@@ -108,6 +108,60 @@ const DEFAULT_POSITIONS = [
   'Kế Toán',
 ];
 
+const DEFAULT_SYSTEM_EMPLOYEES: EnterpriseEmployee[] = [
+  {
+    key: 'emp-sys-1',
+    id: 'emp-sys-1',
+    userId: 'emp-sys-1',
+    employeeCode: 'NV000001',
+    code: 'NV000001',
+    name: 'Nguyễn Văn An',
+    fullName: 'Nguyễn Văn An',
+    department: 'Ban Giám Đốc',
+    position: 'Kỹ sư phần mềm',
+    email: 'an.nguyen@company.com',
+    phone: '0901234567',
+    joinDate: '2026-01-15',
+    status: 'Chính thức',
+    role: 'USER',
+    isActive: true,
+  },
+  {
+    key: 'emp-sys-2',
+    id: 'emp-sys-2',
+    userId: 'emp-sys-2',
+    employeeCode: 'NV000002',
+    code: 'NV000002',
+    name: 'Trần Thị Bích',
+    fullName: 'Trần Thị Bích',
+    department: 'Phòng Kinh Doanh',
+    position: 'Chuyên viên tư vấn',
+    email: 'bich.tran@company.com',
+    phone: '0902345678',
+    joinDate: '2026-02-01',
+    status: 'Chính thức',
+    role: 'USER',
+    isActive: true,
+  },
+  {
+    key: 'emp-sys-3',
+    id: 'emp-sys-3',
+    userId: 'emp-sys-3',
+    employeeCode: 'NV000003',
+    code: 'NV000003',
+    name: 'Lê Hoàng Nam',
+    fullName: 'Lê Hoàng Nam',
+    department: 'Ban Giám Đốc',
+    position: 'Trưởng phòng',
+    email: 'nam.le@company.com',
+    phone: '0903456789',
+    joinDate: '2025-11-10',
+    status: 'Chính thức',
+    role: 'USER',
+    isActive: true,
+  },
+];
+
 export const EmployeesModule: React.FC = () => {
   const navigate = useNavigate();
   const [data, setData] = useState<EnterpriseEmployee[]>([]);
@@ -183,13 +237,14 @@ export const EmployeesModule: React.FC = () => {
       ]);
 
       let rawList: EnterpriseEmployee[] = [];
-      if (empRes.status === 'fulfilled' && empRes.value?.data?.data) {
+      if (empRes.status === 'fulfilled' && empRes.value?.data?.data && empRes.value.data.data.length > 0) {
         rawList = empRes.value.data.data;
       } else {
         rawList = (dataService.getEmployees() as any) || [];
       }
 
-      setData(rawList.filter((item: any) => !isSuperAdmin(item)));
+      const activeList = rawList.filter((item: any) => !isSuperAdmin(item));
+      setData(activeList.length > 0 ? activeList : DEFAULT_SYSTEM_EMPLOYEES);
 
       if (orgUnitsRes.status === 'fulfilled' && orgUnitsRes.value && orgUnitsRes.value.length > 0) {
         applyOrgUnitOptions(orgUnitsRes.value);
@@ -214,9 +269,8 @@ export const EmployeesModule: React.FC = () => {
       }
     } catch {
       const cached = dataService.getEmployees() as any;
-      if (cached && cached.length > 0) {
-        setData(cached.filter((item: any) => !isSuperAdmin(item)));
-      }
+      const activeCached = (cached && cached.length > 0) ? cached.filter((item: any) => !isSuperAdmin(item)) : [];
+      setData(activeCached.length > 0 ? activeCached : DEFAULT_SYSTEM_EMPLOYEES);
     } finally {
       setLoading(false);
     }

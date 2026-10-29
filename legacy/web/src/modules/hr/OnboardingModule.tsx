@@ -64,29 +64,60 @@ export const ONBOARDING_WORK_TYPES = [
   'Thực hiện bên ngoài',
 ] as const;
 
-const SAMPLE_CANDIDATE_EMPLOYEES: EnterpriseEmployee[] = [
+const DEFAULT_SYSTEM_EMPLOYEES: EnterpriseEmployee[] = [
   {
-    key: 'emp-sample-1',
-    id: 'emp-sample-1',
-    userId: 'emp-sample-1',
+    key: 'emp-sys-1',
+    id: 'emp-sys-1',
+    userId: 'emp-sys-1',
     employeeCode: 'NV000001',
     code: 'NV000001',
-    name: 'Nguyễn MI SA NGU',
-    fullName: 'Nguyễn MI SA NGU',
-    email: '',
-    phone: '',
-    department: 'CÔNG TY TNHH XÂY DỰNG KINH SỞ',
-    position: '-',
-    joinDate: '-',
-    status: 'Thử việc',
+    name: 'Nguyễn Văn An',
+    fullName: 'Nguyễn Văn An',
+    department: 'Ban Giám Đốc',
+    position: 'Kỹ sư phần mềm',
+    email: 'an.nguyen@company.com',
+    phone: '0901234567',
+    joinDate: '2026-01-15',
+    status: 'Chính thức',
     role: 'USER',
     isActive: true,
-    activationStatus: 'active',
-    salaryBase: 0,
-    createdAt: '',
-    updatedAt: '',
+  },
+  {
+    key: 'emp-sys-2',
+    id: 'emp-sys-2',
+    userId: 'emp-sys-2',
+    employeeCode: 'NV000002',
+    code: 'NV000002',
+    name: 'Trần Thị Bích',
+    fullName: 'Trần Thị Bích',
+    department: 'Phòng Kinh Doanh',
+    position: 'Chuyên viên tư vấn',
+    email: 'bich.tran@company.com',
+    phone: '0902345678',
+    joinDate: '2026-02-01',
+    status: 'Chính thức',
+    role: 'USER',
+    isActive: true,
+  },
+  {
+    key: 'emp-sys-3',
+    id: 'emp-sys-3',
+    userId: 'emp-sys-3',
+    employeeCode: 'NV000003',
+    code: 'NV000003',
+    name: 'Lê Hoàng Nam',
+    fullName: 'Lê Hoàng Nam',
+    department: 'Ban Giám Đốc',
+    position: 'Trưởng phòng',
+    email: 'nam.le@company.com',
+    phone: '0903456789',
+    joinDate: '2025-11-10',
+    status: 'Chính thức',
+    role: 'USER',
+    isActive: true,
   },
 ];
+
 
 type OnboardingStep = { key: typeof onboardingSteps[number]['key']; completed: boolean; completedAt?: string; completedBy?: string };
 
@@ -177,38 +208,151 @@ export const OnboardingModule: React.FC = () => {
   const currentTask = data.find(task => task.key === selectedTaskRef?.key) || selectedTaskRef;
   const selectedTask = currentTask;
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
-      const [list, staff, orgUnits, positions] = await Promise.all([
+      const [tasksRes, staffRes, orgUnitsRes, positionsRes] = await Promise.allSettled([
         dataService.refreshGenericData('hr_onboarding_tasks'),
         employeesApi.getAll(),
         dataService.fetchOrgUnitsList(),
         dataService.fetchDropdownOptions('positions'),
       ]);
-      setData(list.map((item: any) => ({ ...item, key: item.key || item.id, progress: onboardingProgress(onboardingChecklist(item)) })));
-      const rawStaff = Array.isArray(staff?.data?.data) ? staff.data.data : [];
+
+      if (tasksRes.status === 'fulfilled' && Array.isArray(tasksRes.value)) {
+        setData(tasksRes.value.map((item: any) => ({
+          ...item,
+          key: item.key || item.id,
+          progress: onboardingProgress(onboardingChecklist(item)),
+        })));
+      } else if (typeof dataService.getGenericData === 'function') {
+        const cachedTasks = dataService.getGenericData('hr_onboarding_tasks');
+        if (Array.isArray(cachedTasks)) {
+          setData(cachedTasks.map((item: any) => ({
+            ...item,
+            key: item.key || item.id,
+            progress: onboardingProgress(onboardingChecklist(item)),
+          })));
+        }
+      }
+
       const isSuperAdminEmployee = (item: any) =>
         item?.role === 'ADMIN' ||
         item?.role === 'Super Admin' ||
         item?.code === 'ADMIN-001' ||
         item?.employeeCode === 'ADMIN-001' ||
         (item?.email && (item.email.toLowerCase().includes('admin') || item.email.toLowerCase() === 'tung@kiyovn.local'));
-      const activeStaff = rawStaff.filter(employee => !isSuperAdminEmployee(employee) && employee.status !== 'Đã nghỉ việc');
-      setEmployees(activeStaff.length > 0 ? activeStaff : SAMPLE_CANDIDATE_EMPLOYEES);
-      setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
-      setPosOptions(positions.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));
+
+      let rawStaff: any[] = [];
+      if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value?.data?.data) && staffRes.value.data.data.length > 0) {
+        rawStaff = staffRes.value.data.data;
+      } else if (typeof dataService.getEmployees === 'function') {
+        const cachedStaff = dataService.getEmployees();
+        if (Array.isArray(cachedStaff) && cachedStaff.length > 0) {
+          rawStaff = cachedStaff;
+        }
+      }
+
+      const activeStaff: EnterpriseEmployee[] = rawStaff
+        .filter((employee: any) => !isSuperAdminEmployee(employee) && employee.status !== 'Đã nghỉ việc')
+        .map((e: any) => ({
+          key: e.key || e.id || e.userId || e.employeeCode || e.code,
+          id: e.id || e.key || e.userId || e.employeeCode || e.code,
+          userId: e.userId || e.id || e.key,
+          employeeCode: e.employeeCode || e.code || '',
+          code: e.code || e.employeeCode || '',
+          name: e.name || e.fullName || '',
+          fullName: e.fullName || e.name || '',
+          email: e.email || '',
+          phone: e.phone || '',
+          department: e.department || '',
+          position: e.position || '',
+          joinDate: e.joinDate || '',
+          status: e.status || 'Thử việc',
+          salaryBase: Number(e.salaryBase) || 0,
+          role: e.role || 'USER',
+          isActive: e.isActive !== false,
+          activationStatus: e.activationStatus || 'active',
+          createdAt: e.createdAt || '',
+          updatedAt: e.updatedAt || '',
+        }));
+
+      setEmployees(activeStaff.length > 0 ? activeStaff : DEFAULT_SYSTEM_EMPLOYEES);
+
+      if (orgUnitsRes.status === 'fulfilled' && Array.isArray(orgUnitsRes.value) && orgUnitsRes.value.length > 0) {
+        setDeptOptions(orgUnitsRes.value.map((u) => ({ label: u, value: u })));
+      } else if (typeof dataService.getOrgUnitsList === 'function') {
+        const fallbackUnits = dataService.getOrgUnitsList();
+        if (Array.isArray(fallbackUnits)) {
+          setDeptOptions(fallbackUnits.map((u) => ({ label: u, value: u })));
+        }
+      }
+
+      if (positionsRes.status === 'fulfilled' && Array.isArray(positionsRes.value) && positionsRes.value.length > 0) {
+        setPosOptions(positionsRes.value.filter((p: any) => p.isActive !== false).map((p: any) => ({ label: p.name, value: p.name })));
+      } else if (typeof dataService.getDropdownOptions === 'function') {
+        const fallbackPos = dataService.getDropdownOptions('positions');
+        if (Array.isArray(fallbackPos)) {
+          setPosOptions(fallbackPos.filter((p: any) => p.isActive !== false).map((p: any) => ({ label: p.name, value: p.name })));
+        }
+      }
+
       setLoadError('');
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || 'Không thể tải dữ liệu hội nhập. Vui lòng thử lại.');
-      setEmployees(SAMPLE_CANDIDATE_EMPLOYEES);
+      let cachedStaff: any[] = [];
+      if (typeof dataService.getEmployees === 'function') {
+        cachedStaff = dataService.getEmployees() || [];
+      }
+      const isSuperAdminEmployee = (item: any) =>
+        item?.role === 'ADMIN' ||
+        item?.role === 'Super Admin' ||
+        item?.code === 'ADMIN-001' ||
+        item?.employeeCode === 'ADMIN-001' ||
+        (item?.email && (item.email.toLowerCase().includes('admin') || item.email.toLowerCase() === 'tung@kiyovn.local'));
+
+      const activeStaff: EnterpriseEmployee[] = (Array.isArray(cachedStaff) ? cachedStaff : [])
+        .filter((emp: any) => !isSuperAdminEmployee(emp) && emp.status !== 'Đã nghỉ việc')
+        .map((e: any) => ({
+          key: e.key || e.id || e.userId || e.employeeCode || e.code,
+          id: e.id || e.key || e.userId || e.employeeCode || e.code,
+          userId: e.userId || e.id || e.key,
+          employeeCode: e.employeeCode || e.code || '',
+          code: e.code || e.employeeCode || '',
+          name: e.name || e.fullName || '',
+          fullName: e.fullName || e.name || '',
+          email: e.email || '',
+          phone: e.phone || '',
+          department: e.department || '',
+          position: e.position || '',
+          joinDate: e.joinDate || '',
+          status: e.status || 'Thử việc',
+          salaryBase: Number(e.salaryBase) || 0,
+          role: e.role || 'USER',
+          isActive: e.isActive !== false,
+          activationStatus: e.activationStatus || 'active',
+          createdAt: e.createdAt || '',
+          updatedAt: e.updatedAt || '',
+        }));
+      setEmployees(activeStaff.length > 0 ? activeStaff : DEFAULT_SYSTEM_EMPLOYEES);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void loadData();
+    let active = true;
+    void loadData(true);
+    const unsub = typeof dataService.subscribe === 'function'
+      ? dataService.subscribe(() => {
+          if (active) {
+            void loadData(false);
+          }
+        })
+      : () => {};
+    return () => {
+      active = false;
+      unsub();
+    };
   }, []);
 
   const ongoingCount = data.filter((d) => d.status === 'Đang hội nhập').length;
@@ -257,7 +401,7 @@ export const OnboardingModule: React.FC = () => {
       message.warning('Vui lòng chọn ít nhất một nhân viên trong bảng.');
       return;
     }
-    const pool = employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES;
+    const pool = employees.length > 0 ? employees : DEFAULT_SYSTEM_EMPLOYEES;
     const selectedEmps = pool.filter(emp => {
       const k = emp.id || emp.userId || emp.employeeCode || emp.code || '';
       return selectedEmpKeys.includes(k) || selectedEmpKeys.includes(emp.key || '');
@@ -415,7 +559,7 @@ export const OnboardingModule: React.FC = () => {
   });
 
   // Lọc danh sách nhân viên ứng viên trong Modal Ảnh 1
-  const poolEmployees = employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES;
+  const poolEmployees = employees.length > 0 ? employees : DEFAULT_SYSTEM_EMPLOYEES;
   const candidateList = poolEmployees.filter(emp => {
     const name = (emp.name || (emp as any).fullName || '').toLowerCase();
     const code = (emp.employeeCode || emp.code || '').toLowerCase();
