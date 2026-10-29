@@ -110,6 +110,21 @@ try {
   await page.type('input[placeholder="Nhập lại mã PIN mới..."]', '654321');
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Lưu mã PIN').click());
   await page.waitForFunction(() => document.body.innerText.includes('Đã lưu mã PIN bảo mật trên máy chủ.'), { timeout: 15000 });
+  const payrollPinHeaders = [];
+  page.on('request', request => {
+    if (request.method() !== 'OPTIONS' && request.url().includes('/collections/payroll')) payrollPinHeaders.push(request.headers()['x-security-pin'] || '');
+  });
+  await page.goto(`${webUrl}/admin/finance/payroll/calculate`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForSelector('[role="dialog"] input[aria-label="Mã PIN bảo mật"]', { timeout: 20000 });
+  await page.type('[role="dialog"] input[aria-label="Mã PIN bảo mật"]', '654321');
+  await page.click('[role="dialog"] button[type="submit"]');
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'), { timeout: 15000 });
+  await page.waitForFunction(() => document.body.innerText.includes('Bảng lương kỳ'), { timeout: 20000 });
+  const unverifiedPayrollReads = payrollPinHeaders.filter(pin => !pin).length;
+  const verifiedPayrollReads = payrollPinHeaders.filter(pin => pin === '654321').length;
+  assert.ok(unverifiedPayrollReads > 0, 'the payroll screen should make a protected request before prompting for its PIN');
+  assert.equal(verifiedPayrollReads, unverifiedPayrollReads, 'every protected payroll request should be retried with the entered PIN');
+  assert.ok(payrollPinHeaders.every(pin => pin === '' || pin === '654321'));
   assert.deepEqual(pageErrors, []);
   await page.goto(`${webUrl}/admin/settings/security/twosv/authenticator`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Tiếp tục'), { timeout: 30000 });
@@ -162,7 +177,7 @@ try {
   assert.equal(sessionsResponse.status, 200, JSON.stringify(sessions));
   assert.ok(sessions.data.some(item => item.current && item.mfaVerified));
   assert.deepEqual(pageErrors, []);
-  console.log(JSON.stringify({ browser: 'Chromium', flow: 'server-side PIN setup and update, TOTP setup, local QR generation and enforced password-login challenge', evidence: directory }));
+  console.log(JSON.stringify({ browser: 'Chromium', flow: 'server-side PIN setup and update, protected payroll prompt and retry, TOTP setup, local QR generation and enforced password-login challenge', evidence: directory }));
 } finally {
   await browser?.close();
   for (const child of [api, vite]) {

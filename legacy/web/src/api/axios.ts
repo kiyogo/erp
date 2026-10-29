@@ -1,4 +1,9 @@
 import axios from 'axios';
+import { requestSecurityPin } from './securityPinPrompt';
+
+type SecurityPinRetryConfig = NonNullable<Parameters<typeof axios.request>[0]> & {
+  __securityPinPromptCount?: number;
+};
 
 // ===== Axios instance =====
 const api = axios.create({
@@ -28,7 +33,21 @@ const isPublicPath = (pathname: string) => {
 // ===== Response interceptor – handle 401 =====
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
+    const securityCode = err.response?.data?.code;
+    if (securityCode === 'SECURITY_PIN_REQUIRED' || securityCode === 'SECURITY_PIN_INVALID') {
+      const config = err.config as SecurityPinRetryConfig | undefined;
+      const promptCount = Number(config?.__securityPinPromptCount || 0);
+      if (!config || promptCount >= 8) return Promise.reject(err);
+      try {
+        const pin = await requestSecurityPin(securityCode === 'SECURITY_PIN_INVALID' ? err.response?.data?.message : '');
+        config.headers = { ...config.headers, 'X-Security-Pin': pin } as any;
+        config.__securityPinPromptCount = promptCount + 1;
+        return await api.request(config as any);
+      } catch (promptError) {
+        return Promise.reject(promptError);
+      }
+    }
     if (err.response?.status === 401) {
       const isPublic = isPublicPath(window.location.pathname);
       if (!isPublic) {

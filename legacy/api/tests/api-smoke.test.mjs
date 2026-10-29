@@ -720,6 +720,7 @@ test('meeting rooms enforce server-owned booking identities, room policy, confli
 });
 
 test('payment requests persist actual actors and enforce approval, rejection and internal settlement transitions', async () => {
+  await request('/auth/security-pin', 'POST', { pin: '246810', confirmPin: '246810', currentPassword: env.SEED_ADMIN_PASSWORD });
   await request('/users', 'POST', { email: 'payment-requester@example.test', name: 'Nhân viên đề nghị chi', password: 'Payment-Request-26!Secure', employeeCode: 'PAY-USER-01', role: 'USER' }, 201);
   const userLogin = await request('/auth/login', 'POST', { email: 'payment-requester@example.test', password: 'Payment-Request-26!Secure' });
   const userHeaders = { ...headers, Authorization: `Bearer ${userLogin.access_token || userLogin.token}` };
@@ -734,6 +735,14 @@ test('payment requests persist actual actors and enforce approval, rejection and
   assert.equal((await request('/finance/payments', 'GET', undefined, 200, userHeaders)).data.length, 1);
   await request('/finance/payments', 'POST', { beneficiary: 'Sai số tiền', bankAccountInfo: 'VCB 00112233', category: 'Không hợp lệ', amount: 0, paymentMethod: 'Chuyển khoản VCB' }, 422, userHeaders);
   await request(`/finance/payments/${payment.key}/approve`, 'POST', {}, 403, userHeaders);
+  const pinRequired = await request(`/finance/payments/${payment.key}/approve`, 'POST', {}, 428);
+  assert.equal(pinRequired.code, 'SECURITY_PIN_REQUIRED');
+  const pinRejected = await request(`/finance/payments/${payment.key}/approve`, 'POST', {}, 403, { ...headers, 'X-Security-Pin': '000000' });
+  assert.equal(pinRejected.code, 'SECURITY_PIN_INVALID');
+  Object.assign(headers, { 'X-Security-Pin': '246810' });
+  const payrollPinRequired = await request('/collections/payroll', 'GET', undefined, 428, { Authorization: headers.Authorization });
+  assert.equal(payrollPinRequired.code, 'SECURITY_PIN_REQUIRED');
+  await request('/collections/payroll', 'GET');
   await request(`/collections/finance_payments/${payment.key}`, 'PATCH', { patch: { status: 'Đã thanh toán' } }, 409, headers);
   await request('/collections/finance_payments', 'PUT', { records: [] }, 409, headers);
   await request(`/finance/payments/${payment.key}/reject`, 'POST', { reason: '' }, 422, headers);

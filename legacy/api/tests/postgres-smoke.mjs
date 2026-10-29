@@ -53,8 +53,9 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   let token = '';
+  let securityPin = '';
   async function request(route, method = 'GET', payload, expected = 200) {
-    const response = await fetch(`${base}${route}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+    const response = await fetch(`${base}${route}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(securityPin ? { 'X-Security-Pin': securityPin } : {}) }, body: payload === undefined ? undefined : JSON.stringify(payload) });
     const result = await response.json();
     assert.equal(response.status, expected, JSON.stringify(result));
     return result;
@@ -70,7 +71,11 @@ try {
   const pinUpdated = await request('/auth/security-pin', 'POST', { pin: '654321', confirmPin: '654321', currentPin: '123456' });
   assert.equal(pinUpdated.configured, true);
   assert.notEqual(pinUpdated.updatedAt, pinCreated.updatedAt);
-  completed += 5;
+  const payrollPinChallenge = await request('/collections/payroll', 'GET', undefined, 428);
+  assert.equal(payrollPinChallenge.code, 'SECURITY_PIN_REQUIRED');
+  securityPin = '654321';
+  await request('/collections/payroll');
+  completed += 7;
   const initialUsage = await request('/admin/usage?application=all&period=this_week');
   assert.ok(initialUsage.data.some(item => item.userId === login.user.id && item.loginCount === 1));
   const trackedUsage = await request('/admin/usage/activity', 'POST', { application: 'finance' }, 201);
@@ -247,7 +252,7 @@ try {
   assert.equal(allocation.status, 'Chờ nhân viên ký xác nhận');
   const allocationRace = await Promise.all([1, 2].map(async () => {
     const response = await fetch(`${base}/assets/allocations/${allocation.key}/confirm`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin },
       body: JSON.stringify({ receiverName: allocation.employeeName }),
     });
     return response.status;
@@ -291,7 +296,7 @@ try {
   const pgPayroll = { period: '08/2031', employerInsurance: 200 };
   const pgPayrollPreview = await request('/finance/payroll/ledger-preview', 'POST', pgPayroll);
   const pgPayrollRace = await Promise.all([1, 2].map(async () => {
-    const response = await fetch(`${base}/finance/payroll/ledger-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgPayrollPreview.fingerprint }) });
+    const response = await fetch(`${base}/finance/payroll/ledger-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgPayrollPreview.fingerprint }) });
     return response.status;
   }));
   assert.deepEqual(pgPayrollRace.sort((a, b) => a - b), [201, 409]);
@@ -302,7 +307,7 @@ try {
   const pgAdjustment = await request('/finance/payroll/adjustment-preview', 'POST', pgPayroll);
   assert.deepEqual(pgAdjustment.lines.map((item) => item.amount), [950]);
   const pgAdjustmentRace = await Promise.all([1, 2].map(async () => {
-    const response = await fetch(`${base}/finance/payroll/adjustment-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgAdjustment.fingerprint }) });
+    const response = await fetch(`${base}/finance/payroll/adjustment-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgAdjustment.fingerprint }) });
     return response.status;
   }));
   assert.deepEqual(pgAdjustmentRace.sort((a, b) => a - b), [201, 422]);
@@ -535,7 +540,7 @@ try {
     amount: 125000, paymentMethod: 'Thẻ tín dụng DN',
   }, 201)).payment;
   const paymentApprovals = await Promise.all([1, 2].map(() => fetch(`${base}/finance/payments/${payment.key}/approve`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: '{}',
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin }, body: '{}',
   })));
   assert.deepEqual(paymentApprovals.map(response => response.status).sort((a, b) => a - b), [200, 409]);
   const approvedPayment = (await request('/finance/payments')).data.find(item => item.key === payment.key);

@@ -60,9 +60,10 @@ const DEFAULT_EMPLOYEE_SYSTEM_FILE_NAMES = [
 ];
 
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code = '') {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -443,6 +444,22 @@ async function saveUserSecurityPin(userId, pinHash) {
   const timestamp = now();
   await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'user_security_pin', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at")
     .run(randomUUID(), userId, userId, JSON.stringify({ pinHash, updatedAt: timestamp }), timestamp, timestamp);
+}
+
+async function requireSecurityPin(request, actor) {
+  const security = await getUserSecurityPin(actor.id);
+  if (!security.pinHash) return;
+
+  const suppliedPin = String(request.headers['x-security-pin'] || '');
+  if (!suppliedPin) throw new HttpError(428, 'Nhập mã PIN bảo mật để tiếp tục.', 'SECURITY_PIN_REQUIRED');
+
+  const attemptKey = 'security-pin-action:' + loginKey(request, actor.id);
+  enforceLoginRateLimit(attemptKey, 'Đã thử xác minh PIN quá nhiều lần. Vui lòng thử lại sau.');
+  if (!/^\d{6}$/.test(suppliedPin) || !await verifyPassword(suppliedPin, security.pinHash)) {
+    recordLoginFailure(attemptKey);
+    throw new HttpError(403, 'Mã PIN bảo mật không chính xác.', 'SECURITY_PIN_INVALID');
+  }
+  clearLoginFailures(attemptKey);
 }
 
 function hashRecoveryCode(code) {
@@ -5424,7 +5441,7 @@ function allowOrigin(request, response) {
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || origin === extraOrigin) {
     response.setHeader('Access-Control-Allow-Origin', origin);
     response.setHeader('Vary', 'Origin');
-    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Parent-Id, X-Origin-Module');
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Parent-Id, X-Origin-Module, X-Security-Pin');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   }
 }
@@ -6909,6 +6926,7 @@ async function handleRequest(request, response) {
   if (collectionMatch && request.method === 'GET') {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
     const actor = await requireCollectionActor(request, scope);
+    if (['payroll', 'employee_payslips'].includes(scope)) await requireSecurityPin(request, actor);
     const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const limit = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '100', 10) || 100));
     const query = String(url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 200);
@@ -6984,6 +7002,7 @@ async function handleRequest(request, response) {
   if (collectionMatch && request.method === 'PUT') {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
     const actor = await requireCollectionActor(request, scope);
+    if (['payroll', 'employee_payslips'].includes(scope)) await requireSecurityPin(request, actor);
     const payload = await readJson(request, 4 * 1024 * 1024);
     if (!Array.isArray(payload.records) || payload.records.length > 1_000) {
       throw new HttpError(422, 'Danh sách bản ghi không hợp lệ hoặc vượt quá giới hạn 1.000 bản ghi.');
@@ -7029,6 +7048,7 @@ async function handleRequest(request, response) {
   if (collectionMatch && request.method === 'POST') {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
     const actor = await requireCollectionActor(request, scope);
+    if (['payroll', 'employee_payslips'].includes(scope)) await requireSecurityPin(request, actor);
     const payload = await readJson(request, 256 * 1024);
     let item;
     let ownerId = actor.id;
@@ -7061,6 +7081,7 @@ async function handleRequest(request, response) {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionRecordMatch[1]));
     const recordKey = requiredText(decodeURIComponent(collectionRecordMatch[2]), 'Khóa bản ghi', 160);
     const actor = await requireCollectionActor(request, scope);
+    if (['payroll', 'employee_payslips'].includes(scope) && request.method === 'GET') await requireSecurityPin(request, actor);
     const SHARED_READ_SCOPES = new Set([
       'business_org_units',
       'org_units',
@@ -7088,6 +7109,10 @@ async function handleRequest(request, response) {
 
     if (assignedAssetTodoAccess && publicCollectionRecord(existing)?.assignedStaffId !== actor.id) {
       throw new HttpError(404, 'Không tìm thấy bản ghi.');
+    }
+
+    if (['payroll', 'employee_payslips'].includes(scope) && !['GET', 'HEAD'].includes(request.method)) {
+      await requireSecurityPin(request, actor);
     }
 
     if (scope === 'workflow_requests' && actor.role !== 'ADMIN') {
@@ -7282,6 +7307,9 @@ async function handleRequest(request, response) {
           throw new HttpError(422, 'Quyết toán đã hoàn tất bởi một yêu cầu khác.');
         }
         const item = await normalizeCollectionRecord({ ...current, ...patch, key: current.key ?? recordKey }, scope, actor, current);
+        if (scope === 'workflow_requests' && Object.hasOwn(patch, 'decision')) {
+          await requireSecurityPin(request, actor);
+        }
         if (scope === 'asset_maintenances' && item.record.lastCompletedAt !== current.lastCompletedAt) {
           const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(current.assetKey);
           const asset = publicCollectionRecord(assetRow);
@@ -8158,6 +8186,7 @@ async function handleRequest(request, response) {
       const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payments' AND record_key = ? ORDER BY created_at LIMIT 1").get(key);
       if (!row) throw new HttpError(404, 'Không tìm thấy đề nghị thanh toán.');
       const current = publicCollectionRecord(row);
+      await requireSecurityPin(request, actor);
       const timestamp = now();
       if (action === 'approve') {
         if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Đề nghị này không còn ở trạng thái chờ duyệt.');
@@ -8504,6 +8533,7 @@ async function handleRequest(request, response) {
         if (asset.status !== 'Trong kho' || !same(asset.status, origin.status) || !same(asset.assignedTo, origin.assignedTo)
           || !same(asset.department, origin.department) || !same(asset.location, origin.location)) throw new HttpError(409, 'Thông tin tài sản đã thay đổi trong lúc chờ xác nhận. Cần đối chiếu trước khi bàn giao.');
         if (existing.some((item) => item.key !== key && item.assetKey === asset.key && item.status === 'Chờ nhân viên ký xác nhận')) throw new HttpError(409, 'Tài sản đang có biên bản cấp phát khác chờ xác nhận.');
+        await requireSecurityPin(request, actor);
         const updatedAsset = {
           ...asset, status: 'Đang sử dụng', assignedTo: allocation.employeeName, department: allocation.department,
           history: [...(Array.isArray(asset.history) ? asset.history : []), {
@@ -8845,6 +8875,7 @@ async function handleRequest(request, response) {
       result = await payrollLedgerPreview(period, employerInsurance, actor);
       if (!posting) return;
       if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== result.fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi ghi sổ.');
+      await requireSecurityPin(request, actor);
       const timestamp = now();
       const entryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const insert = await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)");
@@ -8907,6 +8938,7 @@ async function handleRequest(request, response) {
       result = { period, employerInsurance, employeeCount: reviewed.employeeCount, sequence: adjustments.length + 1, lines, fingerprint };
       if (!posting) return;
       if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi điều chỉnh.');
+      await requireSecurityPin(request, actor);
       const timestamp = now();
       const id = randomUUID();
       const entryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -9942,6 +9974,7 @@ async function handleRequest(request, response) {
     }
 
     const payload = await readJson(request);
+    await requireSecurityPin(request, actor);
     const signMethod = payload.signMethod || 'digital';
     const certName = payload.certName || (isTargetEmployee ? `${actor.name} CCCD NEAC Digital ID` : 'Ban Giám Đốc KIYOVN');
     const signedFileName = payload.signedFileName || `${row.code}_Signed_${(row.employee_name || actor.name).replace(/\s+/g, '_')}.pdf`;
@@ -11015,7 +11048,7 @@ const server = createServer((request, response) => {
     const status = error instanceof HttpError ? error.status : Number.isInteger(suppliedStatus) && suppliedStatus >= 400 && suppliedStatus < 500 ? suppliedStatus : 500;
     const message = status === 500 ? 'Máy chủ gặp lỗi. Vui lòng thử lại sau.' : error.message;
     if (status === 500) console.error('[500 Error]', error);
-    sendJson(response, status, { message });
+    sendJson(response, status, { message, ...(error?.code ? { code: error.code } : {}) });
   });
 });
 
