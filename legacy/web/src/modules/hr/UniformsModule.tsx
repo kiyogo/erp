@@ -603,8 +603,8 @@ export const UniformsModule: React.FC = () => {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
-        width={860}
-        style={{ top: 35, maxWidth: '96vw' }}
+        width={1080}
+        style={{ top: 25, maxWidth: '96vw' }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* KHỐI 1: THÔNG TIN CHUNG VỀ ĐỢT CẤP PHÁT */}
@@ -749,27 +749,27 @@ export const UniformsModule: React.FC = () => {
                 <div style={{ fontSize: 13, color: '#64748B' }}>Chưa có dữ liệu</div>
               </div>
             ) : (
-              <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left', color: '#475569' }}>
-                      <th style={{ padding: '8px 10px', width: 40 }}>STT</th>
-                      <th style={{ padding: '8px 10px' }}>Mã NV</th>
-                      <th style={{ padding: '8px 10px' }}>Họ và tên</th>
-                      <th style={{ padding: '8px 10px' }}>Đơn vị</th>
-                      <th style={{ padding: '8px 10px', width: 100 }}>Kích cỡ</th>
-                      <th style={{ padding: '8px 10px', width: 90 }}>Số lượng</th>
-                      <th style={{ padding: '8px 10px', width: 44, textAlign: 'center' }}></th>
+                      <th style={{ padding: '8px 12px', width: 45, textAlign: 'center' }}>STT</th>
+                      <th style={{ padding: '8px 12px', width: 120 }}>Mã NV</th>
+                      <th style={{ padding: '8px 12px', width: 180 }}>Họ và tên</th>
+                      <th style={{ padding: '8px 12px' }}>Đơn vị</th>
+                      <th style={{ padding: '8px 12px', width: 100 }}>Kích cỡ</th>
+                      <th style={{ padding: '8px 12px', width: 90 }}>Số lượng</th>
+                      <th style={{ padding: '8px 12px', width: 48, textAlign: 'center' }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {participatingEmployees.map((emp, idx) => (
                       <tr key={emp.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                        <td style={{ padding: '8px 10px', color: '#64748B' }}>{idx + 1}</td>
-                        <td style={{ padding: '8px 10px', fontWeight: 600, color: '#009688' }}>{emp.empCode}</td>
-                        <td style={{ padding: '8px 10px', fontWeight: 600, color: '#0F172A' }}>{emp.name}</td>
-                        <td style={{ padding: '8px 10px', color: '#64748B' }}>{emp.department}</td>
-                        <td style={{ padding: '8px 10px' }}>
+                        <td style={{ padding: '8px 12px', color: '#64748B', textAlign: 'center' }}>{idx + 1}</td>
+                        <td style={{ padding: '8px 12px', color: '#009688' }}>{emp.empCode}</td>
+                        <td style={{ padding: '8px 12px', color: '#0F172A' }}>{emp.name}</td>
+                        <td style={{ padding: '8px 12px', color: '#64748B' }}>{emp.department}</td>
+                        <td style={{ padding: '8px 12px' }}>
                           <Select
                             value={emp.size}
                             onChange={val => updateEmployeeSize(emp.id, val)}
@@ -783,7 +783,7 @@ export const UniformsModule: React.FC = () => {
                             style={{ width: 85, height: 32 }}
                           />
                         </td>
-                        <td style={{ padding: '8px 10px' }}>
+                        <td style={{ padding: '8px 12px' }}>
                           <Input
                             type="number"
                             min={1}
@@ -793,13 +793,27 @@ export const UniformsModule: React.FC = () => {
                             style={{ width: 65, height: 32 }}
                           />
                         </td>
-                        <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                           <Button
                             type="text"
                             danger
-                            icon={<DeleteOutlined />}
+                            icon={<DeleteOutlined style={{ fontSize: 16, color: '#EF4444' }} />}
                             onClick={() => removeParticipatingEmployee(emp.id)}
-                            style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Xóa nhân viên"
+                            aria-label="Xóa"
+                            style={{
+                              width: 32,
+                              height: 32,
+                              minWidth: 32,
+                              padding: 0,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: 'none',
+                              background: 'transparent',
+                              color: '#EF4444',
+                              cursor: 'pointer',
+                            }}
                           />
                         </td>
                       </tr>
@@ -836,18 +850,32 @@ export const UniformsModule: React.FC = () => {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {attachments.map(att => (
-                  <div key={att.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
+                  <div key={att.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 13 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <FileTextOutlined style={{ color: '#009688' }} />
-                      <span style={{ fontWeight: 600, color: '#0F172A' }}>{att.name}</span>
-                      <span style={{ color: '#94A3B8', fontSize: 11 }}>({att.size})</span>
+                      <span style={{ color: '#0F172A' }}>{att.name}</span>
+                      <span style={{ color: '#94A3B8', fontSize: 12 }}>({att.size})</span>
                     </div>
                     <Button
                       type="text"
                       danger
-                      icon={<DeleteOutlined />}
+                      icon={<DeleteOutlined style={{ fontSize: 16, color: '#EF4444' }} />}
                       onClick={() => removeAttachment(att.id)}
-                      style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                      title="Xóa tài liệu"
+                      aria-label="Xóa tài liệu"
+                      style={{
+                        width: 32,
+                        height: 32,
+                        minWidth: 32,
+                        padding: 0,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: 'none',
+                        background: 'transparent',
+                        color: '#EF4444',
+                        cursor: 'pointer',
+                      }}
                     />
                   </div>
                 ))}
@@ -878,8 +906,8 @@ export const UniformsModule: React.FC = () => {
         open={employeePickerOpen}
         onCancel={() => setEmployeePickerOpen(false)}
         footer={null}
-        width={720}
-        style={{ top: 50, maxWidth: '95vw' }}
+        width={840}
+        style={{ top: 40, maxWidth: '95vw' }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>

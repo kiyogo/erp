@@ -62,7 +62,7 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
   - Khoảng cách lề viền và khoảng cách giữa các khối chức năng (form rows, grid, actions) trong dialog tuân theo chuẩn 14px.
   - Các phần tử form control bên trong (như ô chọn Multi-Select, Input, Tags) giữ khoảng cách nhỏ gọn (row-gap 3px, column-gap 4px, margin 0) để đảm bảo tính thẩm mỹ, thanh thoát và không bị giãn dòng cách xa nhau.
 - **Quy chuẩn kích thước khung nhập và nút bấm (100% bắt buộc kể từ giờ về sau):**
-  - **Chiều cao chuẩn 32px:** Toàn bộ 100% các khung nhập liệu (`Input`, `Select`, `DatePicker`, `InputNumber`) và các nút bấm (`Button`, khung bấm) trong toàn hệ thống web bắt buộc phải có chiều cao chuẩn đồng nhất là **`32px`** (`height: 32px; box-sizing: border-box;`).
+  - **Chiều cao chuẩn 32px:** Toàn bộ 100% các khung nhập liệu (`Input`, `Select`, `DatePicker`, `TimeRangePicker`, `InputNumber`) và các nút bấm (`Button`, khung bấm) trong toàn hệ thống web bắt buộc phải có chiều cao chuẩn đồng nhất là **`32px`** (`height: 32px; box-sizing: border-box;`).
   - **Đệm trong (Padding):** Ô nhập liệu dùng `padding: 4px 11px`; nút bấm dùng `padding: 4px 12px` (hoặc `4px 15px`).
   - **Bo góc (Border Radius):** Đạt chuẩn `6px` đồng bộ với token hệ thống.
   - **Cỡ chữ (Font Size):** Chuẩn `14px` (line-height: `1.5` hoặc `22px`).
@@ -104,6 +104,13 @@ Nhằm đảm bảo giao diện luôn chuẩn xác 100% theo ảnh mẫu và h�
 
 - **Tuyệt đối không dùng ký tự `&` trong tiêu đề:**
   - Không sử dụng ký tự `&` trong tiêu đề nhóm, nhãn form hoặc tiêu đề dialog (ví dụ: không viết `Thiết lập chấm công & chế độ ca`, chỉ ghi rõ ràng là `Thiết lập chấm công`). Khi cần liên kết nội dung thì sử dụng từ nối tiếng Việt chuẩn `và` hoặc dùng dấu phẩy `,`.
+
+- **Khung giờ và thời gian làm việc bắt buộc phải có menu chọn (TimePicker / TimeRangePicker dropdown tương tự như chọn ngày DatePicker):**
+  - Tuyệt đối không để trường nhập khung giờ ca (ví dụ: `08:00 - 17:30`) hoặc thời gian nghỉ giữa ca là một ô `Input` văn bản đơn thuần bắt người dùng phải tự gõ chuỗi ký tự thủ công.
+  - 100% các trường khung giờ phải có **menu chọn thả xuống (popup menu) tương tự như chọn ngày (`DatePicker`)**.
+  - Khi người dùng nhấp vào ô nhập liệu hoặc biểu tượng đồng hồ, hệ thống phải mở menu chọn gồm:
+    1. **Khung giờ mẫu:** Danh sách các ca chuẩn phổ biến (`08:00 - 17:30`, `08:00 - 17:00`, `07:30 - 16:30`, `08:30 - 18:00`, `06:00 - 14:00`, `14:00 - 22:00`, `22:00 - 06:00`...) để người dùng nhấp chọn nhanh chỉ với 1 click.
+    2. **Tùy chỉnh giờ:** Bộ chọn Giờ bắt đầu và Giờ kết thúc trực quan (chọn Giờ : Phút) để người dùng linh hoạt thiết lập khung giờ bất kỳ mà không lo sai định dạng.
 
 - **Kích thước và tỷ lệ hiển thị của Modal / Dialog:**
   - Kích thước modal phải vừa vặn, chuẩn xác theo tỷ lệ của ảnh mẫu (ví dụ: `width: 780px`, khoảng cách đỉnh màn hình `top: 50px`, giới hạn `maxWidth: '95vw'`).

@@ -202,6 +202,32 @@ body {
   border-color: var(--antd-danger-hover);
 }
 
+.ant-btn-text.ant-btn-dangerous,
+.ant-btn-dangerous.ant-btn-text {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  border: none !important;
+  color: var(--antd-danger, #EF4444) !important;
+}
+
+.ant-btn-text.ant-btn-dangerous:hover,
+.ant-btn-dangerous.ant-btn-text:hover {
+  background-color: #FEF2F2 !important;
+  border-color: transparent !important;
+  color: var(--antd-danger-hover, #DC2626) !important;
+}
+
+.ant-btn-icon-only {
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+}
+
 .ant-btn-circle {
   min-width: 32px;
   padding-inline: 0;

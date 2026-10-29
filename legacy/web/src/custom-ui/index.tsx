@@ -15,8 +15,9 @@ import { DatePicker, DatePickerProps } from './DatePicker';
 import { createSystemCode, isSystemGeneratedCodeField } from '../utils/systemCode';
 import { filesApi } from '../api/endpoints';
 import { formatFileSize } from '../utils/fileStorage';
-export { DatePicker };
-export type { DatePickerProps };
+import { TimeRangePicker, TimeRangePickerProps } from './TimeRangePicker';
+export { DatePicker, TimeRangePicker };
+export type { DatePickerProps, TimeRangePickerProps };
 import './theme.css';
 
 // Global trigger tracker for origin-based animations
@@ -813,6 +814,7 @@ export const Button: React.FC<ButtonProps> = ({
   const sizeClass = size ? `ant-btn-${size}` : '';
   const blockClass = block ? 'ant-btn-block' : '';
   const isStandalonePlus = !children && React.isValidElement(icon) && icon.type === PlusOutlined;
+  const isStandaloneIcon = !children && Boolean(icon);
 
   return (
     <button
@@ -820,12 +822,13 @@ export const Button: React.FC<ButtonProps> = ({
       title={title}
       disabled={isDisabled}
       onClick={onClick}
-      className={`ant-btn ${btnTypeClass} ${dangerClass} ${shapeClass} ${loadingClass} ${sizeClass} ${blockClass} ${isStandalonePlus ? 'ant-btn-square-icon' : ''} ${className}`}
+      className={`ant-btn ${btnTypeClass} ${dangerClass} ${shapeClass} ${loadingClass} ${sizeClass} ${blockClass} ${isStandalonePlus ? 'ant-btn-square-icon' : ''} ${isStandaloneIcon ? 'ant-btn-icon-only' : ''} ${className}`}
       style={{
         display: block ? 'flex' : 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 8,
+        gap: isStandaloneIcon ? 0 : 8,
+        padding: isStandaloneIcon && !style?.padding ? 0 : style?.padding,
         cursor: isDisabled ? (isLoading ? 'wait' : 'not-allowed') : 'pointer',
         ...style,
       }}

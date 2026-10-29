@@ -15,7 +15,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Dropdown, Checkbox } from '../../custom-ui';
+import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Dropdown, Checkbox, TimeRangePicker } from '../../custom-ui';
 import { collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { timeRangeDetails, attendanceNumber } from './attendanceRules';
@@ -755,8 +755,21 @@ export const ShiftsModule: React.FC = () => {
             <Form.Item name="shiftCode" label="Mã ca" rules={[{ required: true, message: 'Vui lòng nhập mã ca' }]}>
               <Input placeholder="Ví dụ: HC, SANG, DEM" />
             </Form.Item>
-            <Form.Item name="timeRange" label="Khung giờ ca" rules={[{ required: true, message: 'Vui lòng nhập khung giờ' }]}>
-              <Input placeholder="08:00 - 17:30" suffix={<ClockCircleOutlined style={{ color: '#94A3B8' }} />} />
+            <Form.Item name="timeRange" label="Khung giờ ca" rules={[{ required: true, message: 'Vui lòng chọn khung giờ ca' }]}>
+              <TimeRangePicker
+                placeholder="08:00 - 17:30"
+                onChange={(val) => {
+                  try {
+                    const details = timeRangeDetails(val);
+                    const breakVal = form.getFieldValue('breakTime');
+                    const breakHours = breakVal && breakVal !== '0' ? (timeRangeDetails(breakVal).hours || 0) : 0;
+                    const calculatedHours = Math.max(0.5, details.hours - breakHours);
+                    form.setFieldsValue({ workingHours: calculatedHours });
+                  } catch (e) {
+                    // ignore
+                  }
+                }}
+              />
             </Form.Item>
             <Form.Item name="shiftCategory" label="Nhóm ca" initialValue="Hành chính" rules={[{ required: true }]}>
               <Select options={[
@@ -770,7 +783,32 @@ export const ShiftsModule: React.FC = () => {
               <Input type="number" min={0.5} max={24} step={0.5} placeholder="8" />
             </Form.Item>
             <Form.Item name="breakTime" label="Thời gian nghỉ giữa ca">
-              <Input placeholder="12:00 - 13:30 (hoặc để trống)" />
+              <TimeRangePicker
+                placeholder="12:00 - 13:30 (hoặc để trống)"
+                allowClear
+                presets={[
+                  { label: 'Nghỉ trưa 1h30', value: '12:00 - 13:30', description: 'Nghỉ 1.5 giờ' },
+                  { label: 'Nghỉ trưa 1h', value: '12:00 - 13:00', description: 'Nghỉ 1.0 giờ' },
+                  { label: 'Nghỉ trưa 1h', value: '11:30 - 12:30', description: 'Nghỉ 1.0 giờ' },
+                  { label: 'Nghỉ giữa ca sáng', value: '11:00 - 11:30', description: 'Nghỉ 30 phút' },
+                  { label: 'Nghỉ giữa ca chiều', value: '18:00 - 18:30', description: 'Nghỉ 30 phút' },
+                  { label: 'Nghỉ giữa ca đêm', value: '02:00 - 02:30', description: 'Nghỉ 30 phút' },
+                  { label: 'Không nghỉ giữa ca', value: '', description: '0 giờ nghỉ' },
+                ]}
+                onChange={(val) => {
+                  try {
+                    const shiftTime = form.getFieldValue('timeRange');
+                    if (shiftTime) {
+                      const details = timeRangeDetails(shiftTime);
+                      const breakHours = val && val !== '0' ? (timeRangeDetails(val).hours || 0) : 0;
+                      const calculatedHours = Math.max(0.5, details.hours - breakHours);
+                      form.setFieldsValue({ workingHours: calculatedHours });
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                }}
+              />
             </Form.Item>
             <Form.Item name="applicableTo" label="Đơn vị áp dụng" initialValue="Toàn bộ công ty">
               <Select options={[
