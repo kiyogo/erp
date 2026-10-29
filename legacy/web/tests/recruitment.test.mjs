@@ -126,7 +126,7 @@ test('recruitment saves real candidate records, preserves logical keys, exports 
     assert.equal(writes[0].record.email, 'test@example.com');
     assert.equal(nodes().find(node => node.type === 'KTable').props.dataSource[0].candidatesApplied, 1);
 
-    await button('Copy Link Nội Bộ').props.onClick();
+    await button('Sao chép liên kết nội bộ').props.onClick();
     await tick();
     assert.equal(new URL(copiedLink).searchParams.get('job'), 'job-logical');
 

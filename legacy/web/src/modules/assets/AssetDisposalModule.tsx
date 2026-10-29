@@ -2,7 +2,7 @@ import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
-import { assetDisposalOutcome, assetDisposalSnapshot, disposalMoney, disposalNeedsDataWipe } from './assetDisposalRules';
+import { assetDisposalMethodLabel, assetDisposalOutcome, assetDisposalSnapshot, disposalMoney, disposalNeedsDataWipe } from './assetDisposalRules';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -340,6 +340,7 @@ export const AssetDisposalModule: React.FC = () => {
               { label: 'Bán thanh lý cho đơn vị ngoài', value: 'Bán thanh lý cho đơn vị thu mua ngoài' },
               { label: 'Tiêu hủy an toàn bảo mật', value: 'Tiêu hủy an toàn (Data Wiping / Shredding)' },
               { label: 'Tặng / Quyên góp từ thiện', value: 'Tặng / Quyên góp từ thiện' },
+              { label: 'Báo mất / Thất lạc do rủi ro', value: 'Báo mất / Thất lạc do rủi ro' },
             ]}
           />
         </div>
@@ -375,7 +376,7 @@ export const AssetDisposalModule: React.FC = () => {
                     <DeleteOutlined /> {r.disposalCode}
                   </span>
                   <Tag color="orange" style={{ marginTop: 3 }}>
-                    {r.disposalMethod.includes('nội bộ') ? 'Đấu giá CBNV' : r.disposalMethod.includes('Tiêu hủy') ? 'Tiêu hủy' : 'Bán thanh lý'}
+                    {assetDisposalMethodLabel(r.disposalMethod)}
                   </Tag>
                 </div>
               ),
@@ -742,6 +743,7 @@ export const AssetDisposalModule: React.FC = () => {
               </Checkbox>
             </div>
             {disposalNeedsDataWipe(finalizeTarget.category, finalizeTarget.disposalMethod) && <Alert type="warning" showIcon message="Hồ sơ này bắt buộc ghi nhận thao tác xóa dữ liệu trước khi hoàn tất." style={{ marginBottom: 12 }} />}
+            {finalizeTarget.disposalMethod.startsWith('Báo mất') && <Alert type="info" showIcon message="Không yêu cầu xác nhận xóa dữ liệu trên thiết bị chưa thu hồi. Chỉ ghi nhận xóa dữ liệu nếu đã có căn cứ về thao tác xóa từ xa." style={{ marginBottom: 12 }} />}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button onClick={() => setFinalizeModalOpen(false)}>Hủy</Button>
               <Button type="primary" htmlType="submit" loading={finalizeSaving}>Lưu kết quả xử lý</Button>

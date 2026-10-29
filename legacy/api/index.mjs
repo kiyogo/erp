@@ -2771,7 +2771,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   if (scope === 'asset_disposals') {
     const methods = ['Bán đấu giá nội bộ CBNV', 'Bán thanh lý cho đơn vị thu mua ngoài', 'Tiêu hủy an toàn (Data Wiping / Shredding)', 'Tặng / Quyên góp từ thiện', 'Báo mất / Thất lạc do rủi ro'];
     const finalStatuses = ['Đã thanh lý & Hoàn tất sổ sách', 'Đã tiêu hủy an toàn', 'Đã xử lý mất'];
-    const needsDataWipe = (category, method) => method.startsWith('Tiêu hủy') || ['Thiết bị IT', 'Máy chủ & Hạ tầng IDC'].includes(category);
+    const needsDataWipe = (category, method) => !method.startsWith('Báo mất')
+      && (method.startsWith('Tiêu hủy') || ['Thiết bị IT', 'Máy chủ & Hạ tầng IDC'].includes(category));
     record.key = current?.key || requiredText(record.key, 'Khóa biên bản thanh lý', 160);
     if (!current) {
       record.disposalCode = requiredText(record.disposalCode, 'Mã biên bản thanh lý', 80);

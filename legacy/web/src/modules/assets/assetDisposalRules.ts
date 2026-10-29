@@ -51,6 +51,16 @@ export function assetDisposalOutcome(method: string): 'Đã thanh lý & Hoàn t�
   return 'Đã thanh lý & Hoàn tất sổ sách';
 }
 
+export function assetDisposalMethodLabel(method: string): string {
+  if (method === 'Bán đấu giá nội bộ CBNV') return 'Đấu giá CBNV';
+  if (method === 'Bán thanh lý cho đơn vị thu mua ngoài') return 'Bán thanh lý ngoài';
+  if (method.startsWith('Tiêu hủy')) return 'Tiêu hủy';
+  if (method.startsWith('Tặng')) return 'Tặng / Quyên góp';
+  if (method.startsWith('Báo mất')) return 'Báo mất';
+  return method;
+}
+
 export function disposalNeedsDataWipe(category: string, method: string): boolean {
+  if (method.startsWith('Báo mất')) return false;
   return method.startsWith('Tiêu hủy') || ['Thiết bị IT', 'Máy chủ & Hạ tầng IDC'].includes(category);
 }

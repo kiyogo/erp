@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { assetDisposalOutcome, assetDisposalSnapshot, calculateDisposalResult, disposalMoney, disposalNeedsDataWipe } from '../src/modules/assets/assetDisposalRules.ts';
+import { assetDisposalMethodLabel, assetDisposalOutcome, assetDisposalSnapshot, calculateDisposalResult, disposalMoney, disposalNeedsDataWipe } from '../src/modules/assets/assetDisposalRules.ts';
 
 test('disposal proposal takes identity and book value from an eligible real asset', () => {
   assert.deepEqual(assetDisposalSnapshot({ key: 'asset-1', code: 'TS-1', name: 'Workstation', category: 'Thiết bị IT', model: 'SN01', status: 'Đang sử dụng', originalPrice: 3000, accumulatedDepreciation: 2500 }), {
@@ -24,5 +24,15 @@ test('disposal completion preserves sale, destruction, and loss as distinct outc
   assert.equal(disposalNeedsDataWipe('Thiết bị IT', 'Bán thanh lý cho đơn vị thu mua ngoài'), true);
   assert.equal(disposalNeedsDataWipe('Nội thất văn phòng', 'Tiêu hủy an toàn (Data Wiping / Shredding)'), true);
   assert.equal(disposalNeedsDataWipe('Nội thất văn phòng', 'Tặng / Quyên góp từ thiện'), false);
+  assert.equal(disposalNeedsDataWipe('Thiết bị IT', 'Báo mất / Thất lạc do rủi ro'), false);
+  assert.equal(disposalNeedsDataWipe('Thiết bị IT', 'Bán thanh lý cho đơn vị thu mua ngoài'), true);
   assert.throws(() => assetDisposalOutcome('unknown'));
+});
+
+test('disposal list labels every handling method distinctly', () => {
+  assert.equal(assetDisposalMethodLabel('Bán đấu giá nội bộ CBNV'), 'Đấu giá CBNV');
+  assert.equal(assetDisposalMethodLabel('Bán thanh lý cho đơn vị thu mua ngoài'), 'Bán thanh lý ngoài');
+  assert.equal(assetDisposalMethodLabel('Tiêu hủy an toàn (Data Wiping / Shredding)'), 'Tiêu hủy');
+  assert.equal(assetDisposalMethodLabel('Tặng / Quyên góp từ thiện'), 'Tặng / Quyên góp');
+  assert.equal(assetDisposalMethodLabel('Báo mất / Thất lạc do rủi ro'), 'Báo mất');
 });
