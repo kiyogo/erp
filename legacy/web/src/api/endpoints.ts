@@ -341,6 +341,7 @@ export type EnterpriseTask = {
   projectName: string;
   assigneeId: string;
   assignee: string;
+  createdById?: string;
   createdBy: string;
   priority: TaskPriority;
   dueDate: string;
@@ -348,10 +349,28 @@ export type EnterpriseTask = {
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
+  dueDatePostponementCount?: number;
+  dueDateHistory?: TaskDueDateChange[];
+  collaborators?: TaskCollaborator[];
   subtasks?: TaskChecklistItem[];
   comments?: TaskComment[];
   activities?: TaskActivity[];
   reports?: TaskReport[];
+};
+
+export type TaskDueDateChange = {
+  key: string;
+  previousDueDate: string;
+  newDueDate: string;
+  changedAt: string;
+  actor: string;
+  isPostponement: boolean;
+};
+
+export type TaskCollaborator = {
+  id: string;
+  name: string;
+  employeeCode: string;
 };
 
 export type TaskAssignee = {
@@ -369,6 +388,7 @@ export type CreateTask = {
   description?: string;
   projectName?: string;
   assigneeId?: string;
+  collaboratorIds?: string[];
   priority: TaskPriority;
   dueDate: string;
 };

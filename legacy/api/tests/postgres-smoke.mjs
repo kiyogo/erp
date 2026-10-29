@@ -308,7 +308,32 @@ try {
   await request('/collections/pg_rows', 'PUT', { records: [{ key: 'a', title: 'Alpha' }, { key: 'b', title: 'Beta' }] });
   assert.equal((await request('/collections/pg_rows?sort=title&order=asc')).data[0].title, 'Alpha'); completed++;
   const { task } = await request('/tasks', 'POST', { taskTitle: 'PG task', priority: 'Trung bình', dueDate: '2026-12-31', assigneeId: login.user.id, checklist: ['First', 'Second'] }, 201);
-  assert.equal((await request(`/tasks/${task.key}`)).task.subtasks.length, 2); completed++;
+  assert.equal(task.createdById, login.user.id);
+  assert.equal((await request(`/tasks/${task.key}`)).task.subtasks.length, 2);
+  const pgPostponedTask = (await request(`/tasks/${task.key}`, 'PATCH', { dueDate: '2027-01-07' })).task;
+  assert.equal(pgPostponedTask.dueDatePostponementCount, 1, JSON.stringify(pgPostponedTask));
+  assert.deepEqual(pgPostponedTask.dueDateHistory.map(change => [change.previousDueDate, change.newDueDate, change.isPostponement]), [
+    ['2026-12-31', '2027-01-07', true],
+  ]);
+  assert.equal(pgPostponedTask.dueDateHistory[0].actor, login.user.name);
+  const pgEarlierTask = (await request(`/tasks/${task.key}`, 'PATCH', { dueDate: '2026-12-01' })).task;
+  assert.equal(pgEarlierTask.dueDatePostponementCount, 1);
+  assert.equal(pgEarlierTask.dueDateHistory.length, 2);
+  assert.equal(pgEarlierTask.dueDateHistory[1].isPostponement, false);
+  const pgListedTask = (await request('/tasks')).data.find(item => item.key === task.key);
+  assert.equal(pgListedTask.dueDatePostponementCount, 1);
+  assert.equal(pgListedTask.dueDateHistory.length, 2); completed += 9;
+  const pgCollaborator = (await request('/users', 'POST', {
+    email: 'pg-task-assignee@example.test', name: 'PG Task Assignee', password: 'Pg-Task-26!Secure',
+    employeeCode: 'PG-TASK-ASSIGNEE', role: 'USER',
+  }, 201)).user;
+  const pgSharedTask = (await request('/tasks', 'POST', {
+    taskTitle: 'PG shared task', priority: 'Trung bình', dueDate: '2026-12-31',
+    assigneeId: pgCollaborator.id, collaboratorIds: [login.user.id],
+  }, 201)).task;
+  assert.deepEqual(pgSharedTask.collaborators.map(person => person.id), [login.user.id]);
+  assert.equal((await request(`/tasks/${pgSharedTask.key}`)).task.collaborators[0].employeeCode, login.user.employeeCode);
+  assert.ok((await request('/tasks')).data.some(item => item.key === pgSharedTask.key)); completed += 3;
   const feedbackInput = { key: 'pg-feedback-lifecycle', feedbackCode: 'FB-PG-LIFECYCLE', clientName: 'PG customer', contactPerson: 'PG contact', phone: '0900000000', serviceName: 'PG service', rating: null, content: 'PostgreSQL feedback lifecycle', priority: 'Khẩn cấp', assignedStaffId: login.user.id };
   const feedback = (await request('/collections/crm_feedback', 'POST', { record: feedbackInput }, 201)).record;
   assert.equal(feedback.status, 'Đang xử lý');

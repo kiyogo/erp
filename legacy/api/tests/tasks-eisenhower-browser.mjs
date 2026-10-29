@@ -89,21 +89,37 @@ try {
   assert.equal(loginResponse.status, 200, JSON.stringify(admin));
   const token = admin.token || admin.access_token;
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  const teammateResponse = await fetch(`${apiUrl}/users`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ name: 'Nhân viên giao việc thử', email: 'task-report-assignee@example.test', employeeCode: 'TASK-REPORT-ASSIGNEE', password: 'Task-User-26!Secure', role: 'USER' }),
+  });
+  const teammateResult = await teammateResponse.json();
+  assert.equal(teammateResponse.status, 201, JSON.stringify(teammateResult));
+  const teammate = teammateResult.user;
+  const secondAssigneeResponse = await fetch(`${apiUrl}/users`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ name: 'Người thực hiện thứ hai', email: 'task-report-assignee-two@example.test', employeeCode: 'TASK-REPORT-ASSIGNEE-2', password: 'Task-User-26!Secure', role: 'USER' }),
+  });
+  const secondAssigneeResult = await secondAssigneeResponse.json();
+  assert.equal(secondAssigneeResponse.status, 201, JSON.stringify(secondAssigneeResult));
+  const secondAssignee = secondAssigneeResult.user;
   const today = vietnamDateOffset(0);
+  const createdTasks = [];
   const cases = [
-    { title: 'Ma trận cần làm ngay', priority: 'Khẩn cấp', dueDate: vietnamDateOffset(20), quadrant: 'do-now', projectName: 'Dự án ERP' },
+    { title: 'Ma trận cần làm ngay', priority: 'Khẩn cấp', dueDate: vietnamDateOffset(20), quadrant: 'do-now', projectName: 'Dự án ERP', collaboratorIds: [teammate.id] },
     { title: 'Ma trận lên lịch', priority: 'Cao', dueDate: vietnamDateOffset(20), quadrant: 'schedule', projectName: 'Dự án ERP' },
     { title: 'Ma trận cần giao', priority: 'Trung bình', dueDate: today, quadrant: 'delegate' },
-    { title: 'Ma trận ít ưu tiên', priority: 'Thấp', dueDate: vietnamDateOffset(20), quadrant: 'low-priority' },
+    { title: 'Ma trận ít ưu tiên', priority: 'Thấp', dueDate: vietnamDateOffset(20), quadrant: 'low-priority', assigneeId: teammate.id },
     { title: 'Ma trận đã hoàn thành', priority: 'Khẩn cấp', dueDate: today, completed: true },
   ];
   for (const item of cases) {
     const response = await fetch(`${apiUrl}/tasks`, {
       method: 'POST', headers,
-      body: JSON.stringify({ taskTitle: item.title, priority: item.priority, dueDate: item.dueDate, assigneeId: admin.user.id, projectName: item.projectName }),
+      body: JSON.stringify({ taskTitle: item.title, priority: item.priority, dueDate: item.dueDate, assigneeId: item.assigneeId || admin.user.id, projectName: item.projectName, collaboratorIds: item.collaboratorIds || [] }),
     });
     const result = await response.json();
     assert.equal(response.status, 201, JSON.stringify(result));
+    createdTasks.push(result.task);
     if (item.completed) {
       const update = await fetch(`${apiUrl}/tasks/${encodeURIComponent(result.task.key)}`, {
         method: 'PATCH', headers, body: JSON.stringify({ status: 'Hoàn thành', progress: 100 }),
@@ -111,6 +127,16 @@ try {
       assert.equal(update.status, 200, await update.text());
     }
   }
+  assert.deepEqual(createdTasks[0].collaborators.map(person => person.id), [teammate.id]);
+  const postponedDate = vietnamDateOffset(40);
+  const postponeResponse = await fetch(`${apiUrl}/tasks/${encodeURIComponent(createdTasks[0].key)}`, {
+    method: 'PATCH', headers, body: JSON.stringify({ dueDate: postponedDate }),
+  });
+  const postponeResult = await postponeResponse.json();
+  assert.equal(postponeResponse.status, 200, JSON.stringify(postponeResult));
+  assert.equal(postponeResult.task.dueDatePostponementCount, 1);
+  assert.equal(postponeResult.task.dueDateHistory[0].previousDueDate, cases[0].dueDate);
+  assert.equal(postponeResult.task.dueDateHistory[0].newDueDate, postponedDate);
 
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu'] });
   const page = await browser.newPage();
@@ -162,7 +188,21 @@ try {
   await chooseReport('Theo người thực hiện');
   reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
   assert.ok(reportText.includes(admin.user.name), 'Assignee report must use the real task assignee.');
-  assert.match(reportText, /5\s+100%/);
+  assert.match(reportText, /4\s+80%/);
+  assert.ok(reportText.includes(teammate.name), 'Assignee report must keep other assignees separate.');
+  assert.match(reportText, /1\s+20%/);
+  await chooseReport('Theo người liên quan');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.ok(reportText.includes(`${teammate.name} (${teammate.employeeCode})`), 'Related-person report must use collaborator records from the API.');
+  assert.match(reportText, /1\s+100%/);
+  await chooseReport('Việc giao cho tôi');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.match(reportText, /Chưa bắt đầu\s+3\s+75%/);
+  assert.match(reportText, /Hoàn thành\s+1\s+25%/);
+  await chooseReport('Việc tôi tạo');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.match(reportText, /Chưa bắt đầu\s+4\s+80%/);
+  assert.match(reportText, /Hoàn thành\s+1\s+20%/);
   await chooseReport('Theo dự án / đơn vị');
   reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
   assert.match(reportText, /Dự án ERP\s+2\s+40%\s+0%/);
@@ -170,6 +210,11 @@ try {
   await chooseReport('Nhiệm vụ tạo theo tháng');
   reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
   assert.ok(reportText.includes(today.slice(0, 7)), 'Creation trend must group real task creation dates by month.');
+  await chooseReport('Tình hình lùi hạn công việc');
+  reportText = await page.$eval('[data-testid="task-reports"]', element => element.innerText);
+  assert.ok(reportText.includes(`${createdTasks[0].taskCode} · ${createdTasks[0].taskTitle}`));
+  assert.ok(reportText.includes(`${cases[0].dueDate} → ${postponedDate}`));
+  assert.ok(reportText.includes(admin.user.name));
 
   const cdp = await page.createCDPSession();
   await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: path.join(directory, 'downloads') });
@@ -180,9 +225,38 @@ try {
     await delay(100);
   }
   assert.ok(downloaded, 'Report export must download a real XLSX file.');
+
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Thêm nhiệm vụ')?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')].some(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Người liên quan')), { timeout: 10000 });
+  const formInput = async label => page.evaluateHandle(text => [...document.querySelectorAll('.ant-modal-root .ant-form-item')]
+    .find(item => item.querySelector('label')?.textContent.includes(text))?.querySelector('input'), label);
+  const titleInput = await formInput('Tên nhiệm vụ');
+  await titleInput.asElement().type('Nhiệm vụ tạo từ biểu mẫu có người liên quan');
+  await titleInput.dispose();
+  const chooseFormPerson = async (label, personName) => {
+    await page.evaluate(text => [...document.querySelectorAll('.ant-modal-root .ant-form-item')]
+      .find(item => item.querySelector('label')?.textContent.includes(text))?.querySelector('.ant-select-selector')?.click(), label);
+    await page.waitForFunction(name => [...document.querySelectorAll('.ant-select-dropdown')]
+      .some(dropdown => dropdown.getBoundingClientRect().width > 0 && [...dropdown.querySelectorAll('.ant-select-item')].some(option => option.textContent.includes(name))), { timeout: 10000 }, personName);
+    const selected = await page.evaluate(name => {
+      const dropdowns = [...document.querySelectorAll('.ant-select-dropdown')].filter(dropdown => dropdown.getBoundingClientRect().width > 0);
+      const option = [...(dropdowns.at(-1)?.querySelectorAll('.ant-select-item') || [])].find(item => item.textContent.includes(name));
+      option?.click();
+      return Boolean(option);
+    }, personName);
+    assert.equal(selected, true, `${personName} must be selectable for ${label}.`);
+  };
+  await chooseFormPerson('Người thực hiện', secondAssignee.name);
+  await chooseFormPerson('Người liên quan', teammate.name);
+  const createdFromFormPromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/tasks'), { timeout: 15000 });
+  await page.evaluate(() => [...document.querySelectorAll('.ant-modal-root button')].find(button => button.textContent.trim() === 'Thêm nhiệm vụ')?.click());
+  const createdFromFormResponse = await createdFromFormPromise;
+  assert.equal(createdFromFormResponse.status(), 201);
+  const createdFromForm = await createdFromFormResponse.json();
+  assert.deepEqual(createdFromForm.task.collaborators.map(person => person.id), [teammate.id]);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(taskApiErrors, []);
-  console.log(JSON.stringify({ checks: 'real task data in all four Eisenhower quadrants, Vietnam-date urgency, completed-task exclusion, task detail opening, status/assignee/project/month reports and XLSX download', quadrants: Object.keys(quadrants).length }));
+  console.log(JSON.stringify({ checks: 'real task data in all four Eisenhower quadrants, Vietnam-date urgency, completed-task exclusion, task detail opening, status/assignee/project/month/assigned-to-me/my-created/related-person/postponement reports, XLSX download and create-form collaborator save', quadrants: Object.keys(quadrants).length }));
 } catch (error) {
   console.error(`${error.stack || error}\n${logs}`);
   process.exitCode = 1;

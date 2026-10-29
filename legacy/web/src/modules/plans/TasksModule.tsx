@@ -602,6 +602,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       priority: 'Trung bình',
       unitName: undefined,
       assigneeIds: [],
+      collaboratorIds: [],
       dueDate: defaultDueDate,
     });
     setModalOpen(true);
@@ -652,10 +653,11 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       projectName: values.unitName || '',
       priority: values.priority || 'Trung bình',
       dueDate,
+      collaboratorIds: Array.isArray(values.collaboratorIds) ? values.collaboratorIds : [],
     };
     try {
       for (const assigneeId of assigneeIds) {
-        await tasksApi.create({ ...payload, assigneeId });
+        await tasksApi.create({ ...payload, assigneeId, collaboratorIds: payload.collaboratorIds.filter((id: string) => id !== assigneeId) });
       }
       message.success(`Đã thêm nhiệm vụ cho ${assigneeIds.length} người thực hiện.`);
       setModalOpen(false);
@@ -666,11 +668,17 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       console.warn('Backend tasksApi.create error, saving locally:', err);
       const created = assigneeIds.map((assigneeId: string, index: number) => {
         const selectedAssignee = assignees.find((person) => person.id === assigneeId);
+        const collaborators = payload.collaboratorIds
+          .filter((id: string) => id !== assigneeId)
+          .map((id: string) => assignees.find((person) => person.id === id))
+          .filter((person): person is TaskAssignee => Boolean(person))
+          .map(person => ({ id: person.id, name: person.name, employeeCode: person.employeeCode }));
         return dataService.createEnterpriseTask({
           ...payload,
           taskCode: index === 0 ? payload.taskCode : undefined,
           assigneeId,
           assignee: selectedAssignee ? `${selectedAssignee.name} (${selectedAssignee.employeeCode})` : 'Người thực hiện',
+          collaborators,
         });
       });
       setTasks((current) => [...created, ...current]);
@@ -1023,7 +1031,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
     () => buildEisenhowerMatrix(filteredTasks, matrixToday),
     [filteredTasks, matrixToday],
   );
-  const taskReportRows = useMemo(() => buildTaskReport(filteredTasks, taskReportKind), [filteredTasks, taskReportKind]);
+  const taskReportRows = useMemo(() => buildTaskReport(filteredTasks, taskReportKind, user?.id), [filteredTasks, taskReportKind, user?.id]);
   const exportTaskReport = () => {
     const reportName = TASK_REPORT_OPTIONS.find(option => option.value === taskReportKind)?.label || 'Báo cáo nhiệm vụ';
     downloadFile(`bao-cao-nhiem-vu-${taskReportKind}.xlsx`, generateValidXlsxBlob(taskReportExportRows(taskReportKind, taskReportRows)));
@@ -1124,17 +1132,21 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
             </div>
             {taskReportRows.length ? (
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
-                  <thead><tr>{['Nhóm thống kê', 'Số nhiệm vụ', 'Tỷ trọng', 'Tiến độ trung bình'].map(label => <th key={label} scope="col" style={{ textAlign: label === 'Nhóm thống kê' ? 'left' : 'right', padding: '10px 12px', color: '#64748B', fontSize: 12, borderBottom: '1px solid #E2E8F0' }}>{label}</th>)}</tr></thead>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: taskReportKind === 'postponed' ? 820 : 560 }}>
+                  <thead><tr>{(taskReportKind === 'postponed'
+                    ? ['Công việc', 'Số lần lùi hạn', 'Tỷ trọng lượt lùi', 'Tiến độ hiện tại', 'Lịch sử hạn']
+                    : ['Nhóm thống kê', 'Số nhiệm vụ', 'Tỷ trọng', 'Tiến độ trung bình']
+                  ).map((label, index) => <th key={label} scope="col" style={{ textAlign: index === 0 ? 'left' : 'right', padding: '10px 12px', color: '#64748B', fontSize: 12, borderBottom: '1px solid #E2E8F0' }}>{label}</th>)}</tr></thead>
                   <tbody>{taskReportRows.map(row => <tr key={row.label}>
                     <th scope="row" style={{ textAlign: 'left', padding: '11px 12px', fontWeight: 600, color: '#1E293B', borderBottom: '1px solid #F1F5F9' }}>{row.label}</th>
                     <td style={{ textAlign: 'right', padding: '11px 12px', color: '#334155', borderBottom: '1px solid #F1F5F9' }}>{row.count}</td>
                     <td style={{ textAlign: 'right', padding: '11px 12px', color: '#334155', borderBottom: '1px solid #F1F5F9' }}>{row.percentage}%</td>
                     <td style={{ textAlign: 'right', padding: '11px 12px', color: '#334155', borderBottom: '1px solid #F1F5F9' }}>{row.averageProgress === null ? '—' : `${row.averageProgress}%`}</td>
+                    {taskReportKind === 'postponed' && <td style={{ whiteSpace: 'pre-line', padding: '11px 12px', color: '#475569', fontSize: 12, borderBottom: '1px solid #F1F5F9' }}>{row.details}</td>}
                   </tr>)}</tbody>
                 </table>
               </div>
-            ) : <div style={{ padding: '28px 12px', textAlign: 'center', color: '#64748B' }}>Chưa có nhiệm vụ để lập báo cáo.</div>}
+            ) : <div style={{ padding: '28px 12px', textAlign: 'center', color: '#64748B' }}>{taskReportKind === 'postponed' ? 'Chưa có nhiệm vụ nào được ghi nhận lùi hạn.' : 'Chưa có nhiệm vụ để lập báo cáo.'}</div>}
           </section>
         )}
       </Spin>
@@ -1174,6 +1186,18 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
               filterOption={(input, option) =>
                 (option?.label ?? '').toString().toLowerCase().includes(input.toLowerCase())
               }
+            />
+          </Form.Item>
+          <Form.Item name="collaboratorIds" label="Người liên quan">
+            <Select
+              mode="multiple"
+              showSearch
+              allowClear
+              placeholder="Chọn người cùng phối hợp"
+              options={(isEmployee ? allowedAssignees : assignees)
+                .filter(person => person && (person.name || person.employeeCode))
+                .map(person => ({ value: person.id, label: `${person.name || 'Nhân viên'} (${person.employeeCode || person.id})` }))}
+              filterOption={(input, option) => (option?.label ?? '').toString().toLowerCase().includes(input.toLowerCase())}
             />
           </Form.Item>
           <Form.Item name="dueDate" label="Hạn hoàn thành" rules={[{ required: true }]}><Input type="date" /></Form.Item>

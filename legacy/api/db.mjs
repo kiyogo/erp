@@ -373,6 +373,26 @@ export async function initDatabaseSchema() {
     CREATE INDEX IF NOT EXISTS tasks_due_date_idx ON tasks(due_date, status);
     CREATE INDEX IF NOT EXISTS tasks_code_idx ON tasks(LOWER(code));
 
+    CREATE TABLE IF NOT EXISTS task_due_date_history (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      previous_due_date TEXT NOT NULL,
+      new_due_date TEXT NOT NULL,
+      changed_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      changed_at TEXT NOT NULL,
+      is_postponement INTEGER NOT NULL CHECK (is_postponement IN (0, 1))
+    );
+    CREATE INDEX IF NOT EXISTS task_due_date_history_task_idx ON task_due_date_history(task_id, changed_at);
+
+    CREATE TABLE IF NOT EXISTS task_collaborators (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      collaborator_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      added_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (task_id, collaborator_id)
+    );
+    CREATE INDEX IF NOT EXISTS task_collaborators_user_idx ON task_collaborators(collaborator_id, task_id);
+
     CREATE TABLE IF NOT EXISTS task_checklist_items (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

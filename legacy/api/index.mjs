@@ -1287,6 +1287,7 @@ function publicTask(row) {
     projectName: row.project_name || '',
     assigneeId: row.assignee_id,
     assignee: `${row.assignee_name} (${row.assignee_employee_code})`,
+    createdById: row.created_by,
     createdBy: row.creator_name,
     priority: row.priority,
     dueDate: row.due_date,
@@ -1319,6 +1320,23 @@ async function populateTaskDetails(task, taskId) {
     WHERE a.task_id = ? OR a.task_id = ? ORDER BY a.created_at DESC
   `).all(id, code);
 
+  const dueDateHistoryRows = await db.prepare(`
+    SELECT h.id AS key, h.previous_due_date AS "previousDueDate", h.new_due_date AS "newDueDate",
+      h.changed_at AS "changedAt", h.is_postponement AS "isPostponement", u.name AS actor
+    FROM task_due_date_history h
+    JOIN users u ON u.id = h.changed_by
+    WHERE h.task_id = ?
+    ORDER BY h.changed_at ASC, h.id ASC
+  `).all(id);
+  const dueDateHistory = dueDateHistoryRows.map(item => ({ ...item, isPostponement: Boolean(item.isPostponement) }));
+
+  const collaborators = await db.prepare(`
+    SELECT u.id, u.name, u.employee_code AS "employeeCode"
+    FROM task_collaborators tc JOIN users u ON u.id = tc.collaborator_id
+    WHERE tc.task_id = ?
+    ORDER BY LOWER(u.name) ASC
+  `).all(id);
+
   const reportsRows = await db.prepare(`
     SELECT r.id AS key, r.content, r.attachments_json AS attachmentsJson, r.progress, r.status,
       r.created_at AS createdAt, u.name AS author
@@ -1342,8 +1360,64 @@ async function populateTaskDetails(task, taskId) {
     subtasks,
     comments,
     activities,
+    dueDateHistory,
+    dueDatePostponementCount: dueDateHistory.filter(item => item.isPostponement).length,
+    collaborators,
     reports,
   };
+}
+
+async function populateTaskListDueDateHistory(tasks) {
+  if (!tasks.length) return tasks;
+  const taskIds = tasks.map(task => task.key).filter(Boolean);
+  const grouped = new Map();
+  for (let offset = 0; offset < taskIds.length; offset += 500) {
+    const batch = taskIds.slice(offset, offset + 500);
+    const placeholders = batch.map(() => '?').join(', ');
+    const rows = await db.prepare(`
+      SELECT h.task_id AS "taskId", h.id AS key, h.previous_due_date AS "previousDueDate", h.new_due_date AS "newDueDate",
+        h.changed_at AS "changedAt", h.is_postponement AS "isPostponement", u.name AS actor
+      FROM task_due_date_history h
+      JOIN users u ON u.id = h.changed_by
+      WHERE h.task_id IN (${placeholders})
+      ORDER BY h.changed_at ASC, h.id ASC
+    `).all(...batch);
+    for (const row of rows) {
+      const changes = grouped.get(row.taskId) || [];
+      changes.push({ ...row, isPostponement: Boolean(row.isPostponement) });
+      grouped.set(row.taskId, changes);
+    }
+  }
+  return tasks.map(task => {
+    const dueDateHistory = grouped.get(task.key) || [];
+    return {
+      ...task,
+      dueDateHistory,
+      dueDatePostponementCount: dueDateHistory.filter(item => item.isPostponement).length,
+    };
+  });
+}
+
+async function populateTaskListCollaborators(tasks) {
+  if (!tasks.length) return tasks;
+  const taskIds = tasks.map(task => task.key).filter(Boolean);
+  const grouped = new Map();
+  for (let offset = 0; offset < taskIds.length; offset += 500) {
+    const batch = taskIds.slice(offset, offset + 500);
+    const placeholders = batch.map(() => '?').join(', ');
+    const rows = await db.prepare(`
+      SELECT tc.task_id AS "taskId", u.id, u.name, u.employee_code AS "employeeCode"
+      FROM task_collaborators tc JOIN users u ON u.id = tc.collaborator_id
+      WHERE tc.task_id IN (${placeholders})
+      ORDER BY LOWER(u.name) ASC
+    `).all(...batch);
+    for (const row of rows) {
+      const collaborators = grouped.get(row.taskId) || [];
+      collaborators.push({ id: row.id, name: row.name, employeeCode: row.employeeCode });
+      grouped.set(row.taskId, collaborators);
+    }
+  }
+  return tasks.map(task => ({ ...task, collaborators: grouped.get(task.key) || [] }));
 }
 
 async function proposalRowById(id) {
@@ -4283,10 +4357,17 @@ function validateTaskCreate(input) {
     description: optionalText(input.description, 'Mô tả nhiệm vụ', 4_000),
     projectName: optionalText(input.projectName, 'Đơn vị', 200),
     assigneeId: requiredText(input.assigneeId, 'Người thực hiện', 128),
+    collaboratorIds: validateTaskCollaboratorIds(input.collaboratorIds),
     priority: oneOf(input.priority || 'Trung bình', 'Độ ưu tiên', TASK_PRIORITIES),
     dueDate: (input.dueDate && String(input.dueDate).trim()) ? requiredIsoDate(input.dueDate, 'Hạn hoàn thành') : defaultDueDate,
     checklist: validateChecklist(input.checklist),
   };
+}
+
+function validateTaskCollaboratorIds(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 50) throw new HttpError(422, 'Mỗi nhiệm vụ có thể chọn tối đa 50 người liên quan.');
+  return [...new Set(value.map((item, index) => requiredText(item, `Người liên quan ${index + 1}`, 128)))];
 }
 
 function validateEmployeeProposal(input) {
@@ -4792,9 +4873,12 @@ async function generateEmployeeCode() {
   return `NV-${String(Date.now()).slice(-4)}`;
 }
 
-function ensureTaskAccess(task, actor) {
+async function ensureTaskAccess(task, actor) {
   if (!task) throw new HttpError(404, 'Không tìm thấy nhiệm vụ.');
-  if (actor.role !== 'ADMIN' && task.assignee_id !== actor.id && task.created_by !== actor.id) {
+  const isCollaborator = actor.role !== 'ADMIN' && await db.prepare(
+    'SELECT 1 FROM task_collaborators WHERE task_id = ? AND collaborator_id = ?',
+  ).get(task.id, actor.id);
+  if (actor.role !== 'ADMIN' && task.assignee_id !== actor.id && task.created_by !== actor.id && !isCollaborator) {
     throw new HttpError(403, 'Bạn không có quyền thao tác nhiệm vụ này.');
   }
 }
@@ -8894,7 +8978,7 @@ async function handleRequest(request, response) {
         p.department, p.position
       FROM users u
       LEFT JOIN employee_profiles p ON p.user_id = u.id
-      WHERE u.role != 'ADMIN'
+      WHERE u.role != 'ADMIN' AND u.is_active = 1
         AND COALESCE(p.employment_status, 'Chính thức') != 'Đã nghỉ việc'
       ORDER BY u.name COLLATE NOCASE ASC
     `).all();
@@ -8924,9 +9008,11 @@ async function handleRequest(request, response) {
           LEFT JOIN users assignee ON (assignee.id = t.assignee_id OR assignee.employee_code = t.assignee_id)
           LEFT JOIN users creator ON (creator.id = t.created_by OR creator.employee_code = t.created_by)
           WHERE t.assignee_id = ? OR t.assignee_id = ? OR t.created_by = ? OR t.created_by = ?
+            OR EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = t.id AND tc.collaborator_id = ?)
           ORDER BY t.created_at DESC, t.id DESC
-        `).all(actor.id, actor.employee_code || actor.id, actor.id, actor.employee_code || actor.id);
-    sendJson(response, 200, { data: rows.map((row) => publicTask(row)) });
+        `).all(actor.id, actor.employee_code || actor.id, actor.id, actor.employee_code || actor.id, actor.id);
+    const taskRows = await populateTaskListDueDateHistory(rows.map((row) => publicTask(row)));
+    sendJson(response, 200, { data: await populateTaskListCollaborators(taskRows) });
     return;
   }
 
@@ -8936,6 +9022,19 @@ async function handleRequest(request, response) {
     const task = validateTaskCreate(payload);
     const assignee = await resolveUser(task.assigneeId, actor);
     if (!assignee) throw new HttpError(422, 'Người thực hiện không tồn tại.');
+    const collaborators = [];
+    for (const collaboratorId of task.collaboratorIds) {
+      const collaborator = await db.prepare(`
+        SELECT u.id, u.name, u.employee_code
+        FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+        WHERE (u.id = ? OR LOWER(u.employee_code) = ?) AND u.is_active = 1
+          AND COALESCE(p.employment_status, 'Chính thức') != 'Đã nghỉ việc'
+        ORDER BY CASE WHEN u.id = ? THEN 0 ELSE 1 END LIMIT 1
+      `).get(collaboratorId, collaboratorId.toLowerCase(), collaboratorId);
+      if (!collaborator) throw new HttpError(422, `Không tìm thấy người liên quan đang hoạt động: ${collaboratorId}.`);
+      if (collaborator.id === assignee.id) throw new HttpError(422, 'Người liên quan không thể trùng người thực hiện.');
+      collaborators.push(collaborator);
+    }
     const code = await nextUniqueCode('TASK', 'tasks');
 
     const id = randomUUID();
@@ -8946,6 +9045,12 @@ async function handleRequest(request, response) {
         due_date, progress, status, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Chưa bắt đầu', ?, ?)`)
         .run(id, code, task.taskTitle, task.description, task.projectName, assignee.id, actor.id, task.priority, task.dueDate, timestamp, timestamp);
+      for (const collaborator of collaborators) {
+        await db.prepare(`INSERT INTO task_collaborators (task_id, collaborator_id, added_by, added_at)
+          VALUES (?, ?, ?, ?)`)
+          .run(id, collaborator.id, actor.id, timestamp);
+        await recordTaskActivity(id, actor.id, `Đã thêm ${collaborator.name} vào danh sách người liên quan.`, timestamp);
+      }
       const insertChecklist = await db.prepare(`
         INSERT INTO task_checklist_items (id, task_id, title, is_completed, sort_order) VALUES (?, ?, ?, 0, ?)
       `);
@@ -8963,7 +9068,7 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const id = decodeURIComponent(taskDetailMatch[1]);
     const task = await taskRowById(id);
-    ensureTaskAccess(task, actor);
+    await ensureTaskAccess(task, actor);
     sendJson(response, 200, { task: await populateTaskDetails(publicTask(task), task.id) });
     return;
   }
@@ -8972,7 +9077,7 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const id = decodeURIComponent(taskDetailMatch[1]);
     const current = await taskRowById(id);
-    ensureTaskAccess(current, actor);
+    await ensureTaskAccess(current, actor);
     if (actor.role !== 'ADMIN' && current.created_by !== actor.id && current.created_by !== actor.employee_code) {
       throw new HttpError(403, 'Chỉ Quản trị viên hoặc người tạo mới có quyền xóa nhiệm vụ.');
     }
@@ -8991,7 +9096,7 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const id = decodeURIComponent(taskDetailMatch[1]);
     const current = await taskRowById(id);
-    ensureTaskAccess(current, actor);
+    await ensureTaskAccess(current, actor);
     const payload = await readJson(request);
     const isAdmin = actor.role === 'ADMIN';
     if (!isAdmin && current.assignee_id !== actor.id && current.assignee_id !== actor.employee_code) {
@@ -9022,19 +9127,30 @@ async function handleRequest(request, response) {
       );
     if (status === 'Hoàn thành') progress = 100;
     const timestamp = now();
-    await db.prepare(`UPDATE tasks SET
-      title = ?, description = ?, project_name = ?, assignee_id = ?, priority = ?,
-      due_date = ?, progress = ?, status = ?, updated_at = ?
-      WHERE id = ?
-    `).run(taskTitle, description, projectName, finalAssigneeId, priority, dueDate, progress, status, timestamp, id);
     const statusChanged = status !== current.status;
     const progressChanged = progress !== current.progress;
-    if (statusChanged || progressChanged) {
-      const descriptions = [];
-      if (statusChanged) descriptions.push(`Đã đổi trạng thái thành ${status}.`);
-      if (progressChanged) descriptions.push(`Đã cập nhật tiến độ ${progress}%.`);
-      await recordTaskActivity(id, actor.id, descriptions.join(' '), timestamp);
-    }
+    const dueDateChanged = dueDate !== current.due_date;
+    const isPostponement = dueDateChanged && dueDate > current.due_date;
+    await db.transaction(async () => {
+      await db.prepare(`UPDATE tasks SET
+        title = ?, description = ?, project_name = ?, assignee_id = ?, priority = ?,
+        due_date = ?, progress = ?, status = ?, updated_at = ?
+        WHERE id = ?
+      `).run(taskTitle, description, projectName, finalAssigneeId, priority, dueDate, progress, status, timestamp, id);
+      if (dueDateChanged) {
+        await db.prepare(`INSERT INTO task_due_date_history (
+          id, task_id, previous_due_date, new_due_date, changed_by, changed_at, is_postponement
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), id, current.due_date, dueDate, actor.id, timestamp, isPostponement ? 1 : 0);
+        await recordTaskActivity(id, actor.id, `Đã đổi hạn từ ${current.due_date} thành ${dueDate}${isPostponement ? ' (lùi hạn)' : ''}.`, timestamp);
+      }
+      if (statusChanged || progressChanged) {
+        const descriptions = [];
+        if (statusChanged) descriptions.push(`Đã đổi trạng thái thành ${status}.`);
+        if (progressChanged) descriptions.push(`Đã cập nhật tiến độ ${progress}%.`);
+        await recordTaskActivity(id, actor.id, descriptions.join(' '), timestamp);
+      }
+    });
     sendJson(response, 200, { task: await populateTaskDetails(publicTask(await taskRowById(id)), id) });
     return;
   }
@@ -9044,12 +9160,15 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const taskId = decodeURIComponent(taskReportMatch[1]);
     const task = await taskRowById(taskId);
-    ensureTaskAccess(task, actor);
+    await ensureTaskAccess(task, actor);
     const isAssignee = task.assignee_id === actor.id ||
       task.assignee_id === actor.employee_code ||
       task.assignee_employee_code === actor.employee_code ||
       normalizeText(task.assignee_name) === normalizeText(actor.name);
-    if (actor.role !== 'ADMIN' && !isAssignee && task.created_by !== actor.id) {
+    const isCollaborator = actor.role !== 'ADMIN' && await db.prepare(
+      'SELECT 1 FROM task_collaborators WHERE task_id = ? AND collaborator_id = ?',
+    ).get(task.id, actor.id);
+    if (actor.role !== 'ADMIN' && !isAssignee && task.created_by !== actor.id && !isCollaborator) {
       throw new HttpError(403, 'Chỉ người thực hiện mới có thể gửi báo cáo công việc.');
     }
     const rawBody = await readJson(request);
@@ -9074,7 +9193,7 @@ async function handleRequest(request, response) {
     const taskId = decodeURIComponent(checklistMatch[1]);
     const checklistId = decodeURIComponent(checklistMatch[2]);
     const task = await taskRowById(taskId);
-    ensureTaskAccess(task, actor);
+    await ensureTaskAccess(task, actor);
     const item = await db.prepare('SELECT * FROM task_checklist_items WHERE id = ? AND (task_id = ? OR task_id = ?)').get(checklistId, task.id, task.code || task.id);
     if (!item) throw new HttpError(404, 'Không tìm thấy hạng mục checklist.');
     const payload = await readJson(request);
@@ -9102,7 +9221,7 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const taskId = decodeURIComponent(taskCommentMatch[1]);
     const task = await taskRowById(taskId);
-    ensureTaskAccess(task, actor);
+    await ensureTaskAccess(task, actor);
     const content = requiredText((await readJson(request)).content, 'Nội dung bình luận', 2_000);
     const timestamp = now();
     await db.prepare('INSERT INTO task_comments (id, task_id, author_id, content, created_at) VALUES (?, ?, ?, ?, ?)')

@@ -4,13 +4,23 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-29] - Người liên quan và báo cáo AMIS Công việc
+
+- Tạo nhiệm vụ cho phép chọn tối đa 50 người liên quan đang hoạt động; API chuẩn hóa định danh, chống lặp, lưu trong transaction và trả người liên quan trong danh sách/chi tiết.
+- Người liên quan xem được nhiệm vụ chung, có thể trao đổi và gửi báo cáo; quyền cập nhật tiến độ vẫn thuộc người thực hiện hoặc Quản trị viên. Tài khoản trùng người thực hiện, nghỉ việc hoặc không hợp lệ bị từ chối.
+- Báo cáo “Theo người liên quan” đếm nhiệm vụ, tỷ trọng và tiến độ trung bình từ dữ liệu máy chủ; có xuất XLSX. Giữ nguyên ma trận, danh sách và các loại báo cáo khác.
+- Kiểm tra: SQLite API 120/120, web/domain 146/146, PostgreSQL 83 checkpoint, typecheck, production build và E2E nhiệm vụ trên trình duyệt đạt. Build JavaScript 5,035.57 kB và còn cảnh báo chunk trên 500 kB.
+- Mốc checklist tăng từ 50/982 lên 51/982 (5.2% mức sàn đã xác minh); 931 mục chưa được đối chiếu đồng nhất. Chưa có cơ sở chốt ngày xong toàn bộ web cũ.
+
 ## [2026-10-28] - Trung tâm báo cáo công việc và kiểm tra luồng quy trình
 
 - TasksModule: thêm màn Báo cáo theo trạng thái, người thực hiện, dự án/đơn vị và tháng tạo; hiển thị tỷ trọng và tiến độ trung bình từ danh sách đã lọc; xuất XLSX từ đúng dữ liệu trên màn và báo rõ khi chỉ tải được cache cục bộ. Giữ danh sách, ma trận Eisenhower và các thao tác nhiệm vụ hiện có.
+- Bổ sung hai loại lọc bằng định danh máy chủ: nhiệm vụ giao cho tài khoản hiện tại và nhiệm vụ do tài khoản hiện tại tạo; E2E phân biệt người giao việc với người được giao. Danh sách task trả creator ID trong phạm vi quyền xem đã có.
+- API lưu lịch sử hạn trong cùng transaction cập nhật task; chỉ ngày mới muộn hơn ngày cũ mới tính là lùi hạn. Báo cáo liệt kê task, số lần lùi, ngày cũ/mới, người đổi và thời điểm; thêm kiểm thử SQLite và PostgreSQL.
 - Thêm quy tắc tổng hợp có kiểm tra ngày tạo không hợp lệ, trường phân loại thiếu và tập dữ liệu rỗng; bổ sung test tổng hợp và xuất dữ liệu.
 - E2E trên SQLite tạm xác minh số đếm, tiến độ trung bình, nhóm chưa có dự án, báo cáo tháng và tải XLSX. Mở rộng E2E AMIS Quy trình kiểm tra cả yêu cầu bổ sung/gửi lại/phê duyệt lẫn từ chối có lý do.
-- Kiểm tra: API 119/119, web/domain 145/145, typecheck, production build và hai E2E nhiệm vụ/quy trình đạt. Bundle 5,032.44 kB; còn cảnh báo chunk trên 500 kB. PostgreSQL smoke gần nhất 72 checkpoint, không chạy lại trong lượt này.
-- Giới hạn: đã xác minh 5 mục báo cáo công việc (IDs 366, 383, 384, 388, 391) và một luồng quy trình (ID 982); báo cáo cộng tác viên, thời lượng, năng lực nguồn lực, việc giao cho tôi, hoãn hạn, Gantt, hoạt động dự án, chia sẻ/dashboard và phần lớn các mục khác của 29 ứng dụng vẫn chưa được nghiệm thu. Mốc sàn cập nhật 47/982 (4.8%), không phải tỷ lệ hoàn thành toàn web.
+- Kiểm tra: API 119/119, web/domain 145/145, typecheck, production build, E2E nhiệm vụ/quy trình và PostgreSQL smoke 80 checkpoint đạt. Bundle 5,034.19 kB; còn cảnh báo chunk trên 500 kB.
+- Giới hạn: đã xác minh 8 mục báo cáo công việc (IDs 366, 383, 384, 388, 389, 390, 391, 394) và một luồng quy trình (ID 982); báo cáo cộng tác viên, thời lượng, năng lực nguồn lực, Gantt, hoạt động dự án, chia sẻ/dashboard và phần lớn các mục khác của 29 ứng dụng vẫn chưa được nghiệm thu. Mốc sàn cập nhật 50/982 (5.1%), không phải tỷ lệ hoàn thành toàn web.
 
 ## [2026-10-28] - Quản trị thông báo hệ thống trong web cũ
 

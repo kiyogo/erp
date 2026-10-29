@@ -1541,10 +1541,59 @@ test('task checklist is persisted before response, then task can be deleted', as
     assigneeId: session.user.id, checklist: ['First item', 'Second item'],
   }, 201);
   const key = task.key || task.id;
+  assert.equal(task.createdById, session.user.id);
+  const postponed = await request(`/tasks/${key}`, 'PATCH', { dueDate: '2027-01-07' });
+  assert.equal(postponed.task.dueDatePostponementCount, 1);
+  assert.deepEqual(postponed.task.dueDateHistory.map(change => [change.previousDueDate, change.newDueDate, change.isPostponement]), [
+    ['2026-12-31', '2027-01-07', true],
+  ]);
+  assert.equal(postponed.task.dueDateHistory[0].actor, session.user.name);
+  const broughtForward = await request(`/tasks/${key}`, 'PATCH', { dueDate: '2026-12-01' });
+  assert.equal(broughtForward.task.dueDatePostponementCount, 1);
+  assert.equal(broughtForward.task.dueDateHistory.length, 2);
+  assert.equal(broughtForward.task.dueDateHistory[1].isPostponement, false);
+  const listed = await request('/tasks');
+  assert.equal(listed.data.find(item => item.key === key).dueDatePostponementCount, 1);
   const result = await request(`/tasks/${key}`);
   assert.equal(result.task.subtasks.length, 2);
   await request(`/tasks/${key}`, 'DELETE');
   await request(`/tasks/${key}`, 'GET', undefined, 404);
+});
+
+test('task collaborators are saved, can access shared tasks, and cannot change task progress', async () => {
+  const collaborator = (await request('/users', 'POST', {
+    email: 'task-collaborator@example.test', name: 'Người phối hợp', password: 'Collaborator-26!Secure',
+    employeeCode: 'TASK-COLLABORATOR', role: 'USER',
+  }, 201)).user;
+  const { task } = await request('/tasks', 'POST', {
+    taskTitle: 'Nhiệm vụ phối hợp', priority: 'Cao', dueDate: '2026-12-31',
+    assigneeId: session.user.id, collaboratorIds: [collaborator.id, collaborator.id],
+  }, 201);
+  assert.deepEqual(task.collaborators, [{ id: collaborator.id, name: collaborator.name, employeeCode: collaborator.employeeCode }]);
+  await request('/tasks', 'POST', {
+    taskTitle: 'Không cho trùng người thực hiện', priority: 'Cao', dueDate: '2026-12-31',
+    assigneeId: session.user.id, collaboratorIds: [session.user.id],
+  }, 422);
+  await request('/tasks', 'POST', {
+    taskTitle: 'Không nhận người liên quan không tồn tại', priority: 'Cao', dueDate: '2026-12-31',
+    assigneeId: session.user.id, collaboratorIds: ['missing-collaborator'],
+  }, 422);
+  await request('/tasks', 'POST', {
+    taskTitle: 'Không cho danh sách liên quan quá dài', priority: 'Cao', dueDate: '2026-12-31',
+    assigneeId: session.user.id, collaboratorIds: Array.from({ length: 51 }, (_, index) => `invalid-${index}`),
+  }, 422);
+
+  const collaboratorSession = await request('/auth/login', 'POST', {
+    email: 'task-collaborator@example.test', password: 'Collaborator-26!Secure',
+  });
+  const collaboratorHeaders = { ...headers, Authorization: `Bearer ${collaboratorSession.access_token || collaboratorSession.token}` };
+  const visibleTasks = await request('/tasks', 'GET', undefined, 200, collaboratorHeaders);
+  assert.ok(visibleTasks.data.some(item => item.key === task.key));
+  const sharedTask = await request(`/tasks/${task.key}`, 'GET', undefined, 200, collaboratorHeaders);
+  assert.equal(sharedTask.task.collaborators[0].id, collaborator.id);
+  await request(`/tasks/${task.key}`, 'PATCH', { progress: 20 }, 403, collaboratorHeaders);
+  const commented = await request(`/tasks/${task.key}/comments`, 'POST', { content: 'Đã trao đổi với người thực hiện.' }, 201, collaboratorHeaders);
+  assert.equal(commented.task.comments[0].author, collaborator.name);
 });
 
 test('canvas documents can be created simultaneously', async () => {
