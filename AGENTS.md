@@ -7,16 +7,16 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
 ## 1. QUY TẮC ĐẨY MÃ NGUỒN LÊN GITHUB (BẮT BUỘC)
 
 - **Đẩy ngay sau mỗi lần code xong:** Mỗi khi hoàn thành viết mã, chỉnh sửa mã nguồn hoặc cấu hình trong bất kỳ lượt tương tác (prompt) nào, AI Agent **bắt buộc phải commit và đẩy (push) ngay lập tức** lên GitHub.
-- **Áp dụng theo từng prompt:** Mỗi một prompt có thay đổi mã nguồn hoặc tài liệu dự án đều phải kết thúc bằng việc đẩy lên GitHub (`kiyogo/main`), không được trì hoãn hay chờ đợi sang prompt tiếp theo.
+- **Áp dụng theo từng prompt:** Mỗi một prompt có thay đổi mã nguồn, tài liệu hoặc cấu hình đều phải kết thúc bằng việc đẩy lên GitHub; **code xong là đẩy ngay**, tuyệt đối không được trì hoãn hay chờ đợi sang prompt tiếp theo.
 - **Remote đích chính thức:**
-  - Remote: `kiyogo`
+  - Remote: `origin` (hoặc `kiyogo`)
   - URL: `https://github.com/kiyogo/erp.git`
   - Nhánh: `main`
   - Lệnh thực thi chuẩn:
     ```bash
     git add <các tệp thay đổi>
     git commit -m "<loại commit>(<phạm vi>): mô tả ngắn gọn"
-    git push kiyogo main
+    git push origin main
     ```
 - **Quy chuẩn commit:**
   - Commit message viết rõ ràng theo chuẩn Conventional Commits (ví dụ: `fix(ui): ...`, `feat(...): ...`, `docs(...): ...`).
@@ -24,7 +24,18 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
 
 ---
 
-## 2. QUY TRÌNH KIỂM THỬ TRƯỚC KHI PUSH
+## 2. NGHIÊN CỨU DỰ ÁN MÃ NGUỒN MỞ TRƯỚC KHI LÀM (KHÔNG VIẾT TỪ CON SỐ 0)
+
+- **Không viết từ con số 0 với chức năng mới/chưa quen thuộc:** Đối với bất kỳ chức năng, phân hệ, giải thuật hoặc bài toán nào chưa quen thuộc, AI Agent **tuyệt đối không được tự ý viết mã từ con số 0** theo suy đoán cá nhân.
+- **Tìm kiếm và so sánh trên GitHub:** Bắt buộc phải chủ động tìm kiếm các dự án mã nguồn mở (open-source repositories) tương tự trên GitHub để:
+  1. Khảo sát cách các dự án lớn/uy tín đã giải quyết bài toán đó.
+  2. Đối chiếu, so sánh các luồng ý tưởng, mô hình dữ liệu (data models) và cấu trúc kiến trúc khác nhau.
+  3. Đánh giá tính khả thi, tính mở rộng và độ ổn định trước khi quyết định hướng tiếp cận.
+- **Chọn lọc và thích ứng:** Sau khi phân tích và lựa chọn giải pháp tối ưu nhất, hãy tích hợp và tùy biến phù hợp với kiến trúc và tiêu chuẩn mã nguồn sẵn có của dự án.
+
+---
+
+## 3. QUY TRÌNH KIỂM THỬ TRƯỚC KHI PUSH
 
 - Trước khi commit và push, phải đảm bảo mã nguồn:
   1. Không có lỗi cú pháp hoặc lỗi build.
@@ -34,7 +45,7 @@ Tài liệu này định nghĩa các quy tắc bắt buộc mà mọi AI Coding 
 
 ---
 
-## 3. NGUYÊN TẮC GIAO DIỆN & LOGIC HỆ THỐNG
+## 4. NGUYÊN TẮC GIAO DIỆN & LOGIC HỆ THỐNG
 
 - **Chuẩn giao diện Modal / Dialog:**
   - Khoảng cách lề viền và khoảng cách giữa các khối chức năng (form rows, grid, actions) trong dialog tuân theo chuẩn 14px.
