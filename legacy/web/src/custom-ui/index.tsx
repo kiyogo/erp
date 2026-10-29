@@ -18,7 +18,6 @@ import { formatFileSize } from '../utils/fileStorage';
 export { DatePicker };
 export type { DatePickerProps };
 import './theme.css';
-import { scrollbarMetrics } from './modalScrollbar';
 
 // Global trigger tracker for origin-based animations
 if (typeof window !== 'undefined') {
@@ -3056,96 +3055,6 @@ type ModalComponent = React.FC<any> & {
   warning: (config: any) => void;
 };
 
-const ModalScrollbar: React.FC<{ bodyRef: React.RefObject<HTMLDivElement>; bodyId: string }> = ({ bodyRef, bodyId }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const dragRef = useRef<{ y: number; scrollTop: number; scale: number } | null>(null);
-  useEffect(() => {
-    const body = bodyRef.current;
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext('2d');
-    if (!body || !canvas || !context || typeof ResizeObserver === 'undefined') return;
-    let frame = 0;
-    const draw = () => {
-      frame = 0;
-      const height = body.clientHeight;
-      const { maxScroll, thumbHeight, thumbTop } = scrollbarMetrics(height, body.scrollHeight, body.scrollTop);
-      const visible = maxScroll > 0 && getComputedStyle(body).overflowY !== 'hidden';
-      const ratio = window.devicePixelRatio || 1;
-      canvas.style.top = `${body.offsetTop}px`;
-      canvas.style.height = `${height}px`;
-      canvas.style.visibility = visible ? 'visible' : 'hidden';
-      canvas.style.pointerEvents = visible ? 'auto' : 'none';
-      canvas.tabIndex = visible ? 0 : -1;
-      canvas.width = Math.max(1, Math.round(8 * ratio));
-      canvas.height = Math.max(1, Math.round(height * ratio));
-      canvas.setAttribute('aria-valuemax', String(maxScroll));
-      canvas.setAttribute('aria-valuenow', String(Math.round(body.scrollTop)));
-      if (!visible) return;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      context.fillStyle = 'rgba(148, 163, 184, 0.45)';
-      if (typeof context.roundRect === 'function') {
-        context.beginPath();
-        context.roundRect(1, thumbTop, 6, thumbHeight, 3);
-        context.fill();
-      } else context.fillRect(1, thumbTop, 6, thumbHeight);
-    };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(draw); };
-    const resize = new ResizeObserver(schedule);
-    const observeChildren = () => { for (const child of Array.from(body.children)) resize.observe(child); schedule(); };
-    const mutation = new MutationObserver(observeChildren);
-    resize.observe(body);
-    observeChildren();
-    mutation.observe(body, { childList: true, subtree: true, characterData: true });
-    body.addEventListener('scroll', schedule, { passive: true });
-    window.addEventListener('resize', schedule);
-    body.classList.add('has-canvas-scrollbar');
-    return () => {
-      body.classList.remove('has-canvas-scrollbar');
-      body.removeEventListener('scroll', schedule);
-      window.removeEventListener('resize', schedule);
-      resize.disconnect();
-      mutation.disconnect();
-      if (frame) cancelAnimationFrame(frame);
-    };
-  }, [bodyRef]);
-  return <canvas
-    ref={canvasRef}
-    className="ant-modal-canvas-scrollbar"
-    role="scrollbar"
-    aria-label="Thanh cuộn nội dung dialog"
-    aria-controls={bodyId}
-    aria-orientation="vertical"
-    aria-valuemin={0}
-    onPointerDown={event => {
-      const body = bodyRef.current;
-      if (!body) return;
-      const height = body.clientHeight;
-      const { maxScroll, thumbHeight, track, thumbTop } = scrollbarMetrics(height, body.scrollHeight, body.scrollTop);
-      if (maxScroll <= 0 || track <= 0) return;
-      const y = event.clientY - event.currentTarget.getBoundingClientRect().top;
-      if (y < thumbTop || y > thumbTop + thumbHeight) body.scrollTop = (y - thumbHeight / 2) * maxScroll / track;
-      dragRef.current = { y: event.clientY, scrollTop: body.scrollTop, scale: maxScroll / track };
-      event.currentTarget.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    }}
-    onPointerMove={event => { if (bodyRef.current && dragRef.current) bodyRef.current.scrollTop = dragRef.current.scrollTop + (event.clientY - dragRef.current.y) * dragRef.current.scale; }}
-    onPointerUp={() => { dragRef.current = null; }}
-    onPointerCancel={() => { dragRef.current = null; }}
-    onKeyDown={event => {
-      const body = bodyRef.current;
-      if (!body) return;
-      if (event.key === 'ArrowDown') body.scrollTop += 40;
-      else if (event.key === 'ArrowUp') body.scrollTop -= 40;
-      else if (event.key === 'PageDown') body.scrollTop += body.clientHeight;
-      else if (event.key === 'PageUp') body.scrollTop -= body.clientHeight;
-      else if (event.key === 'Home') body.scrollTop = 0;
-      else if (event.key === 'End') body.scrollTop = body.scrollHeight;
-      else return;
-      event.preventDefault();
-    }}
-  />;
-};
-
 export const Modal: ModalComponent = ({
   title,
   open,
@@ -3170,8 +3079,6 @@ export const Modal: ModalComponent = ({
 }) => {
   const isOpen = open !== undefined ? open : visible;
   const [internalLoading, setInternalLoading] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const bodyId = useId();
   const isBusy = Boolean(confirmLoading || loading || internalLoading);
   const { shouldRender, animClass, overlayRef } = useOverlayAnimation(!!isOpen, 220);
 
@@ -3314,8 +3221,6 @@ export const Modal: ModalComponent = ({
           )}
 
           <div
-            ref={bodyRef}
-            id={bodyId}
             className="ant-modal-body"
             style={{
               padding: 0,
@@ -3340,7 +3245,6 @@ export const Modal: ModalComponent = ({
               {children}
             </ModalContext.Provider>
           </div>
-          <ModalScrollbar bodyRef={bodyRef} bodyId={bodyId} />
 
           {footer !== null && (
             <div className="ant-modal-footer" style={{ padding: 0, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 14, border: 'none', borderTop: 'none', margin: 0, ...(styles?.footer || {}) }}>
