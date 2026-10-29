@@ -58,11 +58,17 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   const upload = await fetch(`${base}/files/upload`, { method: 'POST', headers: { Authorization: headers.Authorization, 'Content-Type': 'application/pdf', 'X-File-Name': 'test-cv.pdf', 'X-Origin-Module': 'hr_recruitment', 'X-Parent-Id': workspace.context.parentId }, body: 'isolated-test-cv-bytes' });
   assert.equal(upload.status, 201);
   const file = (await upload.json()).file;
-  const candidate = { key: 'candidate-test', jobKey: job.key, name: 'Integration Candidate', email: 'candidate@example.test', appliedAt: '2026-10-01', status: 'applied', cvFileId: file.id, cvFileName: file.name };
+  const candidate = {
+    key: 'candidate-test', jobKey: job.key, name: 'Integration Candidate', email: 'candidate@example.test', appliedAt: '2026-10-01', status: 'applied',
+    region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/candidate', source: 'Website tuyển dụng',
+    cvFileId: file.id, cvFileName: file.name,
+  };
   await request('/collections/hr_recruitment_candidates', 'POST', { record: candidate }, 201);
   await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...candidate, key: 'duplicate', email: 'CANDIDATE@example.test' } }, 409);
   await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...candidate, key: 'missing-job', email: 'other@example.test', jobKey: 'missing' } }, 422);
+  await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...candidate, key: 'long-personal-account', email: 'long-account@example.test', personalAccount: 'x'.repeat(501) } }, 422);
   const route = '/collections/hr_recruitment_candidates/candidate-test';
+  await request(route, 'DELETE', undefined, 409);
   await request(route, 'PATCH', { patch: { status: 'hired', hiredDate: '2026-10-11' } }, 422);
   await request(route, 'PATCH', { patch: { status: 'screening' } });
   await request(route, 'PATCH', { patch: { status: 'interview', interviewAt: '2026-09-30T09:00' } }, 422);
@@ -74,11 +80,27 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   const saved = (await request('/collections/hr_recruitment_candidates')).data;
   assert.equal(saved.length, 1);
   assert.equal(saved.filter(record => record.status === 'hired').length, 1);
+  assert.deepEqual([saved[0].region, saved[0].country, saved[0].province, saved[0].ward, saved[0].personalAccount, saved[0].source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/candidate', 'Website tuyển dụng']);
   assert.deepEqual(saved[0].history.map(item => item.status), ['applied', 'screening', 'interview', 'offer', 'hired']);
   assert.ok(saved[0].history.every(item => item.actorId === session.user.id));
   const downloaded = await fetch(`${base}/files/${file.id}/download`, { headers: { Authorization: headers.Authorization } });
   assert.equal(downloaded.status, 200);
   assert.equal(await downloaded.text(), 'isolated-test-cv-bytes');
+  await request('/collections/hr_recruitment_candidates', 'POST', { record: { key: 'candidate-rejected', jobKey: job.key, name: 'Rejected Candidate', email: 'rejected@example.test', appliedAt: '2026-10-02', status: 'applied', cvFileId: file.id, cvFileName: file.name } }, 201);
+  await request('/collections/hr_recruitment_candidates/candidate-rejected', 'PATCH', { patch: { status: 'rejected' } });
+  const deletion = await request('/collections/hr_recruitment_candidates/candidate-rejected', 'DELETE');
+  assert.equal(deletion.deleted, true);
+  assert.ok(deletion.trashItemId);
+  assert.equal((await request('/collections/hr_recruitment_candidates')).data.some(record => record.key === 'candidate-rejected'), false);
+  assert.equal((await fetch(`${base}/files/${file.id}/download`, { headers: { Authorization: headers.Authorization } })).status, 200, 'soft deletion retains the CV for recovery with the candidate record');
+  const restored = await request(`/admin/trash/${encodeURIComponent(deletion.trashItemId)}/restore`, 'POST', {});
+  assert.equal(restored.restored, true);
+  assert.equal(restored.record.status, 'rejected');
+  assert.equal(restored.record.cvFileId, file.id);
+  assert.equal((await request('/collections/hr_recruitment_candidates')).data.some(record => record.key === 'candidate-rejected'), true);
+  const deletedAgain = await request('/collections/hr_recruitment_candidates/candidate-rejected', 'DELETE');
+  assert.ok(deletedAgain.trashItemId);
+  assert.equal((await request('/collections/hr_recruitment_candidates')).data.some(record => record.key === 'candidate-rejected'), false);
   await request('/collections/hr_job_openings/job-test', 'PATCH', { patch: { status: 'Tạm dừng' } });
   assert.equal((await request('/collections/hr_job_openings')).data[0].status, 'Tạm dừng');
 });

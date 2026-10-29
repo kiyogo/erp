@@ -3,6 +3,7 @@ import {
   PlusOutlined,
   SearchOutlined,
   DownloadOutlined,
+  DeleteOutlined,
   UsergroupAddOutlined,
   CheckCircleOutlined,
   ScheduleOutlined,
@@ -59,6 +60,11 @@ export interface RecruitmentCandidate {
   name: string;
   email: string;
   phone: string;
+  region: string;
+  country: string;
+  province: string;
+  ward: string;
+  personalAccount: string;
   source: string;
   status: RecruitmentStage;
   appliedAt: string;
@@ -310,13 +316,27 @@ export const RecruitmentModule: React.FC = () => {
     catch (error: any) { message.error(error?.response?.data?.message || 'Không thể tải CV.'); }
   };
 
+  const deleteRejectedCandidate = (candidate: RecruitmentCandidate) => Modal.confirm({
+    title: 'Xóa hồ sơ ứng viên không tiếp tục?',
+    content: `Hồ sơ ${candidate.name} sẽ được chuyển vào Thùng rác để có thể khôi phục.`,
+    okText: 'Xóa hồ sơ', cancelText: 'Hủy',
+    onOk: async () => {
+      try {
+        await collectionsApi.remove('hr_recruitment_candidates', candidate.key);
+        setCandidates(previous => previous.filter(item => item.key !== candidate.key));
+        if (editingCandidate?.key === candidate.key) { setCandidateModalOpen(false); setEditingCandidate(null); }
+        message.success('Đã chuyển hồ sơ ứng viên vào Thùng rác.');
+      } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể xóa hồ sơ ứng viên.'); }
+    },
+  });
+
   const visibleCandidates = candidates.filter(candidate => candidate.jobKey === currentJob?.key && (candidateStage === 'all' || candidate.status === candidateStage)
-    && `${candidate.name} ${candidate.email} ${candidate.phone} ${candidate.source}`.toLowerCase().includes(candidateSearch.trim().toLowerCase()));
+    && `${candidate.name} ${candidate.email} ${candidate.phone} ${candidate.region} ${candidate.country} ${candidate.province} ${candidate.ward} ${candidate.personalAccount} ${candidate.source} ${candidate.notes}`.toLowerCase().includes(candidateSearch.trim().toLowerCase()));
 
   const candidateColumns = [
-    { title: 'Ứng viên', key: 'name', render: (_: unknown, candidate: RecruitmentCandidate) => <div><strong>{candidate.name}</strong><div>{candidate.email}</div><div>{candidate.phone}</div></div> },
+    { title: 'Ứng viên', key: 'name', render: (_: unknown, candidate: RecruitmentCandidate) => <div><strong>{candidate.name}</strong><div>{candidate.email}</div><div>{candidate.phone}</div><div>{[candidate.ward, candidate.province, candidate.country].filter(Boolean).join(', ') || candidate.region}</div>{candidate.personalAccount && <div>{candidate.personalAccount}</div>}</div> },
     { title: 'Giai đoạn / lịch hẹn', key: 'status', render: (_: unknown, candidate: RecruitmentCandidate) => <div><Tag color={candidate.status === 'hired' ? 'success' : candidate.status === 'rejected' ? 'error' : 'processing'}>{recruitmentStages.find(stage => stage.value === candidate.status)?.label || candidate.status}</Tag><div>{candidate.interviewAt?.replace('T', ' ') || 'Chưa có lịch phỏng vấn'}</div></div> },
-    { title: 'Thao tác', key: 'actions', render: (_: unknown, candidate: RecruitmentCandidate) => <div style={{ display: 'flex', gap: 6 }}><Button size="small" onClick={() => openCandidate(candidate)}>Hồ sơ / Cập nhật</Button>{candidate.cvFileId && <Button size="small" icon={<DownloadOutlined />} onClick={() => void downloadCv(candidate)}>CV</Button>}</div> },
+    { title: 'Thao tác', key: 'actions', render: (_: unknown, candidate: RecruitmentCandidate) => <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><Button size="small" onClick={() => openCandidate(candidate)}>Hồ sơ / Cập nhật</Button>{candidate.cvFileId && <Button size="small" icon={<DownloadOutlined />} onClick={() => void downloadCv(candidate)}>CV</Button>}{candidate.status === 'rejected' && <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteRejectedCandidate(candidate)}>Xóa</Button>}</div> },
   ];
 
   const filteredData = jobs.filter((item) => {
@@ -672,7 +692,7 @@ export const RecruitmentModule: React.FC = () => {
 
       <Modal title={`Hồ sơ ứng viên · ${currentJob?.title || ''}`} open={candidateListOpen} onCancel={() => setCandidateListOpen(false)} footer={null} width={900}>
         <div style={{ display: 'flex', gap: 8, margin: '14px 0', flexWrap: 'wrap' }}>
-          <Input prefix={<SearchOutlined />} value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="Tìm tên, email, điện thoại, nguồn..." style={{ flex: 1, minWidth: 220 }} />
+          <Input prefix={<SearchOutlined />} value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="Tìm tên, email, địa điểm, tài khoản cá nhân, nguồn..." style={{ flex: 1, minWidth: 220 }} />
           <Select value={candidateStage} onChange={setCandidateStage} options={[{ value: 'all', label: 'Tất cả giai đoạn' }, ...recruitmentStages]} style={{ width: 170 }} />
           <Button type="primary" icon={<PlusOutlined />} disabled={currentJob?.status !== 'Đang tuyển dụng' || !!loadError} onClick={() => openCandidate()}>Tiếp nhận ứng viên</Button>
         </div>
@@ -686,6 +706,11 @@ export const RecruitmentModule: React.FC = () => {
             <Form.Item name="email" label="Email ứng viên" rules={[{ required: true, type: 'email' }]}><Input type="email" maxLength={254} /></Form.Item>
             <Form.Item name="phone" label="Điện thoại"><Input type="tel" maxLength={40} /></Form.Item>
             <Form.Item name="source" label="Nguồn ứng tuyển"><Input maxLength={160} placeholder="Nguồn tiếp nhận thực tế" /></Form.Item>
+            <Form.Item name="region" label="Khu vực"><Input maxLength={160} /></Form.Item>
+            <Form.Item name="country" label="Quốc gia"><Input maxLength={100} /></Form.Item>
+            <Form.Item name="province" label="Tỉnh/Thành phố"><Input maxLength={160} /></Form.Item>
+            <Form.Item name="ward" label="Phường/Xã"><Input maxLength={160} /></Form.Item>
+            <Form.Item name="personalAccount" label="Tài khoản cá nhân"><Input maxLength={500} placeholder="Liên kết hồ sơ cá nhân" /></Form.Item>
             <Form.Item name="appliedAt" label="Ngày tiếp nhận CV" rules={[{ required: true }]}><Input type="date" /></Form.Item>
             <Form.Item name="status" label="Giai đoạn" rules={[{ required: true }]}><Select onChange={setCandidateStatus} options={recruitmentStages.filter(stage => stage.value === (editingCandidate?.status || 'applied') || (editingCandidate && stageTransitions[editingCandidate.status]?.includes(stage.value)))} /></Form.Item>
             <Form.Item name="interviewAt" label="Lịch phỏng vấn" rules={[{ required: candidateStatus === 'interview' }]}><Input type="datetime-local" /></Form.Item>

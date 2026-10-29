@@ -4041,6 +4041,13 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.name = requiredText(record.name, 'Tên ứng viên', 160);
     record.email = normalizeEmail(record.email);
     record.phone = optionalText(record.phone, 'Điện thoại', 40);
+    record.region = optionalText(record.region, 'Khu vực', 160);
+    record.country = optionalText(record.country, 'Quốc gia', 100);
+    record.province = optionalText(record.province, 'Tỉnh/Thành phố', 160);
+    record.ward = optionalText(record.ward, 'Phường/Xã', 160);
+    record.personalAccount = optionalText(record.personalAccount, 'Tài khoản cá nhân', 500);
+    record.source = optionalText(record.source, 'Nguồn ứng viên', 160);
+    record.notes = optionalText(record.notes, 'Thông tin khác', 5000);
     record.appliedAt = requiredIsoDate(record.appliedAt, 'Ngày ứng tuyển');
     record.status = oneOf(record.status || 'applied', 'Giai đoạn ứng viên', ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected']);
     const transitions = { applied: ['screening', 'rejected'], screening: ['interview', 'rejected'], interview: ['offer', 'rejected'], offer: ['hired', 'rejected'], hired: [], rejected: [] };
@@ -7383,7 +7390,9 @@ async function handleRequest(request, response) {
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
         if (scope === 'finance_general_ledger' && (publicCollectionRecord(fresh)?.sourceModule === 'payroll' || String(publicCollectionRecord(fresh)?.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
         if (scope === 'attendance_explanations' && publicCollectionRecord(fresh)?.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể xóa.');
-        if (scope === 'workflow_requests') {
+        if (scope === 'hr_recruitment_candidates' && publicCollectionRecord(fresh)?.status !== 'rejected') {
+          throw new HttpError(409, 'Chỉ có thể xóa hồ sơ ứng viên đã chuyển sang trạng thái Không tiếp tục.');
+        } else if (scope === 'workflow_requests') {
           const current = publicCollectionRecord(fresh);
           if (current.status !== 'Chờ bạn ký duyệt' || current.approvalHistory?.length) throw new HttpError(422, 'Hồ sơ đã xử lý nên không thể xóa.');
         } else if (scope === 'crm_feedback') {
@@ -8008,7 +8017,8 @@ async function handleRequest(request, response) {
       const existing = await db.prepare('SELECT id FROM collection_records WHERE scope = ? AND record_key = ? AND owner_id = ?').get(entry.scope, entry.record_key, entry.owner_id);
       if (existing) throw new HttpError(409, 'Đã có bản ghi cùng khóa; hãy xử lý bản ghi hiện tại trước khi khôi phục.');
       const record = parseJsonObject(entry.payload_json);
-      const normalized = await normalizeCollectionRecord(record, entry.scope, actor, null);
+      const restoreCurrent = entry.scope === 'hr_recruitment_candidates' ? record : null;
+      const normalized = await normalizeCollectionRecord(record, entry.scope, actor, restoreCurrent);
       if (normalized.recordKey !== entry.record_key) throw new HttpError(409, 'Khóa bản ghi đã thay đổi; không thể khôi phục an toàn.');
       const idConflict = await db.prepare('SELECT id FROM collection_records WHERE id = ?').get(entry.original_id);
       const restoredId = idConflict ? randomUUID() : entry.original_id;

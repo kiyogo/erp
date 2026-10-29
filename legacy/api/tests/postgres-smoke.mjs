@@ -525,6 +525,32 @@ try {
   assert.equal((await request(`${route}/operations`, 'POST', operation)).revision, 2);
   assert.equal((await request(`${route}/operations`, 'POST', operation)).revision, 2);
   await request(`${route}/snapshots`, 'POST', { revision: 2, data: { blocks: [], updated: true } }); completed++;
+  const pgRecruitmentJobKey = `pg-recruitment-${randomUUID()}`;
+  const pgRecruitmentJobCode = `PG-TD-${randomUUID()}`;
+  await request('/collections/hr_job_openings', 'POST', { record: {
+    key: pgRecruitmentJobKey, jobCode: pgRecruitmentJobCode, title: 'PG Recruitment Candidate', department: 'QA', level: 'Junior',
+    headcountNeeded: 1, deadline: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), status: 'Đang tuyển dụng',
+  } }, 201);
+  const pgCandidateKey = `pg-candidate-${randomUUID()}`;
+  const pgCandidateEmail = `${randomUUID()}@example.test`;
+  const pgCandidate = (await request('/collections/hr_recruitment_candidates', 'POST', { record: {
+    key: pgCandidateKey, jobKey: pgRecruitmentJobKey, name: 'PostgreSQL Candidate', email: pgCandidateEmail, appliedAt: new Date().toISOString().slice(0, 10), status: 'applied',
+    region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/pg-candidate', source: 'Website tuyển dụng',
+  } }, 201)).record;
+  assert.deepEqual([pgCandidate.region, pgCandidate.country, pgCandidate.province, pgCandidate.ward, pgCandidate.personalAccount, pgCandidate.source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/pg-candidate', 'Website tuyển dụng']);
+  await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE', undefined, 409);
+  await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'PATCH', { patch: { status: 'rejected' } });
+  const pgCandidateDeletion = await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE');
+  assert.equal(pgCandidateDeletion.deleted, true);
+  assert.ok(pgCandidateDeletion.trashItemId);
+  assert.equal((await request('/collections/hr_recruitment_candidates')).data.some(item => item.key === pgCandidateKey), false);
+  const pgCandidateRestore = await request(`/admin/trash/${pgCandidateDeletion.trashItemId}/restore`, 'POST', {});
+  assert.equal(pgCandidateRestore.restored, true);
+  assert.equal(pgCandidateRestore.record.status, 'rejected');
+  assert.deepEqual([pgCandidateRestore.record.region, pgCandidateRestore.record.country, pgCandidateRestore.record.province, pgCandidateRestore.record.ward, pgCandidateRestore.record.personalAccount, pgCandidateRestore.record.source], ['Miền Bắc', 'Việt Nam', 'Hà Nội', 'Phường Dịch Vọng', 'https://example.test/pg-candidate', 'Website tuyển dụng']);
+  const pgCandidateSecondDeletion = await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE');
+  assert.equal(pgCandidateSecondDeletion.deleted, true);
+  assert.equal((await request('/collections/hr_recruitment_candidates')).data.some(item => item.key === pgCandidateKey), false); completed++;
   async function bank(balance) {
     return (await request('/finance/bank-accounts', 'POST', { bankName: 'PG bank', accountNumber: randomUUID(), accountHolder: 'PG', balance, status: 'Đang hoạt động' }, 201)).account;
   }
