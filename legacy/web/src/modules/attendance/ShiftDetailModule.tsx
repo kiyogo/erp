@@ -870,8 +870,8 @@ export const ShiftDetailModule: React.FC = () => {
                   Ngày áp dụng trong tuần:
                 </div>
 
-                {/* Thứ 2 - Chủ nhật: 7 nút đều nhau trên 1 hàng */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+                {/* Thứ 2 - Chủ nhật: Các nút hiển thị gần nhau, kích thước gọn gàng tự nhiên */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   {[
                     { num: 2, label: 'Thứ 2' },
                     { num: 3, label: 'Thứ 3' },
@@ -889,19 +889,20 @@ export const ShiftDetailModule: React.FC = () => {
                         onClick={() => handleToggleDay(day.num)}
                         style={{
                           height: 32,
-                          padding: 0,
+                          padding: '0 12px',
                           borderRadius: 6,
                           border: isSelected ? '1px solid #009688' : '1px solid #CBD5E1',
                           backgroundColor: isSelected ? '#E0F2F1' : '#FFFFFF',
                           color: isSelected ? '#00796B' : '#475569',
-                          fontWeight: isSelected ? 700 : 500,
-                          fontSize: 12,
+                          fontWeight: isSelected ? 600 : 500,
+                          fontSize: 12.5,
                           cursor: 'pointer',
-                          display: 'flex',
+                          display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           transition: 'all 0.15s ease',
                           outline: 'none',
+                          whiteSpace: 'nowrap',
                         }}
                       >
                         {day.label}
@@ -910,8 +911,8 @@ export const ShiftDetailModule: React.FC = () => {
                   })}
                 </div>
 
-                {/* Checkbox Bỏ xem trước phân ca: Khoảng cách rộng rãi 20px, không bị dính sát hay đè nút */}
-                <div style={{ marginTop: 20, marginBottom: 20, display: 'flex', alignItems: 'center' }}>
+                {/* Checkbox Bỏ xem trước phân ca: Khoảng cách vừa phải, gọn gàng và tự nhiên */}
+                <div style={{ marginTop: 12, marginBottom: 14, display: 'flex', alignItems: 'center' }}>
                   <Checkbox
                     checked={skipPreview}
                     onChange={(e) => setSkipPreview(Boolean(e.target.checked))}
