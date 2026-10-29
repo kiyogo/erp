@@ -3,6 +3,7 @@ import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/
 import { useNavigate } from 'react-router-dom';
 import { Button, Progress, message } from '../../custom-ui';
 import { financeCashApi, FinanceCashTransaction, financeDocumentsApi, FinanceDebt, FinanceDocument } from '../../api/endpoints';
+import { dataService } from '../../services/dataService';
 
 interface CategoryTotal {
   name: string;
@@ -24,6 +25,7 @@ export const FinanceOverviewModule: React.FC = () => {
   const [transactions, setTransactions] = useState<FinanceCashTransaction[]>([]);
   const [documents, setDocuments] = useState<FinanceDocument[]>([]);
   const [debts, setDebts] = useState<FinanceDebt[]>([]);
+  const [inventory, setInventory] = useState<Array<{ key: string; name: string; stockQty: number; unitPrice: number }>>([]);
   const [loading, setLoading] = useState(false);
 
   const loadData = async () => {
@@ -37,10 +39,17 @@ export const FinanceOverviewModule: React.FC = () => {
       setTransactions(cashResponse.data.data);
       setDocuments(documentResponse.data.data);
       setDebts(debtResponse.data.data);
+      try {
+        await dataService.refreshGenericData('finance_inventory');
+        setInventory(dataService.getGenericData('finance_inventory') as Array<{ key: string; name: string; stockQty: number; unitPrice: number }>);
+      } catch {
+        setInventory(dataService.getGenericData('finance_inventory') as Array<{ key: string; name: string; stockQty: number; unitPrice: number }>);
+      }
     } catch (error: any) {
       setTransactions([]);
       setDocuments([]);
       setDebts([]);
+      setInventory([]);
       message.error(error?.response?.data?.message || 'Không tải được tổng quan tài chính. Vui lòng thử lại.');
     } finally {
       setLoading(false);
@@ -77,6 +86,33 @@ export const FinanceOverviewModule: React.FC = () => {
   );
   const receivable = useMemo(() => debts.filter((debt) => debt.type === 'Phải thu').reduce((sum, debt) => sum + debt.remainingAmount, 0), [debts]);
   const payable = useMemo(() => debts.filter((debt) => debt.type === 'Phải trả').reduce((sum, debt) => sum + debt.remainingAmount, 0), [debts]);
+  const debtAging = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return (['Phải thu', 'Phải trả'] as const).map(type => {
+      const entries = debts.filter(debt => debt.type === type && debt.remainingAmount > 0);
+      const overdue = entries.filter(debt => debt.dueDate && new Date(`${debt.dueDate}T00:00:00`) < today).reduce((sum, debt) => sum + debt.remainingAmount, 0);
+      const current = entries.reduce((sum, debt) => sum + debt.remainingAmount, 0) - overdue;
+      return { type, overdue, current, total: overdue + current };
+    });
+  }, [debts]);
+  const monthlyCash = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 12 }, (_, index) => {
+      const month = new Date(now.getFullYear(), now.getMonth() - 11 + index, 1);
+      const prefix = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
+      const rows = completedTransactions.filter(item => item.date.startsWith(prefix));
+      return {
+        label: `Th ${month.getMonth() + 1}`,
+        income: rows.filter(item => item.type === 'Thu').reduce((sum, item) => sum + item.amount, 0),
+        expense: rows.filter(item => item.type === 'Chi').reduce((sum, item) => sum + item.amount, 0),
+      };
+    });
+  }, [completedTransactions]);
+  const inventoryRows = useMemo(() => inventory.filter(item => Number(item.stockQty) > 0)
+    .map(item => ({ ...item, value: Number(item.stockQty) * Number(item.unitPrice) }))
+    .sort((a, b) => b.value - a.value), [inventory]);
+  const inventoryValue = inventoryRows.reduce((sum, item) => sum + item.value, 0);
 
   const renderBreakdown = (items: CategoryTotal[], total: number, color: string, emptyText: string) => (
     items.length ? (
@@ -153,6 +189,39 @@ export const FinanceOverviewModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
           <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 7 }}><ArrowUpOutlined style={{ color: '#DC2626' }} /> Cơ cấu thực chi</div>
           {renderBreakdown(expenseBreakdown, expense, '#DC2626', 'Chưa có phiếu chi hoàn thành.')}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginBottom: 18 }}>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
+          <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 14 }}>Dòng tiền theo tháng · 12 tháng gần nhất</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, minmax(20px, 1fr))', alignItems: 'end', gap: 8, height: 180, borderBottom: '1px solid #CBD5E1', paddingTop: 12 }}>
+            {monthlyCash.map(month => {
+              const ceiling = Math.max(1, ...monthlyCash.flatMap(item => [item.income, item.expense]));
+              return <div key={month.label} title={`${month.label}: Thu ${formatMoney(month.income)} · Chi ${formatMoney(month.expense)}`} style={{ height: '100%', display: 'flex', alignItems: 'end', justifyContent: 'center', gap: 3 }}>
+                <div style={{ width: '38%', minHeight: month.income ? 2 : 0, height: `${month.income / ceiling * 100}%`, background: '#10B981', borderRadius: '3px 3px 0 0' }} />
+                <div style={{ width: '38%', minHeight: month.expense ? 2 : 0, height: `${month.expense / ceiling * 100}%`, background: '#FB923C', borderRadius: '3px 3px 0 0' }} />
+              </div>;
+            })}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, minmax(20px, 1fr))', gap: 8, marginTop: 6, fontSize: 10, color: '#64748B', textAlign: 'center' }}>{monthlyCash.map(month => <span key={month.label}>{month.label}</span>)}</div>
+          <div style={{ display: 'flex', gap: 16, fontSize: 12, marginTop: 12 }}><span style={{ color: '#059669' }}>● Thu hoàn thành</span><span style={{ color: '#F97316' }}>● Chi hoàn thành</span></div>
+        </div>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
+          <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 14 }}>Công nợ theo hạn thanh toán</div>
+          {debtAging.map(item => <div key={item.type} style={{ padding: '12px 0', borderBottom: '1px solid #E2E8F0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, marginBottom: 8 }}>{item.type}<span>{formatMoney(item.total)}</span></div>
+            <Progress percent={item.total ? Math.round(item.overdue / item.total * 100) : 0} strokeColor="#FB923C" showInfo={false} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748B', marginTop: 4 }}><span>Quá hạn {formatMoney(item.overdue)}</span><span>Trong hạn {formatMoney(item.current)}</span></div>
+          </div>)}
+        </div>
+        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
+          <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 8 }}>Hàng hóa tồn kho</div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{formatMoney(inventoryValue)}</div>
+          <div style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>Giá trị theo tồn kho × đơn giá bán trên danh mục</div>
+          {inventoryRows.slice(0, 5).map(item => <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: '1px solid #F1F5F9', fontSize: 12 }}><span>{item.name}</span><span>{Number(item.stockQty).toLocaleString('vi-VN')} · {formatMoney(item.value)}</span></div>)}
+          {!inventoryRows.length && <div style={{ color: '#64748B', fontSize: 13 }}>Chưa có hàng tồn kho.</div>}
+          <Button type="link" onClick={() => navigate('/admin/finance/inventory')} style={{ paddingLeft: 0, marginTop: 8 }}>Mở kho hàng</Button>
         </div>
       </div>
 
