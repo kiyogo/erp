@@ -792,6 +792,23 @@ test('payment requests persist actual actors and enforce approval, rejection and
 });
 
 test('cash vouchers link active accounts and CRM contacts, allow pending edits and preserve posted history', async () => {
+  const incomeCategories = (await request('/finance/cash-categories?type=Thu')).data;
+  assert.deepEqual(incomeCategories, [
+    '1. Thu tiền khách hàng (không theo hóa đơn)',
+    '2. Thu hoàn ứng nhân viên',
+    '3. Rút tiền gửi về nhập quỹ',
+    '4. Thu hồi các khoản cho vay',
+    '5. Thu vốn góp thành viên',
+    '6. Thu khác',
+  ]);
+  const priorExpenseCategories = (await request('/finance/cash-categories?type=Chi')).data;
+  const expenseCategory = (await request('/finance/cash-categories', 'POST', { type: 'Chi', name: 'Chi mua vật tư' }, 201)).category;
+  assert.equal(expenseCategory.name, 'Chi mua vật tư');
+  const expenseCategories = (await request('/finance/cash-categories?type=Chi')).data;
+  assert.ok(expenseCategories.includes('Chi mua vật tư'));
+  assert.ok(priorExpenseCategories.every(name => expenseCategories.includes(name)));
+  await request('/finance/cash-categories', 'POST', { type: 'Chi', name: 'Chi mua vật tư' }, 409);
+
   const suffix = Date.now().toString();
   const account = (await request('/finance/bank-accounts', 'POST', {
     bankName: 'Vietcombank', accountNumber: `CASH${suffix.slice(-8)}`, accountHolder: 'HTX kiểm thử', balance: 5000, status: 'Đang hoạt động',

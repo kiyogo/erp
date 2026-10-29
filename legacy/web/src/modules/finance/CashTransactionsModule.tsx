@@ -35,12 +35,18 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [typeFilter, setTypeFilter] = useState<'all' | 'Thu' | 'Chi' | 'pending'>(typeFilterDefault);
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [categoryForm] = Form.useForm();
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [cashCategories, setCashCategories] = useState<Record<'Thu' | 'Chi', string[]>>({ Thu: [], Chi: [] });
   const [editingTransaction, setEditingTransaction] = useState<EnterpriseCashTransaction | null>(null);
   const [partyRefValue, setPartyRefValue] = useState('other');
   const [sourceFilter, setSourceFilter] = useState<'bank' | 'petty'>('bank');
   const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
+
+  const isTypePinned = typeFilterDefault === 'Thu' || typeFilterDefault === 'Chi';
+  const pinnedType = isTypePinned ? typeFilterDefault : null;
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<EnterpriseCashTransaction | null>(null);
@@ -58,8 +64,21 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     }
   };
 
+  const loadCategories = async () => {
+    try {
+      const [income, expense] = await Promise.all([
+        financeCashApi.getCategories('Thu'),
+        financeCashApi.getCategories('Chi'),
+      ]);
+      setCashCategories({ Thu: income.data.data, Chi: expense.data.data });
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được danh mục loại phiếu. Vui lòng thử lại.');
+    }
+  };
+
   useEffect(() => {
     void loadData();
+    void loadCategories();
     void financePaymentsApi.getAccounts().then(response => setCashAccounts(response.data.accounts)).catch(() => setCashAccounts([]));
     void crmContactsApi.getAll().then(response => setContacts(response.data.data.filter(contact => ['Đang hoạt động', 'Đang hợp tác'].includes(contact.status)))).catch(() => setContacts([]));
     void employeesApi.getAll().then(response => setEmployees(response.data.data.filter(employee => employee.isActive))).catch(() => setEmployees([]));
@@ -79,11 +98,13 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const pendingCount = data.filter((d) => d.status === 'Chờ duyệt').length;
 
   const activeCashAccounts = cashAccounts.filter(account => account.source === sourceFilter && account.status === 'Đang hoạt động');
-  const partyOptions = [
-    ...contacts.map(contact => ({
-      label: `${contact.type === 'customer' ? 'Khách hàng' : contact.type === 'supplier' ? 'Nhà cung cấp' : 'Đối tác'} · ${contact.name} (${contact.code})`,
-      value: `contact:${contact.type}:${contact.key}`,
-    })),
+  const partyOptionsFor = (type: 'Thu' | 'Chi' | undefined) => [
+    ...contacts
+      .filter(contact => !type || contact.type === 'partner' || (type === 'Thu' ? contact.type === 'customer' : contact.type === 'supplier') || contact.key === editingTransaction?.counterpartyContactId)
+      .map(contact => ({
+        label: `${contact.type === 'customer' ? 'Khách hàng' : contact.type === 'supplier' ? 'Nhà cung cấp' : 'Đối tác'} · ${contact.name} (${contact.code})`,
+        value: `contact:${contact.type}:${contact.key}`,
+      })),
     ...employees.map(employee => ({
       label: `Nhân viên · ${employee.name || employee.fullName} (${employee.employeeCode || employee.code})`,
       value: `employee:${employee.employeeCode || employee.code}`,
@@ -101,9 +122,26 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
   const closeForm = () => {
     setModalOpen(false);
+    setCategoryModalOpen(false);
     setEditingTransaction(null);
     setPartyRefValue('other');
     form.resetFields();
+    categoryForm.resetFields();
+  };
+
+  const handleAddCategory = async (values: { name: string }) => {
+    const type = form.getFieldValue('type') === 'Chi' ? 'Chi' : 'Thu';
+    const name = String(values.name || '').trim();
+    try {
+      await financeCashApi.addCategory(type, name);
+      setCashCategories(current => ({ ...current, [type]: [...current[type], name] }));
+      form.setFieldsValue({ category: name });
+      categoryForm.resetFields();
+      setCategoryModalOpen(false);
+      message.success('Đã thêm loại phiếu.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể thêm loại phiếu. Vui lòng thử lại.');
+    }
   };
 
   const handleSave = async (values: any) => {
@@ -166,7 +204,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     setSourceFilter('bank');
     form.resetFields();
     form.setFieldsValue({
-      type: typeFilterDefault === 'Thu' || typeFilterDefault === 'Chi' ? typeFilterDefault : 'Thu',
+      type: pinnedType || (typeFilter === 'Chi' ? 'Chi' : 'Thu'),
       date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
       status: 'Chờ duyệt',
       source: 'bank',
@@ -231,6 +269,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     if (typeFilter === 'pending') return matchSearch && item.status === 'Chờ duyệt';
     return matchSearch && item.type === typeFilter;
   });
+
+  const activeVoucherType: 'Thu' | 'Chi' = form.getFieldValue('type') === 'Chi' ? 'Chi' : 'Thu';
 
   const columns = [
     {
@@ -419,7 +459,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
       {/* MODAL: Lập phiếu thu / chi */}
       <Modal
-        title={editingTransaction ? `Sửa phiếu ${editingTransaction.code}` : 'Lập phiếu thu / chi'}
+        title={editingTransaction ? `Sửa phiếu ${editingTransaction.code}` : `Lập phiếu ${pinnedType === 'Chi' ? 'chi' : pinnedType === 'Thu' ? 'thu' : 'thu / chi'}`}
         open={modalOpen}
         onCancel={closeForm}
         footer={null}
@@ -429,7 +469,11 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="type" label="Loại chứng từ" rules={[{ required: true }]}>
               <Select
-                disabled={Boolean(editingTransaction)}
+                disabled={Boolean(editingTransaction) || isTypePinned}
+                onChange={() => {
+                  setPartyRefValue('other');
+                  form.setFieldsValue({ partyRef: 'other', recipientOrPayer: '' });
+                }}
                 options={[
                   { label: 'Phiếu Thu Tiền', value: 'Thu' },
                   { label: 'Phiếu Chi Tiền', value: 'Chi' },
@@ -465,12 +509,26 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             />
           </Form.Item>
 
-          <Form.Item name="category" label="Nội dung thu / chi chi tiết" rules={[{ required: true }]}>
-            <Input placeholder="Lý do thu hoặc chi" />
+          <Form.Item label={activeVoucherType === 'Chi' ? 'Loại phiếu chi' : 'Loại phiếu thu'} required>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+              <Form.Item name="category" noStyle rules={[{ required: true, message: 'Hãy chọn loại phiếu.' }]}>
+                <Select
+                  showSearch
+                  placeholder={cashCategories[activeVoucherType].length ? 'Chọn loại phiếu' : 'Chưa có loại phiếu; bấm dấu cộng để thêm'}
+                  options={cashCategories[activeVoucherType].map(name => ({ label: name, value: name }))}
+                />
+              </Form.Item>
+              <Button
+                aria-label={`Thêm loại phiếu ${activeVoucherType === 'Thu' ? 'thu' : 'chi'}`}
+                title={`Thêm loại phiếu ${activeVoucherType === 'Thu' ? 'thu' : 'chi'}`}
+                icon={<PlusOutlined />}
+                onClick={() => { categoryForm.resetFields(); setCategoryModalOpen(true); }}
+              />
+            </div>
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="amount" label="Số tiền thanh toán (VNĐ)" rules={[{ required: true }]}>
+            <Form.Item name="amount" label={activeVoucherType === 'Chi' ? 'Số tiền chi (VNĐ)' : 'Số tiền thu (VNĐ)'} rules={[{ required: true }]}>
               <Input type="number" min={1} step={1} />
             </Form.Item>
             <Form.Item name="date" label="Ngày hạch toán" rules={[{ required: true }]}>
@@ -478,7 +536,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             </Form.Item>
           </div>
 
-          <Form.Item name="partyRef" label="Đối tượng thu / chi" rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]}>
+          <Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Đối tượng nhận tiền' : 'Đối tượng nộp tiền'} rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]}>
             <Select
               showSearch
               onChange={(value: string) => {
@@ -493,12 +551,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
                   form.setFieldsValue({ recipientOrPayer: employee?.name || employee?.fullName || '' });
                 }
               }}
-              options={partyOptions}
+              options={partyOptionsFor(form.getFieldValue('type'))}
             />
           </Form.Item>
           {partyRefValue === 'other' && (
-            <Form.Item name="recipientOrPayer" label="Tên người nộp / nhận" rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên người nộp hoặc nhận.' }]}>
-              <Input placeholder="Nhập tên cá nhân hoặc đơn vị" />
+            <Form.Item name="recipientOrPayer" label={activeVoucherType === 'Chi' ? 'Người nhận tiền' : 'Người nộp tiền'} rules={[{ required: true, whitespace: true, message: 'Hãy nhập tên người nộp hoặc nhận.' }]}>
+              <Input placeholder={activeVoucherType === 'Chi' ? 'Nhập tên người nhận tiền' : 'Nhập tên người nộp tiền'} />
             </Form.Item>
           )}
 
@@ -523,8 +581,26 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button onClick={closeForm}>Đóng</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              {editingTransaction ? 'Lưu thay đổi' : 'Lập phiếu'}
+              {editingTransaction ? 'Lưu thay đổi' : `Lập phiếu ${activeVoucherType === 'Chi' ? 'chi' : 'thu'}`}
             </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Thêm loại phiếu ${activeVoucherType === 'Chi' ? 'chi' : 'thu'}`}
+        open={categoryModalOpen}
+        onCancel={() => { setCategoryModalOpen(false); categoryForm.resetFields(); }}
+        footer={null}
+        width={420}
+      >
+        <Form form={categoryForm} layout="vertical" onFinish={handleAddCategory}>
+          <Form.Item name="name" label="Tên loại phiếu" rules={[{ required: true, whitespace: true, max: 100, message: 'Hãy nhập tên loại phiếu, tối đa 100 ký tự.' }]}>
+            <Input maxLength={100} placeholder="Nhập tên loại phiếu" />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => { setCategoryModalOpen(false); categoryForm.resetFields(); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu loại phiếu</Button>
           </div>
         </Form>
       </Modal>

@@ -290,6 +290,17 @@ export async function initDatabaseSchema() {
     CREATE INDEX IF NOT EXISTS finance_cash_transactions_source_idx ON finance_cash_transactions(source, transaction_type, status);
     CREATE INDEX IF NOT EXISTS finance_cash_transactions_code_idx ON finance_cash_transactions(LOWER(code));
 
+    CREATE TABLE IF NOT EXISTS finance_cash_categories (
+      id TEXT PRIMARY KEY,
+      transaction_type TEXT NOT NULL CHECK (transaction_type IN ('Thu', 'Chi')),
+      name TEXT NOT NULL,
+      created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      created_at TEXT NOT NULL,
+      UNIQUE(transaction_type, name)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS finance_cash_categories_name_lower_idx
+      ON finance_cash_categories(transaction_type, LOWER(name));
+
     CREATE TABLE IF NOT EXISTS finance_documents (
       id TEXT PRIMARY KEY,
       document_type TEXT NOT NULL CHECK (document_type IN ('sale', 'purchase', 'invoice')),

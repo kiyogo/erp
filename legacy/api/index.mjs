@@ -4794,6 +4794,25 @@ async function calculateSalePromotions(document, customer, actor, keys) {
   return { ...result, fingerprint };
 }
 
+const CASH_TRANSACTION_CATEGORY_DEFAULTS = {
+  Thu: [
+    '1. Thu tiền khách hàng (không theo hóa đơn)',
+    '2. Thu hoàn ứng nhân viên',
+    '3. Rút tiền gửi về nhập quỹ',
+    '4. Thu hồi các khoản cho vay',
+    '5. Thu vốn góp thành viên',
+    '6. Thu khác',
+  ],
+  Chi: [],
+};
+
+function validateCashCategory(input) {
+  return {
+    type: oneOf(input.type, 'Loại phiếu', ['Thu', 'Chi']),
+    name: requiredText(input.name, 'Tên loại phiếu', 100),
+  };
+}
+
 function validateCashTransaction(input) {
   return {
     code: '',
@@ -8896,6 +8915,43 @@ async function handleRequest(request, response) {
       });
     });
     sendJson(response, 200, { payment });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/finance/cash-categories') {
+    await requireAdmin(request);
+    const type = oneOf(url.searchParams.get('type'), 'Loại phiếu', ['Thu', 'Chi']);
+    const [saved, historic] = await Promise.all([
+      db.prepare('SELECT name FROM finance_cash_categories WHERE transaction_type = ? ORDER BY created_at, name').all(type),
+      db.prepare('SELECT DISTINCT category AS name FROM finance_cash_transactions WHERE transaction_type = ? ORDER BY category').all(type),
+    ]);
+    const names = [...CASH_TRANSACTION_CATEGORY_DEFAULTS[type], ...saved.map(row => row.name), ...historic.map(row => row.name)];
+    const uniqueNames = [...new Map(names.filter(Boolean).map(name => [String(name).trim().toLocaleLowerCase('vi-VN'), String(name).trim()])).values()];
+    sendJson(response, 200, { data: uniqueNames });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/cash-categories') {
+    const actor = await requireAdmin(request);
+    const category = validateCashCategory(await readJson(request));
+    const [duplicate, historicDuplicate] = await Promise.all([
+      db.prepare('SELECT id, name FROM finance_cash_categories WHERE transaction_type = ? AND LOWER(name) = LOWER(?) LIMIT 1').get(category.type, category.name),
+      db.prepare('SELECT id FROM finance_cash_transactions WHERE transaction_type = ? AND LOWER(category) = LOWER(?) LIMIT 1').get(category.type, category.name),
+    ]);
+    if (duplicate || historicDuplicate || CASH_TRANSACTION_CATEGORY_DEFAULTS[category.type].some(name => name.toLocaleLowerCase('vi-VN') === category.name.toLocaleLowerCase('vi-VN'))) {
+      throw new HttpError(409, 'Loại phiếu này đã tồn tại.');
+    }
+    const id = randomUUID();
+    const timestamp = now();
+    try {
+      await db.prepare('INSERT INTO finance_cash_categories (id, transaction_type, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(id, category.type, category.name, actor.id, timestamp);
+    } catch (error) {
+      if (String(error?.message || '').toLowerCase().includes('unique')) throw new HttpError(409, 'Loại phiếu này đã tồn tại.');
+      throw error;
+    }
+    await recordAuditEvent(actor.id, 'create_cash_category', 'finance_cash_categories', id, { type: category.type, name: category.name });
+    sendJson(response, 201, { category: { key: id, ...category, createdAt: timestamp } });
     return;
   }
 
