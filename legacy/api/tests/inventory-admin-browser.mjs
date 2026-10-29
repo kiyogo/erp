@@ -73,6 +73,8 @@ try {
   const receiptCode = `PNK-BROWSER-${suffix}`;
   const deliveryCode = `GH-BROWSER-${suffix}`;
   const failedDeliveryCode = `GH-FAIL-BROWSER-${suffix}`;
+  const fastLocationCode = `A-${suffix.slice(-5)}`;
+  const reserveLocationCode = `B-${suffix.slice(-5)}`;
 
   const chrome = process.env.TEST_CHROME_PATH || (existsSync('C:/Program Files/Google/Chrome/Application/chrome.exe')
     ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : await puppeteer.executablePath());
@@ -131,6 +133,24 @@ try {
     }, { timeout: 15000 }, [code, label]);
   }
 
+  await page.goto(`${webUrl}/admin/finance/inventory/map`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(() => document.body.innerText.includes('Sơ đồ kho'), { timeout: 30000 });
+  for (const [code, pickOrder] of [[fastLocationCode, '1'], [reserveLocationCode, '2']]) {
+    await page.evaluate(() => [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Thêm vị trí kho')?.click());
+    await page.waitForFunction(() => document.body.innerText.includes('Thêm vị trí kho'), { timeout: 10000 });
+    await setModalField('Kho', 'Kho chính');
+    await setModalField('Mã vị trí', code);
+    await setModalField('Khu vực', 'Khu A');
+    await setModalField('Kệ / ngăn', `Kệ ${pickOrder}`);
+    await setModalField('Sức chứa mặt hàng', '10');
+    await setModalField('Thứ tự lấy hàng', pickOrder);
+    await clickModalButton('Lưu vị trí');
+    await waitForInventory(async () => {
+      const result = await request('/collections/finance_inventory_locations', token);
+      return result.status === 200 && result.body.data?.some((location) => location.code === code) ? true : null;
+    }, `persisted warehouse location ${code}`);
+  }
+
   await page.goto(`${webUrl}/admin/finance/inventory`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => document.body.innerText.includes('Tổng quan kho hàng'), { timeout: 30000 });
   await page.evaluate(() => [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Thêm mặt hàng')?.click());
@@ -142,14 +162,15 @@ try {
   await setModalField('Tồn tối thiểu', '1');
   await setModalField('Tồn tối đa', '25');
   await setModalField('Đơn giá vốn', '0');
-  await setModalField('Vị trí lưu trữ', 'Kệ A · Ngăn 2');
+  await setModalField('Vị trí lưu trữ', reserveLocationCode);
   await clickModalButton('Lưu mặt hàng');
   const product = await waitForInventory(async () => {
     const result = await request('/collections/finance_inventory', token);
     return result.status === 200 ? result.body.data?.find((item) => item.sku === sku) : null;
   }, 'new item persisted by the catalog screen');
   assert.equal(product.stockQty, 0, 'New catalog items must start with zero stock.');
-  assert.equal(product.storageLocation, 'Kệ A · Ngăn 2');
+  assert.equal(product.storageLocation, reserveLocationCode);
+  assert.deepEqual(product.storageAssignments, [{ warehouse: 'Kho chính', locationCode: reserveLocationCode }]);
 
   await page.goto(`${webUrl}/admin/finance/inventory/import`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => document.body.innerText.includes('Phiếu nhập kho'), { timeout: 20000 });
@@ -262,6 +283,18 @@ try {
   assert.equal(completedShipmentAfterReturn.shipmentStatus, 'Giao thất bại');
   assert.equal(completedShipmentAfterReturn.shipmentReturns.length, 2);
 
+  await page.goto(`${webUrl}/admin/finance/inventory/map`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction((skuValue) => {
+    const rows = [...document.querySelectorAll('tr')];
+    return rows.some((row) => row.innerText.includes(skuValue) && row.innerText.includes('2') && row.innerText.includes('3'));
+  }, { timeout: 20000 }, sku);
+  const savedLocations = (await request('/collections/finance_inventory_locations', token)).body.data;
+  assert.equal(savedLocations.find((location) => location.code === fastLocationCode).capacityItems, 10);
+  const mapBody = await page.$eval('body', (node) => node.innerText);
+  assert.ok(mapBody.includes(fastLocationCode), 'Map recommendations should rank the higher-pick location first.');
+  assert.ok(mapBody.includes(reserveLocationCode), 'The current configured location should be visible in the map.');
+  assert.ok(mapBody.includes('Đề xuất tối ưu vị trí'));
+
   await page.goto(`${webUrl}/admin/finance/inventory/reports`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => document.body.innerText.includes('Báo cáo giao dịch kho'), { timeout: 20000 });
   await page.waitForFunction((code) => document.body.innerText.includes(code), { timeout: 15000 }, receiptCode);
@@ -276,7 +309,7 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('Luân chuyển hàng 12 tháng'), { timeout: 20000 });
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(inventoryApiErrors, []);
-  console.log(JSON.stringify({ checks: 'legacy web product creation; persisted receipt; shipment creation and status transitions; partial failed-shipment returns; stock and delivery history; no page or inventory API errors', sku, receiptCode, deliveryCode, failedDeliveryCode, database: directory }));
+  console.log(JSON.stringify({ checks: 'legacy web warehouse locations and capacity; product storage assignment; receipt, shipment transitions and returns; map occupancy and pick-based recommendations; filtered report and chart; no page or inventory API errors', sku, receiptCode, deliveryCode, failedDeliveryCode, database: directory }));
 } catch (error) {
   if (page) {
     console.error('Browser page:', (await page.$eval('body', (node) => node.innerText).catch(() => '')).slice(-3000));

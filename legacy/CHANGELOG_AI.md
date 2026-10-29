@@ -4,6 +4,14 @@ Tài liệu này ghi lại toàn bộ lịch sử các tác vụ chỉnh sửa, 
 
 ---
 
+## [2026-10-29] - Sơ đồ kho và bố trí vị trí trong web cũ
+
+- Chỉ cập nhật trong `legacy/`: thêm màn Sơ đồ kho vào module Kho hiện tại và menu sẵn có; cho phép cấu hình vị trí theo kho, khu, kệ/ngăn, sức chứa SKU, thứ tự lấy hàng và trạng thái. Vị trí đã gán không bị xóa; mã đang được SKU sử dụng không thể đổi.
+- Gán vị trí SKU theo từng kho từ danh mục mặt hàng. Bản đồ hiển thị sức chứa, số SKU/tồn thật, mặt hàng chưa gán và đề xuất bố trí theo giao dịch xuất, giao hàng, lắp ráp, tháo dỡ và kiểm kê giảm trong 365 ngày. Đề xuất không tự sửa dữ liệu; người dùng xác nhận gán qua form mặt hàng. Nối sang biểu đồ luân chuyển đã có.
+- Bảo vệ API bằng quyền Admin, kiểm tra kho cấu hình, mã vị trí trùng, sức chứa đầu vào, trạng thái và assignment. Thêm test đơn vị quy tắc bố trí, API SQLite/PostgreSQL và E2E trình duyệt.
+- Kiểm tra đạt: API 120/120, web/domain 149/149, PostgreSQL smoke 84 checkpoint, E2E sơ đồ kho, typecheck, production build và `git diff --check`. Build JavaScript 5,051.32 kB, còn cảnh báo chunk trên 500 kB.
+- Đánh dấu 3/3 mục sơ đồ kho trong checklist IDs 694–696. Tổng mức sàn đã xác minh 54/982 (5.5%); 928 mục vẫn chưa được đối chiếu đồng nhất nên chưa thể ước lượng ngày hoàn tất toàn web cũ.
+
 ## [2026-10-29] - Người liên quan và báo cáo AMIS Công việc
 
 - Tạo nhiệm vụ cho phép chọn tối đa 50 người liên quan đang hoạt động; API chuẩn hóa định danh, chống lặp, lưu trong transaction và trả người liên quan trong danh sách/chi tiết.

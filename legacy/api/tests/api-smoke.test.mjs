@@ -1433,6 +1433,44 @@ test('inventory receipts, FIFO issues, transfers and counts persist batch stock 
     sourceWarehouse: 'Kho C', reason: 'Kiểm tra phương pháp dùng chung', lines: [{ productKey: commonMethodItem.key, quantity: 1 }] }, 201);
   assert.equal(commonIssue.transaction.lines[0].allocatedLots[0].lotCode, 'COMMON-NEW');
 
+  const locationA = (await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-a1', warehouse: 'Kho A', code: 'a-01', zone: 'A', shelf: '01', capacityItems: 1, pickOrder: 1,
+  } }, 201)).record;
+  assert.equal(locationA.code, 'A-01');
+  assert.equal(locationA.status, 'Đang hoạt động');
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-a2', warehouse: 'Kho A', code: 'A-02', zone: 'A', shelf: '02', capacityItems: 10, pickOrder: 2,
+  } }, 201);
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-b1', warehouse: 'Kho B', code: 'B-01', capacityItems: 10, pickOrder: 1,
+  } }, 201);
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-a-paused', warehouse: 'Kho A', code: 'A-STOP', capacityItems: 10, pickOrder: 4, status: 'Tạm ngưng',
+  } }, 201);
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-duplicate', warehouse: 'Kho A', code: 'A-01', capacityItems: 1, pickOrder: 3,
+  } }, 409);
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-invalid-warehouse', warehouse: 'Kho không khai báo', code: 'X-01', capacityItems: 1, pickOrder: 1,
+  } }, 422);
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'inventory-location-invalid-capacity', warehouse: 'Kho A', code: 'A-99', capacityItems: 0, pickOrder: 1,
+  } }, 422);
+  await request('/collections/finance_inventory_locations/inventory-location-a1', 'DELETE', undefined, 409);
+  const assignedItem = (await request(`/collections/finance_inventory/${itemKey}`, 'PATCH', { patch: {
+    storageLocation: 'A-01', storageAssignments: [{ warehouse: 'Kho A', locationCode: 'A-01' }, { warehouse: 'Kho B', locationCode: 'B-01' }],
+  } }, 200)).record;
+  assert.equal(assignedItem.storageLocation, 'A-01');
+  assert.deepEqual(assignedItem.storageAssignments, [{ warehouse: 'Kho A', locationCode: 'A-01' }, { warehouse: 'Kho B', locationCode: 'B-01' }]);
+  await request('/collections/finance_inventory_locations/inventory-location-a1', 'PATCH', { patch: { code: 'A-CHANGED' } }, 409);
+  await request(`/collections/finance_inventory/${itemKey}`, 'PATCH', { patch: {
+    storageAssignments: [{ warehouse: 'Kho A', locationCode: 'A-STOP' }], storageLocation: 'A-STOP',
+  } }, 422);
+  await request(`/collections/finance_inventory/${itemKey}`, 'PATCH', { patch: {
+    storageAssignments: [{ warehouse: 'Kho B', locationCode: 'MISSING' }],
+  } }, 422);
+  await request('/collections/finance_inventory_locations', 'PUT', { records: [] }, 405);
+
   const beforeEdit = (await request(`/collections/finance_inventory/${itemKey}`)).record;
   const edited = await request(`/collections/finance_inventory/${itemKey}`, 'PATCH', { patch: { category: 'Linh kiện cập nhật' } }, 200);
   assert.equal(edited.record.category, 'Linh kiện cập nhật');
@@ -1447,6 +1485,7 @@ test('inventory receipts, FIFO issues, transfers and counts persist batch stock 
   const login = await request('/auth/login', 'POST', { email: employee.email, password: 'Inventory-User-26!Secure' });
   const employeeHeaders = { ...headers, Authorization: `Bearer ${login.access_token || login.token}` };
   await request('/collections/finance_inventory', 'GET', undefined, 403, employeeHeaders);
+  await request('/collections/finance_inventory_locations', 'GET', undefined, 403, employeeHeaders);
   await request('/finance/inventory/transactions', 'POST', receipt, 403, employeeHeaders);
   await request('/finance/inventory/transactions/GH-INV-API-01/shipment-status', 'POST', { status: 'Giao thất bại', reason: 'Không liên hệ được' }, 403, employeeHeaders);
   await request('/finance/inventory/transactions/GH-INV-API-RETURN-01/returns', 'POST', returnPayload, 403, employeeHeaders);

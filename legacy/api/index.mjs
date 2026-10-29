@@ -1837,8 +1837,11 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'doc_notes' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Chỉ đạo phải được cập nhật từng hồ sơ để giữ lịch sử xử lý.');
   if (scope === 'finance_costing' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý sổ giá thành.');
   if (scope === 'finance_costing' && !['GET', 'POST'].includes(request.method)) throw new HttpError(405, 'Hồ sơ giá thành đã ghi chỉ được lưu mới để giữ dữ liệu đối chiếu.');
-  if (['finance_inventory', 'finance_inventory_transactions', 'finance_inventory_warehouses', 'finance_inventory_settings'].includes(scope) && actor.role !== 'ADMIN') {
+  if (['finance_inventory', 'finance_inventory_transactions', 'finance_inventory_warehouses', 'finance_inventory_settings', 'finance_inventory_locations'].includes(scope) && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý dữ liệu kho hàng.');
+  }
+  if (scope === 'finance_inventory_locations' && request.method === 'DELETE') {
+    throw new HttpError(409, 'Vị trí kho được lưu để bảo toàn liên kết với mặt hàng; hãy tạm ngưng vị trí.');
   }
   if (scope === 'finance_inventory_transactions' && request.method !== 'GET') {
     throw new HttpError(405, 'Giao dịch kho phải được ghi qua luồng xử lý tồn kho.');
@@ -1870,7 +1873,7 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'asset_todos' && actor.role !== 'ADMIN' && ['POST', 'DELETE'].includes(request.method)) throw new HttpError(403, 'Nhân viên chỉ được cập nhật nhiệm vụ tài sản được giao.');
   if (scope === 'attendance_explanations' && request.method === 'PUT') throw new HttpError(405, 'Giải trình phải được gửi và xử lý theo từng bản ghi để giữ lịch sử duyệt.');
   if (scope === 'attendance_explanations' && request.method === 'DELETE' && actor.role === 'ADMIN') throw new HttpError(409, 'Giải trình được lưu để bảo toàn lịch sử xử lý.');
-  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings'].includes(scope)) {
+  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings', 'finance_inventory_locations'].includes(scope)) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
   return actor;
@@ -2708,6 +2711,55 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       }
     }
   }
+  if (scope === 'finance_inventory_locations') {
+    if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được cấu hình vị trí kho.');
+    const editable = ['key', 'warehouse', 'code', 'zone', 'shelf', 'capacityItems', 'pickOrder', 'status'];
+    const serverOwned = ['id', 'createdAt', 'createdBy', 'createdById', 'updatedAt', 'updatedBy', 'updatedById'];
+    if (Object.keys(value).some((field) => ![...editable, ...serverOwned].includes(field))) {
+      throw new HttpError(422, 'Vị trí kho có trường không hỗ trợ.');
+    }
+    if (current && JSON.stringify(value.key) !== JSON.stringify(current.key)) throw new HttpError(422, 'Không thể thay đổi khóa vị trí kho.');
+    record = current ? { ...current } : {};
+    for (const field of editable) if (value[field] !== undefined) record[field] = value[field];
+    record.key = requiredText(record.key, 'Khóa vị trí kho', 160);
+    record.warehouse = requiredText(record.warehouse, 'Tên kho', 160);
+    const settingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_settings' AND record_key = 'global' LIMIT 1").get();
+    const settings = settingsRow ? parseJsonObject(settingsRow.payload_json) : {};
+    const warehouseNames = Array.isArray(settings.warehouseNames) && settings.warehouseNames.length ? settings.warehouseNames : ['Kho chính'];
+    if (!warehouseNames.some((name) => String(name).toLocaleLowerCase('vi-VN') === record.warehouse.toLocaleLowerCase('vi-VN'))) {
+      throw new HttpError(422, 'Kho này chưa có trong cấu hình kho hàng.');
+    }
+    record.code = requiredText(record.code, 'Mã vị trí', 80).replace(/\s+/g, '').toLocaleUpperCase('vi-VN');
+    record.zone = optionalText(record.zone, 'Khu vực', 80);
+    record.shelf = optionalText(record.shelf, 'Kệ / ngăn', 80);
+    const positiveInteger = (input, field, maximum) => {
+      const number = typeof input === 'number' ? input : Number(String(input ?? '').trim());
+      if (!Number.isSafeInteger(number) || number < 1 || number > maximum) throw new HttpError(422, `${field} phải là số nguyên từ 1 đến ${maximum}.`);
+      return number;
+    };
+    record.capacityItems = positiveInteger(record.capacityItems, 'Sức chứa SKU', 1_000_000);
+    record.pickOrder = positiveInteger(record.pickOrder ?? 1, 'Thứ tự lấy hàng', 100_000);
+    record.status = oneOf(record.status || 'Đang hoạt động', 'Trạng thái vị trí', ['Đang hoạt động', 'Tạm ngưng']);
+    const locations = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_inventory_locations'").all();
+    const duplicate = locations.some((row) => {
+      if (row.record_key === record.key) return false;
+      const location = parseJsonObject(row.payload_json);
+      return String(location.warehouse || '').toLocaleLowerCase('vi-VN') === record.warehouse.toLocaleLowerCase('vi-VN')
+        && String(location.code || '').toLocaleUpperCase('vi-VN') === record.code;
+    });
+    if (duplicate) throw new HttpError(409, 'Mã vị trí đã tồn tại trong kho này.');
+    if (current && (current.warehouse !== record.warehouse || current.code !== record.code)) {
+      const products = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory'").all();
+      const linked = products.some((row) => {
+        const product = parseJsonObject(row.payload_json);
+        const defaultLocation = product.warehouse === current.warehouse ? product.storageLocation : '';
+        return defaultLocation === current.code || (product.storageAssignments || []).some((entry) => entry.warehouse === current.warehouse && entry.locationCode === current.code);
+      });
+      if (linked) throw new HttpError(409, 'Mã kho hoặc mã vị trí đang được gán cho mặt hàng; hãy gán lại mặt hàng trước khi đổi mã.');
+    }
+    if (!current) { record.createdAt = now(); record.createdBy = actor.name; record.createdById = actor.id; }
+    record.updatedAt = now(); record.updatedBy = actor.name; record.updatedById = actor.id;
+  }
   if (scope === 'finance_inventory_settings') {
     if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được cấu hình kho hàng.');
     const editable = ['key', 'issueMethodMode', 'issueMethod', 'lotManagedDefault', 'barcodeManagedDefault', 'warehouseNames', 'categoryNames'];
@@ -2731,7 +2783,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.updatedAt = now(); record.updatedBy = actor.name; record.updatedById = actor.id;
   }
   if (scope === 'finance_inventory') {
-    const editableFields = ['key', 'sku', 'name', 'category', 'unit', 'minQty', 'maxQty', 'unitPrice', 'warehouse', 'storageLocation', 'categoryType', 'barcode', 'lotManaged', 'barcodeManaged', 'issueMethod'];
+    const editableFields = ['key', 'sku', 'name', 'category', 'unit', 'minQty', 'maxQty', 'unitPrice', 'warehouse', 'storageLocation', 'storageAssignments', 'categoryType', 'barcode', 'lotManaged', 'barcodeManaged', 'issueMethod'];
     const integerAmount = (input, field) => {
       const amount = typeof input === 'number' ? input : Number(String(input ?? '').trim());
       if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1_000_000_000_000) throw new HttpError(422, `${field} phải là số nguyên không âm hợp lệ.`);
@@ -2765,6 +2817,38 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.unitPrice = optionalAmount(record.unitPrice, 'Đơn giá vốn');
     record.warehouse = requiredText(record.warehouse || 'Kho chính', 'Kho mặc định', 160);
     record.storageLocation = optionalText(record.storageLocation, 'Vị trí lưu trữ', 160);
+    const assignmentsInput = record.storageAssignments === undefined ? (current?.storageAssignments || []) : record.storageAssignments;
+    if (!Array.isArray(assignmentsInput) || assignmentsInput.length > 100) throw new HttpError(422, 'Vị trí theo kho không hợp lệ.');
+    const assignmentByWarehouse = new Map();
+    for (const assignment of assignmentsInput) {
+      if (!assignment || typeof assignment !== 'object' || Array.isArray(assignment)
+        || Object.keys(assignment).some((field) => !['warehouse', 'locationCode'].includes(field))) {
+        throw new HttpError(422, 'Vị trí theo kho có trường không hỗ trợ.');
+      }
+      const warehouse = requiredText(assignment.warehouse, 'Kho của vị trí', 160);
+      const locationCode = optionalText(assignment.locationCode, 'Mã vị trí', 80).replace(/\s+/g, '').toLocaleUpperCase('vi-VN');
+      if (assignmentByWarehouse.has(warehouse.toLocaleLowerCase('vi-VN'))) throw new HttpError(422, 'Mỗi kho chỉ được gán một vị trí cho mặt hàng.');
+      if (locationCode) assignmentByWarehouse.set(warehouse.toLocaleLowerCase('vi-VN'), { warehouse, locationCode });
+    }
+    if (record.storageLocation) {
+      const defaultKey = record.warehouse.toLocaleLowerCase('vi-VN');
+      assignmentByWarehouse.set(defaultKey, { warehouse: record.warehouse, locationCode: record.storageLocation.replace(/\s+/g, '').toLocaleUpperCase('vi-VN') });
+    }
+    const configuredLocations = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_locations'").all();
+    const locationRecords = configuredLocations.map((row) => parseJsonObject(row.payload_json));
+    for (const [warehouseKey, assignment] of assignmentByWarehouse) {
+      const matching = locationRecords.find((location) => String(location.warehouse || '').toLocaleLowerCase('vi-VN') === warehouseKey
+        && String(location.code || '').toLocaleUpperCase('vi-VN') === assignment.locationCode);
+      const previous = (current?.storageAssignments || []).find((entry) => String(entry.warehouse || '').toLocaleLowerCase('vi-VN') === warehouseKey);
+      const unchangedLegacy = current && (previous?.locationCode || (warehouseKey === String(current.warehouse || '').toLocaleLowerCase('vi-VN') ? current.storageLocation : '')) === assignment.locationCode;
+      if (!matching && !unchangedLegacy && locationRecords.some((location) => String(location.warehouse || '').toLocaleLowerCase('vi-VN') === warehouseKey)) {
+        throw new HttpError(422, `Vị trí ${assignment.locationCode} chưa được khai báo trong kho ${assignment.warehouse}.`);
+      }
+      if (matching && matching.status !== 'Đang hoạt động' && !unchangedLegacy) throw new HttpError(422, 'Không thể gán mặt hàng vào vị trí đang tạm ngưng.');
+    }
+    record.storageAssignments = [...assignmentByWarehouse.values()];
+    const defaultAssignment = assignmentByWarehouse.get(record.warehouse.toLocaleLowerCase('vi-VN'));
+    if (defaultAssignment) record.storageLocation = defaultAssignment.locationCode;
     record.categoryType = optionalText(record.categoryType || 'Hàng hóa', 'Loại hàng hóa', 80);
     record.barcode = optionalText(record.barcode, 'Barcode / QR', 100).replace(/\s+/g, '').toLocaleUpperCase('vi-VN');
     const inventorySettingsRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_settings' AND record_key = 'global' LIMIT 1").get();

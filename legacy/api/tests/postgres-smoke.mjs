@@ -156,10 +156,26 @@ try {
   completed++;
   token = noteAdminToken;
   const inventoryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  await request('/collections/finance_inventory_settings', 'POST', { record: {
+    key: 'global', warehouseNames: ['Kho A'], categoryNames: ['Test'], issueMethodMode: 'Mỗi mặt hàng', issueMethod: 'FIFO',
+    lotManagedDefault: false, barcodeManagedDefault: false,
+  } }, 201);
+  const pgLocation = (await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'pg-inventory-location-a1', warehouse: 'Kho A', code: 'pg-a1', capacityItems: 4, pickOrder: 1,
+  } }, 201)).record;
+  assert.equal(pgLocation.code, 'PG-A1');
+  await request('/collections/finance_inventory_locations', 'POST', { record: {
+    key: 'pg-inventory-location-duplicate', warehouse: 'Kho A', code: 'PG-A1', capacityItems: 2, pickOrder: 2,
+  } }, 409);
   await request('/collections/finance_inventory', 'POST', { record: {
     key: 'pg-inventory-return', sku: 'PG-RETURN-01', name: 'PostgreSQL return test', category: 'Test', unit: 'Cái', warehouse: 'Kho A',
     unitPrice: 1000, lotManaged: true, lots: [],
   } }, 201);
+  const pgAssignedItem = (await request('/collections/finance_inventory/pg-inventory-return', 'PATCH', { patch: {
+    storageLocation: 'PG-A1', storageAssignments: [{ warehouse: 'Kho A', locationCode: 'PG-A1' }],
+  } }, 200)).record;
+  assert.equal(pgAssignedItem.storageAssignments[0].locationCode, 'PG-A1');
+  completed++;
   await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-PG-RETURN-01', transactionDate: inventoryDate,
     destinationWarehouse: 'Kho A', lines: [{ productKey: 'pg-inventory-return', quantity: 2, unitCost: 1000, lotCode: 'PG-LOT-01', expiryDate: '2032-01-01' }] }, 201);
   const failedInventoryShipment = (await request('/finance/inventory/transactions', 'POST', { type: 'Giao hàng', transactionCode: 'GH-PG-RETURN-01', transactionDate: inventoryDate,

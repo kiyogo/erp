@@ -329,6 +329,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
         path: '/admin/finance/inventory',
         children: [
           { id: 'fin-inv-catalog', title: 'Danh mục hàng hóa', path: '/admin/finance/inventory/catalog' },
+          { id: 'fin-inv-map', title: 'Sơ đồ kho', path: '/admin/finance/inventory/map' },
           { id: 'fin-inv-in', title: 'Nhập kho', path: '/admin/finance/inventory/import' },
           { id: 'fin-inv-out', title: 'Xuất kho', path: '/admin/finance/inventory/export' },
           { id: 'fin-inv-trans', title: 'Chuyển kho', path: '/admin/finance/inventory/transfer' },

@@ -3,12 +3,13 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   AlertOutlined, ArrowDownOutlined, ArrowUpOutlined, BarChartOutlined, BarcodeOutlined,
   BuildOutlined, CalculatorOutlined, CheckOutlined, CheckSquareOutlined, DownloadOutlined,
-  InboxOutlined, PlusOutlined, SearchOutlined, SwapOutlined,
+  EnvironmentOutlined, InboxOutlined, PlusOutlined, SearchOutlined, SwapOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { inventoryApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { Button, Card, Modal, Progress, Tag, message } from '../../custom-ui';
+import { buildWarehouseLayout, type WarehouseLocation } from './warehouseLayoutRules';
 
 type InventoryLot = {
   lotCode: string;
@@ -31,6 +32,7 @@ type InventoryItem = {
   unitPrice: number;
   warehouse: string;
   storageLocation?: string;
+  storageAssignments?: Array<{ warehouse: string; locationCode: string }>;
   categoryType: string;
   barcode?: string;
   barcodeManaged?: boolean;
@@ -147,6 +149,7 @@ export const InventoryModule: React.FC = () => {
   const currentPath = location.pathname.replace(/^\/admin/, '');
   const [data, setData] = useState<InventoryItem[]>([]);
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
+  const [locations, setLocations] = useState<WarehouseLocation[]>([]);
   const [settings, setSettings] = useState<InventorySettings>(DEFAULT_SETTINGS);
   const [searchText, setSearchText] = useState('');
   const [reportFilter, setReportFilter] = useState({ from: '', to: '', type: '', warehouse: '', query: '' });
@@ -164,19 +167,24 @@ export const InventoryModule: React.FC = () => {
   const [returnDate, setReturnDate] = useState(localDate());
   const [returnQuantities, setReturnQuantities] = useState<Record<number, string>>({});
   const [returnNotes, setReturnNotes] = useState('');
+  const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [editingLocation, setEditingLocation] = useState<WarehouseLocation | null>(null);
+  const [locationDraft, setLocationDraft] = useState<Record<string, any>>({});
 
   const refresh = async () => {
     setLoadError('');
     try {
-      const [items, movements, config] = await Promise.all([
+      const [items, movements, config, warehouseLocations] = await Promise.all([
         dataService.refreshGenericData('finance_inventory'),
         dataService.refreshGenericData('finance_inventory_transactions'),
         dataService.refreshGenericData('finance_inventory_settings'),
+        dataService.refreshGenericData('finance_inventory_locations'),
       ]);
       setData(Array.isArray(items) ? items : []);
       setTransactions(Array.isArray(movements) ? movements : []);
       const saved = Array.isArray(config) ? config.find((row) => row.key === 'global') : undefined;
       setSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) });
+      setLocations(Array.isArray(warehouseLocations) ? warehouseLocations : []);
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || error?.message || 'Không tải được dữ liệu kho.');
     } finally {
@@ -190,6 +198,7 @@ export const InventoryModule: React.FC = () => {
       if (!active) return;
       setData(dataService.getGenericData('finance_inventory'));
       setTransactions(dataService.getGenericData('finance_inventory_transactions'));
+      setLocations(dataService.getGenericData('finance_inventory_locations') as WarehouseLocation[]);
       const saved = dataService.getGenericData('finance_inventory_settings').find((row) => row.key === 'global');
       if (saved) setSettings({ ...DEFAULT_SETTINGS, ...saved });
     };
@@ -210,9 +219,11 @@ export const InventoryModule: React.FC = () => {
   const isSettings = currentPath === '/finance/inventory/settings';
   const isCatalog = currentPath === '/finance/inventory/catalog';
   const isReports = currentPath === '/finance/inventory/reports';
-  const isOverview = !isCharts && !isImport && !isExport && !isTransfer && !isAssembly && !isAudit && !isCosting && !isDelivery && !isCategories && !isSettings && !isCatalog && !isReports;
+  const isWarehouseMap = currentPath === '/finance/inventory/map';
+  const isOverview = !isCharts && !isImport && !isExport && !isTransfer && !isAssembly && !isAudit && !isCosting && !isDelivery && !isCategories && !isSettings && !isCatalog && !isReports && !isWarehouseMap;
 
   const today = localDate();
+  const warehouseLayout = useMemo(() => buildWarehouseLayout(locations, data, transactions, today), [locations, data, transactions, today]);
   const fiveDaysLater = new Date(`${today}T00:00:00`);
   fiveDaysLater.setDate(fiveDaysLater.getDate() + 5);
   const expiryCutoff = `${fiveDaysLater.getFullYear()}-${String(fiveDaysLater.getMonth() + 1).padStart(2, '0')}-${String(fiveDaysLater.getDate()).padStart(2, '0')}`;
@@ -255,6 +266,22 @@ export const InventoryModule: React.FC = () => {
     setModalOpen(true);
   };
 
+  const openLocation = (location?: WarehouseLocation) => {
+    const warehouse = location?.warehouse || settings.warehouseNames[0] || 'Kho chính';
+    setEditingLocation(location || null);
+    setLocationDraft({
+      key: location?.key || `invloc-${newKey()}`,
+      warehouse,
+      code: location?.code || '',
+      zone: location?.zone || '',
+      shelf: location?.shelf || '',
+      capacityItems: location?.capacityItems ?? 10,
+      pickOrder: location?.pickOrder ?? locations.filter((item) => item.warehouse === warehouse).length + 1,
+      status: location?.status || 'Đang hoạt động',
+    });
+    setLocationModalOpen(true);
+  };
+
   const openTransaction = () => {
     const prefix = isImport ? 'PNK' : isExport ? 'PXK' : isTransfer ? 'DCK' : isAudit ? 'KK' : isDelivery ? 'GH' : 'LSX';
     const type = isImport ? 'Nhập kho' : isExport ? 'Xuất kho' : isTransfer ? 'Điều chuyển' : isAudit ? 'Kiểm kê' : isDelivery ? 'Giao hàng' : 'Lắp ráp';
@@ -270,6 +297,21 @@ export const InventoryModule: React.FC = () => {
   };
 
   const updateProduct = (field: string, value: unknown) => setProductDraft((current) => ({ ...current, [field]: value }));
+  const updateStorageAssignment = (warehouse: string, locationCode: string) => setProductDraft((current) => {
+    const assignments = Array.isArray(current.storageAssignments) ? current.storageAssignments : [];
+    const next = assignments.filter((entry: { warehouse: string }) => entry.warehouse !== warehouse);
+    if (locationCode) next.push({ warehouse, locationCode });
+    return { ...current, storageAssignments: next, ...(warehouse === current.warehouse ? { storageLocation: locationCode } : {}) };
+  });
+  const changeProductWarehouse = (warehouse: string) => setProductDraft((current) => {
+    const assignments = Array.isArray(current.storageAssignments) ? [...current.storageAssignments] : [];
+    if (current.storageLocation && current.warehouse && !assignments.some((entry: { warehouse: string }) => entry.warehouse === current.warehouse)) {
+      assignments.push({ warehouse: current.warehouse, locationCode: current.storageLocation });
+    }
+    const savedLocation = assignments.find((entry: { warehouse: string }) => entry.warehouse === warehouse)?.locationCode
+      || (editingProduct?.warehouse === warehouse ? editingProduct.storageLocation : '');
+    return { ...current, warehouse, storageLocation: savedLocation || '', storageAssignments: assignments };
+  });
   const updateTransaction = (field: string, value: unknown) => {
     setTransactionDraft((current) => ({ ...current, [field]: value }));
     if (field === 'type' && isAssembly) setDraftLines((current) => current.map((line) => {
@@ -297,6 +339,7 @@ export const InventoryModule: React.FC = () => {
         minQty: Number(productDraft.minQty) || 0, maxQty: Number(productDraft.maxQty) || 0,
         unitPrice: Number(productDraft.unitPrice) || 0, warehouse: String(productDraft.warehouse || 'Kho chính').trim(),
         storageLocation: String(productDraft.storageLocation || '').trim(),
+        storageAssignments: Array.isArray(productDraft.storageAssignments) ? productDraft.storageAssignments : [],
         categoryType: String(productDraft.categoryType || 'Hàng hóa'), barcode: String(productDraft.barcode || '').trim(),
         lotManaged: Boolean(productDraft.lotManaged), barcodeManaged: Boolean(productDraft.barcodeManaged),
         issueMethod: productDraft.issueMethod || 'FIFO',
@@ -308,6 +351,30 @@ export const InventoryModule: React.FC = () => {
       setModalOpen(false);
     } catch (error: any) {
       message.error(error?.response?.data?.message || error?.message || 'Không lưu được mặt hàng.');
+    } finally { setSaving(false); }
+  };
+
+  const submitLocation = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const values = {
+        key: editingLocation?.key || `invloc-${newKey()}`,
+        warehouse: String(locationDraft.warehouse || '').trim(),
+        code: String(locationDraft.code || '').trim().toLocaleUpperCase('vi-VN'),
+        zone: String(locationDraft.zone || '').trim(),
+        shelf: String(locationDraft.shelf || '').trim(),
+        capacityItems: Number(locationDraft.capacityItems),
+        pickOrder: Number(locationDraft.pickOrder),
+        status: locationDraft.status === 'Tạm ngưng' ? 'Tạm ngưng' : 'Đang hoạt động',
+      };
+      if (editingLocation) await dataService.updateGenericRecord('finance_inventory_locations', values);
+      else await dataService.createGenericRecord('finance_inventory_locations', values);
+      await refresh();
+      message.success(editingLocation ? 'Đã cập nhật vị trí kho.' : 'Đã thêm vị trí kho.');
+      setLocationModalOpen(false);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không lưu được vị trí kho.');
     } finally { setSaving(false); }
   };
 
@@ -478,9 +545,15 @@ export const InventoryModule: React.FC = () => {
   ];
 
   const warehouseValues = settings.warehouseNames.length ? settings.warehouseNames : ['Kho chính'];
+  const activeLocationsFor = (warehouse: string) => locations.filter((location) => location.status === 'Đang hoạt động' && location.warehouse.toLocaleLowerCase('vi-VN') === warehouse.toLocaleLowerCase('vi-VN'));
+  const additionalProductWarehouses = [...new Set([
+    ...(editingProduct?.stockByWarehouse || []).filter((entry) => Number(entry.quantity) > 0).map((entry) => entry.warehouse),
+    ...(Array.isArray(productDraft.storageAssignments) ? productDraft.storageAssignments.map((entry: { warehouse: string }) => entry.warehouse) : []),
+  ])].filter((warehouse) => warehouse && warehouse !== productDraft.warehouse);
   const navItems = [
     { label: 'Tổng quan', path: '/admin/finance/inventory', icon: <InboxOutlined /> },
     { label: 'Danh mục', path: '/admin/finance/inventory/catalog', icon: <BarcodeOutlined /> },
+    { label: 'Sơ đồ kho', path: '/admin/finance/inventory/map', icon: <EnvironmentOutlined /> },
     { label: 'Nhập kho', path: '/admin/finance/inventory/import', icon: <ArrowDownOutlined /> },
     { label: 'Xuất kho', path: '/admin/finance/inventory/export', icon: <ArrowUpOutlined /> },
     { label: 'Điều chuyển', path: '/admin/finance/inventory/transfer', icon: <SwapOutlined /> },
@@ -494,7 +567,7 @@ export const InventoryModule: React.FC = () => {
     { label: 'Cấu hình', path: '/admin/finance/inventory/settings', icon: <AlertOutlined /> },
   ];
 
-  const title = isImport ? 'Phiếu nhập kho' : isExport ? 'Phiếu xuất kho' : isTransfer ? 'Điều chuyển kho' : isAssembly ? 'Lắp ráp, tháo dỡ và lệnh sản xuất' : isAudit ? 'Kiểm kê tồn kho' : isCosting ? 'Tính giá xuất kho' : isCharts ? 'Phân tích kho hàng' : isDelivery ? 'Quản lý giao hàng' : isCategories ? 'Danh mục nhóm hàng' : isSettings ? 'Cấu hình kho hàng' : isCatalog ? 'Danh mục hàng hóa' : isReports ? 'Báo cáo giao dịch kho' : 'Tổng quan kho hàng';
+  const title = isImport ? 'Phiếu nhập kho' : isExport ? 'Phiếu xuất kho' : isTransfer ? 'Điều chuyển kho' : isAssembly ? 'Lắp ráp, tháo dỡ và lệnh sản xuất' : isAudit ? 'Kiểm kê tồn kho' : isCosting ? 'Tính giá xuất kho' : isCharts ? 'Phân tích kho hàng' : isDelivery ? 'Quản lý giao hàng' : isCategories ? 'Danh mục nhóm hàng' : isSettings ? 'Cấu hình kho hàng' : isCatalog ? 'Danh mục hàng hóa' : isReports ? 'Báo cáo giao dịch kho' : isWarehouseMap ? 'Sơ đồ kho' : 'Tổng quan kho hàng';
   const canCreateTransaction = isImport || isExport || isTransfer || isAssembly || isAudit || isDelivery;
 
   const warehouseValue = new Map<string, number>();
@@ -539,6 +612,7 @@ export const InventoryModule: React.FC = () => {
         <div><h2 style={{ margin: 0, fontSize: 20, color: '#0F172A' }}>{title}</h2><div style={{ color: '#64748B', fontSize: 12, marginTop: 4 }}>Tồn kho và giao dịch được đồng bộ trực tiếp với máy chủ.</div></div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {canCreateTransaction && <Button type="primary" icon={<PlusOutlined />} onClick={openTransaction} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Tạo phiếu</Button>}
+          {isWarehouseMap && <Button type="primary" icon={<PlusOutlined />} onClick={() => openLocation()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thêm vị trí kho</Button>}
           {(isOverview || isCatalog || isCategories) && <Button type="primary" icon={<PlusOutlined />} onClick={() => openProduct()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thêm mặt hàng</Button>}
           {(isOverview || isCatalog) && <Button icon={<DownloadOutlined />} onClick={exportInventory}>Xuất CSV</Button>}
           {isReports && <Button icon={<DownloadOutlined />} onClick={() => exportReport(reportTransactions)}>Xuất báo cáo CSV</Button>}
@@ -558,6 +632,59 @@ export const InventoryModule: React.FC = () => {
         <Card style={cardStyle}><div style={{ fontSize: 12, color: '#64748B' }}>Cảnh báo tồn thấp / vượt mức</div><div style={{ fontSize: 21, fontWeight: 800, color: lowStockCount || overStockCount ? '#DC2626' : '#16A34A', marginTop: 4 }}>{lowStockCount} / {overStockCount}</div></Card>
         <Card style={cardStyle}><div style={{ fontSize: 12, color: '#64748B' }}>Lô sắp hết hạn hoặc đã hết hạn</div><div style={{ fontSize: 21, fontWeight: 800, color: expiringLots.length ? '#D97706' : '#16A34A', marginTop: 4 }}>{expiringLots.length}</div></Card>
       </div>
+
+      {isWarehouseMap && <div data-testid="warehouse-layout" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+          <Card style={cardStyle}><div style={{ color: '#64748B', fontSize: 12 }}>Sức chứa vị trí đang hoạt động</div><strong style={{ display: 'block', fontSize: 22, marginTop: 4 }}>{warehouseLayout.totalSlots}</strong></Card>
+          <Card style={cardStyle}><div style={{ color: '#64748B', fontSize: 12 }}>Vị trí đang sử dụng</div><strong style={{ display: 'block', fontSize: 22, marginTop: 4 }}>{warehouseLayout.occupiedSlots}</strong></Card>
+          <Card style={cardStyle}><div style={{ color: '#64748B', fontSize: 12 }}>Mặt hàng chưa xếp vị trí</div><strong style={{ display: 'block', fontSize: 22, color: warehouseLayout.unlocatedItems.length ? '#D97706' : '#059669', marginTop: 4 }}>{warehouseLayout.unlocatedItems.length}</strong></Card>
+          <Card style={cardStyle}><div style={{ color: '#64748B', fontSize: 12 }}>Đề xuất sắp xếp</div><strong style={{ display: 'block', fontSize: 22, color: warehouseLayout.suggestions.length ? '#2563EB' : '#059669', marginTop: 4 }}>{warehouseLayout.suggestions.length}</strong></Card>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+          <Card title="Thiết lập sơ đồ kho" style={cardStyle}><div style={{ color: '#64748B', fontSize: 12, marginBottom: 10 }}>Khai báo khu vực, kệ, sức chứa và thứ tự lấy hàng theo từng kho.</div><Button type="primary" onClick={() => openLocation()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thêm vị trí kho</Button></Card>
+          <Card title="Tối ưu không gian lưu trữ" style={cardStyle}><div style={{ color: '#64748B', fontSize: 12, marginBottom: 10 }}>Xếp SKU có lượt xuất cao vào vị trí lấy hàng ưu tiên, trong giới hạn sức chứa.</div><Button onClick={() => document.getElementById('warehouse-layout-recommendations')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Xem đề xuất</Button></Card>
+          <Card title="Nâng cao hiệu suất vận hành" style={cardStyle}><div style={{ color: '#64748B', fontSize: 12, marginBottom: 10 }}>Xem lượng luân chuyển, tốc độ xuất và thời gian tồn theo danh mục.</div><Link to="/admin/finance/inventory/charts"><Button>Phân tích luân chuyển</Button></Link></Card>
+        </div>
+        <Card title="Vị trí và sức chứa kho" style={cardStyle}>
+          <KTable viewKeyPrefix="legacy-inventory-warehouse-locations" dataSource={warehouseLayout.locations} rowKey="key" loading={loading} pagination={{ pageSize: 10 }} columns={[
+            { title: 'Kho', dataIndex: 'warehouse', key: 'warehouse' },
+            { title: 'Khu vực', dataIndex: 'zone', key: 'zone', render: (value: string) => value || '—' },
+            { title: 'Kệ / ngăn', dataIndex: 'shelf', key: 'shelf', render: (value: string) => value || '—' },
+            { title: 'Mã vị trí', dataIndex: 'code', key: 'code', render: (value: string) => <strong>{value}</strong> },
+            { title: 'Sức chứa SKU', key: 'capacity', render: (_: unknown, location: WarehouseLocation & { occupiedItems: number; quantity: number; occupancyPercent: number }) => <div style={{ minWidth: 130 }}><div>{location.occupiedItems} / {location.capacityItems} mặt hàng</div><Progress percent={Math.min(100, location.occupancyPercent)} strokeColor={location.occupancyPercent > 100 ? '#DC2626' : '#009688'} /></div> },
+            { title: 'Tồn thực', dataIndex: 'quantity', key: 'quantity', render: (value: number) => Number(value || 0).toLocaleString('vi-VN') },
+            { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (value: string) => <Tag color={value === 'Đang hoạt động' ? 'success' : 'default'}>{value}</Tag> },
+            { title: 'Thao tác', key: 'actions', render: (_: unknown, location: WarehouseLocation) => <Button size="small" onClick={() => openLocation(location)}>Sửa</Button> },
+          ]} />
+          {!locations.length && <div style={{ color: '#64748B', fontSize: 12 }}>Chưa có vị trí kho. Thêm vị trí để bắt đầu lập sơ đồ và tính sức chứa.</div>}
+        </Card>
+        <Card title="Mặt hàng chưa gán vị trí" style={cardStyle}>
+          <KTable viewKeyPrefix="legacy-inventory-warehouse-unlocated" dataSource={warehouseLayout.unlocatedItems} rowKey={(row: { item: InventoryItem; warehouse: string }) => `${row.item.key}-${row.warehouse}`} pagination={{ pageSize: 10 }} columns={[
+            { title: 'SKU', key: 'sku', render: (_: unknown, row: { item: InventoryItem }) => <strong>{row.item.sku}</strong> },
+            { title: 'Mặt hàng', key: 'name', render: (_: unknown, row: { item: InventoryItem }) => row.item.name },
+            { title: 'Kho', dataIndex: 'warehouse', key: 'warehouse' },
+            { title: 'Tồn', key: 'quantity', render: (_: unknown, row: { item: InventoryItem; quantity: number }) => `${row.quantity.toLocaleString('vi-VN')} ${row.item.unit}` },
+            { title: 'Vị trí hiện tại', key: 'location', render: (_: unknown, row: { locationCode: string }) => row.locationCode || 'Chưa gán' },
+            { title: 'Thao tác', key: 'actions', render: (_: unknown, row: { item: InventoryItem }) => <Button size="small" onClick={() => openProduct(row.item)}>Gán vị trí</Button> },
+          ]} />
+          {!warehouseLayout.unlocatedItems.length && <div style={{ color: '#64748B', fontSize: 12 }}>Tất cả mặt hàng có tồn đã được gán vào vị trí đang khai báo.</div>}
+        </Card>
+        <div id="warehouse-layout-recommendations"><Card title="Đề xuất tối ưu vị trí" style={cardStyle}>
+          <div style={{ color: '#64748B', fontSize: 12, marginBottom: 10 }}>Đề xuất chỉ dựa trên giao dịch xuất kho, giao hàng, tiêu thụ lắp ráp, tháo dỡ và kiểm kê giảm trong 365 ngày gần nhất. Hệ thống không tự chuyển vị trí.</div>
+          <KTable viewKeyPrefix="legacy-inventory-warehouse-recommendations" dataSource={warehouseLayout.suggestions} rowKey={(row: { item: InventoryItem; warehouse: string }) => `${row.item.key}-${row.warehouse}`} pagination={{ pageSize: 10 }} columns={[
+            { title: 'SKU', key: 'sku', render: (_: unknown, row: { item: InventoryItem }) => <strong>{row.item.sku}</strong> },
+            { title: 'Mặt hàng', key: 'name', render: (_: unknown, row: { item: InventoryItem }) => row.item.name },
+            { title: 'Kho', dataIndex: 'warehouse', key: 'warehouse' },
+            { title: 'Vị trí hiện tại', dataIndex: 'currentLocation', key: 'currentLocation', render: (value: string) => value || 'Chưa gán' },
+            { title: 'Vị trí đề xuất', dataIndex: 'recommendedLocation', key: 'recommendedLocation', render: (value: string) => <Tag color="blue">{value}</Tag> },
+            { title: 'Lượt lấy 365 ngày', dataIndex: 'pickCount', key: 'pickCount' },
+            { title: 'Lượng xuất', dataIndex: 'pickedQuantity', key: 'pickedQuantity', render: (value: number) => Number(value || 0).toLocaleString('vi-VN') },
+            { title: 'Thao tác', key: 'actions', render: (_: unknown, row: { item: InventoryItem }) => <Button size="small" onClick={() => openProduct(row.item)}>Cập nhật vị trí</Button> },
+          ]} />
+          {!warehouseLayout.suggestions.length && <div style={{ color: '#64748B', fontSize: 12 }}>Chưa có thay đổi vị trí cần đề xuất.</div>}
+          {!!warehouseLayout.itemsWithoutCapacity.length && <div role="status" style={{ marginTop: 12, color: '#B45309', fontSize: 12 }}>Không đủ vị trí đang hoạt động cho {warehouseLayout.itemsWithoutCapacity.length} mặt hàng có tồn. Hãy thêm sức chứa hoặc kích hoạt vị trí phù hợp.</div>}
+        </Card></div>
+      </div>}
 
       {(isOverview || isCatalog) && <Card title="Danh mục hàng hóa" style={cardStyle}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, maxWidth: 540 }}><input aria-label="Tìm mặt hàng" style={fieldStyle} placeholder="Tìm SKU, tên, barcode, nhóm hoặc kho" value={searchText} onChange={(event) => setSearchText(event.target.value)} /><Button icon={<SearchOutlined />} onClick={() => setSearchText(searchText.trim())}>Tìm</Button></div>
@@ -661,11 +788,29 @@ export const InventoryModule: React.FC = () => {
             <Field label="Tồn tối thiểu"><input type="number" min={0} step={1} style={fieldStyle} value={productDraft.minQty ?? 0} onChange={(event) => updateProduct('minQty', event.target.value)} /></Field>
             <Field label="Tồn tối đa (0 = không giới hạn)"><input type="number" min={0} step={1} style={fieldStyle} value={productDraft.maxQty ?? 0} onChange={(event) => updateProduct('maxQty', event.target.value)} /></Field>
             <Field label="Đơn giá vốn"><input type="number" min={0} step={1} style={fieldStyle} value={productDraft.unitPrice ?? 0} onChange={(event) => updateProduct('unitPrice', event.target.value)} /></Field>
-            <Field label="Kho mặc định"><select style={fieldStyle} value={productDraft.warehouse || warehouseValues[0]} onChange={(event) => updateProduct('warehouse', event.target.value)}>{warehouseValues.map((warehouse) => <option key={warehouse}>{warehouse}</option>)}</select></Field>
-            <Field label="Vị trí lưu trữ (khu / kệ / ngăn)"><input maxLength={160} style={fieldStyle} value={productDraft.storageLocation || ''} onChange={(event) => updateProduct('storageLocation', event.target.value)} /></Field>
+            <Field label="Kho mặc định"><select style={fieldStyle} value={productDraft.warehouse || warehouseValues[0]} onChange={(event) => changeProductWarehouse(event.target.value)}>{warehouseValues.map((warehouse) => <option key={warehouse}>{warehouse}</option>)}</select></Field>
+            <Field label="Vị trí lưu trữ">
+              {activeLocationsFor(productDraft.warehouse || warehouseValues[0]).length ? <select style={fieldStyle} value={productDraft.storageLocation || ''} onChange={(event) => updateStorageAssignment(productDraft.warehouse || warehouseValues[0], event.target.value)}>
+                <option value="">Chưa gán vị trí</option>
+                {productDraft.storageLocation && !activeLocationsFor(productDraft.warehouse || warehouseValues[0]).some((location) => location.code === productDraft.storageLocation) && <option value={productDraft.storageLocation}>Vị trí đang lưu: {productDraft.storageLocation}</option>}
+                {activeLocationsFor(productDraft.warehouse || warehouseValues[0]).map((location) => <option key={location.key} value={location.code}>{location.code}{location.zone ? ` · ${location.zone}` : ''}{location.shelf ? ` · ${location.shelf}` : ''}</option>)}
+              </select> : <input maxLength={160} style={fieldStyle} value={productDraft.storageLocation || ''} onChange={(event) => updateProduct('storageLocation', event.target.value)} />}
+            </Field>
             <Field label="Barcode / QR"><input style={fieldStyle} value={productDraft.barcode || ''} onChange={(event) => updateProduct('barcode', event.target.value)} /></Field>
             <Field label="Phương pháp xuất kho"><select style={fieldStyle} value={productDraft.issueMethod || 'FIFO'} onChange={(event) => updateProduct('issueMethod', event.target.value)}><option>FIFO</option><option>LIFO</option><option>Bình quân</option></select></Field>
           </div>
+          {!!additionalProductWarehouses.length && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+            {additionalProductWarehouses.map((warehouse) => {
+              const choices = activeLocationsFor(warehouse);
+              const assigned = productDraft.storageAssignments?.find((entry: { warehouse: string }) => entry.warehouse === warehouse)?.locationCode || '';
+              if (!choices.length) return null;
+              return <Field key={warehouse} label={`Vị trí tại ${warehouse}`}><select style={fieldStyle} value={assigned} onChange={(event) => updateStorageAssignment(warehouse, event.target.value)}>
+                <option value="">Chưa gán vị trí</option>
+                {assigned && !choices.some((location) => location.code === assigned) && <option value={assigned}>Vị trí đang lưu: {assigned}</option>}
+                {choices.map((location) => <option key={location.key} value={location.code}>{location.code}{location.zone ? ` · ${location.zone}` : ''}{location.shelf ? ` · ${location.shelf}` : ''}</option>)}
+              </select></Field>;
+            })}
+          </div>}
           <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}><label><input type="checkbox" checked={Boolean(productDraft.lotManaged)} onChange={(event) => updateProduct('lotManaged', event.target.checked)} /> Quản lý số lô và hạn dùng</label><label><input type="checkbox" checked={Boolean(productDraft.barcodeManaged)} onChange={(event) => updateProduct('barcodeManaged', event.target.checked)} /> Bắt buộc Barcode / QR</label></div>
           {!editingProduct && <div style={{ color: '#64748B', fontSize: 12 }}>Số lượng tồn chỉ thay đổi qua phiếu nhập, xuất, điều chuyển, lắp ráp hoặc kiểm kê.</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={() => setModalOpen(false)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu mặt hàng</Button></div>
@@ -704,6 +849,20 @@ export const InventoryModule: React.FC = () => {
           {isAssembly && <div style={{ color: '#64748B', fontSize: 12 }}>Chi phí thành phẩm được tính từ giá vốn thực tế của các dòng thành phần đã xuất.</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={() => setModalOpen(false)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Ghi nhận phiếu</Button></div>
         </form>}
+      </Modal>
+      <Modal open={locationModalOpen} onCancel={() => { if (!saving) setLocationModalOpen(false); }} footer={null} width={720} title={editingLocation ? 'Cập nhật vị trí kho' : 'Thêm vị trí kho'}>
+        <form onSubmit={submitLocation} style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 10 }}>
+          <div style={gridStyle}>
+            <Field label="Kho"><select required style={fieldStyle} value={locationDraft.warehouse || warehouseValues[0]} onChange={(event) => setLocationDraft((current) => ({ ...current, warehouse: event.target.value }))}>{warehouseValues.map((warehouse) => <option key={warehouse}>{warehouse}</option>)}</select></Field>
+            <Field label="Mã vị trí"><input required maxLength={80} style={fieldStyle} value={locationDraft.code || ''} onChange={(event) => setLocationDraft((current) => ({ ...current, code: event.target.value }))} /></Field>
+            <Field label="Khu vực"><input maxLength={80} style={fieldStyle} value={locationDraft.zone || ''} onChange={(event) => setLocationDraft((current) => ({ ...current, zone: event.target.value }))} /></Field>
+            <Field label="Kệ / ngăn"><input maxLength={80} style={fieldStyle} value={locationDraft.shelf || ''} onChange={(event) => setLocationDraft((current) => ({ ...current, shelf: event.target.value }))} /></Field>
+            <Field label="Sức chứa mặt hàng"><input required type="number" min={1} max={1000000} step={1} style={fieldStyle} value={locationDraft.capacityItems ?? 10} onChange={(event) => setLocationDraft((current) => ({ ...current, capacityItems: event.target.value }))} /></Field>
+            <Field label="Thứ tự lấy hàng"><input required type="number" min={1} max={100000} step={1} style={fieldStyle} value={locationDraft.pickOrder ?? 1} onChange={(event) => setLocationDraft((current) => ({ ...current, pickOrder: event.target.value }))} /></Field>
+            <Field label="Trạng thái"><select style={fieldStyle} value={locationDraft.status || 'Đang hoạt động'} onChange={(event) => setLocationDraft((current) => ({ ...current, status: event.target.value }))}><option>Đang hoạt động</option><option>Tạm ngưng</option></select></Field>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button disabled={saving} onClick={() => setLocationModalOpen(false)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu vị trí</Button></div>
+        </form>
       </Modal>
       <Modal open={Boolean(returnShipment)} onCancel={() => { if (!saving) setReturnShipment(null); }} footer={null} width={720} title="Nhận hàng giao thất bại về kho">
         {returnShipment && <form onSubmit={submitShipmentReturn} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 10 }}>
