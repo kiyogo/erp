@@ -478,6 +478,7 @@ export const Menu: React.FC<MenuProps> = ({ items = [], selectedKeys = [], onCli
             key={itemKey}
             className={`ant-menu-item ${isSelected ? 'ant-menu-item-selected' : ''} ${item.danger ? 'ant-menu-item-danger' : ''}`}
             onClick={handleItemClick}
+            onMouseDown={e => e.preventDefault()}
             style={itemStyle}
             onMouseEnter={(e) => {
               if (!item.disabled && !isSelected) {
@@ -1900,7 +1901,7 @@ export const Select: React.FC<SelectProps> = ({
             background: '#FFFFFF',
             backgroundColor: '#FFFFFF',
             border: '1px solid #D9D9D9',
-            borderRadius: 6,
+            borderRadius: 8,
             boxShadow: '0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)',
             boxSizing: 'border-box',
             padding: 0,
@@ -1955,6 +1956,7 @@ export const Select: React.FC<SelectProps> = ({
                       e.currentTarget.style.backgroundColor = '#E0F2F1';
                     }
                   }}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleSelect(opt.value);
@@ -2131,7 +2133,7 @@ export const CompactSelect: React.FC<Omit<SelectProps, 'mode' | 'showSearch' | '
             zIndex: 100050,
             background: '#FFFFFF',
             border: '1px solid #D9D9D9',
-            borderRadius: 6,
+            borderRadius: 8,
             boxShadow: '0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)',
             padding: 0,
             maxHeight: 220,
@@ -2178,6 +2180,7 @@ export const CompactSelect: React.FC<Omit<SelectProps, 'mode' | 'showSearch' | '
                     e.currentTarget.style.backgroundColor = '#E0F2F1';
                   }
                 }}
+                onMouseDown={e => e.preventDefault()}
                 onClick={() => handleSelect(opt.value)}
               >
                 <span>{opt.label !== undefined ? opt.label : String(opt.value)}</span>

@@ -185,7 +185,14 @@ export const OnboardingModule: React.FC = () => {
         dataService.fetchDropdownOptions('positions'),
       ]);
       setData(list.map((item: any) => ({ ...item, key: item.key || item.id, progress: onboardingProgress(onboardingChecklist(item)) })));
-      const activeStaff = staff.data.data.filter(employee => employee.isActive !== false && employee.status !== 'Đã nghỉ việc');
+      const rawStaff = Array.isArray(staff?.data?.data) ? staff.data.data : [];
+      const isSuperAdminEmployee = (item: any) =>
+        item?.role === 'ADMIN' ||
+        item?.role === 'Super Admin' ||
+        item?.code === 'ADMIN-001' ||
+        item?.employeeCode === 'ADMIN-001' ||
+        (item?.email && (item.email.toLowerCase().includes('admin') || item.email.toLowerCase() === 'tung@kiyovn.local'));
+      const activeStaff = rawStaff.filter(employee => !isSuperAdminEmployee(employee) && employee.status !== 'Đã nghỉ việc');
       setEmployees(activeStaff.length > 0 ? activeStaff : SAMPLE_CANDIDATE_EMPLOYEES);
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
       setPosOptions(positions.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));

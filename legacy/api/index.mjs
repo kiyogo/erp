@@ -3744,7 +3744,11 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   }
   if (scope === 'hr_onboarding_tasks') {
     record.employeeId = requiredText(record.employeeId, 'Nhân viên hội nhập', 160);
-    const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department, p.position FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1').get(record.employeeId);
+    const employee = await db.prepare(`SELECT u.id, u.name, u.employee_code, p.department, p.position
+      FROM users u
+      LEFT JOIN employee_profiles p ON p.user_id = u.id
+      WHERE (u.id = ? OR u.employee_code = ?)
+        AND (u.is_active = 1 OR (p.employment_status IS NOT NULL AND p.employment_status != 'Đã nghỉ việc'))`).get(record.employeeId, record.employeeId);
     if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
     record.employeeName = employee.name; record.empCode = employee.employee_code;
     record.department = requiredText(record.department || employee.department, 'Phòng ban tiếp nhận', 160);
