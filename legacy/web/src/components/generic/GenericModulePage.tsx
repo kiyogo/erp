@@ -78,7 +78,7 @@ import { PaymentsModule } from '../../modules/finance/PaymentsModule';
 import { InternalTransferModule } from '../../modules/finance/InternalTransferModule';
 
 // CRM submodules
-import { CRMModule } from '../../modules/crm/CRMModule';
+import { CRMModule, CRMOverviewModule } from '../../modules/crm/CRMModule';
 import { CustomersModule } from '../../modules/crm/CustomersModule';
 import { SuppliersModule } from '../../modules/crm/SuppliersModule';
 import { SupplierEvaluationModule } from '../../modules/crm/SupplierEvaluationModule';
@@ -353,6 +353,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/finance') return <Navigate to="/admin/finance/overview" replace />;
 
   // 8. CRM & Insurance
+  if (p === '/crm/overview' || p === '/crm') return <CRMOverviewModule />;
   if (p === '/crm/customers') return <CustomersModule />;
   if (p === '/crm/suppliers') return <SuppliersModule />;
   if (p === '/crm/promotions') return <PromotionsModule />;

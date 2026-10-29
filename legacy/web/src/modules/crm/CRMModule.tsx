@@ -1,4 +1,5 @@
 import React from 'react';
-import { CRMContactsModule } from './CRMContactsModule';
+import { CRMOverviewModule } from './CRMOverviewModule';
 
-export const CRMModule: React.FC = () => <CRMContactsModule type="all" />;
+export { CRMOverviewModule };
+export const CRMModule: React.FC = () => <CRMOverviewModule />;

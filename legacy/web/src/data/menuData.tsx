@@ -169,15 +169,9 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
     id: 'crm',
     title: 'Khách hàng & đối tác',
     icon: <SmileOutlined />,
-    path: '/admin/crm',
+    path: '/admin/crm/overview',
     children: [
-      { id: 'crm-ai-marketing', title: 'aiMarketing', path: '/admin/crm/marketing', icon: <MailOutlined /> },
-      { id: 'crm-customers', title: 'Khách hàng', path: '/admin/crm/customers' },
-      { id: 'crm-suppliers', title: 'Nhà cung cấp', path: '/admin/crm/suppliers' },
-      { id: 'crm-promotions', title: 'Khuyến mại', path: '/admin/crm/promotions' },
-      { id: 'crm-loyalty', title: 'Tích điểm và trả thưởng', path: '/admin/crm/loyalty' },
-      { id: 'crm-feedback', title: 'Phản ánh khách hàng', path: '/admin/crm/feedback' },
-      { id: 'crm-supplier-evaluations', title: 'Đánh giá nhà cung cấp', path: '/admin/crm/suppliers-eval' },
+      { id: 'crm-overview', title: 'Tổng quan', path: '/admin/crm/overview' },
     ],
   },
   {
