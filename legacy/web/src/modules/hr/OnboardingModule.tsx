@@ -64,12 +64,15 @@ export const ONBOARDING_WORK_TYPES = [
 
 const SAMPLE_CANDIDATE_EMPLOYEES: EnterpriseEmployee[] = [
   {
+    key: 'emp-sample-1',
     id: 'emp-sample-1',
     userId: 'emp-sample-1',
     employeeCode: 'NV000001',
     code: 'NV000001',
     name: 'Nguyễn MI SA NGU',
     fullName: 'Nguyễn MI SA NGU',
+    email: '',
+    phone: '',
     department: 'CÔNG TY TNHH XÂY DỰNG KINH SỞ',
     position: '-',
     joinDate: '-',
