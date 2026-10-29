@@ -321,7 +321,6 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/finance/overview' || p === '/finance/analysis') return <FinanceOverviewModule />;
   if (p === '/finance/cash/flow') return <CashFlowModule />;
   if (p === '/finance/cash/audit') return <CashCountModule />;
-  if (p === '/finance/cash/audit') return <CashCountModule />;
   if (p === '/finance/cash/petty') return <PettyCashModule />;
   if (p.startsWith('/finance/cash/loans')) return <LoansModule />;
   if (p === '/finance/cash/forecast') return <CashForecastModule />;
