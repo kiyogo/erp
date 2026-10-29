@@ -472,7 +472,7 @@ export type FinanceCashTransaction = {
   amount: number;
   date: string;
   voucherDate?: string;
-  currency?: 'VND' | 'USD';
+  currency?: 'VND';
   reference?: string;
   recipientOrPayer: string;
   account: string;

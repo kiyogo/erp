@@ -531,8 +531,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       </div>
 
       {/* Main Table */}
-      <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+          <div className="transparent-table-card">
+        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 20 }} />
       </div>
 
       {/* MODAL: Lập phiếu thu / chi */}
@@ -621,7 +621,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           <Form.Item name="reference" label="Tham chiếu"><Input maxLength={500} placeholder="Số chứng từ, hợp đồng hoặc nội dung liên quan" /></Form.Item>
 
           <div style={{ margin: '4px 0 14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}><strong>Hạch toán</strong><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Loại tiền<Form.Item name="currency" noStyle rules={[{ required: true }]}><Select style={{ width: 110 }} options={[{ label: 'VND', value: 'VND' }, { label: 'USD', value: 'USD' }]} /></Form.Item></div></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}><strong>Hạch toán</strong><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Loại tiền<Form.Item name="currency" noStyle rules={[{ required: true }]}><Select style={{ width: 110 }} options={[{ label: 'VND', value: 'VND' }]} /></Form.Item></div></div>
             <div style={{ overflowX: 'auto' }}><KTable dataSource={journalLines.map((line, lineIndex) => ({ ...line, lineIndex, key: String(lineIndex) }))} columns={journalColumns} pagination={{ pageSize: 20 }} disableCache /></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setJournalLines(current => [...current, { description: '', debitAccount: '', creditAccount: '', amount: 0 }])}>Thêm dòng</Button><Button onClick={() => { setJournalLines([]); form.setFieldsValue({ amount: 0 }); }}>Xóa hết dòng</Button></div>
@@ -646,7 +646,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               if (savedAttachments.length + attachmentFiles.length + incoming.length > 20 || totalSize > 5 * 1024 * 1024) message.error('Tệp vượt quá giới hạn 20 tệp hoặc tổng dung lượng 5 MB.');
               else setAttachmentFiles(current => [...current, ...incoming]);
             }} style={{ border: '1px dashed #86A883', padding: '16px 20px', color: '#64748B', cursor: 'pointer', maxWidth: 500, textAlign: 'center', background: '#FAFCFA' }}>Kéo/thả tệp vào đây hoặc bấm để chọn</div>
-            {[...savedAttachments.map(file => ({ ...file, stored: true as const })), ...attachmentFiles.map(file => ({ id: `local-${file.name}-${file.lastModified}`, name: file.name, size: file.size, stored: false as const, lastModified: file.lastModified }))].map(file => <div key={file.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}><PaperClipOutlined /><span>{file.name} · {(file.size / 1024).toFixed(0)} KB</span><Button aria-label={`Bỏ tệp ${file.name}`} onClick={() => { if (file.stored) setSavedAttachments(current => current.filter(item => item.id !== file.id)); else setAttachmentFiles(current => current.filter(item => !(item.name === file.name && item.lastModified === file.lastModified))); }}>Bỏ</Button></div>)}
+            {[...savedAttachments.map(file => ({ ...file, stored: true as const, lastModified: undefined as number | undefined })), ...attachmentFiles.map(file => ({ id: `local-${file.name}-${file.lastModified}`, name: file.name, size: file.size, stored: false as const, lastModified: file.lastModified }))].map(file => <div key={file.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}><PaperClipOutlined /><span>{file.name} · {(file.size / 1024).toFixed(0)} KB</span><Button aria-label={`Bỏ tệp ${file.name}`} onClick={() => { if (file.stored) setSavedAttachments(current => current.filter(item => item.id !== file.id)); else setAttachmentFiles(current => current.filter(item => !(item.name === file.name && item.lastModified === file.lastModified))); }}>Bỏ</Button></div>)}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 5, alignItems: 'end' }}><Form.Item name="partyRef" label={activeVoucherType === 'Chi' ? 'Đối tượng nhận tiền' : 'Đối tượng nộp tiền'} rules={[{ required: true, message: 'Hãy chọn loại đối tượng.' }]} style={{ marginBottom: 14 }}>

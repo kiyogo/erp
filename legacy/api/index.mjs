@@ -4853,7 +4853,7 @@ function validateCashTransaction(input) {
     attachments: attachmentIds,
     date: requiredIsoDate(input.date, 'Ngày hạch toán'),
     voucherDate: requiredIsoDate(input.voucherDate || input.date, 'Ngày phiếu'),
-    currency: oneOf(input.currency || 'VND', 'Loại tiền', ['VND', 'USD']),
+    currency: oneOf(input.currency || 'VND', 'Loại tiền', ['VND']),
     reference: optionalText(input.reference, 'Tham chiếu', 500),
     recipientOrPayer: requiredText(input.recipientOrPayer, 'Đối tác hoặc người nhận', 200),
     account: requiredText(input.account, 'Tài khoản hoặc quỹ tiền', 200),
