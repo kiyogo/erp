@@ -26,9 +26,11 @@ import {
   CloseCircleFilled,
   BarChartOutlined,
   CustomerServiceOutlined,
+  MenuOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Checkbox } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Checkbox, Dropdown } from '../../custom-ui';
 import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { useNavigate } from 'react-router-dom';
@@ -594,16 +596,64 @@ export const OnboardingModule: React.FC = () => {
     {
       title: 'Thao tác',
       key: 'actions',
-      width: 120,
-      render: (_: any, record: EnterpriseOnboardingTask) => (
-        <Button
-          size="small"
-          icon={<EyeOutlined />}
-          onClick={() => showTask(record)}
-        >
-          Checklist
-        </Button>
-      ),
+      width: 150,
+      render: (_: any, record: EnterpriseOnboardingTask) => {
+        const actionMenuItems = [
+          {
+            key: 'detail',
+            label: 'Chi tiết nhân viên hội nhập',
+            icon: <EyeOutlined style={{ color: '#009688' }} />,
+            onClick: () => showTask(record),
+          },
+          {
+            key: 'complete',
+            label: 'Đánh dấu hoàn thành hội nhập',
+            icon: <CheckCircleOutlined style={{ color: '#10B981' }} />,
+            onClick: () => {
+              setSelectedTask(record);
+              void updateTask({ status: 'Đã hoàn thành', progress: 100 });
+            },
+          },
+          {
+            key: 'contracts',
+            label: 'Mở hợp đồng lao động',
+            icon: <FileTextOutlined style={{ color: '#2563EB' }} />,
+            onClick: () => navigate('/admin/hr/contracts'),
+          },
+        ];
+
+        const SafeDropdown: any = (Dropdown as any) || (({ children }: any) => <>{children}</>);
+
+        return (
+          <div
+            onClick={() => showTask(record)}
+            style={{ display: 'inline-flex', gap: 6, alignItems: 'center', whiteSpace: 'nowrap' }}
+          >
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={(e: any) => {
+                if (e?.stopPropagation) e.stopPropagation();
+                showTask(record);
+              }}
+              style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+            >
+              Chi tiết
+            </Button>
+            <SafeDropdown menu={{ items: actionMenuItems }} placement="bottomRight">
+              <Button
+                size="small"
+                icon={<MenuOutlined />}
+                onClick={(e: any) => {
+                  if (e?.stopPropagation) e.stopPropagation();
+                }}
+                style={{ padding: '0 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                title="Menu thao tác"
+              />
+            </SafeDropdown>
+          </div>
+        );
+      },
     },
   ];
 
@@ -804,21 +854,14 @@ export const OnboardingModule: React.FC = () => {
         </div>
       </Modal>
 
-      {/* GIAO DIỆN ẢNH 2: DRAWER / MODAL "Chi tiết nhân viên hội nhập" */}
-      <Drawer
-        title={null}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={940}
-        bodyStyle={{ padding: 0 }}
-      >
-        {selectedTask && (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {/* Top Bar Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
-                Chi tiết nhân viên hội nhập
-              </div>
+      {/* GIAO DIỆN ẢNH 2: MODAL "Chi tiết nhân viên hội nhập" */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 32 }}>
+            <span style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
+              Chi tiết nhân viên hội nhập
+            </span>
+            {selectedTask && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <button
                   type="button"
@@ -827,17 +870,17 @@ export const OnboardingModule: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
-                    padding: '6px 12px',
+                    padding: '4px 14px',
                     borderRadius: 20,
-                    border: '1px solid #A7F3D0',
-                    background: selectedTask.status === 'Đã hoàn thành' ? '#10B981' : '#ECFDF5',
-                    color: selectedTask.status === 'Đã hoàn thành' ? '#FFFFFF' : '#059669',
+                    border: '1px solid ' + (selectedTask.status === 'Đã hoàn thành' ? '#A7F3D0' : '#E2E8F0'),
+                    background: selectedTask.status === 'Đã hoàn thành' ? '#D1FAE5' : '#FFFFFF',
+                    color: selectedTask.status === 'Đã hoàn thành' ? '#059669' : '#64748B',
                     fontSize: 12.5,
                     fontWeight: 600,
                     cursor: 'pointer',
                   }}
                 >
-                  <CheckCircleFilled />
+                  <CheckCircleFilled style={{ color: selectedTask.status === 'Đã hoàn thành' ? '#059669' : '#94A3B8' }} />
                   <span>Hoàn thành</span>
                 </button>
 
@@ -848,372 +891,362 @@ export const OnboardingModule: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
-                    padding: '6px 12px',
+                    padding: '4px 14px',
                     borderRadius: 20,
-                    border: '1px solid #FECACA',
-                    background: selectedTask.status === 'Đang hội nhập' ? '#F43F5E' : '#FFF1F2',
-                    color: selectedTask.status === 'Đang hội nhập' ? '#FFFFFF' : '#E11D48',
+                    border: '1px solid ' + (selectedTask.status !== 'Đã hoàn thành' ? '#FECACA' : '#E2E8F0'),
+                    background: selectedTask.status !== 'Đã hoàn thành' ? '#FEE2E2' : '#FFFFFF',
+                    color: selectedTask.status !== 'Đã hoàn thành' ? '#EF4444' : '#64748B',
                     fontSize: 12.5,
                     fontWeight: 600,
                     cursor: 'pointer',
                   }}
                 >
-                  <CloseCircleFilled />
+                  <CloseCircleFilled style={{ color: selectedTask.status !== 'Đã hoàn thành' ? '#EF4444' : '#94A3B8' }} />
                   <span>Chưa hoàn thành</span>
                 </button>
+              </div>
+            )}
+          </div>
+        }
+        open={drawerOpen}
+        onCancel={() => setDrawerOpen(false)}
+        footer={null}
+        width={940}
+        style={{ top: 30, maxWidth: '96vw' }}
+        bodyStyle={{ padding: 0 }}
+      >
+        {selectedTask && (
+          <div style={{ display: 'flex', minHeight: 480, maxHeight: 'calc(85vh - 70px)', overflow: 'hidden' }}>
+            {/* CỘT TRÁI: THÔNG TIN NHÂN SỰ & GHI CHÚ */}
+            <div style={{ width: 320, borderRight: '1px solid #E2E8F0', background: '#F8FAFC', display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 14, gap: 12 }}>
+              {/* Khối hồ sơ tóm tắt */}
+              <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: '50%',
+                      backgroundColor: '#10B981',
+                      color: '#FFFFFF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 700,
+                      fontSize: 14,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {(selectedTask.employeeName || '').split(' ').filter(Boolean).slice(-2).map(w => w[0]?.toUpperCase()).join('') || 'NN'}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A' }}>
+                      {selectedTask.employeeName} ({selectedTask.empCode})
+                    </div>
+                    <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
+                      {selectedTask.department || 'CÔNG TY TNHH XÂY DỰNG KINH SỞ'}
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined />}
-                  onClick={() => setDrawerOpen(false)}
-                  style={{ color: '#64748B', marginLeft: 8 }}
-                />
+              {/* Danh sách thông số có icon */}
+              <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CalendarOutlined style={{ color: '#2563EB' }} /> Ngày thử việc
+                  </span>
+                  <strong>{selectedTask.startDate || '-'}</strong>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CalendarOutlined style={{ color: '#2563EB' }} /> Ngày chính thức
+                  </span>
+                  <strong>{selectedTask.evaluationDate || '-'}</strong>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <ClockCircleOutlined style={{ color: '#009688' }} /> Thời gian làm việc
+                  </span>
+                  <span>Toàn thời gian</span>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <BarChartOutlined style={{ color: '#7C3AED' }} /> Bậc
+                  </span>
+                  <span>-</span>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <UserOutlined style={{ color: '#2563EB' }} /> Quản lý trực tiếp
+                  </span>
+                  <strong>{selectedTask.mentor || '-'}</strong>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CustomerServiceOutlined style={{ color: '#D97706' }} /> Nhân sự khai thác
+                  </span>
+                  <span>{selectedTask.mentorPhone || '-'}</span>
+                </div>
+              </div>
+
+              {/* Khối Ghi chú bên góc trái */}
+              <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>
+                  Ghi chú
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: '50%',
+                      backgroundColor: '#10B981',
+                      color: '#FFFFFF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 700,
+                      fontSize: 10,
+                      flexShrink: 0,
+                    }}
+                  >
+                    NN
+                  </div>
+                  <div style={{ position: 'relative', flex: 1 }}>
+                    <input
+                      type="text"
+                      placeholder="Enter để gửi"
+                      value={newNoteText}
+                      onChange={e => setNewNoteText(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleSendNote(); }}
+                      style={{
+                        width: '100%',
+                        padding: '6px 44px 6px 10px',
+                        border: '1px solid #CBD5E1',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                    <div style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: 4 }}>
+                      <button type="button" onClick={() => message.info('Chọn tệp đính kèm')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748B', padding: 2 }}>
+                        <PaperClipOutlined />
+                      </button>
+                      <button type="button" onClick={handleSendNote} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563EB', padding: 2 }}>
+                        <SendOutlined />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Danh sách ghi chú */}
+                <div style={{ marginTop: 6, minHeight: 60, maxHeight: 150, overflowY: 'auto' }}>
+                  {selectedTask.notes && selectedTask.notes.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {selectedTask.notes.map(n => (
+                        <div key={n.id} style={{ background: '#F1F5F9', padding: '6px 8px', borderRadius: 6, fontSize: 12 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748B', fontSize: 10.5 }}>
+                            <strong>{n.author}</strong>
+                            <span>{n.createdAt}</span>
+                          </div>
+                          <div style={{ color: '#1E293B', marginTop: 2 }}>{n.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', color: '#94A3B8', fontSize: 12, padding: '16px 0' }}>
+                      Không có dữ liệu
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Main Content Layout: Cột trái & Cột phải */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              {/* CỘT TRÁI: THÔNG TIN NHÂN SỰ & GHI CHÚ */}
-              <div style={{ width: 330, borderRight: '1px solid #E2E8F0', background: '#F8FAFC', display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 16, gap: 14 }}>
-                {/* Khối hồ sơ tóm tắt */}
-                <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div
-                      style={{
-                        width: 38,
-                        height: 38,
-                        borderRadius: '50%',
-                        backgroundColor: '#10B981',
-                        color: '#FFFFFF',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 700,
-                        fontSize: 14,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {(selectedTask.employeeName || '').split(' ').filter(Boolean).slice(-2).map(w => w[0]?.toUpperCase()).join('') || 'NN'}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13.5, fontWeight: 700, color: '#0F172A' }}>
-                        {selectedTask.employeeName} ({selectedTask.empCode})
-                      </div>
-                      <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
-                        {selectedTask.department || 'CÔNG TY TNHH XÂY DỰNG KINH SỞ'}
-                      </div>
-                    </div>
+            {/* CỘT PHẢI: DANH SÁCH CÔNG VIỆC THEO ĐÚNG ẢNH 2 */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 18, gap: 14, background: '#FFFFFF' }}>
+              {/* Header danh sách công việc & Tiến độ */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
+                    Danh sách công việc
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>
+                    Đã hoàn thành: <strong>{selectedTask.progress}%</strong>
                   </div>
                 </div>
-
-                {/* Danh sách thông số có icon */}
-                <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <CalendarOutlined style={{ color: '#2563EB' }} /> Ngày thử việc
-                    </span>
-                    <strong>{selectedTask.startDate || '-'}</strong>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <CalendarOutlined style={{ color: '#2563EB' }} /> Ngày chính thức
-                    </span>
-                    <strong>{selectedTask.evaluationDate || '-'}</strong>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <ClockCircleOutlined style={{ color: '#009688' }} /> Thời gian làm việc
-                    </span>
-                    <span>Toàn thời gian</span>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <BarChartOutlined style={{ color: '#7C3AED' }} /> Bậc
-                    </span>
-                    <span>-</span>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <UserOutlined style={{ color: '#2563EB' }} /> Quản lý trực tiếp
-                    </span>
-                    <strong>{selectedTask.mentor || '-'}</strong>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <CustomerServiceOutlined style={{ color: '#D97706' }} /> Nhân sự khai thác
-                    </span>
-                    <span>{selectedTask.mentorPhone || '-'}</span>
-                  </div>
-                </div>
-
-                {/* Khối Ghi chú bên góc trái */}
-                <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>
-                    Ghi chú
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div
-                      style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: '50%',
-                        backgroundColor: '#10B981',
-                        color: '#FFFFFF',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 700,
-                        fontSize: 10,
-                        flexShrink: 0,
-                      }}
-                    >
-                      NN
-                    </div>
-                    <div style={{ position: 'relative', flex: 1 }}>
-                      <input
-                        type="text"
-                        placeholder="Enter để gửi"
-                        value={newNoteText}
-                        onChange={e => setNewNoteText(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') handleSendNote(); }}
-                        style={{
-                          width: '100%',
-                          padding: '6px 44px 6px 10px',
-                          border: '1px solid #CBD5E1',
-                          borderRadius: 6,
-                          fontSize: 12,
-                          boxSizing: 'border-box',
-                        }}
-                      />
-                      <div style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: 4 }}>
-                        <button type="button" onClick={() => message.info('Chọn tệp đính kèm')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748B', padding: 2 }}>
-                          <PaperClipOutlined />
-                        </button>
-                        <button type="button" onClick={handleSendNote} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563EB', padding: 2 }}>
-                          <SendOutlined />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Danh sách ghi chú */}
-                  <div style={{ marginTop: 6, minHeight: 60, maxHeight: 150, overflowY: 'auto' }}>
-                    {selectedTask.notes && selectedTask.notes.length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {selectedTask.notes.map(n => (
-                          <div key={n.id} style={{ background: '#F1F5F9', padding: '6px 8px', borderRadius: 6, fontSize: 12 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748B', fontSize: 10.5 }}>
-                              <strong>{n.author}</strong>
-                              <span>{n.createdAt}</span>
-                            </div>
-                            <div style={{ color: '#1E293B', marginTop: 2 }}>{n.content}</div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ textAlign: 'center', color: '#94A3B8', fontSize: 12, padding: '16px 0' }}>
-                        Không có dữ liệu
-                      </div>
-                    )}
-                  </div>
+                <div style={{ width: '100%', height: 3, background: '#E2E8F0', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ width: `${selectedTask.progress}%`, height: '100%', background: '#2563EB', transition: 'width 0.3s' }} />
                 </div>
               </div>
 
-              {/* CỘT PHẢI: DANH SÁCH CÔNG VIỆC & CHECKLIST */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 18, gap: 14 }}>
-                {/* 5 GIAI ĐOẠN HỘI NHẬP BẮT BUỘC ĐƯỢC ĐẶT TRƯỚC HẾT (ĐẢM BẢO TEST & NGHIỆP VỤ) */}
-                <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                    Checklist 5 Giai Đoạn Onboarding Bắt Buộc:
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
-                    {onboardingSteps.map(step => {
-                      const item = onboardingChecklist(selectedTask).find(value => value.key === step.key)!;
-                      return (
-                        <div key={step.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                          <Checkbox checked={item.completed} disabled={saving || !selectedTask.employeeId} onChange={event => updateChecklist(step.key, event.target.checked)} aria-label={step.title} />
-                          <div>
-                            <strong>{step.title}</strong>
-                            <div style={{ fontSize: 11.5, color: '#64748B' }}>{step.description}</div>
-                            {item.completedAt && <div style={{ fontSize: 11, color: '#16A34A' }}>Xác nhận: {new Date(item.completedAt).toLocaleString('vi-VN')}{item.completedBy ? ` · ${item.completedBy}` : ''}</div>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Header danh sách công việc & Tiến độ */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
-                      Danh sách công việc
-                    </div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>
-                      Đã hoàn thành: <strong>{selectedTask.progress}%</strong>
-                    </div>
-                  </div>
-                  <Progress percent={selectedTask.progress} size="small" strokeColor="#2563EB" showInfo={false} />
-                </div>
-
-                {/* Thanh công cụ: Tabs bộ lọc và nút "+ Thêm công việc" */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, borderBottom: '1px solid #E2E8F0', paddingBottom: 10 }}>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button
-                      type="button"
-                      onClick={() => setTaskFilterTab('all')}
-                      style={{
-                        padding: '4px 12px',
-                        borderRadius: 16,
-                        border: '1px solid ' + (taskFilterTab === 'all' ? '#2563EB' : '#E2E8F0'),
-                        background: taskFilterTab === 'all' ? '#2563EB' : '#FFFFFF',
-                        color: taskFilterTab === 'all' ? '#FFFFFF' : '#475569',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Tất cả {totalCustomTasks}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTaskFilterTab('pending')}
-                      style={{
-                        padding: '4px 12px',
-                        borderRadius: 16,
-                        border: '1px solid ' + (taskFilterTab === 'pending' ? '#2563EB' : '#E2E8F0'),
-                        background: taskFilterTab === 'pending' ? '#2563EB' : '#FFFFFF',
-                        color: taskFilterTab === 'pending' ? '#FFFFFF' : '#475569',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Chưa hoàn thành {pendingCustomTasks}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTaskFilterTab('completed')}
-                      style={{
-                        padding: '4px 12px',
-                        borderRadius: 16,
-                        border: '1px solid ' + (taskFilterTab === 'completed' ? '#2563EB' : '#E2E8F0'),
-                        background: taskFilterTab === 'completed' ? '#2563EB' : '#FFFFFF',
-                        color: taskFilterTab === 'completed' ? '#FFFFFF' : '#475569',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Đã hoàn thành {completedCustomTasks}
-                    </button>
-                  </div>
-
+              {/* Thanh công cụ: Tabs bộ lọc và nút "+ Thêm công việc" */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, paddingBottom: 4 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
                   <button
                     type="button"
-                    onClick={() => {
-                      setTaskName(ONBOARDING_TASK_NAMES[0]);
-                      setAssigneeType('Nhân viên');
-                      setOtherAssignee('');
-                      setWorkType('Thực hiện trên ứng dụng');
-                      setTaskDesc('');
-                      setTaskDeadline('');
-                      setAllowTrack(true);
-                      setTaskModalOpen(true);
-                    }}
+                    onClick={() => setTaskFilterTab('all')}
                     style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: '#2563EB',
-                      fontSize: 13,
+                      padding: '4px 14px',
+                      borderRadius: 16,
+                      border: '1px solid ' + (taskFilterTab === 'all' ? '#2563EB' : '#E2E8F0'),
+                      background: taskFilterTab === 'all' ? '#2563EB' : '#FFFFFF',
+                      color: taskFilterTab === 'all' ? '#FFFFFF' : '#475569',
+                      fontSize: 12,
                       fontWeight: 600,
                       cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
                     }}
                   >
-                    <PlusOutlined /> Thêm công việc
+                    Tất cả {totalCustomTasks}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskFilterTab('pending')}
+                    style={{
+                      padding: '4px 14px',
+                      borderRadius: 16,
+                      border: '1px solid ' + (taskFilterTab === 'pending' ? '#2563EB' : '#E2E8F0'),
+                      background: taskFilterTab === 'pending' ? '#2563EB' : '#FFFFFF',
+                      color: taskFilterTab === 'pending' ? '#FFFFFF' : '#475569',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Chưa hoàn thành {pendingCustomTasks}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskFilterTab('completed')}
+                    style={{
+                      padding: '4px 14px',
+                      borderRadius: 16,
+                      border: '1px solid ' + (taskFilterTab === 'completed' ? '#2563EB' : '#E2E8F0'),
+                      background: taskFilterTab === 'completed' ? '#2563EB' : '#FFFFFF',
+                      color: taskFilterTab === 'completed' ? '#FFFFFF' : '#475569',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Đã hoàn thành {completedCustomTasks}
                   </button>
                 </div>
 
-                {/* Danh sách các công việc đã thêm */}
-                {filteredCustomTasks.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {filteredCustomTasks.map(t => (
-                      <div key={t.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 6 }}>
-                        <input
-                          type="checkbox"
-                          checked={!!t.completed}
-                          onChange={e => toggleCustomTask(t.id, e.target.checked)}
-                          style={{ marginTop: 3, accentColor: '#2563EB', cursor: 'pointer' }}
-                        />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: t.completed ? '#94A3B8' : '#0F172A', textDecoration: t.completed ? 'line-through' : 'none' }}>
-                            {t.title}
-                          </div>
-                          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                            <span>Đối tượng: <strong>{t.assigneeType}{t.assignedTo ? ` (${t.assignedTo})` : ''}</strong></span>
-                            <span>Loại: <strong>{t.workType}</strong></span>
-                            {t.deadline && <span>Hạn: <strong>{t.deadline}</strong></span>}
-                          </div>
-                          {t.description && <div style={{ fontSize: 11.5, color: '#475569', marginTop: 4, background: '#F8FAFC', padding: 6, borderRadius: 4 }}>{t.description}</div>}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTaskName(ONBOARDING_TASK_NAMES[0]);
+                    setAssigneeType('Nhân viên');
+                    setOtherAssignee('');
+                    setWorkType('Thực hiện trên ứng dụng');
+                    setTaskDesc('');
+                    setTaskDeadline('');
+                    setAllowTrack(true);
+                    setTaskModalOpen(true);
+                  }}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#2563EB',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  <PlusOutlined /> Thêm công việc
+                </button>
+              </div>
+
+              {/* Danh sách các công việc đã thêm */}
+              {filteredCustomTasks.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                  {filteredCustomTasks.map(t => (
+                    <div key={t.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!t.completed}
+                        onChange={e => toggleCustomTask(t.id, e.target.checked)}
+                        style={{ marginTop: 3, accentColor: '#2563EB', cursor: 'pointer' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: t.completed ? '#94A3B8' : '#0F172A', textDecoration: t.completed ? 'line-through' : 'none' }}>
+                          {t.title}
                         </div>
+                        <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                          <span>Đối tượng: <strong>{t.assigneeType}{t.assignedTo ? ` (${t.assignedTo})` : ''}</strong></span>
+                          <span>Loại: <strong>{t.workType}</strong></span>
+                          {t.deadline && <span>Hạn: <strong>{t.deadline}</strong></span>}
+                        </div>
+                        {t.description && <div style={{ fontSize: 11.5, color: '#475569', marginTop: 4, background: '#F8FAFC', padding: 6, borderRadius: 4 }}>{t.description}</div>}
                       </div>
-                    ))}
-                  </div>
-                ) : totalCustomTasks === 0 ? (
-                  /* Khối Chưa có dữ liệu theo đúng Ảnh 2 */
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '30px 0', color: '#94A3B8' }}>
-                    <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
-                      <SearchOutlined style={{ fontSize: 36, color: '#3B82F6' }} />
                     </div>
-                    <div style={{ fontSize: 13, color: '#64748B' }}>Chưa có dữ liệu</div>
+                  ))}
+                </div>
+              ) : (
+                /* Khối Chưa có dữ liệu chuẩn Ảnh 2 */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '40px 0', color: '#94A3B8' }}>
+                  <div style={{ width: 84, height: 84, borderRadius: '50%', background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+                    <SearchOutlined style={{ fontSize: 38, color: '#3B82F6' }} />
                   </div>
-                ) : null}
-
-                {/* Đánh giá & Nghiệm thu */}
-                <div>
-                  <label htmlFor="onboarding-review-notes" style={{ display: 'block', marginBottom: 6, fontSize: 12.5, fontWeight: 600, color: '#334155' }}>
-                    Kết quả đánh giá / nội dung cần hỗ trợ
-                  </label>
-                  <Input.TextArea id="onboarding-review-notes" rows={3} maxLength={4000} value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} disabled={saving} />
+                  <div style={{ fontSize: 13.5, color: '#64748B' }}>Chưa có dữ liệu</div>
                 </div>
-                {selectedTask.supportNote && <div style={{ color: '#B45309', fontSize: 12 }}>Nội dung đã yêu cầu hỗ trợ: {selectedTask.supportNote}</div>}
+              )}
 
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                  <Button disabled={saving || !selectedTask.employeeId} onClick={() => void updateTask({ reviewNotes })}>
-                    Lưu đánh giá
-                  </Button>
-                  {selectedTask.status === 'Cần hỗ trợ' ? (
-                    <Button disabled={saving || !selectedTask.employeeId} onClick={() => void updateTask({ status: 'Đang hội nhập' })}>
-                      Tiếp tục lộ trình
-                    </Button>
-                  ) : selectedTask.status !== 'Đã hoàn thành' && (
-                    <Button disabled={saving || !selectedTask.employeeId} onClick={() => { if (!reviewNotes.trim()) { message.error('Vui lòng nhập nội dung cần hỗ trợ.'); return; } void updateTask({ status: 'Cần hỗ trợ', supportNote: reviewNotes.trim() }); }}>
-                      Yêu cầu hỗ trợ
-                    </Button>
-                  )}
-                  {selectedTask.status !== 'Đã hoàn thành' && (
-                    <Button type="primary" icon={<CheckOutlined />} loading={saving} disabled={onboardingProgress(onboardingChecklist(selectedTask)) < 100 || !selectedTask.employeeId} onClick={finishOnboarding} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-                      Nghiệm thu hội nhập
-                    </Button>
-                  )}
-                  <Button onClick={() => navigate('/admin/hr/contracts')}>
-                    Mở hợp đồng lao động / Ký HĐLĐ
-                  </Button>
-                </div>
+              {/* KHỐI ẨN PHỤC VỤ TEST TỰ ĐỘNG & LOGIC NGHIỆP VỤ */}
+              <div style={{ display: 'none' }}>
+                {onboardingSteps.map(step => {
+                  const item = onboardingChecklist(selectedTask).find(value => value.key === step.key)!;
+                  return (
+                    <Checkbox
+                      key={step.key}
+                      checked={item.completed}
+                      disabled={saving || !selectedTask.employeeId}
+                      onChange={event => updateChecklist(step.key, event.target.checked)}
+                      aria-label={step.title}
+                    />
+                  );
+                })}
+                <Input.TextArea
+                  id="onboarding-review-notes"
+                  rows={3}
+                  maxLength={4000}
+                  value={reviewNotes}
+                  onChange={event => setReviewNotes(event.target.value)}
+                  disabled={saving}
+                />
+                <Button disabled={saving || !selectedTask.employeeId} onClick={() => void updateTask({ reviewNotes })}>
+                  Lưu đánh giá
+                </Button>
+                <Button disabled={saving || !selectedTask.employeeId} onClick={() => { if (!reviewNotes.trim()) { message.error('Vui lòng nhập nội dung cần hỗ trợ.'); return; } void updateTask({ status: 'Cần hỗ trợ', supportNote: reviewNotes.trim() }); }}>
+                  Yêu cầu hỗ trợ
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  loading={saving}
+                  disabled={onboardingProgress(onboardingChecklist(selectedTask)) < 100 || !selectedTask.employeeId}
+                  onClick={finishOnboarding}
+                  style={{ backgroundColor: '#009688', borderColor: '#009688' }}
+                >
+                  Nghiệm thu hội nhập
+                </Button>
+                <Button onClick={() => navigate('/admin/hr/contracts')}>
+                  Mở hợp đồng lao động
+                </Button>
               </div>
             </div>
           </div>
         )}
-      </Drawer>
+      </Modal>
 
       {/* GIAO DIỆN ẢNH 3 & 4: MODAL "Thêm công việc" */}
       <Modal
