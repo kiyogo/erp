@@ -4560,17 +4560,8 @@ export const FileUploadDialog: React.FC<FileUploadDialogProps> = ({
             const file = new File([blob], item.name, { type: mime, lastModified: Date.now() });
             resolvedFiles.push(file);
           } catch {
-            const mime = item.mime || (
-              item.name.endsWith('.pdf') ? 'application/pdf'
-              : item.name.match(/\.docx?$/i) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-              : item.name.match(/\.xlsx?$/i) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-              : item.name.match(/\.(png|jpe?g|webp|gif)$/i) ? 'image/jpeg'
-              : 'text/plain'
-            );
-            const dummyContent = `Tài liệu: ${item.name}\nKích thước: ${item.size}\nNgày tạo: ${item.modified}`;
-            const blob = new Blob([dummyContent], { type: mime });
-            const file = new File([blob], item.name, { type: mime, lastModified: Date.now() });
-            resolvedFiles.push(file);
+            message.error(`Không thể tải nội dung tệp ${item.name} từ máy chủ.`);
+            return;
           }
         }
       }

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, verify as verifySignature } from 'node:crypto';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import net from 'node:net';
@@ -1154,6 +1154,25 @@ async function ensureStaffRoot() {
   return await db.prepare('SELECT * FROM file_nodes WHERE id = ?').get(root.id);
 }
 
+async function ensureTaskReportDirectory() {
+  const root = await ensureStaffRoot();
+  const existing = await db.prepare(`
+    SELECT * FROM file_nodes
+    WHERE parent_id = ? AND name = 'Báo cáo nhiệm vụ' AND node_type = 'dir' AND deleted_at IS NULL
+    LIMIT 1
+  `).get(root.id);
+  if (existing) return existing;
+
+  const id = randomUUID();
+  const timestamp = now();
+  await db.prepare(`INSERT INTO file_nodes (
+    id, parent_id, employee_id, owner_id, name, node_type, mime_type, size, storage_key,
+    origin_module, is_hidden, is_system, is_protected, created_at, updated_at
+  ) VALUES (?, ?, NULL, NULL, 'Báo cáo nhiệm vụ', 'dir', '', 0, NULL, 'task-report', 0, 1, 1, ?, ?)`)
+    .run(id, root.id, timestamp, timestamp);
+  return await db.prepare('SELECT * FROM file_nodes WHERE id = ?').get(id);
+}
+
 async function ensureEmployeeWorkspace(user) {
   if (!user) return null;
   const profile = await db.prepare('SELECT employment_status FROM employee_profiles WHERE user_id = ?').get(user.id);
@@ -1297,7 +1316,7 @@ function requireFileAccess(user, node) {
 
 async function defaultFileDirectory(user) {
   if (isAdmin(user)) return await ensureStaffRoot();
-  return await ensureEmployeeWorkspace(user).system;
+  return (await ensureEmployeeWorkspace(user)).system;
 }
 
 function fileStoragePath(storageKey) {
@@ -2001,6 +2020,33 @@ async function canReadWorkflowAttachment(actor, fileId) {
     if (row.owner_id === actor.id || await canDecideWorkflow(actor, workflow)) return true;
   }
   return false;
+}
+
+async function findTaskReportAttachment(fileId) {
+  const reports = await db.prepare('SELECT id, task_id, attachments_json FROM task_reports').all();
+  for (const report of reports) {
+    let attachments = [];
+    try {
+      const parsed = JSON.parse(report.attachments_json || '[]');
+      attachments = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      attachments = [];
+    }
+    if (attachments.some(attachment => attachment?.key === fileId || attachment?.id === fileId)) return report;
+  }
+  return null;
+}
+
+async function canReadTaskReportAttachment(actor, fileId) {
+  if (actor.role === 'ADMIN') return true;
+  const report = await findTaskReportAttachment(fileId);
+  if (!report) return false;
+  try {
+    await ensureTaskAccess(await taskRowById(report.task_id), actor);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function requireCollectionActor(request, scope) {
@@ -5237,26 +5283,50 @@ async function ensureTaskAccess(task, actor) {
   }
 }
 
-function validateTaskReport(input, isAdmin = false) {
+async function validateTaskReport(input, actor) {
   const attachments = Array.isArray(input.attachments) ? input.attachments : [];
   if (attachments.length > 10) throw new HttpError(422, 'Tối đa 10 tệp đính kèm cho một báo cáo.');
-  const safeAttachments = attachments.map((file, index) => ({
-    id: requiredText(file?.id, `Tệp đính kèm ${index + 1}`, 128),
-    key: requiredText(file?.key, `Tệp đính kèm ${index + 1}`, 256),
-    name: requiredText(file?.name, `Tệp đính kèm ${index + 1}`, 255),
-    size: optionalAmount(file?.size, `Dung lượng tệp ${index + 1}`),
-    type: optionalText(file?.type, `Loại tệp ${index + 1}`, 120),
-  }));
+  const attachmentIds = new Set();
+  const safeAttachments = [];
+  for (let index = 0; index < attachments.length; index += 1) {
+    const file = attachments[index];
+    const fileId = requiredText(file?.key || file?.id, `Tệp đính kèm ${index + 1}`, 128);
+    if (attachmentIds.has(fileId)) throw new HttpError(422, 'Không thể đính kèm cùng một tệp nhiều lần.');
+    attachmentIds.add(fileId);
+
+    const node = await fileNodeById(fileId);
+    if (!node || node.node_type !== 'file' || node.origin_module !== 'task-report' ||
+        (actor.role !== 'ADMIN' && node.employee_id !== actor.id) || !node.storage_key) {
+      throw new HttpError(404, `Không tìm thấy tệp đính kèm ${index + 1}.`);
+    }
+    let details;
+    try {
+      details = await stat(fileStoragePath(node.storage_key));
+    } catch {
+      throw new HttpError(422, `Không tìm thấy nội dung tệp đính kèm ${index + 1}.`);
+    }
+    if (!details.isFile() || details.size !== Number(node.size || 0)) {
+      throw new HttpError(422, `Nội dung tệp đính kèm ${index + 1} không khớp với dữ liệu đã lưu.`);
+    }
+
+    safeAttachments.push({
+      id: node.id,
+      key: node.id,
+      name: node.name,
+      size: Number(node.size || 0),
+      type: node.mime_type || 'application/octet-stream',
+    });
+  }
   const content = optionalText(input.content, 'Nội dung báo cáo', 4_000);
   if (!content && safeAttachments.length === 0) {
     throw new HttpError(422, 'Vui lòng nhập nội dung báo cáo hoặc đính kèm tệp.');
   }
   let progress = optionalProgress(input.progress);
   let status = input.status;
-  if (!isAdmin && status === 'Hoàn thành') {
+  if (actor.role !== 'ADMIN' && status === 'Hoàn thành') {
     status = 'Chờ nghiệm thu';
   }
-  status = oneOf(status, 'Trạng thái', isAdmin ? TASK_STATUSES : EMPLOYEE_TASK_STATUSES);
+  status = oneOf(status, 'Trạng thái', actor.role === 'ADMIN' ? TASK_STATUSES : EMPLOYEE_TASK_STATUSES);
   if (status === 'Chờ nghiệm thu' && progress < 100) {
     status = progress > 0 ? 'Đang thực hiện' : 'Chưa bắt đầu';
   }
@@ -7781,7 +7851,8 @@ async function handleRequest(request, response) {
   if (fileDownloadMatch && request.method === 'GET') {
     const actor = await requireUser(request);
     const node = await fileNodeById(decodeURIComponent(fileDownloadMatch[1]));
-    if (!node || node.deleted_at || (!canAccessFileNode(actor, node) && !await canReadWorkflowAttachment(actor, node.id))) {
+    if (!node || node.deleted_at || (!canAccessFileNode(actor, node) &&
+        !await canReadWorkflowAttachment(actor, node.id) && !await canReadTaskReportAttachment(actor, node.id))) {
       throw new HttpError(404, 'Tệp này không tồn tại.');
     }
     if (node.node_type !== 'file') throw new HttpError(422, 'Chỉ có thể tải xuống tệp.');
@@ -7811,6 +7882,7 @@ async function handleRequest(request, response) {
     const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileContentMatch[1])));
     if (node.node_type !== 'file') throw new HttpError(422, 'Chỉ có thể cập nhật nội dung tệp.');
     if (node.is_protected) throw new HttpError(403, 'Không thể sửa tệp hệ thống được bảo vệ.');
+    if (await findTaskReportAttachment(node.id)) throw new HttpError(409, 'Không thể sửa tệp đã đính kèm vào báo cáo nhiệm vụ.');
     const content = await readBinary(request);
     const storageKey = node.storage_key || `${node.id}.bin`;
     await writeFile(fileStoragePath(storageKey), content);
@@ -7885,17 +7957,19 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/files/upload') {
     const actor = await requireUser(request);
+    const originModule = optionalText(request.headers['x-origin-module'], 'Nguồn tệp', 80) || 'files';
     const parentId = request.headers['x-parent-id'];
     const requestedParent = parentId
       ? ensureDirectoryWriteAccess(actor, await fileNodeById(String(parentId)))
-      : await defaultFileDirectory(actor);
+      : isAdmin(actor) && originModule === 'task-report'
+        ? await ensureTaskReportDirectory()
+        : await defaultFileDirectory(actor);
     const parent = requestedParent;
     if (parent.parent_id === null) {
       throw new HttpError(403, 'Không thể lưu tệp trực tiếp vào thư mục hệ thống này.');
     }
     const rawName = request.headers['x-file-name'];
     let name = normalizeFileName(rawName ? decodeURIComponent(String(rawName)) : '', 'Tên tệp');
-    const originModule = optionalText(request.headers['x-origin-module'], 'Nguồn tệp', 80) || 'files';
     const mimeType = optionalText(request.headers['content-type'], 'Loại tệp', 200) || 'application/octet-stream';
     if (originModule === 'employee-files' && !isAllowedEmployeeUpload(name, mimeType)) {
       throw new HttpError(422, 'employee/files chỉ cho phép tải lên ảnh, video và tài liệu.');
@@ -7942,6 +8016,7 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileNodeMatch[1])));
     if (node.is_protected) throw new HttpError(403, 'Không thể đổi tên thư mục hoặc tệp hệ thống được bảo vệ.');
+    if (await findTaskReportAttachment(node.id)) throw new HttpError(409, 'Không thể đổi tên tệp đã đính kèm vào báo cáo nhiệm vụ.');
     const payload = await readJson(request);
     const name = normalizeFileName(payload.name, 'Tên mới');
     if (await db.prepare('SELECT 1 FROM file_nodes WHERE parent_id = ? AND name = ? AND id != ? AND deleted_at IS NULL').get(node.parent_id, name, node.id)) {
@@ -7956,6 +8031,7 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileNodeMatch[1])));
     if (node.is_protected) throw new HttpError(403, 'Không thể xóa thư mục hoặc tệp hệ thống được bảo vệ.');
+    if (await findTaskReportAttachment(node.id)) throw new HttpError(409, 'Không thể xóa tệp đã đính kèm vào báo cáo nhiệm vụ.');
     const child = await db.prepare('SELECT id FROM file_nodes WHERE parent_id = ? AND deleted_at IS NULL LIMIT 1').get(node.id);
     if (child) throw new HttpError(422, 'Chỉ có thể xóa thư mục trống.');
     await db.prepare('UPDATE file_nodes SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), node.id);
@@ -9860,8 +9936,7 @@ async function handleRequest(request, response) {
     await ensureTaskAccess(task, actor);
     const isAssignee = task.assignee_id === actor.id ||
       task.assignee_id === actor.employee_code ||
-      task.assignee_employee_code === actor.employee_code ||
-      normalizeText(task.assignee_name) === normalizeText(actor.name);
+      task.assignee_employee_code === actor.employee_code;
     const isCollaborator = actor.role !== 'ADMIN' && await db.prepare(
       'SELECT 1 FROM task_collaborators WHERE task_id = ? AND collaborator_id = ?',
     ).get(task.id, actor.id);
@@ -9869,7 +9944,7 @@ async function handleRequest(request, response) {
       throw new HttpError(403, 'Chỉ người thực hiện mới có thể gửi báo cáo công việc.');
     }
     const rawBody = await readJson(request);
-    const report = validateTaskReport(rawBody, actor.role === 'ADMIN');
+    const report = await validateTaskReport(rawBody, actor);
     const timestamp = now();
     await db.transaction(async () => {
       await db.prepare(`INSERT INTO task_reports (

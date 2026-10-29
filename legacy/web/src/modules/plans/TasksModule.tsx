@@ -24,7 +24,7 @@ import { Button, Form, Input, Modal, Progress, Select, Spin, Tag, Upload, messag
 import { EnterpriseTask, TaskAssignee, TaskPriority, TaskReportAttachment, tasksApi, filesApi, collectionsApi, employeesApi } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { formatFileSize, getFileBlob, storeFileBlob } from '../../utils/fileStorage';
+import { formatFileSize, getFileBlob } from '../../utils/fileStorage';
 import { buildEisenhowerMatrix, vietnamCalendarDate, type EisenhowerQuadrantKey } from './taskEisenhowerRules';
 import { buildTaskReport, TASK_REPORT_OPTIONS, taskReportExportRows, type TaskReportKind } from './taskReportRules';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -849,7 +849,8 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       }
 
       if (!blob) {
-        blob = new Blob([`Tài liệu: ${attachment.name}`], { type: attachment.type || 'text/plain' });
+        message.error(`Không tìm thấy nội dung tệp ${attachment.name}.`);
+        return;
       }
 
       const url = URL.createObjectURL(blob);
@@ -882,7 +883,8 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       }
 
       if (!blob) {
-        blob = new Blob([`Tài liệu: ${attachment.name}`], { type: attachment.type || 'text/plain' });
+        message.error(`Không tìm thấy nội dung tệp ${attachment.name}.`);
+        return;
       }
 
       const url = URL.createObjectURL(blob);
@@ -908,8 +910,14 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       message.error('Hãy nhập nội dung báo cáo hoặc đính kèm tệp.');
       return;
     }
+    if (reportFiles.length > 10) {
+      message.error('Mỗi báo cáo được đính kèm tối đa 10 tệp.');
+      return;
+    }
 
     setSubmittingReport(true);
+    const uploadedFileIds: string[] = [];
+    let reportSaved = false;
     try {
       const computedStatus = autoCalculateStatus(progress);
       const attachments: TaskReportAttachment[] = [];
@@ -917,67 +925,33 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       for (let index = 0; index < reportFiles.length; index++) {
         const fileObj = reportFiles[index];
         const rawFile: File = (fileObj as any).originFileObj || fileObj;
-        const fileName = rawFile.name || (fileObj as any).name || `tep-${index + 1}`;
-        const fileSize = rawFile.size ?? (fileObj as any).size ?? 0;
-        const fileType = rawFile.type || (fileObj as any).type || 'application/octet-stream';
-        let fileId = `att-${Date.now()}-${index}`;
-
-        try {
-          if (rawFile instanceof Blob) {
-            const uploaded = await filesApi.upload(rawFile, fileName, undefined, 'task-report');
-            if (uploaded?.data?.file?.id) {
-              fileId = uploaded.data.file.id;
-            }
-          }
-        } catch (uploadErr) {
-          console.warn('API upload failed, saving to IndexedDB storage fallback:', uploadErr);
-        }
-
-        if (rawFile instanceof Blob) {
-          try {
-            await storeFileBlob(fileId, rawFile);
-          } catch (dbErr) {
-            console.error('IndexedDB error:', dbErr);
-          }
-        }
-
+        if (!(rawFile instanceof Blob)) throw new Error(`Không đọc được tệp ${index + 1}. Vui lòng chọn lại tệp.`);
+        if (rawFile.size > 50 * 1024 * 1024) throw new Error(`Tệp ${rawFile.name} vượt quá giới hạn 50 MB.`);
+        const uploaded = await filesApi.upload(rawFile, rawFile.name || `tep-${index + 1}`, undefined, 'task-report');
+        const file = uploaded?.data?.file;
+        if (!file?.id || file.originModule !== 'task-report') throw new Error(`Máy chủ chưa lưu được tệp ${rawFile.name}.`);
+        uploadedFileIds.push(file.id);
         attachments.push({
-          id: `attachment-${Date.now()}-${index}`,
-          key: fileId,
-          name: fileName,
-          size: fileSize,
-          type: fileType,
+          id: file.id,
+          key: file.id,
+          name: file.name,
+          size: file.sizeBytes,
+          type: file.mime || 'application/octet-stream',
         });
       }
 
-      const authorName = user?.name || (isEmployee ? 'Nhân viên' : 'Quản trị viên');
       const report = {
         content: cleanDashes(reportContent),
         progress,
         status: computedStatus,
         attachments,
-        author: authorName,
       };
 
-      let success = false;
       const taskId = selectedTask.key || selectedTask.id || selectedTask.taskCode;
-      try {
-        const response = await tasksApi.addReport(String(taskId), report);
-        if (response?.data?.task) {
-          updateTaskInState(response.data.task);
-          success = true;
-        }
-      } catch (apiErr) {
-        console.warn('API addReport failed, falling back to local dataService:', apiErr);
-      }
-
-      if (!success) {
-        const updated = dataService.addEnterpriseTaskReport(String(taskId), report);
-        if (updated && (updated.key || updated.taskCode || updated.id)) {
-          updateTaskInState(updated);
-          success = true;
-        }
-      }
+      const response = await tasksApi.addReport(String(taskId), report);
+      if (!response?.data?.task) throw new Error('Máy chủ không xác nhận đã lưu báo cáo.');
+      reportSaved = true;
+      updateTaskInState(response.data.task);
 
       setReportModalOpen(false);
       setReportContent('');
@@ -987,8 +961,11 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
       message.success('Đã gửi báo cáo tiến độ thành công!');
     } catch (err: any) {
       console.error('Error submitting task report:', err);
-      message.error(err?.response?.data?.message || 'Có lỗi xảy ra khi gửi báo cáo. Vui lòng thử lại.');
+      message.error(err?.response?.data?.message || err?.message || 'Có lỗi xảy ra khi gửi báo cáo. Vui lòng thử lại.');
     } finally {
+      if (!reportSaved && uploadedFileIds.length) {
+        await Promise.allSettled(uploadedFileIds.map(fileId => filesApi.remove(fileId)));
+      }
       setSubmittingReport(false);
     }
   };
@@ -1539,6 +1516,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
               </div>
               <Upload.Dragger
                 multiple
+                maxCount={10}
                 beforeUpload={(file, fileList) => {
                   setReportFiles((current) => {
                     const existing = new Set(current.map((item) => `${item.name}-${item.size}`));
@@ -1555,7 +1533,7 @@ export const TasksModule: React.FC<{ mode?: 'admin' | 'employee' }> = ({ mode = 
                   Bấm chọn hoặc kéo thả file vào đây
                 </div>
                 <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
-                  Hỗ trợ tải mọi định dạng file
+                  Tối đa 10 tệp, 50 MB mỗi tệp; chỉ lưu báo cáo khi tải tệp lên máy chủ thành công.
                 </div>
               </Upload.Dragger>
 

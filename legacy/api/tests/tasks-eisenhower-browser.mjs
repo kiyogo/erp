@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -254,9 +254,87 @@ try {
   assert.equal(createdFromFormResponse.status(), 201);
   const createdFromForm = await createdFromFormResponse.json();
   assert.deepEqual(createdFromForm.task.collaborators.map(person => person.id), [teammate.id]);
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Danh sách')?.click());
+
+  const reportFileName = 'bao-cao-nhiem-vu.txt';
+  const reportBytes = Buffer.from('Báo cáo nhiệm vụ có tệp thật.\nKết quả bàn giao đã lưu.');
+  const reportFilePath = path.join(directory, reportFileName);
+  writeFileSync(reportFilePath, reportBytes);
+  await page.waitForFunction(title => [...document.querySelectorAll('tr')].some(element => element.innerText.includes(title)), { timeout: 10000 }, 'Nhiệm vụ tạo từ biểu mẫu có người liên quan');
+  const openedTaskDetail = await page.evaluate(title => {
+    const row = [...document.querySelectorAll('tr')].find(element => element.innerText.includes(title));
+    [...(row?.querySelectorAll('button') || [])].find(button => button.textContent.trim() === 'Chi tiết')?.click();
+    return Boolean(row);
+  }, 'Nhiệm vụ tạo từ biểu mẫu có người liên quan');
+  assert.equal(openedTaskDetail, true, 'newly created task must be visible in the task list');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal-root')]
+    .some(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Chi tiết nhiệm vụ') && modal.innerText.includes('Nhiệm vụ tạo từ biểu mẫu có người liên quan')), { timeout: 10000 });
+  await page.evaluate(() => {
+    const detailModal = [...document.querySelectorAll('.ant-modal')].find(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Chi tiết nhiệm vụ'));
+    [...(detailModal?.querySelectorAll('button') || [])].find(button => button.textContent.trim() === 'Báo cáo')?.click();
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal')]
+    .some(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Báo cáo tiến độ nhiệm vụ')), { timeout: 10000 });
+  const reportModal = await page.evaluateHandle(() => [...document.querySelectorAll('.ant-modal')]
+    .find(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Báo cáo tiến độ nhiệm vụ')));
+  const reportModalElement = reportModal.asElement();
+  assert.ok(reportModalElement, 'report progress dialog must be open');
+  const reportTextarea = await reportModalElement.$('textarea');
+  assert.ok(reportTextarea, 'report dialog must expose its content field');
+  await reportTextarea.evaluate(textarea => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+    setter?.call(textarea, 'Đã hoàn thành và đính kèm biên bản.');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await reportModalElement.evaluate(modal => [...modal.querySelectorAll('*')]
+    .find(element => element.textContent.trim() === 'Bấm chọn hoặc kéo thả file vào đây')?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.ant-modal')]
+    .some(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Chọn tệp để tải lên')), { timeout: 10000 });
+  const filePicker = await page.evaluateHandle(() => [...document.querySelectorAll('.ant-modal')]
+    .find(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Chọn tệp để tải lên')));
+  const filePickerElement = filePicker.asElement();
+  assert.ok(filePickerElement, 'the project file picker must open from the report attachment control');
+  const reportUploadInput = await filePickerElement.$('input[type="file"]');
+  assert.ok(reportUploadInput, 'project file picker must provide a real local file input');
+  await reportUploadInput.uploadFile(reportFilePath);
+  await filePickerElement.evaluate(modal => [...modal.querySelectorAll('button')]
+    .find(button => button.textContent.trim().startsWith('Chọn tệp'))?.click());
+  await page.waitForFunction(name => [...document.querySelectorAll('.ant-modal')]
+    .some(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes('Báo cáo tiến độ nhiệm vụ') && modal.innerText.includes(name)), { timeout: 10000 }, reportFileName);
+  const reportUploadResponsePromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/files/upload'), { timeout: 20000 });
+  const reportSaveResponsePromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith(`/tasks/${encodeURIComponent(createdFromForm.task.key)}/reports`), { timeout: 20000 });
+  await reportModalElement.evaluate(modal => [...modal.querySelectorAll('button')]
+    .find(button => button.textContent.includes('Gửi báo cáo'))?.click());
+  const reportUploadResponse = await reportUploadResponsePromise;
+  assert.equal(reportUploadResponse.status(), 201);
+  const reportSaveResponse = await reportSaveResponsePromise;
+  assert.equal(reportSaveResponse.status(), 201);
+  const reportSavedTask = await reportSaveResponse.json();
+  const savedAttachment = reportSavedTask.task.reports[0].attachments[0];
+  assert.equal(savedAttachment.name, reportFileName);
+  assert.equal(savedAttachment.size, reportBytes.length);
+  assert.ok(savedAttachment.key, 'report attachment must reference its server file node');
+  await page.waitForFunction(name => [...document.querySelectorAll('.ant-modal-root')]
+    .some(modal => modal.getBoundingClientRect().width > 0 && modal.innerText.includes(name)), { timeout: 10000 }, reportFileName);
+  const downloadedReport = page.waitForFunction(name => [...document.querySelectorAll('.ant-modal-root button')]
+    .some(button => button.title === 'Tải file về máy' && button.closest('.ant-modal-root')?.innerText.includes(name)), { timeout: 10000 }, reportFileName);
+  await downloadedReport;
+  await page.$eval(`.ant-modal-root button[title="Tải file về máy"]`, button => button.click());
+  let downloadedReportPath = '';
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const candidate = path.join(directory, 'downloads', reportFileName);
+    if (readdirSync(path.join(directory, 'downloads')).includes(reportFileName)) {
+      downloadedReportPath = candidate;
+      break;
+    }
+    await delay(100);
+  }
+  assert.ok(downloadedReportPath, 'report attachment must download through the API');
+  assert.deepEqual(readFileSync(downloadedReportPath), reportBytes);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(taskApiErrors, []);
-  console.log(JSON.stringify({ checks: 'real task data in all four Eisenhower quadrants, Vietnam-date urgency, completed-task exclusion, task detail opening, status/assignee/project/month/assigned-to-me/my-created/related-person/postponement reports, XLSX download and create-form collaborator save', quadrants: Object.keys(quadrants).length }));
+  console.log(JSON.stringify({ checks: 'real task data in all four Eisenhower quadrants, Vietnam-date urgency, completed-task exclusion, task detail opening, status/assignee/project/month/assigned-to-me/my-created/related-person/postponement reports, XLSX download, create-form collaborator save and real task-report attachment upload/download', quadrants: Object.keys(quadrants).length }));
 } catch (error) {
   console.error(`${error.stack || error}\n${logs}`);
   process.exitCode = 1;
