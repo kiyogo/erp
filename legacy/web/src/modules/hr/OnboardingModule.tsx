@@ -954,14 +954,14 @@ export const OnboardingModule: React.FC = () => {
               <div style={{ background: '#FFFFFF', borderRadius: 8, padding: 14, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <CalendarOutlined style={{ color: '#2563EB' }} /> Ngày thử việc
+                    <CalendarOutlined style={{ color: '#009688' }} /> Ngày thử việc
                   </span>
                   <strong>{selectedTask.startDate || '-'}</strong>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <CalendarOutlined style={{ color: '#2563EB' }} /> Ngày chính thức
+                    <CalendarOutlined style={{ color: '#009688' }} /> Ngày chính thức
                   </span>
                   <strong>{selectedTask.evaluationDate || '-'}</strong>
                 </div>
@@ -982,7 +982,7 @@ export const OnboardingModule: React.FC = () => {
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ color: '#64748B', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <UserOutlined style={{ color: '#2563EB' }} /> Quản lý trực tiếp
+                    <UserOutlined style={{ color: '#009688' }} /> Quản lý trực tiếp
                   </span>
                   <strong>{selectedTask.mentor || '-'}</strong>
                 </div>
@@ -1038,7 +1038,7 @@ export const OnboardingModule: React.FC = () => {
                       <button type="button" onClick={() => message.info('Chọn tệp đính kèm')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748B', padding: 2 }}>
                         <PaperClipOutlined />
                       </button>
-                      <button type="button" onClick={handleSendNote} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563EB', padding: 2 }}>
+                      <button type="button" onClick={handleSendNote} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#009688', padding: 2 }}>
                         <SendOutlined />
                       </button>
                     </div>
@@ -1077,65 +1077,36 @@ export const OnboardingModule: React.FC = () => {
                     Danh sách công việc
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>
-                    Đã hoàn thành: <strong>{selectedTask.progress}%</strong>
+                    Đã hoàn thành: <strong style={{ color: '#009688' }}>{selectedTask.progress}%</strong>
                   </div>
                 </div>
                 <div style={{ width: '100%', height: 3, background: '#E2E8F0', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ width: `${selectedTask.progress}%`, height: '100%', background: '#2563EB', transition: 'width 0.3s' }} />
+                  <div style={{ width: `${selectedTask.progress}%`, height: '100%', background: '#009688', transition: 'width 0.3s' }} />
                 </div>
               </div>
 
               {/* Thanh công cụ: Tabs bộ lọc và nút "+ Thêm công việc" */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, paddingBottom: 4 }}>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button
-                    type="button"
-                    onClick={() => setTaskFilterTab('all')}
-                    style={{
-                      padding: '4px 14px',
-                      borderRadius: 16,
-                      border: '1px solid ' + (taskFilterTab === 'all' ? '#2563EB' : '#E2E8F0'),
-                      background: taskFilterTab === 'all' ? '#2563EB' : '#FFFFFF',
-                      color: taskFilterTab === 'all' ? '#FFFFFF' : '#475569',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Tất cả {totalCustomTasks}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTaskFilterTab('pending')}
-                    style={{
-                      padding: '4px 14px',
-                      borderRadius: 16,
-                      border: '1px solid ' + (taskFilterTab === 'pending' ? '#2563EB' : '#E2E8F0'),
-                      background: taskFilterTab === 'pending' ? '#2563EB' : '#FFFFFF',
-                      color: taskFilterTab === 'pending' ? '#FFFFFF' : '#475569',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Chưa hoàn thành {pendingCustomTasks}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTaskFilterTab('completed')}
-                    style={{
-                      padding: '4px 14px',
-                      borderRadius: 16,
-                      border: '1px solid ' + (taskFilterTab === 'completed' ? '#2563EB' : '#E2E8F0'),
-                      background: taskFilterTab === 'completed' ? '#2563EB' : '#FFFFFF',
-                      color: taskFilterTab === 'completed' ? '#FFFFFF' : '#475569',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Đã hoàn thành {completedCustomTasks}
-                  </button>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[
+                    { key: 'all', label: `Tất cả ${totalCustomTasks}` },
+                    { key: 'pending', label: `Chưa hoàn thành ${pendingCustomTasks}` },
+                    { key: 'completed', label: `Đã hoàn thành ${completedCustomTasks}` },
+                  ].map(tab => (
+                    <Button
+                      key={tab.key}
+                      size="small"
+                      onClick={() => setTaskFilterTab(tab.key as any)}
+                      style={{
+                        backgroundColor: taskFilterTab === tab.key ? '#E0F2F1' : '#FFFFFF',
+                        borderColor: taskFilterTab === tab.key ? '#009688' : '#CBD5E1',
+                        color: taskFilterTab === tab.key ? '#00796B' : '#475569',
+                        fontWeight: taskFilterTab === tab.key ? 700 : 500,
+                      }}
+                    >
+                      {tab.label}
+                    </Button>
+                  ))}
                 </div>
 
                 <button
@@ -1153,7 +1124,7 @@ export const OnboardingModule: React.FC = () => {
                   style={{
                     border: 'none',
                     background: 'transparent',
-                    color: '#2563EB',
+                    color: '#009688',
                     fontSize: 13,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -1162,7 +1133,7 @@ export const OnboardingModule: React.FC = () => {
                     gap: 4,
                   }}
                 >
-                  <PlusOutlined /> Thêm công việc
+                  <PlusOutlined style={{ color: '#009688' }} /> Thêm công việc
                 </button>
               </div>
 
@@ -1175,7 +1146,7 @@ export const OnboardingModule: React.FC = () => {
                         type="checkbox"
                         checked={!!t.completed}
                         onChange={e => toggleCustomTask(t.id, e.target.checked)}
-                        style={{ marginTop: 3, accentColor: '#2563EB', cursor: 'pointer' }}
+                        style={{ marginTop: 3, accentColor: '#009688', cursor: 'pointer' }}
                       />
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 600, fontSize: 13, color: t.completed ? '#94A3B8' : '#0F172A', textDecoration: t.completed ? 'line-through' : 'none' }}>
@@ -1194,8 +1165,8 @@ export const OnboardingModule: React.FC = () => {
               ) : (
                 /* Khối Chưa có dữ liệu chuẩn Ảnh 2 */
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '40px 0', color: '#94A3B8' }}>
-                  <div style={{ width: 84, height: 84, borderRadius: '50%', background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
-                    <SearchOutlined style={{ fontSize: 38, color: '#3B82F6' }} />
+                  <div style={{ width: 84, height: 84, borderRadius: '50%', background: '#E0F2F1', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+                    <SearchOutlined style={{ fontSize: 38, color: '#009688' }} />
                   </div>
                   <div style={{ fontSize: 13.5, color: '#64748B' }}>Chưa có dữ liệu</div>
                 </div>
@@ -1407,7 +1378,7 @@ export const OnboardingModule: React.FC = () => {
                   position: 'absolute',
                   cursor: 'pointer',
                   top: 0, left: 0, right: 0, bottom: 0,
-                  backgroundColor: allowTrack ? '#2563EB' : '#CBD5E1',
+                  backgroundColor: allowTrack ? '#009688' : '#CBD5E1',
                   borderRadius: 20,
                   transition: '0.2s',
                 }}
@@ -1438,7 +1409,7 @@ export const OnboardingModule: React.FC = () => {
             <Button
               type="primary"
               onClick={handleAddCustomTask}
-              style={{ backgroundColor: '#2563EB', borderColor: '#2563EB' }}
+              style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
               Lưu
             </Button>
