@@ -243,17 +243,17 @@ export const OnboardingModule: React.FC = () => {
         (item?.email && (item.email.toLowerCase().includes('admin') || item.email.toLowerCase() === 'tung@kiyovn.local'));
 
       let rawStaff: any[] = [];
-      if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value?.data?.data) && staffRes.value.data.data.length > 0) {
+      if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value?.data?.data)) {
         rawStaff = staffRes.value.data.data;
-      } else if (typeof dataService.getEmployees === 'function') {
-        const cachedStaff = dataService.getEmployees();
-        if (Array.isArray(cachedStaff) && cachedStaff.length > 0) {
-          rawStaff = cachedStaff;
-        }
       }
 
       const activeStaff: EnterpriseEmployee[] = rawStaff
-        .filter((employee: any) => !isSuperAdminEmployee(employee) && employee.status !== 'Đã nghỉ việc')
+        .filter((employee: any) =>
+          !isSuperAdminEmployee(employee) &&
+          employee.isActive !== false &&
+          employee.activationStatus !== 'inactive' &&
+          !['Đã nghỉ việc', 'Ngừng hoạt động'].includes(employee.status),
+        )
         .map((e: any) => ({
           key: e.key || e.id || e.userId || e.employeeCode || e.code,
           id: e.id || e.key || e.userId || e.employeeCode || e.code,
@@ -299,41 +299,7 @@ export const OnboardingModule: React.FC = () => {
       setLoadError('');
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || 'Không thể tải dữ liệu hội nhập. Vui lòng thử lại.');
-      let cachedStaff: any[] = [];
-      if (typeof dataService.getEmployees === 'function') {
-        cachedStaff = dataService.getEmployees() || [];
-      }
-      const isSuperAdminEmployee = (item: any) =>
-        item?.role === 'ADMIN' ||
-        item?.role === 'Super Admin' ||
-        item?.code === 'ADMIN-001' ||
-        item?.employeeCode === 'ADMIN-001' ||
-        (item?.email && (item.email.toLowerCase().includes('admin') || item.email.toLowerCase() === 'tung@kiyovn.local'));
-
-      const activeStaff: EnterpriseEmployee[] = (Array.isArray(cachedStaff) ? cachedStaff : [])
-        .filter((emp: any) => !isSuperAdminEmployee(emp) && emp.status !== 'Đã nghỉ việc')
-        .map((e: any) => ({
-          key: e.key || e.id || e.userId || e.employeeCode || e.code,
-          id: e.id || e.key || e.userId || e.employeeCode || e.code,
-          userId: e.userId || e.id || e.key,
-          employeeCode: e.employeeCode || e.code || '',
-          code: e.code || e.employeeCode || '',
-          name: e.name || e.fullName || '',
-          fullName: e.fullName || e.name || '',
-          email: e.email || '',
-          phone: e.phone || '',
-          department: e.department || '',
-          position: e.position || '',
-          joinDate: e.joinDate || '',
-          status: e.status || 'Thử việc',
-          salaryBase: Number(e.salaryBase) || 0,
-          role: e.role || 'USER',
-          isActive: e.isActive !== false,
-          activationStatus: e.activationStatus || 'active',
-          createdAt: e.createdAt || '',
-          updatedAt: e.updatedAt || '',
-        }));
-      setEmployees(activeStaff.length > 0 ? activeStaff : DEFAULT_SYSTEM_EMPLOYEES);
+      setEmployees(DEFAULT_SYSTEM_EMPLOYEES);
     } finally {
       setLoading(false);
     }
@@ -813,13 +779,13 @@ export const OnboardingModule: React.FC = () => {
   });
 
   return (
-    <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
+    <div className="hr-onboarding-page" style={{ padding: '14px 8px', width: '100%', boxSizing: 'border-box' }}>
       {loadError && <div role="alert" style={{ color: '#DC2626', marginBottom: 12 }}>{loadError} <Button size="small" onClick={() => void loadData()}>Tải lại</Button></div>}
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhân sự mới tiếp nhận Onboarding</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
+          <div style={{ fontSize: 20, color: '#009688', marginTop: 4 }}>
             {data.length} Nhân sự
           </div>
           <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Theo dõi 5 giai đoạn hội nhập và ngày đánh giá đã đăng ký</div>
@@ -827,7 +793,7 @@ export const OnboardingModule: React.FC = () => {
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đang trong lộ trình thử việc</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
+          <div style={{ fontSize: 20, color: '#2563EB', marginTop: 4 }}>
             {ongoingCount} Nhân viên mới
           </div>
           <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>{data.filter(task => task.status === 'Cần hỗ trợ').length} lộ trình cần hỗ trợ</div>
@@ -835,7 +801,7 @@ export const OnboardingModule: React.FC = () => {
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đã nghiệm thu lộ trình hội nhập</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
+          <div style={{ fontSize: 20, color: '#16A34A', marginTop: 4 }}>
             {completedCount} Nhân sự
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Chữ ký hợp đồng được theo dõi tại Hợp đồng lao động</div>
@@ -843,7 +809,7 @@ export const OnboardingModule: React.FC = () => {
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ lộ trình đã nghiệm thu</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
+          <div style={{ fontSize: 20, color: '#7C3AED', marginTop: 4 }}>
             {data.length ? `${Math.round(completedCount / data.length * 100)}%` : 'Chưa có dữ liệu'}
           </div>
           <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Tính trên các lộ trình được lưu trong hệ thống</div>
@@ -914,6 +880,7 @@ export const OnboardingModule: React.FC = () => {
 
       {/* GIAO DIỆN ẢNH 1: MODAL DIALOG "Thêm nhân viên hội nhập" */}
       <Modal
+        className="hr-onboarding-dialog"
         title="Thêm nhân viên hội nhập"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
@@ -921,7 +888,7 @@ export const OnboardingModule: React.FC = () => {
         width={780}
         style={{ top: 50, maxWidth: '95vw' }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {/* Thanh công cụ tìm kiếm và lọc bên trong Dialog */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <Input
@@ -949,7 +916,7 @@ export const OnboardingModule: React.FC = () => {
               dataSource={candidateList}
               columns={candidateColumns}
               rowKey={(record: any) => record.id || record.userId || record.employeeCode || record.code}
-              pagination={{ pageSize: 50 }}
+              pagination={{ pageSize: 10 }}
               rowSelection={{
                 selectedRowKeys: selectedEmpKeys,
                 onChange: (keys: any) => setSelectedEmpKeys(keys),
@@ -1000,6 +967,7 @@ export const OnboardingModule: React.FC = () => {
 
       {/* GIAO DIỆN ẢNH 2: MODAL "Chi tiết nhân viên hội nhập" */}
       <Modal
+        className="hr-onboarding-dialog"
         title={
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 32 }}>
             <span style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
@@ -1361,6 +1329,7 @@ export const OnboardingModule: React.FC = () => {
 
       {/* GIAO DIỆN ẢNH 3 & 4: MODAL "Thêm công việc" */}
       <Modal
+        className="hr-onboarding-dialog"
         title="Thêm công việc"
         open={taskModalOpen}
         onCancel={() => setTaskModalOpen(false)}
