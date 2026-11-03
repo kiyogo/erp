@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
+import { FinancePaymentAccount, FinancePaymentRequest, financePaymentAccountsApi, financePaymentsApi } from '../../api/endpoints';
 
 interface TaxFiling {
   key: string;
@@ -29,7 +30,8 @@ interface TaxFiling {
   amountPayable: number;
   amountPaid: number;
   deadline: string;
-  status: 'Đã nộp đủ' | 'Chờ nộp thuế' | 'Quá hạn nộp';
+  status: 'Đã nộp đủ' | 'Chờ nộp thuế' | 'Quá hạn nộp' | 'Đã ghi nhận đủ theo chứng từ nội bộ' | 'Đã ghi nhận một phần theo chứng từ nội bộ';
+  externalStatus?: string;
 }
 
 const INITIAL_TAX_DATA: TaxFiling[] = [];
@@ -46,6 +48,8 @@ export const TaxModule: React.FC = () => {
   const isDeclaration = currentPath === '/finance/tax/declaration';
 
   const [data, setData] = useState<TaxFiling[]>(INITIAL_TAX_DATA);
+  const [payments, setPayments] = useState<FinancePaymentRequest[]>([]);
+  const [paymentAccounts, setPaymentAccounts] = useState<FinancePaymentAccount[]>([]);
 
   useEffect(() => {
     const list = dataService.getGenericData('finance_tax');
@@ -54,12 +58,31 @@ export const TaxModule: React.FC = () => {
       const updated = dataService.getGenericData('finance_tax');
       setData(Array.isArray(updated) ? updated : []);
     });
+    void financePaymentsApi.getAll().then(response => {
+      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu đề nghị nộp thuế không hợp lệ.');
+      setPayments(response.data.data.filter(payment => payment.sourceModule === 'finance_tax'));
+    }).catch(() => message.error('Không tải được đề nghị nộp thuế.'));
+    void financePaymentAccountsApi.getAccounts().then(response => setPaymentAccounts(response.data.accounts)).catch(() => setPaymentAccounts([]));
     return unsub;
   }, []);
 
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [paymentForm] = Form.useForm();
+  const [settlementForm] = Form.useForm();
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [settlementModalOpen, setSettlementModalOpen] = useState(false);
+  const [selectedTax, setSelectedTax] = useState<TaxFiling | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<FinancePaymentRequest | null>(null);
+
+  const loadPayments = async () => {
+    const response = await financePaymentsApi.getAll(1, 200);
+    if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu đề nghị nộp thuế không hợp lệ.');
+    const remainingPages = Array.from({ length: Math.max(0, response.data.pagination.totalPages - 1) }, (_, index) => index + 2);
+    const otherPages = await Promise.all(remainingPages.map(page => financePaymentsApi.getAll(page, 200)));
+    setPayments([...response.data.data, ...otherPages.flatMap(page => page.data.data)].filter(payment => payment.sourceModule === 'finance_tax'));
+  };
 
   const totalPayable = data.reduce((sum, item) => sum + item.amountPayable, 0);
   const totalPaid = data.reduce((sum, item) => sum + item.amountPaid, 0);
@@ -83,6 +106,70 @@ export const TaxModule: React.FC = () => {
       form.resetFields();
     } catch (error: any) {
       message.error(error?.response?.data?.message || error?.message || 'Không thể lưu hồ sơ thuế.');
+    }
+  };
+
+  const openTaxPayment = (record: TaxFiling) => {
+    setSelectedTax(record);
+    paymentForm.setFieldsValue({ amount: Math.max(0, record.amountPayable - record.amountPaid) });
+    setPaymentModalOpen(true);
+  };
+
+  const submitTaxPayment = async (values: { amount: number; debitAccount: string }) => {
+    if (!selectedTax) return;
+    try {
+      const response = await financePaymentsApi.create({
+        beneficiary: selectedTax.taxAuthority || 'Ngân sách Nhà nước',
+        bankAccountInfo: 'Nộp ngân sách Nhà nước theo hồ sơ thuế nội bộ',
+        category: `Nộp ${selectedTax.taxType} kỳ ${selectedTax.period}`,
+        amount: Number(values.amount),
+        paymentMethod: 'Nộp ngân sách nhà nước',
+        debitAccount: values.debitAccount,
+        sourceModule: 'finance_tax',
+        sourceReference: selectedTax.key,
+      });
+      setPaymentModalOpen(false);
+      paymentForm.resetFields();
+      setSelectedTax(null);
+      await loadPayments();
+      message.success(`Đã tạo đề nghị ${response.data.payment.code}; cần phê duyệt và ghi nhận giao dịch ngân hàng.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể tạo đề nghị nộp thuế.');
+    }
+  };
+
+  const approveTaxPayment = async (payment: FinancePaymentRequest) => {
+    try {
+      await financePaymentsApi.approve(payment.key);
+      await loadPayments();
+      message.success(`Đã phê duyệt đề nghị ${payment.code}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể phê duyệt đề nghị nộp thuế.');
+    }
+  };
+
+  const openTaxSettlement = (payment: FinancePaymentRequest) => {
+    setSelectedPayment(payment);
+    settlementForm.resetFields();
+    setSettlementModalOpen(true);
+  };
+
+  const submitTaxSettlement = async (values: { sourceAccountId: string; settlementReference: string }) => {
+    if (!selectedPayment) return;
+    try {
+      await financePaymentsApi.execute(selectedPayment.key, values);
+      setSettlementModalOpen(false);
+      settlementForm.resetFields();
+      setSelectedPayment(null);
+      const refreshedTaxes = await dataService.refreshGenericData('finance_tax');
+      setData(Array.isArray(refreshedTaxes) ? refreshedTaxes as TaxFiling[] : []);
+      await Promise.all([
+        loadPayments(),
+        financePaymentAccountsApi.getAccounts().then(response => setPaymentAccounts(response.data.accounts)),
+      ]);
+      message.success('Đã ghi nhận khoản thanh toán nội bộ và cập nhật Sổ Cái. Trạng thái với cơ quan thuế vẫn chưa được xác minh.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể ghi nhận giao dịch nộp thuế.');
     }
   };
 
@@ -205,23 +292,26 @@ export const TaxModule: React.FC = () => {
       {isOrders && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Giấy Nộp Tiền Vào Ngân Sách Nhà Nước</h3>
-            <Button type="primary" icon={<PlusOutlined />} disabled title="Chưa tích hợp eTax hoặc ngân hàng" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lập giấy nộp tiền eTax
-            </Button>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Đề nghị nộp thuế qua quy trình thanh toán</h3>
           </div>
+          <Alert message="Ghi nhận nội bộ, chưa xác nhận với cơ quan thuế" description="Đề nghị phải được phê duyệt và ghi nhận bằng mã giao dịch ngân hàng. Phần mềm cập nhật số đã thanh toán và Sổ Cái nội bộ; trạng thái nộp trên eTax hoặc Kho bạc vẫn cần xác minh bên ngoài." type="warning" showIcon />
           <div className="transparent-table-card">
             <KTable
-              dataSource={[]}
+              dataSource={payments}
               columns={[
-                { title: 'Mã số chứng từ', dataIndex: 'code', key: 'code', render: (c: string) => <strong>{c}</strong> },
-                { title: 'Chương & Tiểu mục', key: 'sec', render: (_: any, r: any) => <div><strong>{r.itemCode}</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>Chương: {r.chapter}</div></div> },
-                { title: 'Cơ quan thu & KBNN', key: 'kb', render: (_: any, r: any) => <div>{r.kbn}<div style={{ fontSize: 11.5, color: '#64748B' }}>Trích từ: {r.bank}</div></div> },
-                { title: 'Số tiền nộp', dataIndex: 'amount', key: 'amount', render: (v: number) => <strong style={{ color: '#009688' }}>{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Ngày nộp', dataIndex: 'date', key: 'date' },
-                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag icon={<CheckOutlined />} color="success">{s}</Tag> },
-                { title: 'In', key: 'act', render: () => <Button size="small" icon={<FilePdfOutlined />}>PDF</Button> },
+                { title: 'Mã đề nghị', dataIndex: 'code', key: 'code', render: (code: string) => <span>{code}</span> },
+                { title: 'Loại thuế và kỳ', key: 'tax', render: (_: unknown, payment: FinancePaymentRequest) => <span>{payment.taxType} · {payment.taxPeriod}</span> },
+                { title: 'Cơ quan thuế', dataIndex: 'taxAuthority', key: 'authority', render: (value: string) => value || 'Chưa khai báo' },
+                { title: 'Số tiền', dataIndex: 'amount', key: 'amount', render: (value: number) => `${Number(value).toLocaleString('vi-VN')} ₫` },
+                { title: 'Mã giao dịch', dataIndex: 'settlementReference', key: 'reference', render: (value: string) => value || 'Chưa ghi nhận' },
+                { title: 'Trạng thái nội bộ', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={status === 'Đã thanh toán' ? 'success' : status === 'Từ chối' ? 'error' : 'warning'}>{status}</Tag> },
+                { title: 'Thao tác', key: 'actions', render: (_: unknown, payment: FinancePaymentRequest) => payment.status === 'Chờ duyệt'
+                  ? <Button onClick={() => void approveTaxPayment(payment)}>Phê duyệt</Button>
+                  : payment.status === 'Đã phê duyệt'
+                    ? <Button type="primary" onClick={() => openTaxSettlement(payment)}>Ghi nhận giao dịch</Button>
+                    : <span>{payment.financeTransactionId ? 'Đã liên kết phiếu chi' : 'Không có'}</span> },
               ]}
+              pagination={{ pageSize: 10 }}
             />
           </div>
         </div>
@@ -323,6 +413,11 @@ export const TaxModule: React.FC = () => {
                   ),
                 },
                 {
+                  title: 'Còn phải nộp',
+                  key: 'remaining',
+                  render: (_: unknown, record: TaxFiling) => `${Math.max(0, record.amountPayable - record.amountPaid).toLocaleString('vi-VN')} ₫`,
+                },
+                {
                   title: 'Hạn nộp',
                   dataIndex: 'deadline',
                   key: 'deadline',
@@ -333,7 +428,7 @@ export const TaxModule: React.FC = () => {
                   dataIndex: 'status',
                   key: 'status',
                   render: (status: string) => (
-                    <Tag color={status === 'Đã nộp đủ' ? 'success' : 'warning'}>
+                    <Tag color={status === 'Đã nộp đủ' ? 'success' : status.includes('nội bộ') ? 'processing' : 'warning'}>
                       {status}
                     </Tag>
                   ),
@@ -343,13 +438,12 @@ export const TaxModule: React.FC = () => {
                   key: 'action',
                   render: (_: any, record: TaxFiling) => (
                     <Button
-                      size="small"
-                      type={record.status === 'Đã nộp đủ' ? 'default' : 'primary'}
-                      disabled
-                      title="Chưa có kết nối eTax hoặc xác minh chứng từ thanh toán"
-                      style={record.status !== 'Đã nộp đủ' ? { backgroundColor: '#009688', borderColor: '#009688' } : {}}
+                      type="primary"
+                      disabled={record.amountPayable <= record.amountPaid}
+                      onClick={() => openTaxPayment(record)}
+                      style={{ backgroundColor: '#009688', borderColor: '#009688' }}
                     >
-                      {record.status === 'Đã nộp đủ' ? 'Đã ghi nhận' : 'Chưa kết nối eTax'}
+                      {record.amountPayable <= record.amountPaid ? 'Đã ghi nhận đủ' : 'Lập đề nghị nộp'}
                     </Button>
                   ),
                 },
@@ -403,6 +497,50 @@ export const TaxModule: React.FC = () => {
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu tờ khai
             </Button>
+          </div>
+        </Form>
+      </Modal>
+      <Modal
+        title={`Lập đề nghị nộp ${selectedTax?.taxType || 'thuế'}${selectedTax ? ` kỳ ${selectedTax.period}` : ''}`}
+        open={paymentModalOpen}
+        onCancel={() => { setPaymentModalOpen(false); paymentForm.resetFields(); setSelectedTax(null); }}
+        footer={null}
+        width={500}
+      >
+        <Form form={paymentForm} layout="vertical" onFinish={submitTaxPayment}>
+          <div style={{ marginBottom: 14, color: '#64748B' }}>
+            Còn phải nộp: {selectedTax ? Math.max(0, selectedTax.amountPayable - selectedTax.amountPaid).toLocaleString('vi-VN') : '0'} ₫. Đề nghị sẽ đi qua bước phê duyệt và ghi nhận giao dịch riêng.
+          </div>
+          <Form.Item name="amount" label="Số tiền đề nghị" rules={[{ required: true, message: 'Nhập số tiền đề nghị.' }]}>
+            <Input type="number" min={1} step={1} />
+          </Form.Item>
+          <Form.Item name="debitAccount" label="Tài khoản Nợ phải trả thuế" rules={[{ required: true, whitespace: true, message: 'Nhập tài khoản Nợ theo hệ thống tài khoản doanh nghiệp.' }]}>
+            <Input maxLength={24} placeholder="Nhập mã tài khoản thuế phải trả" />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => { setPaymentModalOpen(false); paymentForm.resetFields(); setSelectedTax(null); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit">Tạo đề nghị</Button>
+          </div>
+        </Form>
+      </Modal>
+      <Modal
+        title={`Ghi nhận giao dịch nộp thuế ${selectedPayment?.code || ''}`}
+        open={settlementModalOpen}
+        onCancel={() => { setSettlementModalOpen(false); settlementForm.resetFields(); setSelectedPayment(null); }}
+        footer={null}
+        width={500}
+      >
+        <Form form={settlementForm} layout="vertical" onFinish={submitTaxSettlement}>
+          <Alert message="Chỉ ghi nhận sau khi giao dịch thực tế đã được thực hiện." description="Nhập mã tham chiếu ngân hàng. Thao tác cập nhật số đã thanh toán trong dữ liệu nội bộ, không xác nhận trạng thái từ eTax hoặc Kho bạc." type="warning" showIcon style={{ marginBottom: 14 }} />
+          <Form.Item name="sourceAccountId" label="Tài khoản ngân hàng trích tiền" rules={[{ required: true, message: 'Chọn tài khoản ngân hàng.' }]}>
+            <Select placeholder="Chọn tài khoản" options={paymentAccounts.filter(account => account.source === 'bank' && account.status === 'Đang hoạt động').map(account => ({ value: account.key, label: `${account.name} · ${Number(account.balance).toLocaleString('vi-VN')} ₫` }))} />
+          </Form.Item>
+          <Form.Item name="settlementReference" label="Mã giao dịch ngân hàng" rules={[{ required: true, min: 3, whitespace: true, message: 'Nhập mã giao dịch ngân hàng, tối thiểu 3 ký tự.' }]}>
+            <Input maxLength={120} placeholder="Mã giao dịch trên chứng từ ngân hàng" />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => { setSettlementModalOpen(false); settlementForm.resetFields(); setSelectedPayment(null); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit">Ghi nhận giao dịch</Button>
           </div>
         </Form>
       </Modal>

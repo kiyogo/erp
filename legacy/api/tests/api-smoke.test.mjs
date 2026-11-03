@@ -833,6 +833,53 @@ test('payment requests persist actual actors and enforce approval, rejection and
   assert.equal(denied.rejectionReason, 'Thiếu hóa đơn hợp lệ.');
   assert.equal((await request('/finance/payments?status=Từ%20chối')).pagination.total, 2);
   assert.equal((await request('/finance/payments')).pagination.total, 5);
+
+  const taxKey = `tax-payment-${Date.now()}`;
+  const taxRecord = (await request('/collections/finance_tax', 'POST', { record: {
+    key: taxKey, code: taxKey.toUpperCase(), taxType: 'Thuế GTGT', period: 'Tháng 10/2026', taxAuthority: 'Cơ quan thuế kiểm thử',
+    deadline: '2026-11-20', amountPayable: 200000,
+  } }, 201)).record;
+  assert.equal(taxRecord.amountPaid, 0);
+  const taxPayment = (await request('/finance/payments', 'POST', {
+    beneficiary: 'Cơ quan thuế kiểm thử', bankAccountInfo: 'Nộp ngân sách Nhà nước theo hồ sơ thuế nội bộ',
+    category: 'Nộp Thuế GTGT kỳ Tháng 10/2026', amount: 150000, paymentMethod: 'Nộp ngân sách nhà nước',
+    debitAccount: '33311', sourceModule: 'finance_tax', sourceReference: taxKey,
+  }, 201, userHeaders)).payment;
+  assert.equal(taxPayment.sourceReference, taxKey);
+  await request('/finance/payments', 'POST', {
+    beneficiary: 'Cơ quan thuế kiểm thử', bankAccountInfo: 'Nộp ngân sách Nhà nước theo hồ sơ thuế nội bộ',
+    category: 'Nộp Thuế GTGT kỳ Tháng 10/2026', amount: 100000, paymentMethod: 'Nộp ngân sách nhà nước',
+    debitAccount: '33311', sourceModule: 'finance_tax', sourceReference: taxKey,
+  }, 422, userHeaders);
+  await request(`/finance/payments/${taxPayment.key}/approve`, 'POST', {}, 200, headers);
+  const settledTaxPayment = (await request(`/finance/payments/${taxPayment.key}/execute`, 'POST', {
+    sourceAccountId: paymentSource.key, settlementReference: 'TAX-BANK-2026-001',
+  }, 200, posterHeaders)).payment;
+  assert.equal(settledTaxPayment.status, 'Đã ghi nhận nội bộ');
+  const updatedTax = (await request('/collections/finance_tax')).data.find(item => item.key === taxKey);
+  assert.equal(updatedTax.amountPaid, 150000);
+  assert.equal(updatedTax.status, 'Đã ghi nhận một phần theo chứng từ nội bộ');
+  assert.equal(updatedTax.externalStatus, 'Chưa xác minh với cơ quan thuế');
+  assert.equal(updatedTax.paymentEvidence[0].settlementReference, 'TAX-BANK-2026-001');
+  const finalTaxPayment = (await request('/finance/payments', 'POST', {
+    beneficiary: 'Cơ quan thuế kiểm thử', bankAccountInfo: 'Nộp ngân sách Nhà nước theo hồ sơ thuế nội bộ',
+    category: 'Nộp Thuế GTGT kỳ Tháng 10/2026', amount: 50000, paymentMethod: 'Nộp ngân sách nhà nước',
+    debitAccount: '33311', sourceModule: 'finance_tax', sourceReference: taxKey,
+  }, 201, userHeaders)).payment;
+  await request('/finance/payments', 'POST', {
+    beneficiary: 'Cơ quan thuế kiểm thử', bankAccountInfo: 'Nộp ngân sách Nhà nước theo hồ sơ thuế nội bộ',
+    category: 'Nộp Thuế GTGT kỳ Tháng 10/2026', amount: 1, paymentMethod: 'Nộp ngân sách nhà nước',
+    debitAccount: '33311', sourceModule: 'finance_tax', sourceReference: taxKey,
+  }, 422, userHeaders);
+  await request(`/finance/payments/${finalTaxPayment.key}/approve`, 'POST', {}, 200, headers);
+  await request(`/finance/payments/${finalTaxPayment.key}/execute`, 'POST', {
+    sourceAccountId: paymentSource.key, settlementReference: 'TAX-BANK-2026-002',
+  }, 200, posterHeaders);
+  const fullyPaidTax = (await request('/collections/finance_tax')).data.find(item => item.key === taxKey);
+  assert.equal(fullyPaidTax.amountPaid, 200000);
+  assert.equal(fullyPaidTax.status, 'Đã ghi nhận đủ theo chứng từ nội bộ');
+  assert.equal(fullyPaidTax.externalStatus, 'Chưa xác minh với cơ quan thuế');
+  assert.equal(fullyPaidTax.paymentEvidence.length, 2);
 });
 
 test('cash vouchers link active accounts and CRM contacts, allow pending edits and preserve posted history', async () => {

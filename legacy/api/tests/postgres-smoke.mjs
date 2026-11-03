@@ -650,7 +650,36 @@ try {
   assert.equal(recordedPayment.history.length, 3);
   const paymentLedger = (await request('/collections/finance_general_ledger')).data.find(item => item.key === recordedPayment.ledgerEntryKey);
   assert.equal(paymentLedger.sourceModule, 'finance_payment');
-  assert.equal(paymentLedger.amount, 125000); completed++;
+  assert.equal(paymentLedger.amount, 125000);
+  const pgTaxKey = `pg-tax-${randomUUID()}`;
+  const pgTax = (await request('/collections/finance_tax', 'POST', { record: {
+    key: pgTaxKey, code: pgTaxKey.toUpperCase(), taxType: 'Thuế GTGT', period: 'Tháng 10/2026', taxAuthority: 'Cơ quan thuế PostgreSQL',
+    deadline: '2026-11-20', amountPayable: 2000,
+  } }, 201)).record;
+  assert.equal(pgTax.amountPaid, 0);
+  token = requesterLogin.access_token || requesterLogin.token;
+  const pgTaxPayment = (await request('/finance/payments', 'POST', {
+    beneficiary: 'Cơ quan thuế PostgreSQL', bankAccountInfo: 'Nộp ngân sách theo hồ sơ nội bộ', category: 'Nộp Thuế GTGT kỳ Tháng 10/2026',
+    amount: 2000, paymentMethod: 'Nộp ngân sách nhà nước', debitAccount: '33311', sourceModule: 'finance_tax', sourceReference: pgTaxKey,
+  }, 201)).payment;
+  token = paymentAdminToken;
+  await request(`/finance/payments/${pgTaxPayment.key}/approve`, 'POST', {});
+  token = posterLogin.access_token || posterLogin.token;
+  securityPin = '135790';
+  const pgRecordedTaxPayment = (await request(`/finance/payments/${pgTaxPayment.key}/execute`, 'POST', {
+    sourceAccountId: paymentSource.key, settlementReference: 'PG-TAX-TXN-2026-01',
+  })).payment;
+  token = paymentAdminToken;
+  securityPin = '654321';
+  assert.equal(pgRecordedTaxPayment.status, 'Đã ghi nhận nội bộ');
+  const updatedPgTax = (await request('/collections/finance_tax')).data.find(item => item.key === pgTaxKey);
+  assert.equal(updatedPgTax.amountPaid, 2000);
+  assert.equal(updatedPgTax.status, 'Đã ghi nhận đủ theo chứng từ nội bộ');
+  assert.equal(updatedPgTax.externalStatus, 'Chưa xác minh với cơ quan thuế');
+  assert.equal(updatedPgTax.paymentEvidence[0].settlementReference, 'PG-TAX-TXN-2026-01');
+  const pgTaxLedger = (await request('/collections/finance_general_ledger')).data.find(item => item.key === pgRecordedTaxPayment.ledgerEntryKey);
+  assert.equal(pgTaxLedger.sourceModule, 'finance_payment');
+  assert.equal(pgTaxLedger.amount, 2000); completed++;
   await request('/attendance/check-in', 'POST', { type: 'in' });
   await request('/attendance/check-in', 'POST', { type: 'out' }); completed++;
   const archive = { dispatchType: 'Văn bản đến', docType: 'Công văn', subject: 'PG archive', partner: 'PG office', docDate: '2026-10-20', dateReceivedOrIssued: '2026-10-26', urgency: 'Bình thường', securityLevel: 'Nội bộ' };

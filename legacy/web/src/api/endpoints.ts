@@ -516,6 +516,32 @@ export const financePaymentAccountsApi = {
   getAccounts: () => api.get<{ accounts: FinancePaymentAccount[] }>('/finance/payment-accounts'),
 };
 
+export type FinancePaymentRequest = {
+  key: string;
+  code: string;
+  beneficiary: string;
+  category: string;
+  amount: number;
+  paymentMethod: 'Chuyển khoản VCB' | 'Chuyển khoản TCB' | 'Tiền mặt' | 'Nộp ngân sách nhà nước';
+  debitAccount?: string;
+  status: string;
+  creatorId: string;
+  sourceModule?: string;
+  sourceReference?: string;
+  taxType?: string;
+  taxPeriod?: string;
+  taxAuthority?: string;
+  settlementReference?: string;
+  financeTransactionId?: string;
+};
+
+export const financePaymentsApi = {
+  getAll: (page = 1, limit = 200) => api.get<{ data: FinancePaymentRequest[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>('/finance/payments', { params: { page, limit } }),
+  create: (data: { beneficiary: string; bankAccountInfo: string; category: string; amount: number; paymentMethod: FinancePaymentRequest['paymentMethod']; debitAccount: string; taxCode?: string; sourceModule: 'finance_tax'; sourceReference: string }) => api.post<{ payment: FinancePaymentRequest }>('/finance/payments', data),
+  approve: (key: string) => api.post<{ payment: FinancePaymentRequest }>(`/finance/payments/${encodeURIComponent(key)}/approve`, {}),
+  execute: (key: string, data: { sourceAccountId: string; settlementReference: string }) => api.post<{ payment: FinancePaymentRequest }>(`/finance/payments/${encodeURIComponent(key)}/execute`, data),
+};
+
 export type SalePromotionApplication = {
   key: string;
   code: string;

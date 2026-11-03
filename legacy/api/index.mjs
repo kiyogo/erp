@@ -2268,6 +2268,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (!Number.isFinite(record.amountPayable) || record.amountPayable < 0 || record.amountPayable > 1_000_000_000_000_000) throw new HttpError(422, 'Số tiền thuế phải nộp không hợp lệ.');
     record.amountPaid = 0;
     record.status = 'Chờ nộp thuế';
+    record.externalStatus = 'Chưa xác minh với cơ quan thuế';
+    record.paymentEvidence = [];
   }
   if (scope === 'payroll' && !current) {
     if (record.status === 'Đã chi trả') throw new HttpError(409, 'Phiếu lương mới không thể được tạo ở trạng thái đã chi trả; hãy dùng nghiệp vụ chi lương để lập phiếu chi và bút toán.');
@@ -9023,15 +9025,20 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     await requireAccountingProfile();
     const input = await readJson(request, 32 * 1024);
+    const sourceModule = optionalText(input.sourceModule, 'Phân hệ nguồn', 40);
+    if (sourceModule && sourceModule !== 'finance_tax') throw new HttpError(422, 'Phân hệ nguồn thanh toán không hợp lệ.');
+    const sourceReference = sourceModule ? requiredText(input.sourceReference, 'Hồ sơ thuế liên quan', 160) : '';
     const beneficiary = requiredText(input.beneficiary, 'Đơn vị thụ hưởng', 200);
     const category = requiredText(input.category, 'Nội dung thanh toán', 500);
     const amount = requiredAmount(input.amount, 'Số tiền thanh toán');
-    if (amount < 1_000) throw new HttpError(422, 'Số tiền thanh toán tối thiểu là 1.000 đồng.');
-    const paymentMethod = oneOf(input.paymentMethod, 'Phương thức thanh toán', ['Chuyển khoản VCB', 'Chuyển khoản TCB', 'Tiền mặt']);
+    if (amount < 1_000 && !sourceModule) throw new HttpError(422, 'Số tiền thanh toán tối thiểu là 1.000 đồng.');
+    const paymentMethod = oneOf(input.paymentMethod, 'Phương thức thanh toán', ['Chuyển khoản VCB', 'Chuyển khoản TCB', 'Tiền mặt', 'Nộp ngân sách nhà nước']);
+    if (sourceModule && paymentMethod !== 'Nộp ngân sách nhà nước') throw new HttpError(422, 'Khoản thuế phải dùng phương thức nộp ngân sách nhà nước.');
     const bankAccountInfo = requiredText(input.bankAccountInfo, 'Thông tin thụ hưởng', 200);
     const debitAccount = optionalText(input.debitAccount, 'Tài khoản Nợ', 24);
     const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
     if (debitAccount && !accountPattern.test(debitAccount)) throw new HttpError(422, 'Mã tài khoản Nợ phải có dạng số trong hệ thống tài khoản đã chọn.');
+    if (sourceModule && !debitAccount) throw new HttpError(422, 'Hãy chọn tài khoản Nợ phải trả thuế theo hệ thống tài khoản doanh nghiệp.');
     const id = randomUUID();
     const timestamp = now();
     const createdDate = inventoryBusinessDate();
@@ -9045,6 +9052,7 @@ async function handleRequest(request, response) {
       amount,
       paymentMethod,
       debitAccount,
+      ...(sourceModule ? { sourceModule, sourceReference } : {}),
       creator: actor.name,
       creatorId: actor.id,
       empCode: actor.employee_code || '',
@@ -9058,6 +9066,20 @@ async function handleRequest(request, response) {
     };
     await db.transaction(async () => {
       if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_payments'))");
+      if (sourceModule) {
+        if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_tax:${sourceReference}`]);
+        const taxRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_tax' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(sourceReference);
+        if (!taxRow) throw new HttpError(404, 'Không tìm thấy nghĩa vụ thuế liên quan.');
+        const taxRecord = publicCollectionRecord(taxRow);
+        const reservedRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.sourceModule') = 'finance_tax' AND json_extract(payload_json, '$.sourceReference') = ?").all(sourceReference);
+        const reserved = reservedRows.map(row => parseJsonObject(row.payload_json)).filter(item => ['Chờ duyệt', 'Đã phê duyệt'].includes(item.status)).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+        if (amount > Number(taxRecord.amountPayable) - Number(taxRecord.amountPaid || 0) - reserved) {
+          throw new HttpError(422, 'Số tiền đề nghị vượt nghĩa vụ thuế còn phải nộp sau khi trừ các đề nghị đang xử lý.');
+        }
+        payment.taxType = taxRecord.taxType;
+        payment.taxPeriod = taxRecord.period;
+        payment.taxAuthority = taxRecord.taxAuthority || '';
+      }
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_payments', ?, ?, ?, ?, ?)`)
         .run(id, id, actor.id, JSON.stringify(payment), timestamp, timestamp);
@@ -9100,13 +9122,25 @@ async function handleRequest(request, response) {
         if (current.status !== 'Đã phê duyệt') throw new HttpError(409, 'Chỉ có thể ghi nhận chi cho đề nghị đã được phê duyệt.');
         if (current.approverId === actor.id || current.creatorId === actor.id) throw new HttpError(403, 'Người lập và người phê duyệt không được ghi nhận thanh toán.');
         await lockTransferLedger();
+        const amount = requiredAmount(current.amount, 'Số tiền thanh toán');
+        let linkedTaxRow = null;
+        let linkedTaxRecord = null;
+        if (current.sourceModule === 'finance_tax') {
+          if (current.paymentMethod !== 'Nộp ngân sách nhà nước') throw new HttpError(409, 'Phương thức thanh toán của hồ sơ thuế không hợp lệ.');
+          if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_tax:${current.sourceReference}`]);
+          linkedTaxRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_tax' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(current.sourceReference);
+          if (!linkedTaxRow) throw new HttpError(409, 'Không tìm thấy nghĩa vụ thuế để đối chiếu khoản nộp.');
+          linkedTaxRecord = publicCollectionRecord(linkedTaxRow);
+          if (!Number.isFinite(Number(linkedTaxRecord.amountPayable)) || amount > Number(linkedTaxRecord.amountPayable) - Number(linkedTaxRecord.amountPaid || 0)) {
+            throw new HttpError(409, 'Nghĩa vụ thuế còn lại đã thay đổi; số tiền này không thể ghi nộp.');
+          }
+        }
         const source = (await internalTransferAccounts()).find(account => account.key === sourceAccountId);
         if (!source || source.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản nguồn không tồn tại hoặc đã ngừng hoạt động.');
         if (current.paymentMethod === 'Tiền mặt' && source.source !== 'petty') throw new HttpError(422, 'Phương thức tiền mặt phải ghi chi từ quỹ tiền mặt.');
         if (current.paymentMethod !== 'Tiền mặt' && source.source !== 'bank') throw new HttpError(422, 'Phương thức thanh toán này phải ghi chi từ tài khoản ngân hàng.');
         if (current.paymentMethod === 'Chuyển khoản VCB' && !/vietcombank|\bvcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Vietcombank phù hợp với phương thức thanh toán.');
         if (current.paymentMethod === 'Chuyển khoản TCB' && !/techcombank|\btcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Techcombank phù hợp với phương thức thanh toán.');
-        const amount = requiredAmount(current.amount, 'Số tiền thanh toán');
         if (!Number.isSafeInteger(source.balance) || source.balance < amount) throw new HttpError(422, 'Số dư tài khoản nguồn không đủ cho khoản chi.');
         const debitAccount = requiredText(current.debitAccount, 'Tài khoản Nợ', 24);
         const creditAccount = source.source === 'petty' ? 'TK 111' : 'TK 112';
@@ -9162,9 +9196,30 @@ async function handleRequest(request, response) {
         await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
           VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`)
           .run(randomUUID(), ledgerKey, actor.id, JSON.stringify(ledgerEntry), timestamp, timestamp);
+        if (linkedTaxRow && linkedTaxRecord) {
+          const amountPaid = Number(linkedTaxRecord.amountPaid || 0) + amount;
+          const complete = amountPaid >= Number(linkedTaxRecord.amountPayable);
+          const paymentEvidence = [...(Array.isArray(linkedTaxRecord.paymentEvidence) ? linkedTaxRecord.paymentEvidence : []), {
+            paymentKey: key, paymentCode: current.code, amount, settlementReference, financeTransactionId: transactionId,
+            ledgerEntryKey: ledgerKey, recordedBy: actor.name, recordedById: actor.id, recordedAt: timestamp,
+          }];
+          const updatedTax = {
+            ...linkedTaxRecord,
+            amountPaid,
+            status: complete ? 'Đã ghi nhận đủ theo chứng từ nội bộ' : 'Đã ghi nhận một phần theo chứng từ nội bộ',
+            externalStatus: 'Chưa xác minh với cơ quan thuế',
+            paymentEvidence,
+          };
+          const updateTax = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+            .run(JSON.stringify(updatedTax), timestamp, linkedTaxRow.id, linkedTaxRow.payload_json);
+          if (!updateTax.changes) throw new HttpError(409, 'Nghĩa vụ thuế vừa được cập nhật ở nơi khác. Hãy tải lại hồ sơ.');
+          await recordAuditEvent(actor.id, 'record_internal_tax_payment', 'finance_tax', current.sourceReference, {
+            paymentKey: key, amount, amountPaid, remaining: Number(updatedTax.amountPayable) - amountPaid, settlementReference, financeTransactionId: transactionId,
+          });
+        }
         payment = {
           ...current,
-          status: 'Đã thanh toán',
+          status: current.sourceModule === 'finance_tax' ? 'Đã ghi nhận nội bộ' : 'Đã thanh toán',
           paidBy: actor.name,
           paidById: actor.id,
           paidAt: timestamp,
