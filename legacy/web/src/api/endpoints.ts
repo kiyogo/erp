@@ -553,6 +553,10 @@ export const financeCashApi = {
   cancel: (id: string) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${id}`, { status: 'Đã hủy' }),
 };
 
+export const financeCashCountsApi = {
+  approve: (key: string) => api.post<{ record: Record<string, unknown> & { key: string; status: string; approvedBy: string; approvedAt: string } }>(`/finance/cash-counts/${encodeURIComponent(key)}/approve`, {}),
+};
+
 export const financePaymentAccountsApi = {
   getAccounts: () => api.get<{ accounts: FinancePaymentAccount[] }>('/finance/payment-accounts'),
 };

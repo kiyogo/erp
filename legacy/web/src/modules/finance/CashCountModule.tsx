@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { EditOutlined, PaperClipOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { filesApi, financeCashApi, financePaymentAccountsApi, FinanceCashTransaction, FinancePaymentAccount } from '../../api/endpoints';
+import { filesApi, financeCashApi, financeCashCountsApi, financePaymentAccountsApi, FinanceCashTransaction, FinancePaymentAccount } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { Button, DatePicker, Input, message, Modal, Select, Tag } from '../../custom-ui';
 
@@ -11,7 +11,7 @@ type CashCount = {
   key: string; code: string; purpose: string; countDate: string; currency: string; reference: string;
   date: string; time: string; participants: string; cashAccountId: string; cashAccountName: string; counterName: string; witnessName: string; lines: CountLine[]; bookBalance: number;
   actualBalance: number; difference: number; reconciliation: string; reason: string; handlingDirection: string; conclusion: string;
-  attachments: CountFile[]; status: string;
+  attachments: CountFile[]; status: string; createdById?: string; approvedBy?: string; approvedById?: string; approvedAt?: string;
 };
 
 const today = () => {
@@ -104,7 +104,7 @@ export const CashCountModule: React.FC = () => {
     setConfirmCurrency('VND');
     setConfirmAccountId(accounts[0]?.key || '');
     setEditing(null);
-    setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', cashAccountId: accounts[0]?.key || '', cashAccountName: accounts[0]?.name || '', counterName: '', witnessName: '', bookBalance: bookBalanceAt(accounts[0]?.key || '', date), reconciliation: '', reason: '', handlingDirection: '', conclusion: '', status: 'Đã ghi nhận' });
+    setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', cashAccountId: accounts[0]?.key || '', cashAccountName: accounts[0]?.name || '', counterName: '', witnessName: '', bookBalance: bookBalanceAt(accounts[0]?.key || '', date), reconciliation: '', reason: '', handlingDirection: '', conclusion: '', status: 'Chờ phê duyệt' });
     setLines(blankLines());
     setSavedFiles([]);
     setRemovedFiles([]);
@@ -198,6 +198,16 @@ export const CashCountModule: React.FC = () => {
     catch { message.error('Không tải được chứng từ thu chi để chọn tham chiếu.'); }
   };
 
+  const approve = async (record: CashCount) => {
+    try {
+      await financeCashCountsApi.approve(record.key);
+      message.success(`Đã phê duyệt biên bản ${record.code}.`);
+      await loadData();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể phê duyệt biên bản kiểm kê.');
+    }
+  };
+
   const referenceRows = transactions.filter(item => {
     const query = referenceSearch.trim().toLocaleLowerCase();
     const date = String(item.date || '').slice(0, 10);
@@ -216,7 +226,9 @@ export const CashCountModule: React.FC = () => {
     { title: 'Số dư theo sổ', dataIndex: 'bookBalance', key: 'bookBalance', width: 160, render: (value: number) => money(value) },
     { title: 'Số kiểm kê thực tế', dataIndex: 'actualBalance', key: 'actualBalance', width: 170, render: (value: number) => money(value) },
     { title: 'Chênh lệch', dataIndex: 'difference', key: 'difference', width: 150, render: (value: number) => <Tag color={Number(value) === 0 ? 'success' : 'warning'}>{money(value)}</Tag> },
-    { title: 'Thao tác', key: 'actions', width: 110, render: (_: unknown, record: CashCount) => <Button size="small" aria-label={`Sửa phiếu ${record.code}`} icon={<EditOutlined />} onClick={() => openEdit(record)}>Sửa</Button> },
+    { title: 'Người phê duyệt', dataIndex: 'approvedBy', key: 'approvedBy', width: 160, render: (value: string) => value || '—' },
+    { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 150, render: (value: string) => <Tag color={value === 'Đã phê duyệt' ? 'success' : 'warning'}>{value}</Tag> },
+    { title: 'Thao tác', key: 'actions', width: 230, render: (_: unknown, record: CashCount) => <div style={{ display: 'flex', gap: 6 }}><Button aria-label={`Sửa phiếu ${record.code}`} icon={<EditOutlined />} disabled={record.status === 'Đã phê duyệt'} onClick={() => openEdit(record)}>Sửa</Button>{record.status === 'Chờ phê duyệt' && <Button type="primary" onClick={() => void approve(record)}>Phê duyệt</Button>}</div> },
   ];
 
   const refColumns = [
@@ -263,6 +275,7 @@ export const CashCountModule: React.FC = () => {
             <label style={labelStyle}>Giờ<Select aria-label="Giờ kiểm kê" value={draft.time || undefined} onChange={value => setField('time', value)} options={timeOptions} /></label>
             <label style={labelStyle}>Người kiểm kê<Input value={draft.counterName || ''} onChange={event => setField('counterName', event.target.value)} /></label>
             <label style={labelStyle}>Người chứng kiến<Input value={draft.witnessName || ''} onChange={event => setField('witnessName', event.target.value)} /></label>
+            <label style={labelStyle}>Người phê duyệt<Input value={draft.approvedBy || 'Chưa phê duyệt'} disabled /></label>
             <label style={labelStyle}>Thành viên tham gia<Input value={draft.participants || ''} onChange={event => setField('participants', event.target.value)} /></label>
           </div>
 

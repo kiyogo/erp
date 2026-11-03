@@ -1031,11 +1031,22 @@ test('cash counts require a real petty cash account and recompute book balance a
     key: 'cash-count-server-check', code: 'KKQ-SERVER-001', purpose: 'Kiểm kê quỹ tiền mặt', countDate: '2026-10-30', date: '2026-10-30', time: '16:30',
     cashAccountId: 'petty:Quỹ tiền mặt', counterName: 'Người kiểm kê', witnessName: 'Người chứng kiến', currency: 'VND',
     lines: [{ key: 'note-1000', denomination: 1000, quantity: 2, note: 'Mệnh giá 1.000' }], bookBalance: 999999, actualBalance: 999999, difference: 0,
+    status: 'Đã phê duyệt', approvedBy: 'Người giả mạo', approvedById: 'forged', approvedAt: '2020-01-01T00:00:00.000Z',
   } }, 201)).record;
   assert.equal(record.cashAccountName, 'Quỹ tiền mặt');
   assert.equal(record.bookBalance, 0);
   assert.equal(record.actualBalance, 2000);
   assert.equal(record.difference, -2000);
+  assert.equal(record.status, 'Chờ phê duyệt');
+  assert.equal(record.approvedBy, '');
+  assert.equal(record.approvedById, '');
+  assert.ok(record.createdById);
+  await request('/finance/cash-counts/cash-count-server-check/approve', 'POST', {}, 409);
+  const forgedApproval = (await request('/collections/finance_cash_counts/cash-count-server-check', 'PATCH', { patch: { status: 'Đã phê duyệt', approvedBy: 'Người giả mạo' } })).record;
+  assert.equal(forgedApproval.status, 'Chờ phê duyệt');
+  assert.equal(forgedApproval.approvedBy, '');
+  await request('/collections/finance_cash_counts/cash-count-server-check', 'DELETE', undefined, 409);
+  await request('/collections/finance_cash_counts', 'PUT', { records: [] }, 405);
   await request('/collections/finance_cash_counts', 'POST', { record: {
     key: 'cash-count-invalid-account', code: 'KKQ-SERVER-002', purpose: 'Kiểm kê quỹ tiền mặt', countDate: '2026-10-30', date: '2026-10-30', time: '16:30',
     cashAccountId: 'missing', counterName: 'Người kiểm kê', lines: [],

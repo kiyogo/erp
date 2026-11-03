@@ -2183,6 +2183,8 @@ const accountingOperationScopes = new Set([
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
   if (scope === 'finance_cash_counts' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được lập và quản lý biên bản kiểm kê quỹ.');
+  if (scope === 'finance_cash_counts' && request.method === 'PUT') throw new HttpError(405, 'Không thể thay thế hàng loạt biên bản kiểm kê quỹ.');
+  if (scope === 'finance_cash_counts' && request.method === 'DELETE') throw new HttpError(409, 'Biên bản kiểm kê quỹ được lưu để bảo toàn lịch sử kiểm kê và phê duyệt.');
   if (scope === 'finance_cash_forecast_scenarios' && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được lập và xem kịch bản dự báo dòng tiền.');
   }
@@ -4543,6 +4545,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   }
   if (record.key === undefined) record.key = recordKey;
   if (scope === 'finance_cash_counts') {
+    if (current?.status === 'Đã phê duyệt') throw new HttpError(409, 'Biên bản đã được phê duyệt và không thể sửa.');
     record.code = requiredText(record.code, 'Mã kiểm kê', 80);
     record.countDate = requiredIsoDate(record.countDate, 'Ngày kiểm kê');
     record.date = requiredIsoDate(record.date, 'Ngày lập');
@@ -4584,15 +4587,16 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.actualBalance = actualBalance;
     record.difference = bookBalance - actualBalance;
     if (!Number.isSafeInteger(record.difference)) throw new HttpError(422, 'Chênh lệch kiểm kê vượt giới hạn số nguyên an toàn.');
-    record.status = current?.status || 'Đã ghi nhận';
+    record.status = current?.status || 'Chờ phê duyệt';
     record.createdBy = current?.createdBy || actor.name;
+    record.createdById = current?.createdById || actor.id;
     record.createdAt = current?.createdAt || now();
     record.updatedBy = actor.name;
     record.updatedAt = now();
+    record.approvedBy = current?.approvedBy || '';
+    record.approvedById = current?.approvedById || '';
+    record.approvedAt = current?.approvedAt || '';
     delete record.resolved;
-    delete record.approvedBy;
-    delete record.approvedById;
-    delete record.approvedAt;
   }
   if (scope === 'dropdown_positions') {
     record.name = requiredText(record.name, 'Tên vị trí', 160);
@@ -10381,6 +10385,30 @@ async function handleRequest(request, response) {
       await postCashTransactionToLedger(publicCashTransaction(current), id, actor, profile);
     });
     sendJson(response, 200, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
+  const cashCountApprovalMatch = /^\/finance\/cash-counts\/([^/]+)\/approve$/.exec(resource);
+  if (request.method === 'POST' && cashCountApprovalMatch) {
+    const actor = await requireCollectionActor(request, 'finance_cash_counts');
+    const recordKey = requiredText(decodeURIComponent(cashCountApprovalMatch[1]), 'Mã kiểm kê', 160);
+    const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_cash_counts' AND record_key = ?").get(recordKey);
+    if (!row) throw new HttpError(404, 'Không tìm thấy biên bản kiểm kê quỹ.');
+    const record = parseJsonObject(row.payload_json);
+    if (record.status !== 'Chờ phê duyệt') throw new HttpError(409, 'Chỉ có thể phê duyệt biên bản đang chờ phê duyệt.');
+    if (record.createdById && record.createdById === actor.id) throw new HttpError(409, 'Người lập biên bản không được tự phê duyệt.');
+    const timestamp = now();
+    record.status = 'Đã phê duyệt';
+    record.approvedBy = actor.name;
+    record.approvedById = actor.id;
+    record.approvedAt = timestamp;
+    record.updatedBy = actor.name;
+    record.updatedAt = timestamp;
+    const update = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+      .run(JSON.stringify(record), timestamp, row.id, row.payload_json);
+    if (!update.changes) throw new HttpError(409, 'Biên bản vừa được cập nhật; hãy tải lại trước khi phê duyệt.');
+    await recordAuditEvent(actor.id, 'approve', 'finance_cash_counts', recordKey, { code: record.code });
+    sendJson(response, 200, { record });
     return;
   }
 
