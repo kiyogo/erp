@@ -19,7 +19,7 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3001',
+        target: process.env.KIYO_API_TARGET || 'http://127.0.0.1:3001',
         changeOrigin: true,
       },
     },

@@ -86,6 +86,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
   const loadPaymentTerms = async () => {
     try {
       const response = await collectionsApi.get<{ key: string; code: string; name: string; creditDays: number; discountDays: number; discountRate: number }>('crm_payment_terms', { limit: 500 });
+      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu điều khoản thanh toán không hợp lệ.');
       setPaymentTerms(response.data.data);
     } catch { setPaymentTerms([]); }
   };
