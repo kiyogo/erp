@@ -206,7 +206,7 @@ export const EInvoiceModule: React.FC = () => {
                 {
                   title: 'Nguồn trạng thái', key: 'sourceStatus', width: 260,
                   render: (_: unknown, provider: (typeof providerCatalog)[number]) => provider.number >= 129
-                    ? <span>Được công bố trong đợt Thông báo 759/TB-CT ngày {'sourceDate' in provider ? provider.sourceDate : ''}</span>
+                    ? <span>Được công bố trong đợt Thông báo 759/TB-CT ngày {'sourceDate' in provider && typeof provider.sourceDate === 'string' ? provider.sourceDate : ''}</span>
                     : <span>Danh sách tham khảo ngày 14/05/2026; chưa xác minh theo quy định mới</span>,
                 },
                 {

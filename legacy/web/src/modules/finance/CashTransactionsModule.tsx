@@ -20,7 +20,6 @@ import {
   employeesApi,
   financeCashApi,
   financeDocumentsApi,
-  FinanceDocument,
   financePaymentAccountsApi,
   FinanceCashTransaction,
   FinancePaymentAccount,
@@ -35,6 +34,18 @@ import { EmployeeQuickCreateDialog } from '../hr/EmployeeQuickCreateDialog';
 import { CRMContactsModule } from '../crm/CRMContactsModule';
 
 export type EnterpriseCashTransaction = FinanceCashTransaction;
+type FinanceReferenceRow = {
+  key: string;
+  type: 'cash' | 'sale' | 'purchase' | 'invoice';
+  code: string;
+  date: string;
+  voucherDate: string;
+  category: string;
+  recipientOrPayer: string;
+  debitAccount: string;
+  creditAccount: string;
+  amount: number;
+};
 
 export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi' | 'all' }> = ({
   typeFilterDefault = 'all',
@@ -70,10 +81,14 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [contactCreateOpen, setContactCreateOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState('');
-  const [referenceType, setReferenceType] = useState('all');
+  const [referenceType, setReferenceType] = useState<'all' | FinanceReferenceRow['type']>('all');
+  const [referencePage, setReferencePage] = useState(1);
+  const [referenceTotal, setReferenceTotal] = useState(0);
+  const [referenceLoading, setReferenceLoading] = useState(false);
   const [referenceFrom, setReferenceFrom] = useState('');
   const [referenceTo, setReferenceTo] = useState('');
-  const [referenceDocuments, setReferenceDocuments] = useState<FinanceDocument[]>([]);
+  const [referenceRows, setReferenceRows] = useState<FinanceReferenceRow[]>([]);
+  const referenceRequestId = useRef(0);
   const [orgUnitOptions, setOrgUnitOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [positionOptions, setPositionOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [workStatusOptions, setWorkStatusOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -160,11 +175,31 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
   useEffect(() => {
     if (!referenceOpen) return;
-    void financeDocumentsApi.getAll().then(response => {
-      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu chứng từ không hợp lệ.');
-      setReferenceDocuments(response.data.data);
-    }).catch(() => { setReferenceDocuments([]); message.error('Không tải được chứng từ mua bán và hóa đơn.'); });
-  }, [referenceOpen]);
+    const requestId = ++referenceRequestId.current;
+    setReferenceLoading(true);
+    const timeout = setTimeout(() => {
+      void financeDocumentsApi.getReferences({
+        page: referencePage,
+        limit: 20,
+        q: referenceSearch.trim() || undefined,
+        type: referenceType,
+        dateFrom: referenceFrom || undefined,
+        dateTo: referenceTo || undefined,
+        excludeCashId: editingTransaction?.key,
+      }).then(response => {
+        if (requestId !== referenceRequestId.current) return;
+        if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu chứng từ tham chiếu không hợp lệ.');
+        setReferenceRows(response.data.data);
+        setReferenceTotal(response.data.pagination.total);
+      }).catch((error: any) => {
+        if (requestId !== referenceRequestId.current) return;
+        setReferenceRows([]);
+        setReferenceTotal(0);
+        message.error(error?.response?.data?.message || 'Không tải được chứng từ tham chiếu.');
+      }).finally(() => { if (requestId === referenceRequestId.current) setReferenceLoading(false); });
+    }, referenceSearch ? 250 : 0);
+    return () => { clearTimeout(timeout); referenceRequestId.current += 1; };
+  }, [referenceOpen, referencePage, referenceSearch, referenceType, referenceFrom, referenceTo, editingTransaction?.key]);
 
   useEffect(() => {
     setTypeFilter(typeFilterDefault);
@@ -764,15 +799,12 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
       <Modal title="Chọn chứng từ tham chiếu" open={referenceOpen} onCancel={() => setReferenceOpen(false)} footer={null} width="min(1200px, calc(100vw - 32px))">
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Select style={{ width: 180 }} value={referenceType} onChange={setReferenceType} options={[{ label: 'Tất cả chứng từ', value: 'all' }, { label: 'Phiếu thu / chi', value: 'cash' }, { label: 'Bán hàng', value: 'sale' }, { label: 'Mua hàng', value: 'purchase' }, { label: 'Hóa đơn', value: 'invoice' }]} />
-          <Input aria-label="Từ ngày" type="date" value={referenceFrom} onChange={event => setReferenceFrom(event.target.value)} style={{ width: 160 }} />
-          <Input aria-label="Đến ngày" type="date" value={referenceTo} onChange={event => setReferenceTo(event.target.value)} style={{ width: 160 }} />
-          <Input placeholder="Tìm số chứng từ, diễn giải hoặc đối tượng" value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} style={{ width: 300 }} />
+          <Select style={{ width: 180 }} value={referenceType} onChange={value => { setReferenceType(value as typeof referenceType); setReferencePage(1); }} options={[{ label: 'Tất cả chứng từ', value: 'all' }, { label: 'Phiếu thu / chi', value: 'cash' }, { label: 'Bán hàng', value: 'sale' }, { label: 'Mua hàng', value: 'purchase' }, { label: 'Hóa đơn', value: 'invoice' }]} />
+          <Input aria-label="Từ ngày" type="date" value={referenceFrom} onChange={event => { setReferenceFrom(event.target.value); setReferencePage(1); }} style={{ width: 160 }} />
+          <Input aria-label="Đến ngày" type="date" value={referenceTo} onChange={event => { setReferenceTo(event.target.value); setReferencePage(1); }} style={{ width: 160 }} />
+          <Input placeholder="Tìm số chứng từ, diễn giải hoặc đối tượng" value={referenceSearch} onChange={event => { setReferenceSearch(event.target.value); setReferencePage(1); }} style={{ width: 300 }} />
         </div>
-        <KTable dataSource={[
-          ...data.filter(item => item.key !== editingTransaction?.key).map(item => ({ key: `cash:${item.key}`, type: 'cash', code: item.code, date: item.date, voucherDate: item.voucherDate || item.date, category: item.category, recipientOrPayer: item.recipientOrPayer, debitAccount: (item.journalLines || []).map(line => line.debitAccount).filter(Boolean).join(', '), creditAccount: (item.journalLines || []).map(line => line.creditAccount).filter(Boolean).join(', '), amount: item.amount })),
-          ...referenceDocuments.map(item => ({ key: `${item.documentType}:${item.key}`, type: item.documentType, code: item.code, date: item.documentDate, voucherDate: item.documentDate, category: item.description, recipientOrPayer: item.partnerName, debitAccount: '', creditAccount: '', amount: item.amount })),
-        ].filter(item => (referenceType === 'all' || item.type === referenceType) && (!referenceFrom || item.date >= referenceFrom) && (!referenceTo || item.date <= referenceTo) && `${item.code} ${item.category} ${item.recipientOrPayer}`.toLocaleLowerCase().includes(referenceSearch.toLocaleLowerCase()))} columns={ [
+        <KTable dataSource={referenceRows} loading={referenceLoading} columns={[
           { title: 'Ngày hạch toán', dataIndex: 'date', key: 'date' },
           { title: 'Ngày chứng từ', dataIndex: 'voucherDate', key: 'voucherDate' },
           { title: 'Số chứng từ', dataIndex: 'code', key: 'code' },
@@ -781,8 +813,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           { title: 'TK Nợ', dataIndex: 'debitAccount', key: 'debitAccount' },
           { title: 'TK Có', dataIndex: 'creditAccount', key: 'creditAccount' },
           { title: 'Số tiền', dataIndex: 'amount', key: 'amount', render: (amount: number) => Number(amount).toLocaleString('vi-VN') },
-          { title: '', key: 'select', render: (_: unknown, item: { code: string }) => <Button onClick={() => { form.setFieldsValue({ reference: item.code }); setReferenceOpen(false); }}>Chọn</Button> },
-        ]} pagination={{ pageSize: 20 }} disableCache />
+          { title: '', key: 'select', render: (_: unknown, item: FinanceReferenceRow) => <Button onClick={() => { form.setFieldsValue({ reference: item.code }); setReferenceOpen(false); }}>Chọn</Button> },
+        ]} pagination={{ current: referencePage, pageSize: 20, total: referenceTotal, onChange: page => setReferencePage(page) }} disableCache />
       </Modal>
 
       <EmployeeQuickCreateDialog

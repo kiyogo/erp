@@ -631,6 +631,10 @@ export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmou
 
 export const financeDocumentsApi = {
   getAll: (params?: { documentType?: FinanceDocument['documentType']; subtype?: string }) => api.get<{ data: FinanceDocument[] }>('/finance/documents', { params }),
+  getReferences: (params: { page: number; limit: number; q?: string; type?: 'all' | 'cash' | FinanceDocument['documentType']; dateFrom?: string; dateTo?: string; excludeCashId?: string }) => api.get<{
+    data: Array<{ key: string; type: 'cash' | FinanceDocument['documentType']; code: string; date: string; voucherDate: string; category: string; recipientOrPayer: string; debitAccount: string; creditAccount: string; amount: number }>;
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }>('/finance/document-references', { params }),
   create: (data: CreateFinanceDocument) => api.post<{ document: FinanceDocument; replayed?: boolean }>('/finance/documents', data),
   previewSalePromotions: (data: { customerId: string; promotionKeys: string[]; subtype: string; status: string; amount: number; documentDate: string; vatRate: number; vatAmount: number }) =>
     api.post<SalePromotionPreview>('/finance/sales/promotion-preview', data),

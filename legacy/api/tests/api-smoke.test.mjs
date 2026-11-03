@@ -934,6 +934,10 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(searchedCash.pagination.total, 1);
   assert.equal(searchedCash.data[0].key, created.key);
   assert.deepEqual(Object.keys(searchedCash.summary).sort(), ['pendingCount', 'totalExpense', 'totalIncome']);
+  const referenceCash = await request(`/finance/document-references?page=1&limit=1&type=cash&q=${encodeURIComponent(created.code)}`);
+  assert.equal(referenceCash.pagination.total, 1);
+  assert.equal(referenceCash.data[0].key, `cash:${created.key}`);
+  await request('/finance/document-references?page=1&limit=5&dateFrom=2026-11-02&dateTo=2026-10-01', 'GET', undefined, 422);
   const filteredCash = await request(`/finance/cash-transactions?page=1&limit=5&accountId=${encodeURIComponent(account.key)}&counterpartyId=${encodeURIComponent(contact.key)}&employeeCode=CASH-STAFF&dateFrom=2026-10-29&dateTo=2026-10-29&q=${encodeURIComponent(created.code)}`);
   assert.equal(filteredCash.pagination.total, 1);
   assert.equal(filteredCash.data[0].key, created.key);

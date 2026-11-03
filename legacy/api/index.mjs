@@ -11187,6 +11187,64 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/finance/document-references') {
+    await requireAdmin(request);
+    const page = Number(url.searchParams.get('page') || 1);
+    const limit = Number(url.searchParams.get('limit') || 20);
+    const query = String(url.searchParams.get('q') || '').trim().slice(0, 120);
+    const type = url.searchParams.get('type') || 'all';
+    const dateFromRaw = url.searchParams.get('dateFrom');
+    const dateToRaw = url.searchParams.get('dateTo');
+    const excludeCashId = String(url.searchParams.get('excludeCashId') || '').trim().slice(0, 120);
+    if (!Number.isInteger(page) || page < 1 || page > 1_000_000) throw new HttpError(422, 'Trang chứng từ tham chiếu không hợp lệ.');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(422, 'Số dòng chứng từ tham chiếu phải từ 1 đến 100.');
+    if (!['all', 'cash', 'sale', 'purchase', 'invoice'].includes(type)) throw new HttpError(422, 'Loại chứng từ tham chiếu không hợp lệ.');
+    const dateFrom = dateFromRaw ? requiredIsoDate(dateFromRaw, 'Từ ngày') : '';
+    const dateTo = dateToRaw ? requiredIsoDate(dateToRaw, 'Đến ngày') : '';
+    if (dateFrom && dateTo && dateFrom > dateTo) throw new HttpError(422, 'Từ ngày phải bằng hoặc trước đến ngày.');
+    const where = [];
+    const params = [];
+    if (type !== 'all') { where.push('type = ?'); params.push(type); }
+    if (dateFrom) { where.push('date >= ?'); params.push(dateFrom); }
+    if (dateTo) { where.push('date <= ?'); params.push(dateTo); }
+    if (excludeCashId) { where.push("NOT (type = 'cash' AND id = ?)"); params.push(excludeCashId); }
+    if (query) {
+      where.push('(LOWER(code) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(recipient_or_payer) LIKE LOWER(?))');
+      const pattern = `%${query}%`;
+      params.push(pattern, pattern, pattern);
+    }
+    const union = `SELECT 'cash' AS type, id, code, transaction_date AS date, COALESCE(voucher_date, transaction_date) AS voucher_date,
+        category, counterparty AS recipient_or_payer, journal_lines_json, amount, created_at
+      FROM finance_cash_transactions
+      UNION ALL
+      SELECT document_type AS type, id, code, document_date AS date, document_date AS voucher_date,
+        description AS category, partner_name AS recipient_or_payer, '[]' AS journal_lines_json, amount, created_at
+      FROM finance_documents`;
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = Number((await db.prepare(`SELECT COUNT(*) AS total FROM (${union}) AS refs ${clause}`).get(...params)).total) || 0;
+    const rows = await db.prepare(`SELECT * FROM (${union}) AS refs ${clause} ORDER BY date DESC, created_at DESC, code DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit, (page - 1) * limit);
+    const data = rows.map(row => {
+      let journalLines = [];
+      try { journalLines = JSON.parse(row.journal_lines_json || '[]'); } catch {}
+      if (!Array.isArray(journalLines)) journalLines = [];
+      return {
+        key: `${row.type}:${row.id}`,
+        type: row.type,
+        code: row.code,
+        date: row.date,
+        voucherDate: row.voucher_date || row.date,
+        category: row.category || '',
+        recipientOrPayer: row.recipient_or_payer || '',
+        debitAccount: journalLines.map(line => line?.debitAccount).filter(Boolean).join(', '),
+        creditAccount: journalLines.map(line => line?.creditAccount).filter(Boolean).join(', '),
+        amount: financeStoredInteger(row.amount),
+      };
+    });
+    sendJson(response, 200, { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/finance/documents') {
     await requireAdmin(request);
     const documentType = url.searchParams.get('documentType');
