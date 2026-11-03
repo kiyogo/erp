@@ -105,10 +105,15 @@ export const BankAccountsModule: React.FC = () => {
   }, [data, statementAccountId]);
 
   const handleCreate = async (values: any) => {
+    const openingBalance = Number(values.balance);
+    if (!Number.isSafeInteger(openingBalance) || openingBalance < 0) {
+      message.error('Nhập số dư ban đầu thực tế bằng số nguyên không âm.');
+      return;
+    }
     try {
       await financeBankAccountsApi.create({
         ...values,
-        balance: Number(values.balance) || 0,
+        balance: openingBalance,
         status: 'Đang hoạt động',
       });
       message.success(`Đã thêm tài khoản ngân hàng: ${values.bankName}`);
@@ -734,14 +739,14 @@ export const BankAccountsModule: React.FC = () => {
             <Form.Item name="accountNumber" label="Số tài khoản" rules={[{ required: true, message: 'Nhập số tài khoản' }]}>
               <Input placeholder="0011 0042 8888" />
             </Form.Item>
-            <Form.Item name="balance" label="Số dư ban đầu (VNĐ)" initialValue={1000000000}>
-              <Input type="number" min={0} step={10000000} />
+            <Form.Item name="balance" label="Số dư ban đầu (VNĐ)" rules={[{ required: true, message: 'Nhập số dư ban đầu thực tế.' }]}>
+              <Input type="number" min={0} step={1} placeholder="Nhập theo số dư thực tế" />
             </Form.Item>
           </div>
-          <Form.Item name="accountHolder" label="Tên chủ tài khoản" initialValue="CONG TY CP CONG NGHE KIYOVN" rules={[{ required: true }]}>
+          <Form.Item name="accountHolder" label="Tên chủ tài khoản" rules={[{ required: true, whitespace: true, message: 'Nhập tên chủ tài khoản theo hồ sơ ngân hàng.' }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="branch" label="Chi nhánh mở tài khoản" initialValue="Sở Giao Dịch Hà Nội">
+          <Form.Item name="branch" label="Chi nhánh mở tài khoản">
             <Input />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>

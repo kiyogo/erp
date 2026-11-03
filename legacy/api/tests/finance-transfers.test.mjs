@@ -75,6 +75,17 @@ async function balance(key) {
   return (await request('/finance/internal-transfers')).accounts.find(account => account.key === key).balance;
 }
 
+test('bank account creation requires an explicit verified opening balance and preserves zero', async () => {
+  const baseAccount = { bankName: 'Ngân hàng kiểm thử', accountHolder: 'Doanh nghiệp kiểm thử', status: 'Đang hoạt động' };
+  await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID() }, 422);
+  await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID(), balance: 1.5 }, 422);
+  await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID(), balance: -1 }, 422);
+  const zeroBalanceAccount = await request('/finance/bank-accounts', 'POST', {
+    ...baseAccount, accountNumber: randomUUID(), balance: 0,
+  }, 201);
+  assert.equal(zeroBalanceAccount.account.balance, 0);
+});
+
 test('only authenticated administrators may read or record transfers', async () => {
   assert.equal((await fetch(`${base}/finance/internal-transfers`)).status, 401);
   assert.equal((await fetch(`${base}/finance/internal-transfers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);

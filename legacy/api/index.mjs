@@ -5565,6 +5565,9 @@ function validateFinanceDocument(input) {
 }
 
 function validateBankAccount(input) {
+  if (input.balance === undefined || input.balance === null || input.balance === '') {
+    throw new HttpError(422, 'Nhập số dư ban đầu thực tế của tài khoản ngân hàng.');
+  }
   return {
     bankName: requiredText(input.bankName, 'Tên ngân hàng', 200),
     accountNumber: requiredText(input.accountNumber, 'Số tài khoản', 64),
