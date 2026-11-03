@@ -1052,6 +1052,10 @@ test('cash counts require a real petty cash account and recompute book balance a
   }, 201)).user;
   const approverLogin = await request('/auth/login', 'POST', { email: approver.email, password: 'Cash-Count-Approver-26!Secure' });
   const approverHeaders = { ...headers, Authorization: `Bearer ${approverLogin.access_token || approverLogin.token}` };
+  await request('/finance/cash-counts/cash-count-server-check/approve', 'POST', {}, 422, approverHeaders);
+  await request('/collections/finance_cash_counts/cash-count-server-check', 'PATCH', {
+    patch: { reason: 'Sai lệch do chứng từ chi đang được đối chiếu', handlingDirection: 'Đối chiếu chứng từ nguồn trước khi lập phiếu điều chỉnh' },
+  });
   const approved = (await request('/finance/cash-counts/cash-count-server-check/approve', 'POST', {}, 200, approverHeaders)).record;
   assert.equal(approved.status, 'Đã phê duyệt');
   assert.equal(approved.approvedById, approver.id);

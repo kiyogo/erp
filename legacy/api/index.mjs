@@ -10397,6 +10397,16 @@ async function handleRequest(request, response) {
     const record = parseJsonObject(row.payload_json);
     if (record.status !== 'Chờ phê duyệt') throw new HttpError(409, 'Chỉ có thể phê duyệt biên bản đang chờ phê duyệt.');
     if (record.createdById && record.createdById === actor.id) throw new HttpError(409, 'Người lập biên bản không được tự phê duyệt.');
+    if (Number(record.difference) !== 0 && (!String(record.reason || '').trim() || !String(record.handlingDirection || '').trim())) {
+      throw new HttpError(422, 'Biên bản có chênh lệch phải ghi rõ nguyên nhân và hướng xử lý trước khi phê duyệt.');
+    }
+    const currentBalance = await db.prepare(`SELECT COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END), 0) AS balance
+      FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty' AND transaction_date <= ?
+      AND (source_account_id = ? OR (source_account_id IS NULL AND account_name = ?))`)
+      .get(record.countDate, record.cashAccountId, record.cashAccountName);
+    if (Number(currentBalance?.balance || 0) !== Number(record.bookBalance)) {
+      throw new HttpError(409, 'Số dư sổ quỹ đã thay đổi sau khi lập biên bản. Hãy cập nhật lại số dư và đối chiếu trước khi phê duyệt.');
+    }
     const timestamp = now();
     record.status = 'Đã phê duyệt';
     record.approvedBy = actor.name;
