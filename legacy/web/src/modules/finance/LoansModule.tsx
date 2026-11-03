@@ -14,7 +14,7 @@ import { filesApi, financeLoanEventsApi, financePaymentAccountsApi, systemApi, t
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { Alert, Button, Drawer, Form, Input, message, Modal, Select, Tabs } from '../../custom-ui';
-import { hasUniqueLoanContractCode, isValidLoanDateRange, loanAccountsFor, loanDirectionOf, type LoanDirection } from './loanRules';
+import { buildLoanDebtReport, buildLoanDueReport, hasUniqueLoanContractCode, isValidLoanDateRange, loanAccountsFor, loanDirectionOf, type LoanDirection } from './loanRules';
 
 type InterestRateRow = { rate: string; overdueRate: string; effectiveFrom: string; note: string };
 type LoanAttachment = { id: string; name: string; size: number; mimeType?: string };
@@ -188,6 +188,11 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     });
   }, [data, routeDirection, searchText]);
   const totalPrincipal = visibleData.reduce((sum, loan) => sum + (Number(loan.principalAmount) || 0), 0);
+  const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const debtReportRows = buildLoanDebtReport(visibleData, loanEvents);
+  const dueReportRows = buildLoanDueReport(visibleData, loanEvents, businessDate);
+  const totalOutstanding = debtReportRows.reduce((sum, row) => sum + row.outstandingPrincipal, 0);
+  const overdueAmount = dueReportRows.filter(row => row.status === 'Quá hạn').reduce((sum, row) => sum + row.principalDue + (row.interestDue || 0), 0);
 
   const loanBalance = (loanKey: string) => loanEvents.filter(event => event.loanKey === loanKey).reduce((balance, event) => ({
     principalDrawn: balance.principalDrawn + (event.eventType === 'disbursement' ? Number(event.principalAmount) || 0 : 0),
@@ -528,6 +533,15 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
             ['Số khế ước', 'Loại khế ước', 'Đối tượng', 'Hợp đồng tín dụng', 'Mục đích vay', 'Giá trị khoản vay', 'Loại tiền', 'Tài khoản nợ gốc', 'Tài khoản lãi vay', 'Ngày giải ngân', 'Ngày đáo hạn'],
             ...visibleData.map(loan => [loan.contractCode, loanDirectionOf(loan) === 'borrow' ? 'Đi vay' : 'Cho vay', loanCounterparty(loan), loan.creditContract || '', loan.purpose || '', loan.principalAmount, loan.currency || 'VND', loan.principalAccount || '', loan.interestAccount || '', loan.disbursedDate, loan.dueDate]),
           ]))}>Xuất Excel</Button>
+          <Button icon={<DownloadOutlined />} disabled={!debtReportRows.length} onClick={() => downloadFile(`bao_cao_du_no_${routeDirection}.xlsx`, generateValidXlsxBlob([
+            ['Số khế ước', 'Loại', 'Đối tượng', 'Gốc hợp đồng', 'Đã giải ngân', 'Đã trả hoặc thu gốc', 'Dư nợ gốc', 'Lãi đã trả hoặc thu', 'Ngày đáo hạn'],
+            ...debtReportRows.map(row => [row.contractCode, row.direction, row.counterparty, row.principalContracted, row.principalDrawn, row.principalRepaid, row.outstandingPrincipal, row.interestSettled, row.dueDate]),
+          ]))}>Báo cáo dư nợ</Button>
+          <Button icon={<DownloadOutlined />} disabled={!dueReportRows.length} onClick={() => downloadFile(`bao_cao_den_han_${routeDirection}.xlsx`, generateValidXlsxBlob([
+            ['Ngày lập báo cáo', businessDate],
+            ['Số khế ước', 'Nghiệp vụ', 'Đối tượng', 'Ngày đến hạn', 'Gốc còn theo lịch', 'Lãi còn theo lịch', 'Trạng thái'],
+            ...dueReportRows.map(row => [row.contractCode, row.direction, row.counterparty, row.dueDate, row.principalDue, row.interestDue ?? '', row.status]),
+          ]))}>Báo cáo đến hạn</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm khế ước</Button>
         </div>
       </div>
@@ -535,6 +549,8 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
       <div style={{ display: 'flex', gap: 16, marginBottom: 12, color: '#475569', fontSize: 13 }}>
         <span>Số khế ước: <strong>{visibleData.length}</strong></span>
         <span>Tổng giá trị: <strong>{money(totalPrincipal)}</strong></span>
+        <span>Dư nợ gốc đã giải ngân: <strong>{money(totalOutstanding)}</strong></span>
+        <span>Gốc và lãi quá hạn theo lịch: <strong>{money(overdueAmount)}</strong></span>
       </div>
       <div className="transparent-table-card">
         <KTable dataSource={visibleData} columns={columns} rowKey="key" pagination={{ pageSize: 10 }} locale={{ emptyText: 'Chưa có khế ước.' }} />
