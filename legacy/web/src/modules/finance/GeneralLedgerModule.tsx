@@ -206,6 +206,10 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   });
 
   const handleCreate = async (values: any) => {
+    if (!activeChart.length) {
+      message.error(`Chưa có danh mục tài khoản cho chế độ ${accountingRegime}. Hãy khai báo hoặc nạp danh mục trước khi ghi sổ.`);
+      return;
+    }
     const lines = journalLines.map(line => ({ account: line.account.trim(), debit: Number(line.debit) || 0, credit: Number(line.credit) || 0 }));
     const debitTotal = lines.reduce((sum, line) => sum + line.debit, 0);
     const creditTotal = lines.reduce((sum, line) => sum + line.credit, 0);
@@ -533,6 +537,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         footer={null}
         width={800}
       >
+        {!activeChart.length && <div role="alert" style={{ color: '#92400E', marginTop: 14 }}>Chưa có danh mục tài khoản cho chế độ {accountingRegime || 'kế toán đang chọn'}. Hãy khai báo tài khoản trước khi ghi sổ.</div>}
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="voucherCode" label="Số chứng từ" initialValue={`PKT-${new Date().getFullYear()}-${String(data.length + 1).padStart(4, '0')}`} rules={[{ required: true }]}>
@@ -556,7 +561,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
                 columns={[
                   { title: 'Tài khoản', key: 'account', render: (_: unknown, line: JournalLine & { lineIndex: number }) => activeChart.length
                     ? <Select aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} value={line.account || undefined} placeholder="Chọn tài khoản" options={activeChart.filter((account) => account.status === 'Đang sử dụng' && !activeChart.some((child) => child.parentCode === account.code)).map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} onChange={(value) => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, account: value } : row))} />
-                    : <Input aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} maxLength={24} value={line.account} placeholder="Mã tài khoản" onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, account: event.target.value } : row))} /> },
+                    : <Input aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} disabled maxLength={24} value={line.account} placeholder="Khai báo danh mục trước" /> },
                   { title: 'Phát sinh Nợ', key: 'debit', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Phát sinh Nợ dòng ${line.lineIndex + 1}`} type="number" min={0} step="0.01" value={line.debit || ''} onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, debit: Number(event.target.value) || 0 } : row))} /> },
                   { title: 'Phát sinh Có', key: 'credit', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Phát sinh Có dòng ${line.lineIndex + 1}`} type="number" min={0} step="0.01" value={line.credit || ''} onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, credit: Number(event.target.value) || 0 } : row))} /> },
                   { title: '', key: 'action', width: 48, render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Button className="ant-btn-square-icon" aria-label={`Xóa dòng ${line.lineIndex + 1}`} icon={<DeleteOutlined />} disabled={journalLines.length <= 2} onClick={() => setJournalLines(current => current.filter((_, index) => index !== line.lineIndex))} /> },
@@ -572,7 +577,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button disabled={saving} onClick={() => { setModalOpen(false); form.resetFields(); setJournalLines([{ account: '', debit: 0, credit: 0 }]); }}>Hủy</Button>
-            <Button type="primary" htmlType="submit" loading={saving} disabled={saving || !fiscalYearStart.ready} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving || !fiscalYearStart.ready || !activeChart.length} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Ghi sổ cái
             </Button>
           </div>

@@ -65,6 +65,23 @@ await request('/system/company-profile', 'PUT', {
   fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
 });
 
+test('ledger posting requires an accounting chart for the active regime before accepting entries', async () => {
+  await request('/finance/general-ledger/entries', 'POST', {
+    voucherCode: 'NO-CHART-001', entryDate: '2026-10-30', description: 'Kiểm tra bắt buộc có danh mục tài khoản',
+    lines: [{ account: '111', debit: 100, credit: 0 }, { account: '511', debit: 0, credit: 100 }],
+  }, 422);
+  for (const [code, name, accountType] of [
+    ['111', 'Tiền mặt', 'Tài sản'], ['112', 'Tiền gửi ngân hàng', 'Tài sản'], ['1121', 'Tiền gửi ngân hàng VND', 'Tài sản'], ['131', 'Phải thu khách hàng', 'Tài sản'],
+    ['2141', 'Hao mòn tài sản cố định hữu hình', 'Tài sản'], ['331', 'Phải trả người bán', 'Nợ phải trả'], ['33311', 'Thuế GTGT phải nộp', 'Nợ phải trả'], ['3335', 'Thuế thu nhập cá nhân', 'Nợ phải trả'],
+    ['334', 'Phải trả người lao động', 'Nợ phải trả'], ['338', 'Phải trả, phải nộp khác', 'Nợ phải trả'], ['3383', 'Bảo hiểm xã hội', 'Nợ phải trả'], ['3384', 'Bảo hiểm y tế', 'Nợ phải trả'],
+    ['3386', 'Bảo hiểm thất nghiệp', 'Nợ phải trả'], ['511', 'Doanh thu bán hàng', 'Doanh thu'], ['642', 'Chi phí quản lý', 'Chi phí'], ['6421', 'Chi phí quản lý chi tiết', 'Chi phí'],
+  ]) {
+    await request('/finance/chart-of-accounts', 'POST', { record: {
+      code, name, parentCode: '', accountType, balanceNature: 'Chưa xác định', effectiveDate: '2026-01-01', status: 'Đang sử dụng',
+    } }, 201);
+  }
+});
+
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
   await request('/collections/business_org_units', 'POST', {

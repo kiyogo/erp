@@ -5409,7 +5409,7 @@ function validateCashTransaction(input) {
 async function validateLedgerAccountLines(profile, lines) {
   const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
   const chart = rows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === profile.accountingRegime);
-  if (!chart.length) return;
+  if (!chart.length) throw new HttpError(422, `Chưa có danh mục tài khoản cho chế độ ${profile.accountingRegime}. Hãy khai báo hoặc nạp danh mục đã được đối chiếu trước khi ghi sổ.`);
   const chartByCode = new Map(chart.map((item) => [String(item.code || '').toUpperCase(), item]));
   const usedCodes = new Set(lines.flatMap((line) => line.account ? [line.account] : [line.debitAccount, line.creditAccount])
     .map((value) => String(value || '').replace(/^TK\s*/i, '').split(' (')[0].replace(/\s+/g, '').toUpperCase()).filter(Boolean));
