@@ -448,7 +448,7 @@ export const PayrollModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'end', gap: 12, flexWrap: 'wrap' }}>
             <label>Phương thức thanh toán<Select value={paymentMethod} onChange={setPaymentMethod} options={['Tiền mặt', 'Tiền gửi'].map((value) => ({ value, label: value }))} /></label>
-            <label style={{ minWidth: 280 }}>Tài khoản chi<Select value={paymentAccountId || undefined} loading={loadingPaymentAccounts} onChange={setPaymentAccountId} options={availablePaymentAccounts.map((account) => ({ value: account.key, label: `${account.name} · Số dư ${account.balance.toLocaleString('vi-VN')} ₫` }))} placeholder="Chọn tài khoản chi" /></label>
+            <label style={{ minWidth: 280 }}>Tài khoản chi<Select value={paymentAccountId || undefined} disabled={loadingPaymentAccounts} onChange={setPaymentAccountId} options={availablePaymentAccounts.map((account) => ({ value: account.key, label: `${account.name} · Số dư ${account.balance.toLocaleString('vi-VN')} ₫` }))} placeholder={loadingPaymentAccounts ? 'Đang tải tài khoản...' : 'Chọn tài khoản chi'} /></label>
             <label>Ngày nộp bảo hiểm<Input type="date" value={paymentDate} onChange={(e: any) => setPaymentDate(e.target.value)} /></label>
             <Button type="primary" onClick={loadInsuranceDue}>Lấy nghĩa vụ đã đối chiếu</Button>
           </div>
@@ -512,9 +512,9 @@ export const PayrollModule: React.FC = () => {
               const source = value === 'Tiền mặt' ? 'petty' : 'bank';
               setPaymentAccountId(paymentAccounts.find((account) => account.source === source && account.status === 'Đang hoạt động')?.key || '');
             }} options={['Tiền mặt', 'Tiền gửi'].map((value) => ({ value, label: value }))} /></label>
-            <label style={{ minWidth: 280 }}>Tài khoản chi<Select value={paymentAccountId || undefined} loading={loadingPaymentAccounts} onChange={setPaymentAccountId}
+            <label style={{ minWidth: 280 }}>Tài khoản chi<Select value={paymentAccountId || undefined} disabled={loadingPaymentAccounts} onChange={setPaymentAccountId}
               options={availablePaymentAccounts.map((account) => ({ value: account.key, label: `${account.name} · Số dư ${account.balance.toLocaleString('vi-VN')} ₫` }))}
-              placeholder="Chọn tài khoản chi" /></label>
+              placeholder={loadingPaymentAccounts ? 'Đang tải tài khoản...' : 'Chọn tài khoản chi'} /></label>
             <label>Ngày trả lương<Input type="date" value={paymentDate} onChange={(e: any) => setPaymentDate(e.target.value)} /></label>
             <Button type="primary" onClick={() => setPaymentRows(periodData.filter((row) => row.status === 'Chưa chi trả'))}>Lấy dữ liệu</Button>
           </div>
