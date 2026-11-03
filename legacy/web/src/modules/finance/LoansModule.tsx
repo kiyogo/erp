@@ -10,10 +10,10 @@ import {
 } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { KTable } from '../../components/KTable';
-import { filesApi, systemApi } from '../../api/endpoints';
+import { filesApi, financeLoanEventsApi, financePaymentAccountsApi, systemApi, type FinanceLoanEvent, type FinancePaymentAccount } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
-import { Button, Drawer, Form, Input, message, Modal, Select, Tabs } from '../../custom-ui';
+import { Alert, Button, Drawer, Form, Input, message, Modal, Select, Tabs } from '../../custom-ui';
 import { hasUniqueLoanContractCode, isValidLoanDateRange, loanAccountsFor, loanDirectionOf, type LoanDirection } from './loanRules';
 
 type InterestRateRow = { rate: string; overdueRate: string; effectiveFrom: string; note: string };
@@ -123,6 +123,13 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
   const [savedAttachments, setSavedAttachments] = useState<LoanAttachment[]>([]);
   const [removedAttachments, setRemovedAttachments] = useState<LoanAttachment[]>([]);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [loanEvents, setLoanEvents] = useState<FinanceLoanEvent[]>([]);
+  const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [eventType, setEventType] = useState<FinanceLoanEvent['eventType']>('disbursement');
+  const [eventSaving, setEventSaving] = useState(false);
+  const [eventModalOpen, setEventModalOpen] = useState(false);
+  const [eventLoan, setEventLoan] = useState<EnterpriseLoanItem | null>(null);
+  const [eventForm] = Form.useForm();
   const [accountingRegime, setAccountingRegime] = useState('');
   const [chartAccounts, setChartAccounts] = useState<Array<{ code: string; name: string; parentCode?: string; accountingRegime: string; status: string; accountType: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -131,10 +138,14 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     let active = true;
     systemApi.getCompanyProfile().then(async ({ data: response }) => {
       const regime = String(response.profile.accountingRegime || '');
-      const accounts = await dataService.refreshGenericData('finance_chart_of_accounts');
+      const [accounts, paymentAccounts] = await Promise.all([
+        dataService.refreshGenericData('finance_chart_of_accounts'),
+        financePaymentAccountsApi.getAccounts(),
+      ]);
       if (!active) return;
       setAccountingRegime(regime);
       setChartAccounts(accounts);
+      setCashAccounts(paymentAccounts.data.accounts.filter(account => account.status === 'Đang hoạt động'));
     }).catch(() => { if (active) message.error('Không tải được chế độ kế toán và danh mục tài khoản cho khoản vay.'); });
     return () => { active = false; };
   }, []);
@@ -149,6 +160,16 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const refresh = () => {
+      const rows = dataService.getGenericData('finance_loan_events');
+      setLoanEvents(Array.isArray(rows) ? rows as FinanceLoanEvent[] : []);
+    };
+    void dataService.refreshGenericData('finance_loan_events').then(refresh).catch(() => message.error('Không tải được lịch sử giao dịch khoản vay.'));
+    const unsubscribe = dataService.subscribe(refresh);
+    return unsubscribe;
+  }, []);
+
   const visibleData = useMemo(() => {
     const query = searchText.trim().toLocaleLowerCase();
     return data.filter(loan => {
@@ -158,6 +179,62 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     });
   }, [data, routeDirection, searchText]);
   const totalPrincipal = visibleData.reduce((sum, loan) => sum + (Number(loan.principalAmount) || 0), 0);
+
+  const loanBalance = (loanKey: string) => loanEvents.filter(event => event.loanKey === loanKey).reduce((balance, event) => ({
+    principalDrawn: balance.principalDrawn + (event.eventType === 'disbursement' ? Number(event.principalAmount) || 0 : 0),
+    principalRepaid: balance.principalRepaid + (event.eventType === 'repayment' ? Number(event.principalAmount) || 0 : 0),
+  }), { principalDrawn: 0, principalRepaid: 0 });
+
+  const openLoanEvent = (loan: EnterpriseLoanItem, type: FinanceLoanEvent['eventType']) => {
+    setEventLoan(loan);
+    setEventType(type);
+    eventForm.resetFields();
+    eventForm.setFieldsValue({ eventDate: todayIso(), principalAmount: 0, interestAmount: 0, sourceAccountId: cashAccounts[0]?.key || '' });
+    setEventModalOpen(true);
+  };
+
+  const closeLoanEvent = () => {
+    setEventModalOpen(false);
+    setEventLoan(null);
+    eventForm.resetFields();
+  };
+
+  const handleLoanEvent = async (values: Record<string, any>) => {
+    if (!eventLoan || eventSaving) return;
+    const principalAmount = Number(values.principalAmount) || 0;
+    const interestAmount = eventType === 'repayment' ? Number(values.interestAmount) || 0 : 0;
+    if (!Number.isSafeInteger(principalAmount) || principalAmount < 0 || !Number.isSafeInteger(interestAmount) || interestAmount < 0 || principalAmount + interestAmount <= 0) {
+      message.error('Tiền gốc và lãi phải là số nguyên không âm, trong đó tổng giao dịch lớn hơn 0.');
+      return;
+    }
+    if (eventType === 'disbursement' && principalAmount <= 0) {
+      message.error('Số tiền giải ngân phải lớn hơn 0.');
+      return;
+    }
+    setEventSaving(true);
+    try {
+      const response = await financeLoanEventsApi.create(eventLoan.key, {
+        eventType,
+        eventDate: String(values.eventDate || ''),
+        principalAmount,
+        interestAmount,
+        reference: String(values.reference || '').trim(),
+        sourceAccountId: String(values.sourceAccountId || ''),
+        note: String(values.note || '').trim() || undefined,
+      });
+      await Promise.all([
+        dataService.refreshGenericData('finance_loan_events'),
+        dataService.refreshGenericData('finance_general_ledger'),
+        financePaymentAccountsApi.getAccounts().then(({ data: response }) => setCashAccounts(response.accounts.filter(account => account.status === 'Đang hoạt động'))),
+      ]);
+      message.success(`Đã ghi nhận ${eventType === 'disbursement' ? 'giải ngân' : 'thanh toán'} ${response.data.transaction.code} vào phiếu tiền và Sổ Cái.`);
+      closeLoanEvent();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể ghi nhận giao dịch khoản vay.');
+    } finally {
+      setEventSaving(false);
+    }
+  };
 
   const closeForm = () => {
     setModalOpen(false);
@@ -304,15 +381,22 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     { title: routeDirection === 'lend' ? 'Đối tượng vay' : 'Đối tượng cho vay', key: 'counterparty', render: (_: unknown, loan: EnterpriseLoanItem) => loanCounterparty(loan) },
     { title: 'Hợp đồng tín dụng', dataIndex: 'creditContract', key: 'creditContract' },
     { title: 'Giá trị khoản vay', dataIndex: 'principalAmount', key: 'principalAmount', width: 170, render: (value: number, loan: EnterpriseLoanItem) => <span>{money(value)} {loan.currency && loan.currency !== 'VND' ? `(${loan.currency})` : ''}</span> },
+    { title: 'Dư nợ gốc đã ghi nhận', key: 'outstanding', width: 190, render: (_: unknown, loan: EnterpriseLoanItem) => {
+      const events = loanEvents.filter(event => event.loanKey === loan.key);
+      if (!events.length) return 'Chưa đối chiếu';
+      const balance = loanBalance(loan.key);
+      return money(balance.principalDrawn - balance.principalRepaid);
+    } },
     { title: 'Lãi suất', key: 'interest', width: 130, render: (_: unknown, loan: EnterpriseLoanItem) => { const rate = loan.rates?.find(row => row.rate != null)?.rate ?? loan.interestRate; return rate == null ? '—' : `${rate}%`; } },
     { title: 'Ngày giải ngân', dataIndex: 'disbursedDate', key: 'disbursedDate', width: 130 },
     { title: 'Ngày đáo hạn', dataIndex: 'dueDate', key: 'dueDate', width: 130 },
-    { title: 'Thao tác', key: 'actions', width: 150, render: (_: unknown, loan: EnterpriseLoanItem) => <div style={{ display: 'flex', gap: 4 }}><Button size="small" aria-label="Xem khế ước" icon={<EyeOutlined />} onClick={() => { setSelectedLoan(loan); setDrawerOpen(true); }} /><Button size="small" aria-label="Sửa khế ước" icon={<EditOutlined />} onClick={() => openEdit(loan)} /></div> },
+    { title: 'Thao tác', key: 'actions', width: 150, render: (_: unknown, loan: EnterpriseLoanItem) => <div style={{ display: 'flex', gap: 4 }}><Button aria-label="Xem khế ước" icon={<EyeOutlined />} onClick={() => { setSelectedLoan(loan); setDrawerOpen(true); }} /><Button aria-label="Sửa khế ước" icon={<EditOutlined />} onClick={() => openEdit(loan)} /></div> },
   ];
 
   const directionLabel = routeDirection === 'lend' ? 'cho vay' : 'đi vay';
   const formDirection = draftDirection;
   const isLend = formDirection === 'lend';
+  const hasPostedLoanEvents = Boolean(editingLoan && loanEvents.some(event => event.loanKey === editingLoan.key));
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
@@ -350,19 +434,20 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         width="min(1120px, calc(100vw - 32px))"
       >
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
-          {routeDirection === 'all' && <Form.Item name="direction" label="Loại khế ước" rules={[{ required: true }]}><Select options={[{ label: 'Khế ước đi vay', value: 'borrow' }, { label: 'Khế ước cho vay', value: 'lend' }]} onChange={(value: LoanDirection) => { setDraftDirection(value); form.setFieldsValue({ principalAccount: '', interestAccount: '', disbursementMethod: value === 'borrow' ? 'Chuyển khoản vào tài khoản DN' : 'Chuyển khoản' }); }} /></Form.Item>}
+          {hasPostedLoanEvents && <Alert type="info" showIcon message="Khế ước đã có giao dịch ghi sổ. Loại vay, giá trị gốc, tài khoản hạch toán và ngày bắt đầu được khóa để bảo toàn liên kết." style={{ marginBottom: 14 }} />}
+          {routeDirection === 'all' && <Form.Item name="direction" label="Loại khế ước" rules={[{ required: true }]}><Select disabled={hasPostedLoanEvents} options={[{ label: 'Khế ước đi vay', value: 'borrow' }, { label: 'Khế ước cho vay', value: 'lend' }]} onChange={(value: LoanDirection) => { setDraftDirection(value); form.setFieldsValue({ principalAccount: '', interestAccount: '', disbursementMethod: value === 'borrow' ? 'Chuyển khoản vào tài khoản DN' : 'Chuyển khoản' }); }} /></Form.Item>}
           <strong>Thông tin giải ngân</strong>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
             <Form.Item name="contractCode" label="Số khế ước" rules={[{ required: true, whitespace: true }]}><Input maxLength={80} /></Form.Item>
             <Form.Item name="counterpartyName" label={isLend ? 'Đối tượng vay' : 'Đối tượng cho vay'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
             <Form.Item name="creditContract" label="Hợp đồng tín dụng"><Input /></Form.Item>
             <Form.Item name="purpose" label="Mục đích vay"><Input /></Form.Item>
-            <Form.Item name="principalAccount" label="Tài khoản hạch toán nợ gốc" rules={[{ required: true, whitespace: true }]}><Select showSearch optionFilterProp="label" options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Tài sản' : 'Nợ phải trả').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
-            <Form.Item name="interestAccount" label="Tài khoản hạch toán lãi" rules={[{ required: true, whitespace: true }]}><Select showSearch optionFilterProp="label" options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Doanh thu' : 'Chi phí').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
+            <Form.Item name="principalAccount" label="Tài khoản hạch toán nợ gốc" rules={[{ required: true, whitespace: true }]}><Select disabled={hasPostedLoanEvents} showSearch options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Tài sản' : 'Nợ phải trả').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
+            <Form.Item name="interestAccount" label="Tài khoản hạch toán lãi" rules={[{ required: true, whitespace: true }]}><Select disabled={hasPostedLoanEvents} showSearch options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Doanh thu' : 'Chi phí').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
             <Form.Item name="currency" label="Loại tiền" rules={[{ required: true }]}><Select options={[{ label: 'VND', value: 'VND' }]} /></Form.Item>
-            <Form.Item name="principalAmount" label="Giá trị khoản vay" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
+            <Form.Item name="principalAmount" label="Giá trị khoản vay" rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="number" min={1} step={1} /></Form.Item>
             <Form.Item name="termMonths" label="Thời hạn vay (tháng)" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
-            <Form.Item name="disbursedDate" label="Ngày giải ngân" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+            <Form.Item name="disbursedDate" label="Ngày giải ngân" rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="date" /></Form.Item>
             <Form.Item name="dueDate" label="Ngày đáo hạn" rules={[{ required: true }]}><Input type="date" /></Form.Item>
             <Form.Item name="disbursementMethod" label="Phương thức giải ngân" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
             <Form.Item name="beneficiaryAccount" label="TK thụ hưởng"><Input /></Form.Item>
@@ -420,6 +505,36 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         </Form>
       </Modal>
 
+      <Modal
+        title={`${eventType === 'disbursement' ? 'Ghi nhận giải ngân' : 'Ghi nhận trả hoặc thu nợ'}${eventLoan ? ` · ${eventLoan.contractCode}` : ''}`}
+        open={eventModalOpen}
+        onCancel={closeLoanEvent}
+        footer={[
+          <Button key="cancel" onClick={closeLoanEvent}>Hủy</Button>,
+          <Button key="save" type="primary" loading={eventSaving} onClick={() => eventForm.submit()}>Ghi nhận</Button>,
+        ]}
+        width="min(620px, calc(100vw - 32px))"
+      >
+        {eventLoan && <Form form={eventForm} layout="vertical" onFinish={handleLoanEvent} style={{ marginTop: 14 }}>
+          <Alert type="warning" showIcon message="Chỉ dùng khi giao dịch chưa có phiếu tiền hoặc bút toán tương ứng. Thao tác này tạo chứng từ tiền mới và ghi Sổ Cái; không dùng để đối chiếu lại giao dịch đã ghi nhận." />
+          <div style={{ marginTop: 14, color: '#475569' }}>
+            {eventType === 'disbursement'
+              ? `Gốc còn có thể giải ngân: ${money(Math.max(0, Number(eventLoan.principalAmount) - loanBalance(eventLoan.key).principalDrawn))}`
+              : `Gốc đã giải ngân còn lại: ${money(Math.max(0, loanBalance(eventLoan.key).principalDrawn - loanBalance(eventLoan.key).principalRepaid))}`}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', marginTop: 14 }}>
+            <Form.Item name="eventDate" label="Ngày giao dịch" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+            <Form.Item name="reference" label="Số chứng từ" rules={[{ required: true, whitespace: true }]}><Input maxLength={120} /></Form.Item>
+            <Form.Item name="sourceAccountId" label={eventType === 'disbursement' ? 'Tài khoản nhận tiền' : 'Tài khoản chi hoặc nhận tiền'} rules={[{ required: true }]}>
+              <Select options={cashAccounts.map(account => ({ value: account.key, label: `${account.name} · ${account.source === 'bank' ? 'Ngân hàng' : 'Tiền mặt'} · ${money(account.balance)}` }))} placeholder="Chọn tài khoản tiền" />
+            </Form.Item>
+            <Form.Item name="principalAmount" label={eventType === 'disbursement' ? 'Tiền gốc giải ngân' : 'Tiền gốc trả hoặc thu'} rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>
+            {eventType === 'repayment' && <Form.Item name="interestAmount" label={loanDirectionOf(eventLoan) === 'borrow' ? 'Tiền lãi đã trả' : 'Tiền lãi đã thu'} rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>}
+            <Form.Item name="note" label="Ghi chú"><Input maxLength={2000} /></Form.Item>
+          </div>
+        </Form>}
+      </Modal>
+
       <Drawer title="Chi tiết khế ước" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={560}>
         {selectedLoan && <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div><strong>{selectedLoan.contractCode}</strong> · {loanDirectionOf(selectedLoan) === 'borrow' ? 'Khế ước đi vay' : 'Khế ước cho vay'}</div>
@@ -431,6 +546,17 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           <div>Ngày giải ngân: {selectedLoan.disbursedDate} · Đáo hạn: {selectedLoan.dueDate}</div>
           <div>Phương thức giải ngân: {selectedLoan.disbursementMethod || '—'}</div>
           <div>TK nợ gốc: {selectedLoan.principalAccount || '—'} · TK lãi: {selectedLoan.interestAccount || '—'}</div>
+          <div>Đã giải ngân theo sổ: {loanEvents.some(event => event.loanKey === selectedLoan.key) ? money(loanBalance(selectedLoan.key).principalDrawn) : 'Chưa đối chiếu'}</div>
+          <div>Dư nợ gốc đã ghi nhận: {loanEvents.some(event => event.loanKey === selectedLoan.key) ? money(loanBalance(selectedLoan.key).principalDrawn - loanBalance(selectedLoan.key).principalRepaid) : 'Chưa đối chiếu'}</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button disabled={Number(selectedLoan.principalAmount) <= loanBalance(selectedLoan.key).principalDrawn || !cashAccounts.length} onClick={() => openLoanEvent(selectedLoan, 'disbursement')}>Ghi nhận giải ngân</Button>
+            <Button disabled={loanBalance(selectedLoan.key).principalDrawn <= 0 || !cashAccounts.length} onClick={() => openLoanEvent(selectedLoan, 'repayment')}>{loanDirectionOf(selectedLoan) === 'borrow' ? 'Ghi nhận trả nợ' : 'Ghi nhận thu nợ'}</Button>
+          </div>
+          <div style={{ color: '#475569' }}>Giao dịch khoản vay: {loanEvents.filter(event => event.loanKey === selectedLoan.key).length}</div>
+          {loanEvents.filter(event => event.loanKey === selectedLoan.key).sort((left, right) => right.eventDate.localeCompare(left.eventDate)).map(event => <div key={event.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <span>{event.eventDate} · {event.eventType === 'disbursement' ? 'Giải ngân' : 'Trả hoặc thu nợ'} · {event.reference} · {event.cashVoucherCode}</span>
+            <span>{money(Number(event.principalAmount) + Number(event.interestAmount))}</span>
+          </div>)}
           <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(selectedLoan); }}>Sửa khế ước</Button>
         </div>}
       </Drawer>

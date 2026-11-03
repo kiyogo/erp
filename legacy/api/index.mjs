@@ -2175,7 +2175,7 @@ async function canReadTaskReportAttachment(actor, fileId) {
 const accountingOperationScopes = new Set([
   'finance_advances', 'finance_cash_transactions', 'finance_cash_counts', 'finance_costing', 'finance_einvoices', 'finance_equity',
   'finance_fixed_assets', 'finance_general_ledger', 'finance_internal_transfers', 'finance_inventory',
-  'finance_inventory_transactions', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
+  'finance_inventory_transactions', 'finance_loan_events', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
   'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts',
 ]);
 
@@ -2186,6 +2186,9 @@ async function requireCollectionActor(request, scope) {
   }
   if (scope === 'finance_general_ledger' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Sổ Cái chỉ được ghi qua API hạch toán có kiểm tra cân đối và kỳ kế toán.');
+  }
+  if (scope === 'finance_loan_events' && !['GET', 'HEAD'].includes(request.method)) {
+    throw new HttpError(409, 'Giao dịch khoản vay chỉ được ghi qua API có liên kết phiếu tiền và Sổ Cái.');
   }
   if (scope === 'finance_chart_of_accounts' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Danh mục tài khoản chỉ được thay đổi qua API có kiểm tra cấu trúc và bút toán đã ghi sổ.');
@@ -2246,7 +2249,7 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'asset_todos' && actor.role !== 'ADMIN' && ['POST', 'DELETE'].includes(request.method)) throw new HttpError(403, 'Nhân viên chỉ được cập nhật nhiệm vụ tài sản được giao.');
   if (scope === 'attendance_explanations' && request.method === 'PUT') throw new HttpError(405, 'Giải trình phải được gửi và xử lý theo từng bản ghi để giữ lịch sử duyệt.');
   if (scope === 'attendance_explanations' && request.method === 'DELETE' && actor.role === 'ADMIN') throw new HttpError(409, 'Giải trình được lưu để bảo toàn lịch sử xử lý.');
-  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings', 'finance_inventory_locations'].includes(scope)) {
+  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings', 'finance_inventory_locations', 'finance_loans', 'finance_loan_events'].includes(scope)) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
   return actor;
@@ -2277,6 +2280,13 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   }
   if (scope === 'finance_loans') {
     const profile = await requireAccountingProfile();
+    if (current) {
+      const postedEvents = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(current.key);
+      const protectedFields = ['direction', 'principalAmount', 'principalAccount', 'interestAccount', 'disbursedDate'];
+      if (postedEvents && protectedFields.some(field => String(record[field] ?? '') !== String(current[field] ?? ''))) {
+        throw new HttpError(409, 'Không thể đổi loại khế ước, số tiền gốc, tài khoản hạch toán hoặc ngày bắt đầu sau khi đã ghi giao dịch.');
+      }
+    }
     record.direction = oneOf(record.direction || (record.loanType === 'Khế ước cho vay' ? 'lend' : 'borrow'), 'Loại khế ước', ['borrow', 'lend']);
     record.contractCode = requiredText(record.contractCode, 'Số khế ước', 80);
     const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loans' AND LOWER(json_extract(payload_json, '$.contractCode')) = LOWER(?) AND record_key <> ? LIMIT 1")
@@ -8427,6 +8437,7 @@ async function handleRequest(request, response) {
       }
       await db.transaction(async () => {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        if (scope === 'finance_loans' && db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${recordKey}`]);
         if (scope === 'asset_disposals' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         if (scope === 'asset_maintenances' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
@@ -8536,8 +8547,12 @@ async function handleRequest(request, response) {
       const deletedAt = now();
       await db.transaction(async () => {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
+        if (scope === 'finance_loans' && db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${recordKey}`]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        if (scope === 'finance_loans' && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(fresh.record_key)) {
+          throw new HttpError(409, 'Khế ước đã có giao dịch tiền và Sổ Cái, không thể xóa để bảo toàn lịch sử đối chiếu.');
+        }
         if (scope === 'payroll') {
           const payroll = publicCollectionRecord(fresh);
           const period = payrollMonth(payroll?.month);
@@ -9588,6 +9603,163 @@ async function handleRequest(request, response) {
     return;
   }
 
+  const loanEventMatch = /^\/finance\/loans\/([^/]+)\/events$/.exec(resource);
+  if (request.method === 'POST' && loanEventMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const loanKey = decodeURIComponent(loanEventMatch[1]);
+    const loanRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_loans' AND record_key = ?").get(loanKey);
+    if (!loanRow) throw new HttpError(404, 'Không tìm thấy khế ước vay.');
+    const loan = publicCollectionRecord(loanRow);
+    if (loan.accountingRegime !== profile.accountingRegime) throw new HttpError(409, 'Chế độ kế toán của khế ước không khớp hồ sơ doanh nghiệp hiện tại.');
+
+    const input = await readJson(request);
+    const eventType = oneOf(input.eventType, 'Nghiệp vụ khoản vay', ['disbursement', 'repayment']);
+    const parseEventAmount = (value, label) => {
+      const amount = value === undefined || value === null || value === '' ? 0 : Number(value);
+      if (!Number.isSafeInteger(amount) || amount < 0) throw new HttpError(422, `${label} phải là số nguyên không âm.`);
+      return amount;
+    };
+    const principalAmount = parseEventAmount(input.principalAmount, 'Tiền gốc');
+    const interestAmount = parseEventAmount(input.interestAmount, 'Tiền lãi');
+    if (principalAmount + interestAmount <= 0) throw new HttpError(422, 'Giao dịch phải có tiền gốc hoặc tiền lãi lớn hơn 0.');
+    if (eventType === 'disbursement' && (principalAmount <= 0 || interestAmount !== 0)) {
+      throw new HttpError(422, 'Giải ngân chỉ ghi nhận số tiền gốc lớn hơn 0; không nhập tiền lãi.');
+    }
+    const eventDate = requiredIsoDate(input.eventDate, 'Ngày giao dịch');
+    if (eventDate < loan.disbursedDate) throw new HttpError(422, 'Ngày giao dịch không được trước ngày bắt đầu khế ước.');
+    if (eventType === 'disbursement' && eventDate > loan.dueDate) throw new HttpError(422, 'Không thể ghi giải ngân sau ngày đáo hạn khế ước.');
+    const reference = requiredText(input.reference, 'Số chứng từ', 120);
+    const sourceAccountId = requiredText(input.sourceAccountId, 'Tài khoản tiền', 160);
+    const sourceAccount = (await internalTransferAccounts()).find(item => item.key === sourceAccountId);
+    if (!sourceAccount || sourceAccount.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản tiền không tồn tại hoặc đã ngừng hoạt động.');
+    const isBorrow = loan.direction === 'borrow';
+    const isReceipt = eventType === 'disbursement' ? isBorrow : !isBorrow;
+    const transactionType = isReceipt ? 'Thu' : 'Chi';
+    const cashAccount = sourceAccount.source === 'petty' ? '111' : '112';
+    const principalAccount = String(loan.principalAccount || '').replace(/^TK\s*/i, '').replace(/\s+/g, '');
+    const interestAccount = String(loan.interestAccount || '').replace(/^TK\s*/i, '').replace(/\s+/g, '');
+    const chartRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+    const chart = chartRows.map(row => parseJsonObject(row.payload_json)).filter(account => account.accountingRegime === profile.accountingRegime);
+    const expectedPrincipalType = isBorrow ? 'Nợ phải trả' : 'Tài sản';
+    const expectedInterestType = isBorrow ? 'Chi phí' : 'Doanh thu';
+    for (const [code, expectedType, label] of [[principalAccount, expectedPrincipalType, 'Tài khoản nợ gốc'], [interestAccount, expectedInterestType, 'Tài khoản lãi']]) {
+      const account = chart.find(item => String(item.code || '').replace(/\s+/g, '').toUpperCase() === code.toUpperCase());
+      if (!account || account.status !== 'Đang sử dụng' || account.accountType !== expectedType || chart.some(item => item.parentCode === account.code)) {
+        throw new HttpError(422, `${label} không còn là tài khoản chi tiết đang hoạt động thuộc nhóm ${expectedType}.`);
+      }
+    }
+    const lines = [];
+    const addLine = (description, debitAccount, creditAccount, amount) => {
+      if (amount > 0) lines.push({ description, debitAccount, creditAccount, amount });
+    };
+    if (eventType === 'disbursement') {
+      addLine('Giải ngân gốc khế ước ' + loan.contractCode, isBorrow ? cashAccount : principalAccount, isBorrow ? principalAccount : cashAccount, principalAmount);
+    } else if (isBorrow) {
+      addLine('Thanh toán gốc khế ước ' + loan.contractCode, principalAccount, cashAccount, principalAmount);
+      addLine('Thanh toán lãi khế ước ' + loan.contractCode, interestAccount, cashAccount, interestAmount);
+    } else {
+      addLine('Thu hồi gốc khế ước ' + loan.contractCode, cashAccount, principalAccount, principalAmount);
+      addLine('Thu lãi khế ước ' + loan.contractCode, cashAccount, interestAccount, interestAmount);
+    }
+    const transaction = await resolveCashTransactionLinks(validateCashTransaction({
+      type: transactionType,
+      source: sourceAccount.source,
+      category: eventType === 'disbursement' ? 'Giải ngân khoản vay' : 'Thu hoặc trả nợ vay',
+      amount: principalAmount + interestAmount,
+      date: eventDate,
+      voucherDate: input.voucherDate || eventDate,
+      reference,
+      recipientOrPayer: loan.counterpartyName,
+      account: sourceAccount.name,
+      status: 'Đã hoàn thành',
+      note: optionalText(input.note, 'Ghi chú', 2_000),
+      sourceAccountId,
+      counterpartyType: 'other',
+      sourceDocument: `Khế ước ${loan.contractCode}`,
+      journalLines: lines,
+    }));
+    await validateLedgerAccountLines(profile, transaction.journalLines);
+    await requireSecurityPin(request, actor);
+    transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
+    const cashTransactionId = randomUUID();
+    const eventKey = randomUUID();
+    const timestamp = now();
+    let eventRecord;
+    let balance;
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+        await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${loanKey}`]);
+      }
+      const currentLoanRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_loans' AND record_key = ?").get(loanKey);
+      if (!currentLoanRow) throw new HttpError(409, 'Khế ước đã bị xóa hoặc thay đổi; hãy tải lại trước khi ghi giao dịch.');
+      const currentLoan = publicCollectionRecord(currentLoanRow);
+      const protectedFields = ['direction', 'principalAmount', 'principalAccount', 'interestAccount', 'disbursedDate', 'dueDate'];
+      if (protectedFields.some(field => String(currentLoan[field] ?? '') !== String(loan[field] ?? ''))) {
+        throw new HttpError(409, 'Thông tin tài chính của khế ước vừa thay đổi; hãy tải lại trước khi ghi giao dịch.');
+      }
+      const duplicate = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ?
+        AND lower(json_extract(payload_json, '$.reference')) = lower(?) LIMIT 1`).get(loanKey, reference);
+      if (duplicate) throw new HttpError(409, 'Số chứng từ này đã được dùng cho khế ước.');
+      const priorRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ?").all(loanKey);
+      const priorEvents = priorRows.map(row => parseJsonObject(row.payload_json));
+      const principalDrawn = priorEvents.filter(item => item.eventType === 'disbursement').reduce((sum, item) => sum + Number(item.principalAmount || 0), 0);
+      const principalRepaid = priorEvents.filter(item => item.eventType === 'repayment').reduce((sum, item) => sum + Number(item.principalAmount || 0), 0);
+      if (eventType === 'disbursement' && principalDrawn + principalAmount > Number(loan.principalAmount)) {
+        throw new HttpError(422, 'Tổng giải ngân vượt giá trị gốc của khế ước.');
+      }
+      if (eventType === 'repayment' && principalRepaid + principalAmount > principalDrawn) {
+        throw new HttpError(422, 'Tiền gốc trả hoặc thu vượt số dư gốc đã giải ngân.');
+      }
+      await db.prepare(`INSERT INTO finance_cash_transactions (
+        id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+        account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
+        counterparty_contact_id, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, '[]', ?, ?, ?, '', '', '', 0, ?, '', '', ?, 'other', NULL, ?, ?, ?)`)
+        .run(cashTransactionId, transaction.code, transaction.type, transaction.source, transaction.category,
+          transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
+          transaction.note, JSON.stringify(transaction.journalLines), transaction.voucherDate, transaction.currency,
+          transaction.reference, transaction.sourceDocument, transaction.sourceAccountId, actor.id, timestamp, timestamp);
+      await postCashTransactionToLedger(transaction, cashTransactionId, actor, profile);
+      eventRecord = {
+        key: eventKey,
+        loanKey,
+        contractCode: loan.contractCode,
+        accountingRegime: profile.accountingRegime,
+        direction: loan.direction,
+        eventType,
+        eventDate,
+        principalAmount,
+        interestAmount,
+        reference,
+        sourceAccountId: sourceAccount.key,
+        sourceAccountName: sourceAccount.name,
+        cashTransactionId,
+        cashVoucherCode: transaction.code,
+        createdBy: actor.name,
+        createdAt: timestamp,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_loan_events', ?, ?, ?, ?, ?)`)
+        .run(randomUUID(), eventKey, actor.id, JSON.stringify(eventRecord), timestamp, timestamp);
+      await recordAuditEvent(actor.id, eventType === 'disbursement' ? 'disburse_loan' : 'settle_loan', 'finance_loan_events', eventKey, {
+        loanKey, reference, principalAmount, interestAmount, cashTransactionId,
+      });
+      balance = {
+        principalDrawn: principalDrawn + (eventType === 'disbursement' ? principalAmount : 0),
+        principalRepaid: principalRepaid + (eventType === 'repayment' ? principalAmount : 0),
+        outstandingPrincipal: principalDrawn + (eventType === 'disbursement' ? principalAmount : 0)
+          - principalRepaid - (eventType === 'repayment' ? principalAmount : 0),
+      };
+    });
+    const postedTransaction = publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(cashTransactionId));
+    sendJson(response, 201, { event: eventRecord, transaction: postedTransaction, balance });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/finance/cash-transactions') {
     await requireAdmin(request);
     const source = url.searchParams.get('source');
@@ -9668,6 +9840,8 @@ async function handleRequest(request, response) {
     const id = decodeURIComponent(cashTransactionMatch[1]);
     const current = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id);
     if (!current) throw new HttpError(404, 'Không tìm thấy chứng từ thu chi.');
+    const loanEvent = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.cashTransactionId') = ? LIMIT 1").get(id);
+    if (loanEvent) throw new HttpError(409, 'Phiếu tiền thuộc giao dịch khoản vay đã ghi sổ; cần xử lý điều chỉnh theo chứng từ vay để giữ đồng bộ dư nợ.');
     if (/^TRF-[0-9a-f-]+-(OUT|IN|FEE)$/i.test(current.code)) {
       throw new HttpError(409, 'Chứng từ thuộc lệnh điều chuyển. Hãy hủy cả lệnh để bảo toàn hai bên sổ quỹ.');
     }

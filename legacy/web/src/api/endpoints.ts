@@ -502,6 +502,29 @@ export type UpdateFinanceCashTransaction = Partial<Omit<CreateFinanceCashTransac
 
 export type FinancePaymentAccount = { key: string; name: string; source: 'bank' | 'petty'; balance: number; status: string };
 
+export type FinanceLoanEvent = {
+  key: string;
+  loanKey: string;
+  contractCode: string;
+  accountingRegime: string;
+  direction: 'borrow' | 'lend';
+  eventType: 'disbursement' | 'repayment';
+  eventDate: string;
+  principalAmount: number;
+  interestAmount: number;
+  reference: string;
+  sourceAccountId: string;
+  sourceAccountName: string;
+  cashTransactionId: string;
+  cashVoucherCode: string;
+  createdBy: string;
+  createdAt: string;
+};
+
+export const financeLoanEventsApi = {
+  create: (loanKey: string, data: { eventType: FinanceLoanEvent['eventType']; eventDate: string; principalAmount: number; interestAmount: number; reference: string; sourceAccountId: string; note?: string }) => api.post<{ event: FinanceLoanEvent; transaction: FinanceCashTransaction; balance: { principalDrawn: number; principalRepaid: number; outstandingPrincipal: number } }>(`/finance/loans/${encodeURIComponent(loanKey)}/events`, data),
+};
+
 export const financeCashApi = {
   getAll: (source?: FinanceCashTransaction['source']) => api.get<{ data: FinanceCashTransaction[] }>('/finance/cash-transactions', { params: source ? { source } : undefined }),
   getCategories: (type: FinanceCashTransaction['type']) => api.get<{ data: string[] }>('/finance/cash-categories', { params: { type } }),

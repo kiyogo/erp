@@ -329,6 +329,40 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/finance/chart-of-accounts', 'POST', { record: { code: '21101', name: 'Mã sai cấp', parentCode: '111', accountType: 'Tài sản', effectiveDate: '2026-01-01' } }, 422);
   await request('/auth/security-pin', 'POST', { pin: '246810', confirmPin: '246810', currentPassword: env.SEED_ADMIN_PASSWORD }, 200);
   headers['X-Security-Pin'] = '246810';
+  const loanDisbursement = (await request('/finance/loans/loan-draft-1/events', 'POST', {
+    eventType: 'disbursement', eventDate: '2026-10-10', principalAmount: 100000, interestAmount: 0,
+    reference: 'UNC-LOAN-001', sourceAccountId: bank.key,
+  }, 201));
+  assert.deepEqual(loanDisbursement.balance, { principalDrawn: 100000, principalRepaid: 0, outstandingPrincipal: 100000 });
+  assert.equal(loanDisbursement.transaction.type, 'Thu');
+  assert.deepEqual(loanDisbursement.transaction.journalLines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [['112', '3411', 100000]]);
+  await request(`/finance/cash-transactions/${loanDisbursement.event.cashTransactionId}`, 'PATCH', { status: 'Đã hủy' }, 409);
+  await request('/finance/loans/loan-draft-1/events', 'POST', {
+    eventType: 'disbursement', eventDate: '2026-10-10', principalAmount: 100000, interestAmount: 0,
+    reference: 'unc-loan-001', sourceAccountId: bank.key,
+  }, 409);
+  await request('/finance/loans/loan-draft-1/events', 'POST', {
+    eventType: 'disbursement', eventDate: '2026-10-10', principalAmount: 1, interestAmount: 0,
+    reference: 'UNC-LOAN-002', sourceAccountId: bank.key,
+  }, 422);
+  await request('/finance/loans/loan-draft-1/events', 'POST', {
+    eventType: 'repayment', eventDate: '2026-10-11', principalAmount: 100001, interestAmount: 0,
+    reference: 'UNC-LOAN-003', sourceAccountId: bank.key,
+  }, 422);
+  const loanRepayment = await request('/finance/loans/loan-draft-1/events', 'POST', {
+    eventType: 'repayment', eventDate: '2026-10-11', principalAmount: 15000, interestAmount: 1250,
+    reference: 'UNC-LOAN-004', sourceAccountId: bank.key,
+  }, 201);
+  assert.deepEqual(loanRepayment.balance, { principalDrawn: 100000, principalRepaid: 15000, outstandingPrincipal: 85000 });
+  assert.equal(loanRepayment.transaction.amount, 16250);
+  assert.deepEqual(loanRepayment.transaction.journalLines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [['3411', '112', 15000], ['635', '112', 1250]]);
+  const loanLedger = (await request('/collections/finance_general_ledger')).data.filter((entry) => [loanDisbursement.event.cashTransactionId, loanRepayment.event.cashTransactionId].some(id => entry.sourceReference === `cash-voucher:${id}`));
+  assert.equal(loanLedger.length, 3, 'loan cash vouchers should create balanced, linked ledger lines');
+  await request(`/collections/finance_loan_events/${loanDisbursement.event.key}`, 'DELETE', undefined, 409);
+  await request('/collections/finance_loans/loan-draft-1', 'PATCH', { patch: { principalAmount: 90000 } }, 409);
+  await request('/collections/finance_loans/loan-draft-1', 'DELETE', undefined, 409);
+  await request('/collections/finance_loans', 'PUT', { records: [] }, 405);
+  await request('/collections/finance_loan_events', 'POST', { record: { key: 'bypass-loan-event' } }, 409);
   await request('/collections/payroll', 'POST', { record: {
     key: 'tt99-payroll-ledger', employeeCode: 'TT99-PAY-1', employeeName: 'Nhân viên kiểm thử', month: '2032-09', status: 'Chưa chi trả',
     baseSalary: 1000, allowance: 0, bonus: 0, insuranceDeduction: 100, taxDeduction: 0, netSalary: 900,
@@ -387,7 +421,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   }, 422);
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'SALE-Q4-1', entryDate: '2026-10-10', description: 'Trùng', debitAccount: 'TK 131', creditAccount: 'TK 511', amount: 1000 }, 409);
   const closeResult = await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 201);
-  assert.equal(closeResult.entries, 5);
+  assert.equal(closeResult.entries, 6, 'posted loan interest expense must be included in the period close');
   assert.ok(closeResult.records.every(record => record.status === 'Đã ghi sổ cái'));
   await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 409);
   await request('/collections/finance_general_ledger', 'PUT', { records: [] }, 409);
