@@ -276,14 +276,41 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(invoiceDraft.cqtCode, undefined);
   await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-invalid', invoiceNumber: 'DRAFT-INVALID', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: '20%' } }, 422);
   await request('/collections/finance_chart_of_accounts', 'POST', { record: { key: 'bypass-chart' } }, 409);
+  const existingCash = (await request('/finance/chart-of-accounts', 'POST', { record: {
+    code: '111', name: 'Tiền mặt', accountType: 'Tài sản', balanceNature: 'Chưa xác định', effectiveDate: '2026-01-01',
+    status: 'Đang sử dụng', tracksParty: true,
+  } }, 201)).record;
+  await request('/finance/chart-of-accounts', 'POST', { record: {
+    code: '112', name: 'Tên tùy chỉnh xung đột', accountType: 'Tài sản', balanceNature: 'Chưa xác định', effectiveDate: '2026-01-01',
+  } }, 201);
+  await request('/finance/chart-of-accounts/templates/import', 'POST', {}, 409);
+  assert.equal((await request('/collections/finance_chart_of_accounts?limit=500')).data.length, 2, 'a template conflict must not leave a partial import');
+  await request('/finance/chart-of-accounts/112', 'DELETE', undefined, 200);
+  const parallelImports = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/chart-of-accounts/templates/import`, {
+      method: 'POST', headers, body: JSON.stringify({}),
+    });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(parallelImports.map((result) => result.status).sort(), [200, 201]);
+  const importedChart = parallelImports.find((result) => result.status === 201).body;
+  assert.equal(importedChart.template.name, 'Thông tư 99/2025/TT-BTC');
+  assert.equal(importedChart.createdCount, 183);
+  assert.equal(importedChart.skippedCount, 1);
+  const repeatedChartImport = parallelImports.find((result) => result.status === 200).body;
+  assert.equal(repeatedChartImport.createdCount, 0);
+  assert.equal(repeatedChartImport.skippedCount, 184);
+  const fullChart = (await request('/collections/finance_chart_of_accounts?limit=500')).data;
+  assert.equal(fullChart.length, 184);
+  assert.equal(fullChart.find((account) => account.code === '111').key, existingCash.key);
+  assert.equal(fullChart.find((account) => account.code === '111').tracksParty, true, 'a matching manual account must not be overwritten');
   const addAccount = (code, accountType, parentCode = '', status = 'Đang sử dụng') => request('/finance/chart-of-accounts', 'POST', { record: {
     code, name: `Tài khoản ${code}`, parentCode, accountType, balanceNature: 'Chưa xác định',
     effectiveDate: '2026-01-01', status, tracksParty: false,
     tracksForeignCurrency: false, tracksDebt: false, tracksDetails: false,
   } }, 201);
-  await addAccount('111', 'Tài sản');
   await addAccount('1111', 'Tài sản', '111');
-  for (const [code, type] of [['112', 'Tài sản'], ['131', 'Tài sản'], ['511', 'Doanh thu'], ['641', 'Chi phí'], ['642', 'Chi phí'], ['911', 'Xác định kết quả'], ['4212', 'Vốn chủ sở hữu'], ['999', 'Tài sản']]) await addAccount(code, type, '', code === '999' ? 'Ngừng sử dụng' : 'Đang sử dụng');
+  await addAccount('999', 'Tài sản', '', 'Ngừng sử dụng');
   await request('/finance/chart-of-accounts', 'POST', { record: { code: '21101', name: 'Mã sai cấp', parentCode: '111', accountType: 'Tài sản', effectiveDate: '2026-01-01' } }, 422);
   await request('/auth/security-pin', 'POST', { pin: '246810', confirmPin: '246810', currentPassword: env.SEED_ADMIN_PASSWORD }, 200);
   headers['X-Security-Pin'] = '246810';
@@ -304,11 +331,11 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'GROUP-ACCOUNT', entryDate: '2026-10-10', description: 'Tài khoản tổng hợp', debitAccount: 'TK 111', creditAccount: 'TK 112', amount: 100 }, 422);
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'INACTIVE-ACCOUNT', entryDate: '2026-10-10', description: 'Tài khoản ngừng', debitAccount: 'TK 999', creditAccount: 'TK 112', amount: 100 }, 422);
   await journalEntry('SALE-Q4-1', 'TK 131', 'TK 511', 1000);
-  await journalEntry('EXPENSE-Q4-1', 'TK 642', 'TK 112', 400);
+  await journalEntry('EXPENSE-Q4-1', 'TK 6428', 'TK 112', 400);
   const multiLineJournal = (await request('/finance/general-ledger/entries', 'POST', {
     voucherCode: 'EXPENSE-Q4-MULTI', entryDate: '2026-10-11', description: 'Bút toán nhiều tài khoản', lines: [
-      { account: 'TK 641', debit: 200, credit: 0 },
-      { account: 'TK 642', debit: 100, credit: 0 },
+      { account: 'TK 6418', debit: 200, credit: 0 },
+      { account: 'TK 6428', debit: 100, credit: 0 },
       { account: 'TK 112', debit: 0, credit: 300 },
     ],
   }, 201)).record;
@@ -317,7 +344,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(multiLineJournal.lines.reduce((sum, line) => sum + line.debit, 0), multiLineJournal.lines.reduce((sum, line) => sum + line.credit, 0));
   await request('/finance/general-ledger/entries', 'POST', {
     voucherCode: 'EXPENSE-Q4-UNBALANCED', entryDate: '2026-10-11', description: 'Bút toán mất cân', lines: [
-      { account: 'TK 641', debit: 200, credit: 0 }, { account: 'TK 112', debit: 0, credit: 199 },
+      { account: 'TK 6418', debit: 200, credit: 0 }, { account: 'TK 112', debit: 0, credit: 199 },
     ],
   }, 422);
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'SALE-Q4-1', entryDate: '2026-10-10', description: 'Trùng', debitAccount: 'TK 131', creditAccount: 'TK 511', amount: 1000 }, 409);
@@ -338,6 +365,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   const staffLogin = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'staff@example.test', password: 'Operations-Test-26!Safe' }) });
   const staff = await staffLogin.json();
   for (const method of ['GET', 'PUT']) assert.equal((await fetch(`${base}/system/company-profile`, { method, headers: { Authorization: `Bearer ${staff.access_token}`, 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify(second) : undefined })).status, 403);
+  assert.equal((await fetch(`${base}/finance/chart-of-accounts/templates/import`, { method: 'POST', headers: { Authorization: `Bearer ${staff.access_token}`, 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
 });
 
 test('SMTP configuration keeps credentials encrypted, supports updates without revealing the saved password and reports failed delivery', async () => {

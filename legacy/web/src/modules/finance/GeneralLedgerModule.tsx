@@ -113,6 +113,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [chartForm] = Form.useForm();
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [chartSaving, setChartSaving] = useState(false);
+  const [chartImporting, setChartImporting] = useState(false);
   const [editingAccount, setEditingAccount] = useState<ChartAccount | null>(null);
   const activeChart = chartData.filter((account) => account.accountingRegime === accountingRegime);
 
@@ -132,6 +133,30 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       setChartSaving(false);
     }
   };
+
+  const importChartTemplate = () => Modal.confirm({
+    title: 'Nạp mẫu tài khoản TT99',
+    content: (
+      <div>
+        <div>Chỉ thêm các tài khoản còn thiếu theo Phụ lục II Thông tư 99/2025/TT-BTC, áp dụng cho năm tài chính bắt đầu từ hoặc sau ngày 01/01/2026. Tài khoản đã có sẽ được giữ nguyên; nếu mã trùng nhưng thông tin khác, toàn bộ thao tác sẽ bị từ chối.</div>
+        <a href="https://congbao.chinhphu.vn/van-ban/thong-tu-so-99-2025-tt-btc-46529/59643.htm" target="_blank" rel="noreferrer">Xem văn bản tại Công báo Chính phủ</a>
+      </div>
+    ),
+    okText: 'Nạp mẫu',
+    cancelText: 'Hủy',
+    onOk: async () => {
+      try {
+        setChartImporting(true);
+        const { data: result } = await chartOfAccountsApi.importTemplate();
+        await dataService.refreshGenericData('finance_chart_of_accounts');
+        message.success(`Đã thêm ${result.createdCount} tài khoản; giữ nguyên ${result.skippedCount} tài khoản đã có.`);
+      } catch (error: any) {
+        message.error(error?.response?.data?.message || 'Không thể nạp mẫu tài khoản.');
+      } finally {
+        setChartImporting(false);
+      }
+    },
+  });
 
   const deleteChartAccount = (account: ChartAccount) => Modal.confirm({
     title: 'Xóa tài khoản',
@@ -563,6 +588,11 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         {accountingRegime === 'TT58' && (
           <div style={{ color: '#64748B', marginBottom: 14 }}>
             Thông tư 58/2026/TT-BTC hướng dẫn ghi sổ theo mẫu dành cho doanh nghiệp siêu nhỏ. Danh mục tài khoản tại đây chỉ phục vụ theo dõi nội bộ; sổ mẫu và quy trình chuyển đổi số dư theo Thông tư 58 chưa được triển khai trong phân hệ này.
+          </div>
+        )}
+        {accountingRegime === 'TT99' && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <Button icon={<FileSyncOutlined />} loading={chartImporting} onClick={importChartTemplate}>Nạp mẫu TT99</Button>
           </div>
         )}
         <Form form={chartForm} layout="vertical" onFinish={saveChartAccount} style={{ marginTop: 14 }}>

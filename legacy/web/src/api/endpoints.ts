@@ -1068,6 +1068,7 @@ export const generalLedgerApi = {
 };
 
 export const chartOfAccountsApi = {
+  importTemplate: () => api.post<{ template: { name: string; source: string; sourceUrl: string }; createdCount: number; skippedCount: number }>('/finance/chart-of-accounts/templates/import', {}),
   create: (record: Record<string, unknown>) => api.post<{ record: Record<string, any> }>('/finance/chart-of-accounts', { record }),
   update: (key: string, patch: Record<string, unknown>) => api.patch<{ record: Record<string, any> }>(`/finance/chart-of-accounts/${encodeURIComponent(key)}`, { patch }),
   remove: (key: string) => api.delete<{ deleted: boolean }>(`/finance/chart-of-accounts/${encodeURIComponent(key)}`),

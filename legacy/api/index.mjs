@@ -14,6 +14,7 @@ import logger from './logger.mjs';
 import { createBackupManager } from './backups.mjs';
 import { createDocxFromText } from './document-files.mjs';
 import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
+import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -4945,6 +4946,71 @@ async function validateLedgerAccountLines(profile, lines) {
   }
 }
 
+async function importChartOfAccountsTemplate(profile, actor) {
+  const template = getChartOfAccountsTemplate(profile.accountingRegime);
+  if (!template) throw new HttpError(422, 'Chưa có mẫu tài khoản đã đối chiếu cho chế độ kế toán đang áp dụng.');
+  const timestamp = now();
+  let result;
+  await db.transaction(async () => {
+    if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', ['finance_chart_of_accounts']);
+    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+    const current = rows.map(publicCollectionRecord).filter((item) => item?.accountingRegime === profile.accountingRegime);
+    const byCode = new Map();
+    for (const account of current) {
+      const code = String(account.code || '').toUpperCase();
+      if (!byCode.has(code)) byCode.set(code, []);
+      byCode.get(code).push(account);
+    }
+    const levels = new Map();
+    const prepared = [...template.accounts].sort((left, right) => left.code.length - right.code.length || left.code.localeCompare(right.code, 'vi', { numeric: true })).map((source) => {
+      const accountType = chartAccountType(source.code);
+      if (!accountType || !/^\d{3,6}$/.test(source.code) || !source.name || (source.parentCode && !levels.has(source.parentCode))) {
+        throw new HttpError(500, `Mẫu ${template.name} có cấu trúc tài khoản không hợp lệ tại mã ${source.code}.`);
+      }
+      const level = source.parentCode ? levels.get(source.parentCode) + 1 : 1;
+      levels.set(source.code, level);
+      return { ...source, accountType, level };
+    });
+    const conflicts = [];
+    let skippedCount = 0;
+    const missing = [];
+    for (const source of prepared) {
+      const matches = byCode.get(source.code.toUpperCase()) || [];
+      if (!matches.length) {
+        missing.push(source);
+        continue;
+      }
+      const consistent = matches.length === 1 && matches[0].name === source.name
+        && String(matches[0].parentCode || '') === source.parentCode
+        && matches[0].accountType === source.accountType;
+      if (!consistent) conflicts.push(source.code);
+      else skippedCount += 1;
+    }
+    if (conflicts.length) throw new HttpError(409, `Mẫu tài khoản bị dừng vì mã đã tồn tại với thông tin khác: ${conflicts.slice(0, 10).join(', ')}.`);
+    for (const source of missing) {
+      const record = {
+        key: randomUUID(), code: source.code, name: source.name, parentCode: source.parentCode,
+        level: source.level, accountType: source.accountType, balanceNature: 'Chưa xác định',
+        tracksParty: false, tracksForeignCurrency: false, tracksDebt: false, tracksDetails: false,
+        effectiveDate: template.effectiveDate, status: 'Đang sử dụng', accountingRegime: profile.accountingRegime,
+        templateSource: `${template.name}, ${template.source}`, createdAt: timestamp, updatedAt: timestamp,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_chart_of_accounts', ?, ?, ?, ?, ?)`)
+        .run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
+    }
+    await recordAuditEvent(actor.id, 'import_template', 'finance_chart_of_accounts', profile.accountingRegime, {
+      template: template.name, source: template.source, createdCount: missing.length, skippedCount,
+    });
+    result = {
+      template: { name: template.name, source: template.source, sourceUrl: template.sourceUrl },
+      createdCount: missing.length,
+      skippedCount,
+    };
+  });
+  return result;
+}
+
 async function postCashTransactionToLedger(transaction, id, actor, profile) {
   if (!Array.isArray(transaction.journalLines) || transaction.journalLines.length === 0) {
     throw new HttpError(422, 'Phiếu phải có ít nhất một dòng hạch toán trước khi ghi sổ.');
@@ -7632,73 +7698,84 @@ async function handleRequest(request, response) {
     if (backupMatch[2] === 'restore' && request.method === 'POST') throw new HttpError(409, 'Khôi phục tự động chưa được hỗ trợ. Hãy kiểm tra bản sao lưu và lập kế hoạch khôi phục ngoại tuyến.');
   }
 
+  if (request.method === 'POST' && resource === '/finance/chart-of-accounts/templates/import') {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const result = await importChartOfAccountsTemplate(profile, actor);
+    sendJson(response, result.createdCount ? 201 : 200, result);
+    return;
+  }
+
   const chartAccountMatch = /^\/finance\/chart-of-accounts(?:\/([^/]+))?$/.exec(resource);
   if (chartAccountMatch && ['POST', 'PATCH', 'DELETE'].includes(request.method)) {
     const actor = await requireAdmin(request);
     const profile = await requireAccountingProfile();
-    const timestamp = now();
-    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
-    const accounts = rows.map(publicCollectionRecord).filter((item) => item?.accountingRegime === profile.accountingRegime);
-    const key = chartAccountMatch[1] ? decodeURIComponent(chartAccountMatch[1]) : '';
-    const current = accounts.find((item) => item.key === key || item.code === key);
-    const journalRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all();
-    const postedCodes = new Set(journalRows.flatMap((row) => {
-      const entry = parseJsonObject(row.payload_json);
-      if (entry.accountingRegime && entry.accountingRegime !== profile.accountingRegime) return [];
-      const lines = Array.isArray(entry.lines) ? entry.lines : [
-        ...(entry.debitAccount ? [{ account: entry.debitAccount }] : []),
-        ...(entry.creditAccount ? [{ account: entry.creditAccount }] : []),
-      ];
-      return lines.map((line) => String(line.account || '').replace(/^TK\s*/i, '').trim().toUpperCase());
-    }));
-    if (request.method === 'DELETE') {
-      if (!current) throw new HttpError(404, 'Không tìm thấy tài khoản trong danh mục hiện hành.');
-      if (postedCodes.has(current.code.toUpperCase())) throw new HttpError(409, 'Không thể xóa tài khoản đã có bút toán ghi sổ; hãy chuyển trạng thái sang Ngừng sử dụng.');
-      if (accounts.some((item) => item.parentCode === current.code)) throw new HttpError(409, 'Không thể xóa tài khoản đang có tài khoản cấp dưới.');
-      await db.prepare("DELETE FROM collection_records WHERE scope = 'finance_chart_of_accounts' AND record_key = ?").run(current.key);
-      await recordAuditEvent(actor.id, 'delete', 'finance_chart_of_accounts', current.key, { accountingRegime: profile.accountingRegime });
-      sendJson(response, 200, { deleted: true });
-      return;
-    }
-    const payload = await readJson(request, 16 * 1024);
-    const source = request.method === 'PATCH' ? { ...current, ...(payload.patch || {}) } : (payload.record || {});
-    if (request.method === 'PATCH' && !current) throw new HttpError(404, 'Không tìm thấy tài khoản trong danh mục hiện hành.');
-    const code = requiredText(source.code, 'Mã tài khoản', 20).replace(/^TK\s*/i, '').trim();
-    const name = requiredText(source.name, 'Tên tài khoản', 200);
-    if (!/^[0-9]{3,6}(?:\.[0-9]{1,4})?$/.test(code)) throw new HttpError(422, 'Mã tài khoản phải gồm 3 đến 6 chữ số, có thể kèm mã chi tiết sau dấu chấm.');
-    if (accounts.some((item) => item.code.toUpperCase() === code.toUpperCase() && item.key !== current?.key)) throw new HttpError(409, 'Mã tài khoản đã tồn tại trong chế độ kế toán hiện hành.');
-    if (current && current.code !== code && postedCodes.has(current.code.toUpperCase())) throw new HttpError(409, 'Không thể đổi mã tài khoản đã có bút toán ghi sổ.');
-    if (current && current.code !== code && accounts.some((item) => item.parentCode === current.code)) throw new HttpError(409, 'Không thể đổi mã tài khoản đang có tài khoản cấp dưới.');
-    const parentCode = String(source.parentCode || '').trim();
-    if (parentCode) {
-      const parent = accounts.find((item) => item.code === parentCode && item.key !== current?.key);
-      if (!parent) throw new HttpError(422, 'Tài khoản cấp trên không tồn tại trong danh mục hiện hành.');
-      if (!code.startsWith(parentCode) || code === parentCode) throw new HttpError(422, 'Mã tài khoản chi tiết phải bắt đầu bằng mã tài khoản cấp trên.');
-      if (parentCode.startsWith(code)) throw new HttpError(422, 'Cấu trúc tài khoản không được tạo vòng lặp.');
-    }
-    const types = ['Tài sản', 'Nợ phải trả', 'Vốn chủ sở hữu', 'Doanh thu', 'Chi phí', 'Thu nhập khác', 'Chi phí khác', 'Xác định kết quả'];
-    const natures = ['Dư Nợ', 'Dư Có', 'Lưỡng tính', 'Chưa xác định'];
-    const accountType = requiredText(source.accountType, 'Loại tài khoản', 40);
-    const balanceNature = requiredText(source.balanceNature || 'Chưa xác định', 'Tính chất số dư', 40);
-    if (!types.includes(accountType) || !natures.includes(balanceNature)) throw new HttpError(422, 'Loại tài khoản hoặc tính chất số dư không hợp lệ.');
-    const effectiveDate = requiredIsoDate(source.effectiveDate, 'Ngày hiệu lực');
-    const status = source.status === 'Ngừng sử dụng' ? 'Ngừng sử dụng' : 'Đang sử dụng';
-    const record = {
-      key: current?.key || randomUUID(), code, name, parentCode,
-      level: parentCode ? (accounts.find((item) => item.code === parentCode)?.level || 1) + 1 : 1,
-      accountType, balanceNature,
-      tracksParty: Boolean(source.tracksParty), tracksForeignCurrency: Boolean(source.tracksForeignCurrency),
-      tracksDebt: Boolean(source.tracksDebt), tracksDetails: Boolean(source.tracksDetails),
-      effectiveDate, status, accountingRegime: profile.accountingRegime,
-      createdAt: current?.createdAt || timestamp, updatedAt: timestamp,
-    };
-    const ownerId = current ? (rows.find((row) => row.record_key === current.key)?.owner_id || actor.id) : actor.id;
-    await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
-      VALUES (?, 'finance_chart_of_accounts', ?, ?, ?, ?, ?)
-      ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`)
-      .run(current?.id || randomUUID(), record.key, ownerId, JSON.stringify(record), current?.createdAt || timestamp, timestamp);
-    await recordAuditEvent(actor.id, current ? 'update' : 'create', 'finance_chart_of_accounts', record.key, { code, accountingRegime: profile.accountingRegime });
-    sendJson(response, current ? 200 : 201, { record });
+    const payload = request.method === 'DELETE' ? null : await readJson(request, 16 * 1024);
+    const result = await db.transaction(async () => {
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', ['finance_chart_of_accounts']);
+      const timestamp = now();
+      const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+      const accounts = rows.map(publicCollectionRecord).filter((item) => item?.accountingRegime === profile.accountingRegime);
+      const key = chartAccountMatch[1] ? decodeURIComponent(chartAccountMatch[1]) : '';
+      const current = accounts.find((item) => item.key === key || item.code === key);
+      const journalRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all();
+      const postedCodes = new Set(journalRows.flatMap((row) => {
+        const entry = parseJsonObject(row.payload_json);
+        if (entry.accountingRegime && entry.accountingRegime !== profile.accountingRegime) return [];
+        const lines = Array.isArray(entry.lines) ? entry.lines : [
+          ...(entry.debitAccount ? [{ account: entry.debitAccount }] : []),
+          ...(entry.creditAccount ? [{ account: entry.creditAccount }] : []),
+        ];
+        return lines.map((line) => String(line.account || '').replace(/^TK\s*/i, '').trim().toUpperCase());
+      }));
+      if (request.method === 'DELETE') {
+        if (!current) throw new HttpError(404, 'Không tìm thấy tài khoản trong danh mục hiện hành.');
+        if (postedCodes.has(current.code.toUpperCase())) throw new HttpError(409, 'Không thể xóa tài khoản đã có bút toán ghi sổ; hãy chuyển trạng thái sang Ngừng sử dụng.');
+        if (accounts.some((item) => item.parentCode === current.code)) throw new HttpError(409, 'Không thể xóa tài khoản đang có tài khoản cấp dưới.');
+        await db.prepare("DELETE FROM collection_records WHERE scope = 'finance_chart_of_accounts' AND record_key = ?").run(current.key);
+        await recordAuditEvent(actor.id, 'delete', 'finance_chart_of_accounts', current.key, { accountingRegime: profile.accountingRegime });
+        return { status: 200, body: { deleted: true } };
+      }
+      const source = request.method === 'PATCH' ? { ...current, ...(payload.patch || {}) } : (payload.record || {});
+      if (request.method === 'PATCH' && !current) throw new HttpError(404, 'Không tìm thấy tài khoản trong danh mục hiện hành.');
+      const code = requiredText(source.code, 'Mã tài khoản', 20).replace(/^TK\s*/i, '').trim();
+      const name = requiredText(source.name, 'Tên tài khoản', 200);
+      if (!/^[0-9]{3,6}(?:\.[0-9]{1,4})?$/.test(code)) throw new HttpError(422, 'Mã tài khoản phải gồm 3 đến 6 chữ số, có thể kèm mã chi tiết sau dấu chấm.');
+      if (accounts.some((item) => item.code.toUpperCase() === code.toUpperCase() && item.key !== current?.key)) throw new HttpError(409, 'Mã tài khoản đã tồn tại trong chế độ kế toán hiện hành.');
+      if (current && current.code !== code && postedCodes.has(current.code.toUpperCase())) throw new HttpError(409, 'Không thể đổi mã tài khoản đã có bút toán ghi sổ.');
+      if (current && current.code !== code && accounts.some((item) => item.parentCode === current.code)) throw new HttpError(409, 'Không thể đổi mã tài khoản đang có tài khoản cấp dưới.');
+      const parentCode = String(source.parentCode || '').trim();
+      if (parentCode) {
+        const parent = accounts.find((item) => item.code === parentCode && item.key !== current?.key);
+        if (!parent) throw new HttpError(422, 'Tài khoản cấp trên không tồn tại trong danh mục hiện hành.');
+        if (!code.startsWith(parentCode) || code === parentCode) throw new HttpError(422, 'Mã tài khoản chi tiết phải bắt đầu bằng mã tài khoản cấp trên.');
+        if (parentCode.startsWith(code)) throw new HttpError(422, 'Cấu trúc tài khoản không được tạo vòng lặp.');
+      }
+      const types = ['Tài sản', 'Nợ phải trả', 'Vốn chủ sở hữu', 'Doanh thu', 'Chi phí', 'Thu nhập khác', 'Chi phí khác', 'Xác định kết quả'];
+      const natures = ['Dư Nợ', 'Dư Có', 'Lưỡng tính', 'Chưa xác định'];
+      const accountType = requiredText(source.accountType, 'Loại tài khoản', 40);
+      const balanceNature = requiredText(source.balanceNature || 'Chưa xác định', 'Tính chất số dư', 40);
+      if (!types.includes(accountType) || !natures.includes(balanceNature)) throw new HttpError(422, 'Loại tài khoản hoặc tính chất số dư không hợp lệ.');
+      const effectiveDate = requiredIsoDate(source.effectiveDate, 'Ngày hiệu lực');
+      const status = source.status === 'Ngừng sử dụng' ? 'Ngừng sử dụng' : 'Đang sử dụng';
+      const record = {
+        key: current?.key || randomUUID(), code, name, parentCode,
+        level: parentCode ? (accounts.find((item) => item.code === parentCode)?.level || 1) + 1 : 1,
+        accountType, balanceNature,
+        tracksParty: Boolean(source.tracksParty), tracksForeignCurrency: Boolean(source.tracksForeignCurrency),
+        tracksDebt: Boolean(source.tracksDebt), tracksDetails: Boolean(source.tracksDetails),
+        effectiveDate, status, accountingRegime: profile.accountingRegime,
+        createdAt: current?.createdAt || timestamp, updatedAt: timestamp,
+      };
+      const ownerId = current ? (rows.find((row) => row.record_key === current.key)?.owner_id || actor.id) : actor.id;
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_chart_of_accounts', ?, ?, ?, ?, ?)
+        ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`)
+        .run(current?.id || randomUUID(), record.key, ownerId, JSON.stringify(record), current?.createdAt || timestamp, timestamp);
+      await recordAuditEvent(actor.id, current ? 'update' : 'create', 'finance_chart_of_accounts', record.key, { code, accountingRegime: profile.accountingRegime });
+      return { status: current ? 200 : 201, body: { record } };
+    });
+    sendJson(response, result.status, result.body);
     return;
   }
 
