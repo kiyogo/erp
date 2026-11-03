@@ -192,10 +192,6 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
             id: 'fin-cash-trx',
             title: 'Thu, chi tiền',
             path: '/admin/finance/cash/transactions',
-            children: [
-              { id: 'fin-cash-income', title: 'Khoản thu', path: '/admin/finance/cash/income' },
-              { id: 'fin-cash-expense', title: 'Khoản chi', path: '/admin/finance/cash/expense' },
-            ],
           },
           { id: 'fin-cash-audit', title: 'Kiểm kê', path: '/admin/finance/cash/audit' },
           {
