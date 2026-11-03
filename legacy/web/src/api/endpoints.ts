@@ -684,8 +684,39 @@ export type FinanceBankStatement = {
 };
 
 export const financeBankStatementsApi = {
-  getAll: () => collectionsApi.get<FinanceBankStatement>('finance_bank_statements'),
+  getAll: async () => {
+    const first = await collectionsApi.get<FinanceBankStatement>('finance_bank_statements', { page: 1, limit: 500 });
+    const rest = await Promise.all(Array.from({ length: first.data.pagination.totalPages - 1 }, (_, index) =>
+      collectionsApi.get<FinanceBankStatement>('finance_bank_statements', { page: index + 2, limit: 500 })));
+    return { ...first, data: { ...first.data, data: [first, ...rest].flatMap((response) => response.data.data) } };
+  },
   create: (record: FinanceBankStatement) => collectionsApi.create<FinanceBankStatement>('finance_bank_statements', record),
+};
+
+export type FinanceBankStatementMatchEvent = {
+  key: string;
+  action: 'match' | 'unmatch' | 'classify';
+  statementKey: string;
+  bankAccountId: string;
+  lineKey: string;
+  cashTransactionId?: string;
+  cashTransactionCode?: string;
+  reversesMatchKey?: string;
+  classification?: 'Thu khách hàng' | 'Thanh toán nhà cung cấp' | 'Phí ngân hàng' | 'Lãi tiền gửi' | 'Chuyển khoản nội bộ' | 'Khác';
+  reason?: string;
+  eventSequence: number;
+  createdAt: string;
+  createdBy: string;
+};
+
+export const financeBankStatementMatchesApi = {
+  getAll: async () => {
+    const first = await collectionsApi.get<FinanceBankStatementMatchEvent>('finance_bank_statement_matches', { page: 1, limit: 500 });
+    const rest = await Promise.all(Array.from({ length: first.data.pagination.totalPages - 1 }, (_, index) =>
+      collectionsApi.get<FinanceBankStatementMatchEvent>('finance_bank_statement_matches', { page: index + 2, limit: 500 })));
+    return { ...first, data: { ...first.data, data: [first, ...rest].flatMap((response) => response.data.data) } };
+  },
+  create: (record: FinanceBankStatementMatchEvent) => collectionsApi.create<FinanceBankStatementMatchEvent>('finance_bank_statement_matches', record),
 };
 
 export type FinanceTransferAccount = {

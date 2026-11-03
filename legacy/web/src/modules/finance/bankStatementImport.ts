@@ -130,9 +130,10 @@ export function parseBankStatementRows(rows: unknown[][]): ImportedBankStatement
   return lines;
 }
 
-export function bankStatementLineFingerprint(line: Pick<ImportedBankStatementLine, 'transactionDate' | 'direction' | 'amount' | 'description' | 'reference' | 'transactionId'>): string {
+export function bankStatementLineFingerprint(line: Pick<ImportedBankStatementLine, 'transactionDate' | 'direction' | 'amount' | 'balance' | 'description' | 'reference' | 'transactionId'>): string {
   const normalize = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('vi-VN').replace(/\s+/g, ' ');
-  return [normalize(line.transactionId), line.transactionDate, line.direction, Number(line.amount).toFixed(2), normalize(line.reference), normalize(line.description)].join('|');
+  return [normalize(line.transactionId), line.transactionDate, line.direction, Number(line.amount).toFixed(2),
+    line.balance === undefined ? '' : Number(line.balance).toFixed(2), normalize(line.reference), normalize(line.description)].join('|');
 }
 
 export async function parseBankStatementFile(file: File): Promise<{ lines: ImportedBankStatementLine[]; fileHash: string }> {

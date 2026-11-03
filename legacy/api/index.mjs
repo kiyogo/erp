@@ -2176,7 +2176,7 @@ const accountingOperationScopes = new Set([
   'finance_advances', 'finance_cash_transactions', 'finance_cash_counts', 'finance_costing', 'finance_einvoices', 'finance_equity',
   'finance_fixed_assets', 'finance_general_ledger', 'finance_internal_transfers', 'finance_inventory',
   'finance_inventory_transactions', 'finance_loan_events', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
-  'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts', 'finance_bank_statements',
+  'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts', 'finance_bank_statements', 'finance_bank_statement_matches',
 ]);
 
 async function requireCollectionActor(request, scope) {
@@ -2192,6 +2192,8 @@ async function requireCollectionActor(request, scope) {
   }
   if (scope === 'finance_bank_statements' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được nhập và xem sao kê ngân hàng.');
   if (scope === 'finance_bank_statements' && !['GET', 'HEAD', 'POST'].includes(request.method)) throw new HttpError(409, 'Sao kê đã nhập được giữ làm chứng từ đối chiếu và không thể sửa hoặc xóa.');
+  if (scope === 'finance_bank_statement_matches' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được đối chiếu sao kê ngân hàng.');
+  if (scope === 'finance_bank_statement_matches' && !['GET', 'HEAD', 'POST'].includes(request.method)) throw new HttpError(409, 'Lịch sử đối chiếu chỉ được bổ sung bằng sự kiện ghép, bỏ ghép hoặc phân loại.');
   if (scope === 'finance_chart_of_accounts' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Danh mục tài khoản chỉ được thay đổi qua API có kiểm tra cấu trúc và bút toán đã ghi sổ.');
   }
@@ -2447,6 +2449,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     const normalizeDuplicateText = value => String(value || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN').replace(/\s+/g, ' ');
     const fingerprintLine = line => [
       normalizeDuplicateText(line.transactionId), line.transactionDate, line.direction, Number(line.amount).toFixed(2),
+      line.balance === undefined ? '' : Number(line.balance).toFixed(2),
       normalizeDuplicateText(line.reference), normalizeDuplicateText(line.description),
     ].join('|');
     const fingerprints = new Set(importedRows.flatMap(row => {
@@ -2464,6 +2467,88 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.importedBy = actor.name;
     record.importedById = actor.id;
     delete record.rawFile;
+  }
+  if (scope === 'finance_bank_statement_matches') {
+    record.action = oneOf(record.action, 'Thao tác đối chiếu', ['match', 'unmatch', 'classify']);
+    record.statementKey = requiredText(record.statementKey, 'Mã sao kê', 160);
+    const statementRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_bank_statements' AND record_key = ?")
+      .get(record.statementKey);
+    if (!statementRow) throw new HttpError(404, 'Không tìm thấy sao kê để đối chiếu.');
+    const statement = parseJsonObject(statementRow.payload_json);
+    record.bankAccountId = statement.bankAccountId;
+    record.lineKey = requiredText(record.lineKey, 'Mã dòng sao kê', 120);
+    const line = Array.isArray(statement.lines) ? statement.lines.find(item => item.key === record.lineKey) : null;
+    if (!line) throw new HttpError(404, 'Không tìm thấy dòng giao dịch trong sao kê.');
+    if (line.duplicate) throw new HttpError(409, 'Dòng giao dịch trùng không được ghép chứng từ.');
+
+    const matchRows = await db.prepare("SELECT record_key, payload_json, created_at FROM collection_records WHERE scope = 'finance_bank_statement_matches' ORDER BY created_at ASC, record_key ASC").all();
+    const events = matchRows.map(row => ({ ...parseJsonObject(row.payload_json), key: row.record_key }))
+      .sort((left, right) => Number(left.eventSequence || 0) - Number(right.eventSequence || 0));
+    record.eventSequence = events.length + 1;
+    const activeByLine = new Map();
+    const activeByTransaction = new Map();
+    for (const event of events) {
+      const eventLineKey = `${event.statementKey}|${event.lineKey}`;
+      if (event.action === 'match' && event.cashTransactionId) {
+        activeByLine.set(eventLineKey, event);
+        activeByTransaction.set(event.cashTransactionId, event);
+      } else if (event.action === 'unmatch' && event.reversesMatchKey) {
+        const current = activeByLine.get(eventLineKey);
+        if (current?.key === event.reversesMatchKey) {
+          activeByLine.delete(eventLineKey);
+          if (current.cashTransactionId) activeByTransaction.delete(current.cashTransactionId);
+        }
+      }
+    }
+
+    const lineId = `${record.statementKey}|${record.lineKey}`;
+    if (record.action === 'match') {
+      if (activeByLine.has(lineId)) throw new HttpError(409, 'Dòng sao kê đã được ghép. Hãy bỏ ghép trước khi chọn chứng từ khác.');
+      record.cashTransactionId = requiredText(record.cashTransactionId, 'Chứng từ thu chi', 160);
+      const transactionRow = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(record.cashTransactionId);
+      if (!transactionRow) throw new HttpError(404, 'Không tìm thấy chứng từ thu chi.');
+      const transaction = publicCashTransaction(transactionRow);
+      if (transaction.status !== 'Đã hoàn thành' || transaction.source !== 'bank') throw new HttpError(409, 'Chỉ ghép với phiếu ngân hàng đã ghi sổ.');
+      const bankAccountRow = await db.prepare('SELECT * FROM finance_bank_accounts WHERE id = ?').get(statement.bankAccountId);
+      if (!bankAccountRow) throw new HttpError(409, 'Tài khoản ngân hàng của sao kê không còn tồn tại.');
+      const bankAccount = publicBankAccount(bankAccountRow);
+      const sameNameAccounts = await db.prepare('SELECT id FROM finance_bank_accounts WHERE bank_name = ?').all(bankAccount.bankName);
+      const accountAliases = new Set([
+        bankAccount.key,
+        bankAccount.accountNumber,
+        `${bankAccount.bankName} (${bankAccount.accountNumber})`,
+        `${bankAccount.bankName} - ${bankAccount.accountNumber} (VND)`,
+        ...(sameNameAccounts.length === 1 ? [bankAccount.bankName] : []),
+      ]);
+      const accountMatches = transaction.sourceAccountId === statement.bankAccountId
+        || (!transaction.sourceAccountId && accountAliases.has(transaction.account));
+      if (!accountMatches) throw new HttpError(422, 'Phiếu và sao kê phải thuộc cùng tài khoản ngân hàng.');
+      if (transaction.type !== line.direction || Number(transaction.amount) !== Number(line.amount) || transaction.currency !== (line.currency || statement.currency)) {
+        throw new HttpError(422, 'Loại giao dịch, số tiền và tiền tệ của phiếu phải khớp chính xác với sao kê.');
+      }
+      if (activeByTransaction.has(record.cashTransactionId)) throw new HttpError(409, 'Phiếu đã được ghép với một giao dịch sao kê khác.');
+      record.cashTransactionCode = transaction.code;
+      delete record.reversesMatchKey;
+      delete record.reason;
+      delete record.classification;
+    } else if (record.action === 'unmatch') {
+      record.reversesMatchKey = requiredText(record.reversesMatchKey, 'Lần ghép cần bỏ', 160);
+      const current = activeByLine.get(lineId);
+      if (!current || current.key !== record.reversesMatchKey) throw new HttpError(409, 'Lần ghép đã thay đổi hoặc đã được bỏ trước đó.');
+      record.cashTransactionId = current.cashTransactionId;
+      record.cashTransactionCode = current.cashTransactionCode;
+      record.reason = requiredText(record.reason, 'Lý do bỏ ghép', 500);
+      delete record.classification;
+    } else {
+      record.classification = oneOf(record.classification, 'Phân loại giao dịch', ['Thu khách hàng', 'Thanh toán nhà cung cấp', 'Phí ngân hàng', 'Lãi tiền gửi', 'Chuyển khoản nội bộ', 'Khác']);
+      delete record.cashTransactionId;
+      delete record.cashTransactionCode;
+      delete record.reversesMatchKey;
+      delete record.reason;
+    }
+    record.createdAt = now();
+    record.createdBy = actor.name;
+    record.createdById = actor.id;
   }
   if (scope === 'tickets') {
     const at = now();
