@@ -80,6 +80,17 @@ try {
   securityPin = '654321';
   await request('/collections/payroll');
   completed += 7;
+  const accountingBank = (await request('/finance/bank-accounts', 'POST', {
+    bankName: 'PG company bank', accountNumber: `PG-${randomUUID()}`, accountHolder: 'PG', balance: 0, status: 'Đang hoạt động',
+  }, 201)).account;
+  const blankCompanyProfile = (await request('/system/company-profile')).profile;
+  const configuredCompanyProfile = (await request('/system/company-profile', 'PUT', {
+    ...blankCompanyProfile, companyName: 'PG company', taxCode: '0012345678', bankAccountId: accountingBank.key,
+    legalForm: 'llc_single', companySize: 'small', industry: 'PostgreSQL tests', accountingRegime: 'TT99',
+    fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
+  })).profile;
+  assert.equal(configuredCompanyProfile.accountingProfileComplete, true);
+  completed++;
   const initialUsage = await request('/admin/usage?application=all&period=this_week');
   assert.ok(initialUsage.data.some(item => item.userId === login.user.id && item.loginCount === 1));
   const trackedUsage = await request('/admin/usage/activity', 'POST', { application: 'finance' }, 201);
@@ -572,8 +583,8 @@ try {
   const pgCandidateSecondDeletion = await request(`/collections/hr_recruitment_candidates/${pgCandidateKey}`, 'DELETE');
   assert.equal(pgCandidateSecondDeletion.deleted, true);
   assert.equal((await request('/collections/hr_recruitment_candidates')).data.some(item => item.key === pgCandidateKey), false); completed++;
-  async function bank(balance) {
-    return (await request('/finance/bank-accounts', 'POST', { bankName: 'PG bank', accountNumber: randomUUID(), accountHolder: 'PG', balance, status: 'Đang hoạt động' }, 201)).account;
+  async function bank(balance, bankName = 'PG bank') {
+    return (await request('/finance/bank-accounts', 'POST', { bankName, accountNumber: randomUUID(), accountHolder: 'PG', balance, status: 'Đang hoạt động' }, 201)).account;
   }
   const source = await bank(100000);
   const destination = await bank(0);
@@ -590,11 +601,20 @@ try {
   assert.equal(missingCancelPin.status, 428);
   assert.equal((await missingCancelPin.json()).code, 'SECURITY_PIN_REQUIRED');
   await request(cancelRoute, 'POST', { reason: 'PG cancellation' }); completed++;
-  const paymentSource = await bank(200000);
+  const paymentSource = await bank(200000, 'Vietcombank');
+  await request(`/users/${login.user.id}`, 'PATCH', { role: 'USER' }, 422);
+  await request('/users', 'POST', { email: `pg-requester-${randomUUID()}@example.test`, name: 'PG payment requester', password: 'PG-Requester-26!Secure', employeeCode: `PG-REQ-${randomUUID().slice(0, 8)}`, role: 'USER' }, 201);
+  const requesterEmail = (await testDatabase.query("SELECT email FROM users WHERE name = 'PG payment requester' ORDER BY created_at DESC LIMIT 1")).rows[0].email;
+  const requesterLoginResponse = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: requesterEmail, password: 'PG-Requester-26!Secure' }) });
+  assert.equal(requesterLoginResponse.status, 200);
+  const requesterLogin = await requesterLoginResponse.json();
+  const paymentAdminToken = token;
+  token = requesterLogin.access_token || requesterLogin.token;
   const payment = (await request('/finance/payments', 'POST', {
     beneficiary: 'PG supplier payment', bankAccountInfo: 'PG account reference', category: 'PostgreSQL payment workflow',
-    amount: 125000, paymentMethod: 'Thẻ tín dụng DN',
+    amount: 125000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 642',
   }, 201)).payment;
+  token = paymentAdminToken;
   const paymentApprovals = await Promise.all([1, 2].map(() => fetch(`${base}/finance/payments/${payment.key}/approve`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin }, body: '{}',
   })));
@@ -602,11 +622,26 @@ try {
   const approvedPayment = (await request('/finance/payments')).data.find(item => item.key === payment.key);
   assert.equal(approvedPayment.status, 'Đã phê duyệt');
   assert.equal(approvedPayment.approverId, login.user.id);
+  const posterEmail = `pg-poster-${randomUUID()}@example.test`;
+  const posterPassword = 'PG-Poster-26!Secure';
+  await request('/users', 'POST', { email: posterEmail, name: 'PG payment poster', password: posterPassword, employeeCode: `PG-POST-${randomUUID().slice(0, 8)}`, role: 'ADMIN' }, 201);
+  const posterLoginResponse = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: posterEmail, password: posterPassword }) });
+  assert.equal(posterLoginResponse.status, 200);
+  const posterLogin = await posterLoginResponse.json();
+  const posterPinResponse = await fetch(`${base}/auth/security-pin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${posterLogin.access_token || posterLogin.token}` }, body: JSON.stringify({ pin: '135790', confirmPin: '135790', currentPassword: posterPassword }) });
+  assert.equal(posterPinResponse.status, 200);
+  token = posterLogin.access_token || posterLogin.token;
+  securityPin = '135790';
   const recordedPayment = (await request(`/finance/payments/${payment.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'PG-TXN-2026-01' })).payment;
+  token = paymentAdminToken;
+  securityPin = '654321';
   assert.equal(recordedPayment.status, 'Đã thanh toán');
   assert.equal(recordedPayment.settlementRecordedInternally, true);
   assert.equal(recordedPayment.ledgerRecorded, true);
-  assert.equal(recordedPayment.history.length, 3); completed++;
+  assert.equal(recordedPayment.history.length, 3);
+  const paymentLedger = (await request('/collections/finance_general_ledger')).data.find(item => item.key === recordedPayment.ledgerEntryKey);
+  assert.equal(paymentLedger.sourceModule, 'finance_payment');
+  assert.equal(paymentLedger.amount, 125000); completed++;
   await request('/attendance/check-in', 'POST', { type: 'in' });
   await request('/attendance/check-in', 'POST', { type: 'out' }); completed++;
   const archive = { dispatchType: 'Văn bản đến', docType: 'Công văn', subject: 'PG archive', partner: 'PG office', docDate: '2026-10-20', dateReceivedOrIssued: '2026-10-26', urgency: 'Bình thường', securityLevel: 'Nội bộ' };
@@ -619,12 +654,11 @@ try {
   await request('/collections/hr_rewards/pg-reward', 'PATCH', { patch: { status: 'Đã ký quyết định' } });
   const awarded = await request('/collections/hr_rewards/pg-reward', 'PATCH', { patch: { status: 'Đã trao giải' } });
   assert.equal(awarded.record.awardedById, login.user.id); completed++;
-  await request(`/users/${login.user.id}`, 'PATCH', { role: 'USER' }, 422);
   assert.equal((await request('/admin/backups')).capabilities.database, false); completed++;
   await request('/admin/backups', 'POST', { name: 'Unavailable PG dump', type: 'Database' }, 422);
   const company = (await request('/system/company-profile')).profile;
   const companySaved = (await request('/system/company-profile', 'PUT', { ...company, companyName: 'PG company', fullName: 'Pháp nhân PostgreSQL', taxCode: '0012345678' })).profile;
-  assert.equal(companySaved.revision, 1);
+  assert.equal(companySaved.revision, 2);
   assert.equal((await request('/system/company-profile')).profile.fullName, 'Pháp nhân PostgreSQL');
   await request('/system/company-profile', 'PUT', { ...company, companyName: 'Stale' }, 409); completed++;
   const contract = (await request('/contracts', 'POST', { code: 'PG-CONTRACT', name: 'Hợp đồng PostgreSQL', contractTemplate: 'PG template', employeeCode: login.user.employeeCode, employeeName: login.user.name }, 201)).contract;

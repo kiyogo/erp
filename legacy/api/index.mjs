@@ -811,6 +811,19 @@ async function requireAccountingProfile() {
   return profile;
 }
 
+async function requireOpenLedgerPeriod(entryDate, profile) {
+  const closed = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceModule') = 'general_ledger_close'").all();
+  for (const row of closed) {
+    const sourceReference = parseJsonObject(row.payload_json).sourceReference;
+    const match = /^period-close:(\d{4}-Q[1-4])$/.exec(String(sourceReference || ''));
+    if (!match) continue;
+    const dates = getFiscalQuarterDates(match[1], Number(profile.fiscalYearStartMonth), Number(profile.fiscalYearStartDay));
+    if (dates && entryDate >= dates.startDate && entryDate < dates.endExclusive) {
+      throw new HttpError(409, 'Kỳ tài chính đã kết chuyển; không thể ghi thêm bút toán vào kỳ đã khóa.');
+    }
+  }
+}
+
 async function verifyGoogleIdentityCredential(credential) {
   const config = await getGoogleConfig();
   const clientId = config.clientId;
@@ -7562,16 +7575,7 @@ async function handleRequest(request, response) {
       if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
       const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND (LOWER(record_key) = LOWER(?) OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?)) LIMIT 1").get(key, voucherCode);
       if (duplicate) throw new HttpError(409, 'Khóa hoặc số chứng từ đã tồn tại trong Sổ Cái.');
-      const closed = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceModule') = 'general_ledger_close'").all();
-      for (const row of closed) {
-        const sourceReference = parseJsonObject(row.payload_json).sourceReference;
-        const match = /^period-close:(\d{4}-Q[1-4])$/.exec(String(sourceReference || ''));
-        if (!match) continue;
-        const startMonth = Number(profile.fiscalYearStartMonth);
-        const startDay = Number(profile.fiscalYearStartDay);
-        const dates = getFiscalQuarterDates(match[1], startMonth, startDay);
-        if (dates && entryDate >= dates.startDate && entryDate < dates.endExclusive) throw new HttpError(409, 'Kỳ tài chính đã kết chuyển; không thể ghi thêm bút toán vào kỳ đã khóa.');
-      }
+      await requireOpenLedgerPeriod(entryDate, profile);
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), key, actor.id, JSON.stringify(record), timestamp, timestamp);
       await recordAuditEvent(actor.id, 'post_manual_journal', 'finance_general_ledger', key, { voucherCode, amount, accountingRegime: profile.accountingRegime });
@@ -8905,6 +8909,213 @@ async function handleRequest(request, response) {
     await requireAdmin(request);
     const accounts = (await internalTransferAccounts()).filter(account => account.status === 'Đang hoạt động');
     sendJson(response, 200, { accounts });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/finance/payments') {
+    const actor = await requireUser(request);
+    const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+    const query = String(url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 200);
+    const status = String(url.searchParams.get('status') || '').trim().slice(0, 80);
+    const where = ["scope = 'finance_payments'"];
+    const parameters = [];
+    if (actor.role !== 'ADMIN') { where.push('owner_id = ?'); parameters.push(actor.id); }
+    if (status) { where.push("json_extract(payload_json, '$.status') = ?"); parameters.push(status); }
+    if (query) { where.push('LOWER(payload_json) LIKE ?'); parameters.push(`%${query}%`); }
+    const predicate = where.join(' AND ');
+    const total = Number((await db.prepare(`SELECT COUNT(*) AS total FROM collection_records WHERE ${predicate}`).get(...parameters))?.total || 0);
+    const rows = await db.prepare(`SELECT * FROM collection_records WHERE ${predicate} ORDER BY created_at DESC, record_key DESC LIMIT ? OFFSET ?`)
+      .all(...parameters, limit, (page - 1) * limit);
+    sendJson(response, 200, {
+      data: rows.map(publicCollectionRecord).filter(Boolean),
+      pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) },
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/payments') {
+    const actor = await requireUser(request);
+    await requireAccountingProfile();
+    const input = await readJson(request, 32 * 1024);
+    const beneficiary = requiredText(input.beneficiary, 'Đơn vị thụ hưởng', 200);
+    const category = requiredText(input.category, 'Nội dung thanh toán', 500);
+    const amount = requiredAmount(input.amount, 'Số tiền thanh toán');
+    if (amount < 1_000) throw new HttpError(422, 'Số tiền thanh toán tối thiểu là 1.000 đồng.');
+    const paymentMethod = oneOf(input.paymentMethod, 'Phương thức thanh toán', ['Chuyển khoản VCB', 'Chuyển khoản TCB', 'Tiền mặt']);
+    const bankAccountInfo = requiredText(input.bankAccountInfo, 'Thông tin thụ hưởng', 200);
+    const debitAccount = optionalText(input.debitAccount, 'Tài khoản Nợ', 24);
+    const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
+    if (debitAccount && !accountPattern.test(debitAccount)) throw new HttpError(422, 'Mã tài khoản Nợ phải có dạng số trong hệ thống tài khoản đã chọn.');
+    const id = randomUUID();
+    const timestamp = now();
+    const createdDate = inventoryBusinessDate();
+    const payment = {
+      key: id,
+      code: `PAY-${createdDate.slice(0, 4)}-${id.slice(0, 8).toUpperCase()}`,
+      beneficiary,
+      taxCode: optionalText(input.taxCode, 'Mã số thuế', 30),
+      bankAccountInfo,
+      category,
+      amount,
+      paymentMethod,
+      debitAccount,
+      creator: actor.name,
+      creatorId: actor.id,
+      empCode: actor.employee_code || '',
+      approver: '',
+      approverId: '',
+      createdDate,
+      createdAt: timestamp,
+      status: 'Chờ duyệt',
+      notes: optionalText(input.notes, 'Ghi chú', 1_000),
+      history: [{ action: 'Trình duyệt', status: 'Chờ duyệt', actor: actor.name, actorId: actor.id, at: timestamp }],
+    };
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_payments'))");
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_payments', ?, ?, ?, ?, ?)`)
+        .run(id, id, actor.id, JSON.stringify(payment), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'submit_payment_request', 'finance_payments', id, { amount, paymentMethod });
+    });
+    sendJson(response, 201, { payment });
+    return;
+  }
+
+  const paymentActionMatch = /^\/finance\/payments\/([^/]+)\/(approve|reject|execute)$/.exec(resource);
+  if (paymentActionMatch && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const key = requiredText(decodeURIComponent(paymentActionMatch[1]), 'Mã đề nghị', 160);
+    const action = paymentActionMatch[2];
+    const input = await readJson(request, 16 * 1024);
+    const reason = action === 'reject' ? requiredText(input.reason, 'Lý do từ chối', 1_000) : '';
+    const settlementReference = action === 'execute' ? requiredText(input.settlementReference, 'Mã giao dịch hoặc chứng từ chi', 120) : '';
+    const sourceAccountId = action === 'execute' ? requiredText(input.sourceAccountId, 'Tài khoản nguồn', 200) : '';
+    if (action === 'execute' && settlementReference.length < 3) throw new HttpError(422, 'Mã giao dịch hoặc chứng từ chi phải có ít nhất 3 ký tự.');
+    await requireSecurityPin(request, actor);
+
+    let payment;
+    await db.transaction(async () => {
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_payments:${key}`]);
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payments' AND record_key = ? ORDER BY created_at LIMIT 1").get(key);
+      if (!row) throw new HttpError(404, 'Không tìm thấy đề nghị thanh toán.');
+      const current = publicCollectionRecord(row);
+      const timestamp = now();
+
+      if (action === 'approve') {
+        if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Đề nghị này không còn ở trạng thái chờ duyệt.');
+        if (current.creatorId === actor.id) throw new HttpError(403, 'Người lập đề nghị không được tự phê duyệt khoản thanh toán.');
+        payment = { ...current, status: 'Đã phê duyệt', approver: actor.name, approverId: actor.id, approvedAt: timestamp };
+      } else if (action === 'reject') {
+        if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Chỉ có thể từ chối đề nghị đang chờ duyệt.');
+        if (current.creatorId === actor.id) throw new HttpError(403, 'Người lập đề nghị không được tự từ chối hồ sơ của mình.');
+        payment = { ...current, status: 'Từ chối', approver: actor.name, approverId: actor.id, rejectedAt: timestamp, rejectionReason: reason };
+      } else {
+        if (current.status !== 'Đã phê duyệt') throw new HttpError(409, 'Chỉ có thể ghi nhận chi cho đề nghị đã được phê duyệt.');
+        if (current.approverId === actor.id || current.creatorId === actor.id) throw new HttpError(403, 'Người lập và người phê duyệt không được ghi nhận thanh toán.');
+        await lockTransferLedger();
+        const source = (await internalTransferAccounts()).find(account => account.key === sourceAccountId);
+        if (!source || source.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản nguồn không tồn tại hoặc đã ngừng hoạt động.');
+        if (current.paymentMethod === 'Tiền mặt' && source.source !== 'petty') throw new HttpError(422, 'Phương thức tiền mặt phải ghi chi từ quỹ tiền mặt.');
+        if (current.paymentMethod !== 'Tiền mặt' && source.source !== 'bank') throw new HttpError(422, 'Phương thức thanh toán này phải ghi chi từ tài khoản ngân hàng.');
+        if (current.paymentMethod === 'Chuyển khoản VCB' && !/vietcombank|\bvcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Vietcombank phù hợp với phương thức thanh toán.');
+        if (current.paymentMethod === 'Chuyển khoản TCB' && !/techcombank|\btcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Techcombank phù hợp với phương thức thanh toán.');
+        const amount = requiredAmount(current.amount, 'Số tiền thanh toán');
+        if (!Number.isSafeInteger(source.balance) || source.balance < amount) throw new HttpError(422, 'Số dư tài khoản nguồn không đủ cho khoản chi.');
+        const debitAccount = requiredText(current.debitAccount, 'Tài khoản Nợ', 24);
+        const creditAccount = source.source === 'petty' ? 'TK 111' : 'TK 112';
+        const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
+        if (!accountPattern.test(debitAccount) || debitAccount.replace(/\s+/g, '').toUpperCase() === creditAccount.replace(/\s+/g, '').toUpperCase()) {
+          throw new HttpError(422, 'Tài khoản Nợ phải hợp lệ và khác tài khoản tiền nguồn.');
+        }
+        await requireOpenLedgerPeriod(inventoryBusinessDate(), profile);
+        const duplicateReference = await db.prepare("SELECT id FROM finance_cash_transactions WHERE reference = ? AND status <> 'Đã hủy' LIMIT 1").get(settlementReference);
+        if (duplicateReference) throw new HttpError(409, 'Mã giao dịch thanh toán đã được ghi nhận.');
+        const transactionId = randomUUID();
+        const transactionCode = `${current.code}-OUT`;
+        const transactionNote = `${current.category}; Tham chiếu: ${settlementReference}`.slice(0, 1_000);
+        const paymentDate = inventoryBusinessDate();
+        const transactionJournalLine = {
+          description: current.category,
+          debitAccount,
+          creditAccount,
+          amount,
+        };
+        await db.prepare(`INSERT INTO finance_cash_transactions (
+          id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+          account_name, status, note, journal_lines_json, reference, employee_code, source_account_id,
+          counterparty_type, created_by, created_at, updated_at
+        ) VALUES (?, ?, 'Chi', ?, 'Thanh toán đề nghị', ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, ?, ?, 'other', ?, ?, ?)`)
+          .run(transactionId, transactionCode, source.source, amount, paymentDate, current.beneficiary, source.name,
+            transactionNote, JSON.stringify([transactionJournalLine]), settlementReference, current.empCode || null,
+            source.key, actor.id, timestamp, timestamp);
+
+        const ledgerKey = `payment:${key}`;
+        const ledgerEntry = {
+          key: ledgerKey,
+          voucherCode: transactionCode,
+          entryDate: paymentDate,
+          description: `Thanh toán đề nghị ${current.code} - ${current.beneficiary}`,
+          debitAccount,
+          creditAccount,
+          amount,
+          author: actor.name,
+          authorId: actor.id,
+          status: 'Đã ghi sổ cái',
+          sourceModule: 'finance_payment',
+          sourceReference: ledgerKey,
+          accountingRegime: profile.accountingRegime,
+          createdAt: timestamp,
+        };
+        if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+        const duplicateLedger = await db.prepare(`SELECT record_key FROM collection_records
+          WHERE scope = 'finance_general_ledger'
+            AND (LOWER(record_key) = LOWER(?) OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?))
+          LIMIT 1`).get(ledgerKey, transactionCode);
+        if (duplicateLedger) throw new HttpError(409, 'Mã bút toán hoặc số chứng từ đã tồn tại trong sổ cái.');
+        await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), ledgerKey, actor.id, JSON.stringify(ledgerEntry), timestamp, timestamp);
+        payment = {
+          ...current,
+          status: 'Đã thanh toán',
+          paidBy: actor.name,
+          paidById: actor.id,
+          paidAt: timestamp,
+          settlementReference,
+          settlementRecordedInternally: true,
+          sourceAccountId: source.key,
+          sourceAccount: source.name,
+          sourceType: source.source,
+          financeTransactionId: transactionId,
+          ledgerEntryKey: ledgerKey,
+          ledgerRecorded: true,
+        };
+      }
+
+      payment.history = [...(Array.isArray(current.history) ? current.history : []), {
+        action: action === 'approve' ? 'Phê duyệt' : action === 'reject' ? 'Từ chối' : 'Ghi nhận đã chi nội bộ',
+        status: payment.status,
+        actor: actor.name,
+        actorId: actor.id,
+        at: timestamp,
+        ...(reason ? { reason } : {}),
+        ...(settlementReference ? { reference: settlementReference } : {}),
+        ...(payment.sourceAccount ? { sourceAccount: payment.sourceAccount, financeTransactionId: payment.financeTransactionId, ledgerEntryKey: payment.ledgerEntryKey } : {}),
+      }];
+      const update = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+        .run(JSON.stringify(payment), timestamp, row.id, row.payload_json);
+      if (!update.changes) throw new HttpError(409, 'Đề nghị vừa được xử lý ở nơi khác. Hãy tải lại danh sách.');
+      await recordAuditEvent(actor.id, `payment_${action}`, 'finance_payments', key, {
+        code: payment.code,
+        amount: payment.amount,
+        ...(payment.sourceAccountId ? { sourceAccountId: payment.sourceAccountId, financeTransactionId: payment.financeTransactionId, ledgerEntryKey: payment.ledgerEntryKey } : {}),
+        ...(reason ? { reason } : {}),
+        ...(settlementReference ? { settlementReference } : {}),
+      });
+    });
+    sendJson(response, 200, { payment });
     return;
   }
 

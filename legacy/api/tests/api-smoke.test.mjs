@@ -738,8 +738,11 @@ test('payment requests persist actual actors and enforce approval, rejection and
   assert.equal(payment.status, 'Chờ duyệt');
   assert.equal(payment.approver, '');
   assert.equal(payment.history.length, 1);
-  assert.equal((await request('/finance/payments', 'GET', undefined, 200, userHeaders)).data.length, 1);
+  const ownPayments = await request('/finance/payments?page=1&limit=1', 'GET', undefined, 200, userHeaders);
+  assert.equal(ownPayments.data.length, 1);
+  assert.deepEqual(ownPayments.pagination, { page: 1, limit: 1, total: 1, totalPages: 1 });
   await request('/finance/payments', 'POST', { beneficiary: 'Sai số tiền', bankAccountInfo: 'VCB 00112233', category: 'Không hợp lệ', amount: 0, paymentMethod: 'Chuyển khoản VCB' }, 422, userHeaders);
+  await request('/finance/payments', 'POST', { beneficiary: 'Không hỗ trợ', bankAccountInfo: 'Thẻ 1234', category: 'Thanh toán thẻ', amount: 1000, paymentMethod: 'Thẻ tín dụng DN' }, 422, userHeaders);
   await request(`/finance/payments/${payment.key}/approve`, 'POST', {}, 403, userHeaders);
   const pinRequired = await request(`/finance/payments/${payment.key}/approve`, 'POST', {}, 428);
   assert.equal(pinRequired.code, 'SECURITY_PIN_REQUIRED');
@@ -753,17 +756,26 @@ test('payment requests persist actual actors and enforce approval, rejection and
   await request('/collections/finance_payments', 'PUT', { records: [] }, 409, headers);
   await request(`/finance/payments/${payment.key}/reject`, 'POST', { reason: '' }, 422, headers);
 
-  const createdSecond = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp hai', bankAccountInfo: 'TCB 77665544', category: 'Chi phí vận hành', amount: 900000, paymentMethod: 'Chuyển khoản VCB' }, 201)).payment;
+  const createdSecond = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp hai', bankAccountInfo: 'VCB 77665544', category: 'Chi phí vận hành', amount: 900000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 642' }, 201, userHeaders)).payment;
   const competing = await Promise.all(['POST', 'POST'].map(() => fetch(`${base}/finance/payments/${createdSecond.key}/approve`, { method: 'POST', headers, body: '{}' })));
   assert.deepEqual(competing.map((response) => response.status).sort(), [200, 409]);
   const approved = (await request('/finance/payments')).data.find((record) => record.key === createdSecond.key);
   assert.equal(approved.status, 'Đã phê duyệt');
   assert.equal(approved.approverId, session.user.id);
-  await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'AB' }, 422);
-  await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: 'missing-account', settlementReference: 'VCB-TXN-2026-001' }, 422);
-  const paid = (await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-TXN-2026-001' })).payment;
+  await request('/users', 'POST', { email: 'payment-poster@example.test', name: 'Kế toán thanh toán', password: 'Payment-Poster-26!Secure', employeeCode: 'PAY-POSTER-01', role: 'ADMIN' }, 201);
+  const posterLogin = await request('/auth/login', 'POST', { email: 'payment-poster@example.test', password: 'Payment-Poster-26!Secure' });
+  const posterHeaders = { ...headers, Authorization: `Bearer ${posterLogin.access_token || posterLogin.token}` };
+  await request('/auth/security-pin', 'POST', { pin: '135790', confirmPin: '135790', currentPassword: 'Payment-Poster-26!Secure' }, 200, posterHeaders);
+  Object.assign(posterHeaders, { 'X-Security-Pin': '135790' });
+  const selfApproval = (await request('/finance/payments', 'POST', { beneficiary: 'Người lập tự duyệt', bankAccountInfo: 'VCB 99887766', category: 'Phân tách nhiệm vụ', amount: 100000, paymentMethod: 'Chuyển khoản VCB' }, 201)).payment;
+  await request(`/finance/payments/${selfApproval.key}/approve`, 'POST', {}, 403, headers);
+  const reviewedSelfApproval = (await request(`/finance/payments/${selfApproval.key}/reject`, 'POST', { reason: 'Kiểm thử phân tách nhiệm vụ.' }, 200, posterHeaders)).payment;
+  assert.equal(reviewedSelfApproval.status, 'Từ chối');
+  await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'AB' }, 422, posterHeaders);
+  await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: 'missing-account', settlementReference: 'VCB-TXN-2026-001' }, 422, posterHeaders);
+  const paid = (await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-TXN-2026-001' }, 200, posterHeaders)).payment;
   assert.equal(paid.status, 'Đã thanh toán');
-  assert.equal(paid.paidById, session.user.id);
+  assert.equal(paid.paidById, posterLogin.user.id);
   assert.equal(paid.settlementReference, 'VCB-TXN-2026-001');
   assert.equal(paid.settlementRecordedInternally, true);
   assert.equal(paid.ledgerRecorded, true);
@@ -774,21 +786,30 @@ test('payment requests persist actual actors and enforce approval, rejection and
   assert.equal(expenseVoucher.type, 'Chi');
   assert.equal(expenseVoucher.amount, createdSecond.amount);
   assert.equal(expenseVoucher.account, `Vietcombank (${paymentSource.accountNumber})`);
+  assert.equal(expenseVoucher.journalLines.length, 1);
+  assert.equal(expenseVoucher.journalLines[0].debitAccount, 'TK 642');
+  assert.equal(expenseVoucher.journalLines[0].creditAccount, 'TK 112');
+  const ledgerEntry = (await request('/collections/finance_general_ledger')).data.find((item) => item.key === paid.ledgerEntryKey);
+  assert.equal(ledgerEntry.sourceModule, 'finance_payment');
+  assert.equal(ledgerEntry.amount, createdSecond.amount);
+  assert.equal(ledgerEntry.debitAccount, 'TK 642');
+  assert.equal(ledgerEntry.creditAccount, 'TK 112');
   const balances = (await request('/finance/payment-accounts')).accounts;
   assert.equal(balances.find((item) => item.key === paymentSource.key).balance, 2100000);
-  await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-TXN-2026-001' }, 409);
+  await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-TXN-2026-001' }, 409, posterHeaders);
 
-  const overBalance = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp vượt số dư', bankAccountInfo: 'VCB 77665544', category: 'Kiểm tra số dư', amount: 2500000, paymentMethod: 'Chuyển khoản VCB' }, 201)).payment;
+  const overBalance = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp vượt số dư', bankAccountInfo: 'VCB 77665544', category: 'Kiểm tra số dư', amount: 2500000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 642' }, 201, userHeaders)).payment;
   await request(`/finance/payments/${overBalance.key}/approve`, 'POST', {});
-  await request(`/finance/payments/${overBalance.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-INSUFFICIENT-01' }, 422);
+  await request(`/finance/payments/${overBalance.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-INSUFFICIENT-01' }, 422, posterHeaders);
   assert.equal((await request('/finance/payments')).data.find((item) => item.key === overBalance.key).status, 'Đã phê duyệt');
   assert.equal((await request('/finance/cash-transactions?source=bank')).data.length, 1);
 
-  const rejected = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp ba', bankAccountInfo: 'VCB 88990011', category: 'Dịch vụ khác', amount: 1500000, paymentMethod: 'Chuyển khoản TCB' }, 201)).payment;
+  const rejected = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp ba', bankAccountInfo: 'TCB 88990011', category: 'Dịch vụ khác', amount: 1500000, paymentMethod: 'Chuyển khoản TCB' }, 201, userHeaders)).payment;
   const denied = (await request(`/finance/payments/${rejected.key}/reject`, 'POST', { reason: 'Thiếu hóa đơn hợp lệ.' })).payment;
   assert.equal(denied.status, 'Từ chối');
   assert.equal(denied.rejectionReason, 'Thiếu hóa đơn hợp lệ.');
-  assert.equal((await request('/finance/payments')).data.length, 4);
+  assert.equal((await request('/finance/payments?status=Từ%20chối')).pagination.total, 2);
+  assert.equal((await request('/finance/payments')).pagination.total, 5);
 });
 
 test('cash vouchers link active accounts and CRM contacts, allow pending edits and preserve posted history', async () => {
