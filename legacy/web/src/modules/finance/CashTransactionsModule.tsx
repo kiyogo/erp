@@ -20,7 +20,7 @@ import {
   financeCashApi,
   financeDocumentsApi,
   FinanceDocument,
-  financePaymentsApi,
+  financePaymentAccountsApi,
   FinanceCashTransaction,
   FinancePaymentAccount,
   FinanceCashJournalLine,
@@ -106,7 +106,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   useEffect(() => {
     void loadData();
     void loadCategories();
-    void financePaymentsApi.getAccounts().then(response => {
+    void financePaymentAccountsApi.getAccounts().then(response => {
       if (!Array.isArray(response.data?.accounts)) throw new Error('Dữ liệu tài khoản không hợp lệ.');
       setCashAccounts(response.data.accounts);
     }).catch(() => { setCashAccounts([]); message.error('Không tải được danh sách tài khoản.'); });

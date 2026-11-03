@@ -77,7 +77,6 @@ import { GeneralLedgerModule } from '../../modules/finance/GeneralLedgerModule';
 import { PurchasingModule } from '../../modules/finance/PurchasingModule';
 import { SalesModule } from '../../modules/finance/SalesModule';
 import { InventoryModule } from '../../modules/finance/InventoryModule';
-import { PaymentsModule } from '../../modules/finance/PaymentsModule';
 import { InternalTransferModule } from '../../modules/finance/InternalTransferModule';
 
 // CRM submodules
@@ -224,7 +223,6 @@ export const GenericModulePage: React.FC = () => {
   if (currentPath === '/employee/payslip') return <EmployeePayslipModule />;
   if (currentPath === '/employee/contracts') return <EmployeeContractsModule />;
   if (currentPath === '/employee/proposals') return <EmployeeProposalsModule />;
-  if (currentPath === '/employee/finance/payments') return <PaymentsModule />;
   if (currentPath === '/employee/workflows/requests') return <WorkflowRequestsModule />;
   if (currentPath === '/employee/assets/tasks') return <AssetTodoModule mode="employee" />;
   if (currentPath === '/employee/assets') return <EmployeeAssetsModule />;
@@ -335,7 +333,7 @@ export const GenericModulePage: React.FC = () => {
     return <CashTransactionsModule typeFilterDefault={type} />;
   }
   if (p.startsWith('/finance/cash/bank')) return <BankAccountsModule />;
-  if (p.startsWith('/finance/payments')) return <PaymentsModule />;
+  if (p.startsWith('/finance/payments')) return <Navigate to="/admin/finance/overview" replace />;
   if (p === '/finance/invoices') return <InvoicesModule />;
   if (p.startsWith('/finance/debts')) return <Navigate to="/admin/finance/overview" replace />;
   if (p === '/finance/payroll/tax') return <Navigate to="/admin/finance/payroll" replace />;

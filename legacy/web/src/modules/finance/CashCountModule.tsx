@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { EditOutlined, PaperClipOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { filesApi, financeCashApi, financePaymentsApi, FinanceCashTransaction, FinancePaymentAccount } from '../../api/endpoints';
+import { filesApi, financeCashApi, financePaymentAccountsApi, FinanceCashTransaction, FinancePaymentAccount } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { Button, Input, message, Modal, Select, Tag } from '../../custom-ui';
 
@@ -54,7 +54,7 @@ export const CashCountModule: React.FC = () => {
     try {
       const [rows, accountResponse, cashResponse] = await Promise.all([
         dataService.refreshGenericData('finance_cash_counts'),
-        financePaymentsApi.getAccounts(),
+        financePaymentAccountsApi.getAccounts(),
         financeCashApi.getAll(),
       ]);
       setRecords(rows as CashCount[]);

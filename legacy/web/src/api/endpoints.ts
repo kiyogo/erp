@@ -500,41 +500,6 @@ export type FinanceCashAttachment = { id: string; name: string; size: number; mi
 export type CreateFinanceCashTransaction = Omit<FinanceCashTransaction, 'key' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string };
 export type UpdateFinanceCashTransaction = Partial<Omit<CreateFinanceCashTransaction, 'code'>>;
 
-export type FinancePaymentRecord = {
-  key: string;
-  code: string;
-  beneficiary: string;
-  taxCode?: string;
-  bankAccountInfo: string;
-  category: string;
-  amount: number;
-  paymentMethod: 'Chuyển khoản VCB' | 'Chuyển khoản TCB' | 'Tiền mặt' | 'Thẻ tín dụng DN';
-  creator: string;
-  creatorId: string;
-  empCode: string;
-  approver?: string;
-  approverId?: string;
-  createdDate: string;
-  createdAt: string;
-  status: 'Chờ duyệt' | 'Đã phê duyệt' | 'Đã thanh toán' | 'Từ chối';
-  notes?: string;
-  approvedAt?: string;
-  rejectedAt?: string;
-  rejectionReason?: string;
-  paidBy?: string;
-  paidAt?: string;
-  settlementReference?: string;
-  sourceAccountId?: string;
-  sourceAccount?: string;
-  sourceType?: 'bank' | 'petty';
-  financeTransactionId?: string;
-  ledgerRecorded?: boolean;
-  settlementRecordedInternally?: boolean;
-  history?: Array<{ action: string; status: string; actor: string; actorId: string; at: string; reason?: string; reference?: string; sourceAccount?: string; financeTransactionId?: string }>;
-};
-
-export type CreateFinancePayment = Pick<FinancePaymentRecord, 'beneficiary' | 'bankAccountInfo' | 'category' | 'amount' | 'paymentMethod'> & Pick<FinancePaymentRecord, 'taxCode' | 'notes'>;
-
 export type FinancePaymentAccount = { key: string; name: string; source: 'bank' | 'petty'; balance: number; status: string };
 
 export const financeCashApi = {
@@ -546,13 +511,8 @@ export const financeCashApi = {
   cancel: (id: string) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${id}`, { status: 'Đã hủy' }),
 };
 
-export const financePaymentsApi = {
-  getAll: () => api.get<{ data: FinancePaymentRecord[] }>('/finance/payments'),
+export const financePaymentAccountsApi = {
   getAccounts: () => api.get<{ accounts: FinancePaymentAccount[] }>('/finance/payment-accounts'),
-  create: (data: CreateFinancePayment) => api.post<{ payment: FinancePaymentRecord }>('/finance/payments', data),
-  approve: (key: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/approve`, {}),
-  reject: (key: string, reason: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/reject`, { reason }),
-  recordPayment: (key: string, sourceAccountId: string, settlementReference: string) => api.post<{ payment: FinancePaymentRecord }>(`/finance/payments/${encodeURIComponent(key)}/execute`, { sourceAccountId, settlementReference }),
 };
 
 export type SalePromotionApplication = {

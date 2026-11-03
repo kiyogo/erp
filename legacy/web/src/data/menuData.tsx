@@ -224,16 +224,6 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       },
       { id: 'fin-invoices', title: 'Hóa đơn', path: '/admin/finance/invoices' },
       {
-        id: 'fin-payments',
-        title: 'Thanh toán',
-        path: '/admin/finance/payments',
-        children: [
-          { id: 'fin-pay-create', title: 'Lập thanh toán', path: '/admin/finance/payments/create' },
-          { id: 'fin-pay-approve', title: 'Duyệt thanh toán', path: '/admin/finance/payments/approve' },
-          { id: 'fin-pay-history', title: 'Lịch sử thanh toán', path: '/admin/finance/payments/history' },
-        ],
-      },
-      {
         id: 'fin-payroll',
         title: 'Tiền lương',
         path: '/admin/finance/payroll',
@@ -580,12 +570,6 @@ export const EMPLOYEE_PORTAL_MENU_ITEMS: MenuItem[] = [
     title: 'Kiến nghị',
     icon: <FolderOpenOutlined />,
     path: '/employee/proposals',
-  },
-  {
-    id: 'emp-finance-payments',
-    title: 'Đề nghị thanh toán',
-    icon: <DollarOutlined />,
-    path: '/employee/finance/payments',
   },
   {
     id: 'emp-workflow-requests',
