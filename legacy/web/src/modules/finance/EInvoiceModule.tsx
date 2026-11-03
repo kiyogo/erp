@@ -77,7 +77,7 @@ export const EInvoiceModule: React.FC = () => {
     const vat = Math.round(total * vatRate / 100);
     const newInv: EInvoice = {
       ...values,
-      key: String(Date.now()),
+      key: crypto.randomUUID(),
       templateCode: '',
       symbol: values.symbol || '',
       issueDate: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
@@ -162,7 +162,7 @@ export const EInvoiceModule: React.FC = () => {
         <Card title="Lập bản nháp hóa đơn điện tử" style={{ borderRadius: 8, border: '1px solid #E2E8F0', maxWidth: 840 }}>
           <Form form={createForm} layout="vertical" onFinish={handleCreate}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${String(data.length + 1).padStart(5, '0')}`} rules={[{ required: true }]}>
+              <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${crypto.randomUUID()}`} rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
               <Form.Item name="symbol" label="Ký hiệu / mẫu số đã đăng ký">
@@ -184,18 +184,11 @@ export const EInvoiceModule: React.FC = () => {
               <Form.Item name="totalAmount" label="Tổng tiền hàng trước thuế (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền' }]}>
                 <Input type="number" min={0} placeholder="Ví dụ: 100000000" />
               </Form.Item>
-              <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true, message: 'Chọn thuế suất GTGT' }]}>
-                <Select
-                  options={[
-                    { label: '10%', value: '10%' },
-                    { label: '8%', value: '8%' },
-                    { label: '5%', value: '5%' },
-                    { label: '0%', value: '0%' },
-                    { label: 'Không chịu thuế GTGT', value: 'Không chịu thuế' },
-                  ]}
-                />
+              <Form.Item name="vatRate" label="Thuế suất GTGT (%)" rules={[{ required: true, message: 'Nhập thuế suất đã đối chiếu' }]}>
+                <Input type="number" min={0} max={100} step="any" placeholder="Nhập theo phân loại hàng hóa và kỳ áp dụng" />
               </Form.Item>
             </div>
+            <div style={{ color: '#64748B', marginTop: -8 }}>Bản nháp không tự chọn thuế suất; đối chiếu mức áp dụng cho mặt hàng và thời điểm giao dịch trước khi lưu.</div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
               <Button onClick={() => createForm.resetFields()}>Làm mới form</Button>
               <Button type="primary" htmlType="submit" icon={<SafetyCertificateOutlined />} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
