@@ -2,6 +2,7 @@ import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  DeleteOutlined,
   PlusOutlined,
   SearchOutlined,
   DownloadOutlined,
@@ -20,13 +21,20 @@ interface LedgerEntry {
   voucherCode: string;
   entryDate: string;
   description: string;
-  debitAccount: string;
-  creditAccount: string;
+  debitAccount?: string;
+  creditAccount?: string;
   amount: number;
+  lines?: JournalLine[];
   author: string;
   status: 'Đã ghi sổ cái' | 'Chờ duyệt kế toán trưởng';
   sourceReference?: string;
   sourceModule?: string;
+}
+
+interface JournalLine {
+  account: string;
+  debit: number;
+  credit: number;
 }
 
 const INITIAL_ENTRIES: LedgerEntry[] = [];
@@ -74,13 +82,25 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
 
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [journalLines, setJournalLines] = useState<JournalLine[]>([{ account: '', debit: 0, credit: 0 }]);
   const [form] = Form.useForm();
 
   const totalAmount = data.reduce((sum, item) => sum + item.amount, 0);
-  const totalDebits = data.filter((item) => item.debitAccount).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const totalCredits = data.filter((item) => item.creditAccount).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const balancedLedger = data.every((item) => Boolean(item.debitAccount && item.creditAccount) && Number.isFinite(Number(item.amount)) && Number(item.amount) > 0)
-    && Math.abs(totalDebits - totalCredits) < 0.5;
+  const getLines = (item: LedgerEntry): JournalLine[] => Array.isArray(item.lines) && item.lines.length
+    ? item.lines
+    : [
+      ...(item.debitAccount ? [{ account: item.debitAccount, debit: Number(item.amount) || 0, credit: 0 }] : []),
+      ...(item.creditAccount ? [{ account: item.creditAccount, debit: 0, credit: Number(item.amount) || 0 }] : []),
+    ];
+  const totalDebits = data.reduce((sum, item) => sum + getLines(item).reduce((lineSum, line) => lineSum + (Number(line.debit) || 0), 0), 0);
+  const totalCredits = data.reduce((sum, item) => sum + getLines(item).reduce((lineSum, line) => lineSum + (Number(line.credit) || 0), 0), 0);
+  const balancedLedger = data.every((item) => {
+    const lines = getLines(item);
+    const debits = lines.reduce((sum, line) => sum + (Number(line.debit) || 0), 0);
+    const credits = lines.reduce((sum, line) => sum + (Number(line.credit) || 0), 0);
+    return lines.length > 0 && lines.every(line => line.account && Number(line.debit) >= 0 && Number(line.credit) >= 0 && ((Number(line.debit) > 0) !== (Number(line.credit) > 0))) && Math.abs(debits - credits) < 0.005;
+  }) && Math.abs(totalDebits - totalCredits) < 0.005;
   const accountSummary = summarizeLedgerAccounts(data);
   const quarterSummary = calculateQuarterLedger(data, selectedQuarter, fiscalYearStart.month, fiscalYearStart.day);
   const { year: yearText, quarter: quarterText, records: quarterLedgerData, revenue, expenses, netResult } = quarterSummary;
@@ -98,9 +118,11 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   });
 
   const handleCreate = async (values: any) => {
-    const amount = Number(values.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      message.error('Số tiền hạch toán phải lớn hơn 0.');
+    const lines = journalLines.map(line => ({ account: line.account.trim(), debit: Number(line.debit) || 0, credit: Number(line.credit) || 0 }));
+    const debitTotal = lines.reduce((sum, line) => sum + line.debit, 0);
+    const creditTotal = lines.reduce((sum, line) => sum + line.credit, 0);
+    if (lines.length < 2 || lines.some(line => !line.account || ((line.debit > 0) === (line.credit > 0))) || debitTotal <= 0 || Math.round(debitTotal * 100) !== Math.round(creditTotal * 100)) {
+      message.error('Nhập ít nhất hai dòng hợp lệ và bảo đảm tổng phát sinh Nợ bằng tổng phát sinh Có.');
       return;
     }
     if (data.some((record) => record.voucherCode === String(values.voucherCode).trim())) {
@@ -115,25 +137,30 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
     const newItem: LedgerEntry = {
       ...values,
       key: crypto.randomUUID(),
-      amount,
+      amount: debitTotal,
+      lines,
       author,
       status: 'Đã ghi sổ cái',
     };
     try {
+      setSaving(true);
       await generalLedgerApi.createEntry(newItem);
       await dataService.refreshGenericData('finance_general_ledger');
       message.success(`Đã hạch toán chứng từ: ${values.voucherCode}`);
       setModalOpen(false);
       form.resetFields();
+      setJournalLines([{ account: '', debit: 0, credit: 0 }]);
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể lưu chứng từ vào Sổ Cái.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const exportLedger = () => {
     const rows = [
       ['Số chứng từ', 'Ngày hạch toán', 'Diễn giải', 'Tài khoản Nợ', 'Tài khoản Có', 'Số tiền', 'Người ghi sổ', 'Trạng thái'],
-      ...filteredData.map((item) => [item.voucherCode, item.entryDate, item.description, item.debitAccount, item.creditAccount, item.amount, item.author, item.status]),
+      ...filteredData.map((item) => [item.voucherCode, item.entryDate, item.description, getLines(item).filter(line => line.debit > 0).map(line => line.account).join(', '), getLines(item).filter(line => line.credit > 0).map(line => line.account).join(', '), item.amount, item.author, item.status]),
     ];
     downloadFile('so_cai.xlsx', generateValidXlsxBlob(rows));
     message.success(`Đã xuất ${filteredData.length} chứng từ Sổ Cái.`);
@@ -149,8 +176,8 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   };
 
   const exportAccountReport = (account: string) => {
-    const entries = data.filter((item) => item.debitAccount === account || item.creditAccount === account);
-    const lines = entries.map((item) => `${item.entryDate} | ${item.voucherCode} | ${item.description} | No ${item.debitAccount} | Co ${item.creditAccount} | ${Number(item.amount).toLocaleString('vi-VN')} VND`);
+    const entries = data.filter((item) => getLines(item).some(line => line.account === account));
+    const lines = entries.flatMap((item) => getLines(item).filter(line => line.account === account).map(line => `${item.entryDate} | ${item.voucherCode} | ${item.description} | No ${Number(line.debit).toLocaleString('vi-VN')} | Co ${Number(line.credit).toLocaleString('vi-VN')} VND`));
     downloadFile(`bao_cao_${account.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(`BAO CAO ${account}`, 'Phat sinh tu cac but toan da luu trong So Cai', lines));
   };
 
@@ -162,7 +189,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       ? [`Kỳ: Quý ${quarterText}/${yearText}`, `Doanh thu tài khoản đầu 5, 7: ${revenue.toLocaleString('vi-VN')} VND`, `Chi phí tài khoản đầu 6, 8: ${expenses.toLocaleString('vi-VN')} VND`, `Kết quả sơ bộ: ${netResult.toLocaleString('vi-VN')} VND`, `Số bút toán: ${quarterLedgerData.length}`]
       : code === 'B03 - DN'
       ? cashMovements.map((item) => `${item.account}: No ${item.debit.toLocaleString('vi-VN')} VND / Co ${item.credit.toLocaleString('vi-VN')} VND`)
-      : data.map((item) => `${item.entryDate} | ${item.voucherCode} | ${item.description} | No ${item.debitAccount} | Co ${item.creditAccount} | ${Number(item.amount).toLocaleString('vi-VN')} VND`);
+      : data.flatMap((item) => getLines(item).map(line => `${item.entryDate} | ${item.voucherCode} | ${item.description} | ${line.account} | No ${Number(line.debit).toLocaleString('vi-VN')} | Co ${Number(line.credit).toLocaleString('vi-VN')} VND`));
     downloadFile(`bao_cao_${code.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(code, `Du lieu Sổ Cai ${code === 'B02 - DN' ? `quy ${quarterText}/${yearText}` : 'hien co'}`, reportLines.length ? reportLines : ['Chua co but toan phat sinh.']));
   };
 
@@ -201,8 +228,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
     (item) =>
       (item.voucherCode || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (item.description || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.debitAccount || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.creditAccount || '').toLowerCase().includes(searchText.toLowerCase())
+      getLines(item).some(line => line.account.toLowerCase().includes(searchText.toLowerCase()))
   );
 
   return (
@@ -388,10 +414,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
                   title: 'Định khoản Nợ ➔ Có',
                   key: 'acc',
                   render: (_: any, r: LedgerEntry) => (
-                    <div style={{ fontSize: 12 }}>
-                      <div style={{ color: '#16A34A', fontWeight: 600 }}>Nợ: {r.debitAccount}</div>
-                      <div style={{ color: '#2563EB', fontWeight: 600 }}>Có: {r.creditAccount}</div>
-                    </div>
+                    <div style={{ fontSize: 12 }}>{getLines(r).map((line, index) => <div key={`${r.key}-${index}`}>{line.account} · Nợ {Number(line.debit).toLocaleString('vi-VN')} · Có {Number(line.credit).toLocaleString('vi-VN')}</div>)}</div>
                   ),
                 },
                 {
@@ -417,11 +440,11 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       <Modal
         title="Hạch toán chứng từ nghiệp vụ khác"
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => { setModalOpen(false); form.resetFields(); setJournalLines([{ account: '', debit: 0, credit: 0 }]); }}
         footer={null}
-        width={520}
+        width={800}
       >
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
+        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="voucherCode" label="Số chứng từ" initialValue={`PKT-${new Date().getFullYear()}-${String(data.length + 1).padStart(4, '0')}`} rules={[{ required: true }]}>
               <Input />
@@ -433,20 +456,32 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
           <Form.Item name="description" label="Nội dung diễn giải" rules={[{ required: true, message: 'Nhập diễn giải' }]}>
             <Input.TextArea rows={2} placeholder="Ví dụ: Phân bổ chi phí thuê văn phòng tháng 8" />
           </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="debitAccount" label="Tài khoản Nợ" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: TK 642" />
-            </Form.Item>
-            <Form.Item name="creditAccount" label="Tài khoản Có" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: TK 242" />
-            </Form.Item>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Dòng hạch toán</span>
+              <Button icon={<PlusOutlined />} onClick={() => setJournalLines(current => [...current, { account: '', debit: 0, credit: 0 }])}>Thêm dòng</Button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <KTable
+                dataSource={journalLines.map((line, index) => ({ ...line, lineIndex: index, key: String(index) }))}
+                columns={[
+                  { title: 'Tài khoản', key: 'account', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} maxLength={24} value={line.account} placeholder="Mã tài khoản" onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, account: event.target.value } : row))} /> },
+                  { title: 'Phát sinh Nợ', key: 'debit', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Phát sinh Nợ dòng ${line.lineIndex + 1}`} type="number" min={0} step="0.01" value={line.debit || ''} onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, debit: Number(event.target.value) || 0 } : row))} /> },
+                  { title: 'Phát sinh Có', key: 'credit', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Phát sinh Có dòng ${line.lineIndex + 1}`} type="number" min={0} step="0.01" value={line.credit || ''} onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, credit: Number(event.target.value) || 0 } : row))} /> },
+                  { title: '', key: 'action', width: 48, render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Button className="ant-btn-square-icon" aria-label={`Xóa dòng ${line.lineIndex + 1}`} icon={<DeleteOutlined />} disabled={journalLines.length <= 2} onClick={() => setJournalLines(current => current.filter((_, index) => index !== line.lineIndex))} /> },
+                ]}
+                pagination={{ pageSize: 100 }}
+                disableCache
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>Tổng Nợ: {journalLines.reduce((sum, line) => sum + (Number(line.debit) || 0), 0).toLocaleString('vi-VN')} ₫</span>
+              <span>Tổng Có: {journalLines.reduce((sum, line) => sum + (Number(line.credit) || 0), 0).toLocaleString('vi-VN')} ₫</span>
+            </div>
           </div>
-          <Form.Item name="amount" label="Số tiền hạch toán (VNĐ)" rules={[{ required: true }]}>
-            <Input type="number" min={1} step={1} />
-          </Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button disabled={saving} onClick={() => { setModalOpen(false); form.resetFields(); setJournalLines([{ account: '', debit: 0, credit: 0 }]); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} disabled={saving || !fiscalYearStart.ready} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Ghi sổ cái
             </Button>
           </div>

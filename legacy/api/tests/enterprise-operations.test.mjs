@@ -281,9 +281,24 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'INVALID-JOURNAL', entryDate: '2026-10-10', description: 'Sai', debitAccount: 'TK 642', creditAccount: 'TK 642', amount: 100 }, 422);
   await journalEntry('SALE-Q4-1', 'TK 131', 'TK 511', 1000);
   await journalEntry('EXPENSE-Q4-1', 'TK 642', 'TK 112', 400);
+  const multiLineJournal = (await request('/finance/general-ledger/entries', 'POST', {
+    voucherCode: 'EXPENSE-Q4-MULTI', entryDate: '2026-10-11', description: 'Bút toán nhiều tài khoản', lines: [
+      { account: 'TK 641', debit: 200, credit: 0 },
+      { account: 'TK 642', debit: 100, credit: 0 },
+      { account: 'TK 112', debit: 0, credit: 300 },
+    ],
+  }, 201)).record;
+  assert.equal(multiLineJournal.amount, 300);
+  assert.equal(multiLineJournal.lines.length, 3);
+  assert.equal(multiLineJournal.lines.reduce((sum, line) => sum + line.debit, 0), multiLineJournal.lines.reduce((sum, line) => sum + line.credit, 0));
+  await request('/finance/general-ledger/entries', 'POST', {
+    voucherCode: 'EXPENSE-Q4-UNBALANCED', entryDate: '2026-10-11', description: 'Bút toán mất cân', lines: [
+      { account: 'TK 641', debit: 200, credit: 0 }, { account: 'TK 112', debit: 0, credit: 199 },
+    ],
+  }, 422);
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'SALE-Q4-1', entryDate: '2026-10-10', description: 'Trùng', debitAccount: 'TK 131', creditAccount: 'TK 511', amount: 1000 }, 409);
   const closeResult = await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 201);
-  assert.equal(closeResult.entries, 3);
+  assert.equal(closeResult.entries, 4);
   assert.ok(closeResult.records.every(record => record.status === 'Đã ghi sổ cái'));
   await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 409);
   await request('/collections/finance_general_ledger', 'PUT', { records: [] }, 409);

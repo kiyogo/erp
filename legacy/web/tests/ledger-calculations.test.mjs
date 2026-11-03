@@ -11,6 +11,17 @@ test('ledger account summaries aggregate only actual debit and credit movements'
     { account: 'TK 334', debit: 0, credit: 1000 },
     { account: 'TK 112', debit: 0, credit: 500 },
   ]);
+  assert.deepEqual(ledger.summarizeLedgerAccounts([
+    { amount: 300, lines: [
+      { account: 'TK 641', debit: 200, credit: 0 },
+      { account: 'TK 642', debit: 100, credit: 0 },
+      { account: 'TK 112', debit: 0, credit: 300 },
+    ] },
+  ]), [
+    { account: 'TK 641', debit: 200, credit: 0 },
+    { account: 'TK 642', debit: 100, credit: 0 },
+    { account: 'TK 112', debit: 0, credit: 300 },
+  ]);
 });
 
 test('quarter results use posted records inside the chosen calendar quarter', () => {
@@ -26,6 +37,16 @@ test('quarter results use posted records inside the chosen calendar quarter', ()
   assert.equal(result.netResult, 600);
   assert.equal(result.debits, 1400);
   assert.equal(result.credits, 1400);
+  const multiLine = ledger.calculateQuarterLedger([
+    { entryDate: '2026-08-02', status: 'Đã ghi sổ cái', amount: 300, lines: [
+      { account: 'TK 641', debit: 200, credit: 0 },
+      { account: 'TK 642', debit: 100, credit: 0 },
+      { account: 'TK 112', debit: 0, credit: 300 },
+    ] },
+  ], '2026-Q3');
+  assert.equal(multiLine.expenses, 300);
+  assert.equal(multiLine.debits, 300);
+  assert.equal(multiLine.credits, 300);
 });
 
 test('quarter closing lines clear income and expense balances and transfer the actual result once', () => {

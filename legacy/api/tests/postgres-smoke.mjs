@@ -91,6 +91,18 @@ try {
   })).profile;
   assert.equal(configuredCompanyProfile.accountingProfileComplete, true);
   completed++;
+  const journal = (await request('/finance/general-ledger/entries', 'POST', {
+    voucherCode: `PG-JOURNAL-${randomUUID().slice(0, 8)}`, entryDate: '2026-10-10', description: 'Bút toán nhiều dòng PostgreSQL',
+    lines: [
+      { account: 'TK 641', debit: 125.5, credit: 0 },
+      { account: 'TK 642', debit: 74.5, credit: 0 },
+      { account: 'TK 112', debit: 0, credit: 200 },
+    ],
+  }, 201)).record;
+  assert.equal(journal.lines.length, 3);
+  assert.equal(journal.amount, 200);
+  assert.equal((await request('/collections/finance_general_ledger')).data.find(item => item.key === journal.key).lines.length, 3);
+  completed++;
   const initialUsage = await request('/admin/usage?application=all&period=this_week');
   assert.ok(initialUsage.data.some(item => item.userId === login.user.id && item.loginCount === 1));
   const trackedUsage = await request('/admin/usage/activity', 'POST', { application: 'finance' }, 201);

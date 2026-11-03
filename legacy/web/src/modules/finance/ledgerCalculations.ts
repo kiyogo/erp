@@ -4,12 +4,21 @@ export type LedgerCalculationRecord = {
   debitAccount?: string;
   creditAccount?: string;
   amount: number;
+  lines?: Array<{ account: string; debit: number; credit: number }>;
   entryDate?: string;
   status?: string;
 };
 
 export type AccountMovement = { account: string; debit: number; credit: number };
 export type ClosingLine = { description: string; debitAccount: string; creditAccount: string; amount: number };
+
+function ledgerLines(record: LedgerCalculationRecord) {
+  if (Array.isArray(record.lines) && record.lines.length) return record.lines;
+  return [
+    ...(record.debitAccount ? [{ account: record.debitAccount, debit: Number(record.amount) || 0, credit: 0 }] : []),
+    ...(record.creditAccount ? [{ account: record.creditAccount, debit: 0, credit: Number(record.amount) || 0 }] : []),
+  ];
+}
 
 export { getFiscalQuarterDates };
 
@@ -33,16 +42,11 @@ export function getFiscalQuarterPeriod(date: Date, startMonth = 1, startDay = 1)
 export function summarizeLedgerAccounts(records: LedgerCalculationRecord[]): AccountMovement[] {
   const accounts = new Map<string, AccountMovement>();
   for (const record of records) {
-    const amount = Number(record.amount) || 0;
-    const debit = String(record.debitAccount || '').trim();
-    const credit = String(record.creditAccount || '').trim();
-    if (debit) {
-      const current = accounts.get(debit) || { account: debit, debit: 0, credit: 0 };
-      accounts.set(debit, { ...current, debit: current.debit + amount });
-    }
-    if (credit) {
-      const current = accounts.get(credit) || { account: credit, debit: 0, credit: 0 };
-      accounts.set(credit, { ...current, credit: current.credit + amount });
+    for (const line of ledgerLines(record)) {
+      const account = String(line.account || '').trim();
+      if (!account) continue;
+      const current = accounts.get(account) || { account, debit: 0, credit: 0 };
+      accounts.set(account, { ...current, debit: current.debit + (Number(line.debit) || 0), credit: current.credit + (Number(line.credit) || 0) });
     }
   }
   return Array.from(accounts.values());
@@ -58,16 +62,11 @@ export function calculateQuarterLedger(records: LedgerCalculationRecord[], perio
   });
   const accounts = new Map<string, { debit: number; credit: number }>();
   for (const record of quarterRecords) {
-    const amount = Number(record.amount) || 0;
-    const debit = String(record.debitAccount || '').match(/(?:TK\s*)?(\d{3,4})/i)?.[1] || '';
-    const credit = String(record.creditAccount || '').match(/(?:TK\s*)?(\d{3,4})/i)?.[1] || '';
-    if (debit) {
-      const current = accounts.get(debit) || { debit: 0, credit: 0 };
-      accounts.set(debit, { ...current, debit: current.debit + amount });
-    }
-    if (credit) {
-      const current = accounts.get(credit) || { debit: 0, credit: 0 };
-      accounts.set(credit, { ...current, credit: current.credit + amount });
+    for (const line of ledgerLines(record)) {
+      const account = String(line.account || '').match(/(?:TK\s*)?(\d{3,6})/i)?.[1] || '';
+      if (!account) continue;
+      const current = accounts.get(account) || { debit: 0, credit: 0 };
+      accounts.set(account, { ...current, debit: current.debit + (Number(line.debit) || 0), credit: current.credit + (Number(line.credit) || 0) });
     }
   }
   const movements = Array.from(accounts.entries());
@@ -84,8 +83,8 @@ export function calculateQuarterLedger(records: LedgerCalculationRecord[], perio
     revenue,
     expenses,
     netResult: revenue - expenses,
-    debits: quarterRecords.filter((record) => record.debitAccount).reduce((sum, record) => sum + (Number(record.amount) || 0), 0),
-    credits: quarterRecords.filter((record) => record.creditAccount).reduce((sum, record) => sum + (Number(record.amount) || 0), 0),
+    debits: Array.from(accounts.values()).reduce((sum, sides) => sum + sides.debit, 0),
+    credits: Array.from(accounts.values()).reduce((sum, sides) => sum + sides.credit, 0),
   };
 }
 

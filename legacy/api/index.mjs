@@ -7618,18 +7618,39 @@ async function handleRequest(request, response) {
     const voucherCode = requiredText(payload.voucherCode, 'Số chứng từ', 80);
     const entryDate = requiredIsoDate(payload.entryDate, 'Ngày hạch toán');
     const description = requiredText(payload.description, 'Nội dung diễn giải', 1_000);
-    const debitAccount = requiredText(payload.debitAccount, 'Tài khoản Nợ', 24);
-    const creditAccount = requiredText(payload.creditAccount, 'Tài khoản Có', 24);
     const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
-    if (!accountPattern.test(debitAccount) || !accountPattern.test(creditAccount)) throw new HttpError(422, 'Mã tài khoản phải là mã số trong hệ thống tài khoản đã chọn.');
-    if (debitAccount.replace(/\s+/g, '').toUpperCase() === creditAccount.replace(/\s+/g, '').toUpperCase()) throw new HttpError(422, 'Tài khoản Nợ và Có phải khác nhau.');
-    const amount = Number(payload.amount);
-    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000_000_000 || Math.round(amount * 100) !== amount * 100) {
-      throw new HttpError(422, 'Số tiền phải lớn hơn 0 và không quá 2 chữ số thập phân.');
+    const lines = payload.lines === undefined ? [
+      { account: payload.debitAccount, debit: payload.amount, credit: 0 },
+      { account: payload.creditAccount, debit: 0, credit: payload.amount },
+    ] : payload.lines;
+    if (payload.lines === undefined && String(payload.debitAccount || '').replace(/\s+/g, '').toUpperCase() === String(payload.creditAccount || '').replace(/\s+/g, '').toUpperCase()) {
+      throw new HttpError(422, 'Tài khoản Nợ và Có phải khác nhau.');
     }
+    if (!Array.isArray(lines) || lines.length < 2 || lines.length > 100) throw new HttpError(422, 'Chứng từ phải có từ 2 đến 100 dòng hạch toán.');
+    const journalLines = lines.map((line, index) => {
+      const account = requiredText(line?.account, `Tài khoản dòng ${index + 1}`, 24);
+      if (!accountPattern.test(account)) throw new HttpError(422, `Mã tài khoản dòng ${index + 1} phải là mã số trong hệ thống tài khoản đã chọn.`);
+      const debit = line?.debit === '' || line?.debit === undefined ? 0 : Number(line.debit);
+      const credit = line?.credit === '' || line?.credit === undefined ? 0 : Number(line.credit);
+      for (const [side, value] of [['Nợ', debit], ['Có', credit]]) {
+        if (!Number.isFinite(value) || value < 0 || value > 1_000_000_000_000_000 || !Number.isSafeInteger(Math.round(value * 100)) || Math.round(value * 100) !== value * 100) {
+          throw new HttpError(422, `Số tiền ${side} dòng ${index + 1} không hợp lệ hoặc có quá 2 chữ số thập phân.`);
+        }
+      }
+      if ((debit > 0) === (credit > 0)) throw new HttpError(422, `Dòng ${index + 1} chỉ được có số tiền bên Nợ hoặc bên Có.`);
+      return { account, debit, credit };
+    });
+    const debitTotalCents = journalLines.reduce((sum, line) => sum + Math.round(line.debit * 100), 0);
+    const creditTotalCents = journalLines.reduce((sum, line) => sum + Math.round(line.credit * 100), 0);
+    if (!Number.isSafeInteger(debitTotalCents) || !Number.isSafeInteger(creditTotalCents) || debitTotalCents > 100_000_000_000_000_000 || debitTotalCents <= 0 || debitTotalCents !== creditTotalCents) {
+      throw new HttpError(422, 'Tổng phát sinh Nợ phải bằng tổng phát sinh Có.');
+    }
+    const amount = debitTotalCents / 100;
     const key = requiredText(payload.key || randomUUID(), 'Khóa bút toán', 160);
     const record = {
-      key, voucherCode, entryDate, description, debitAccount, creditAccount, amount,
+      key, voucherCode, entryDate, description,
+      ...(payload.lines === undefined ? { debitAccount: journalLines[0].account, creditAccount: journalLines[1].account } : {}), amount,
+      lines: journalLines,
       author: actor.name, authorId: actor.id, status: 'Đã ghi sổ cái',
       sourceModule: 'manual_journal', sourceReference: `manual:${key}`,
       accountingRegime: profile.accountingRegime, createdAt: now(),
@@ -7642,7 +7663,7 @@ async function handleRequest(request, response) {
       await requireOpenLedgerPeriod(entryDate, profile);
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), key, actor.id, JSON.stringify(record), timestamp, timestamp);
-      await recordAuditEvent(actor.id, 'post_manual_journal', 'finance_general_ledger', key, { voucherCode, amount, accountingRegime: profile.accountingRegime });
+      await recordAuditEvent(actor.id, 'post_manual_journal', 'finance_general_ledger', key, { voucherCode, amount, journalLineCount: journalLines.length, accountingRegime: profile.accountingRegime });
     });
     sendJson(response, 201, { record });
     return;
@@ -7672,13 +7693,17 @@ async function handleRequest(request, response) {
       const quarterRecords = records.filter((record) => record.status === 'Đã ghi sổ cái' && record.entryDate >= startDate && record.entryDate < endExclusive);
       const accounts = new Map();
       for (const item of quarterRecords) {
-        const amount = Number(item.amount);
-        if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(422, 'Sổ Cái có số tiền không hợp lệ; chưa thể kết chuyển.');
-        for (const [side, field] of [['debit', 'debitAccount'], ['credit', 'creditAccount']]) {
-          const code = /(?:TK\s*)?(\d{3,6})/i.exec(String(item[field] || ''))?.[1] || '';
-          if (!code) continue;
+        const lines = Array.isArray(item.lines) && item.lines.length
+          ? item.lines
+          : [{ account: item.debitAccount, debit: item.debitAccount ? item.amount : 0, credit: 0 }, { account: item.creditAccount, debit: 0, credit: item.creditAccount ? item.amount : 0 }];
+        for (const line of lines) {
+          const code = /(?:TK\s*)?(\d{3,6})/i.exec(String(line.account || ''))?.[1] || '';
+          const debit = Number(line.debit) || 0;
+          const credit = Number(line.credit) || 0;
+          if (!code || debit < 0 || credit < 0 || (!debit && !credit)) throw new HttpError(422, 'Sổ Cái có dòng hạch toán không hợp lệ; chưa thể kết chuyển.');
           const movement = accounts.get(code) || { debit: 0, credit: 0 };
-          movement[side] += amount;
+          movement.debit += debit;
+          movement.credit += credit;
           accounts.set(code, movement);
         }
       }

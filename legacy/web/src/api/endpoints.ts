@@ -1061,7 +1061,7 @@ export const collectionsApi = {
 };
 
 export const generalLedgerApi = {
-  createEntry: (record: { key?: string; voucherCode: string; entryDate: string; description: string; debitAccount: string; creditAccount: string; amount: number }) =>
+  createEntry: (record: { key?: string; voucherCode: string; entryDate: string; description: string; debitAccount?: string; creditAccount?: string; amount?: number; lines?: Array<{ account: string; debit: number; credit: number }> }) =>
     api.post<{ record: Record<string, any> }>('/finance/general-ledger/entries', record),
   closeQuarter: (period: string) =>
     api.post<{ period: string; startDate: string; endDate: string; entries: number; records: Record<string, any>[] }>('/finance/general-ledger/close', { period }),
