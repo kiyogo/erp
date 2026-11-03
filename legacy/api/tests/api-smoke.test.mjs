@@ -935,6 +935,13 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, attachmentCount: 1.5 }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], amount: 1000 }] }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, journalLines: [{ ...baseVoucher.journalLines[0], debitAccount: 'abc' }] }, 422);
+  const insuranceVoucher = {
+    ...baseVoucher, type: 'Chi', category: 'Nộp bảo hiểm', reference: 'BH-2026-10-001',
+    counterpartyType: 'other', counterpartyContactId: '', recipientOrPayer: 'Cơ quan Bảo hiểm xã hội',
+    journalLines: [{ description: 'Nộp bảo hiểm kỳ 10/2026', debitAccount: '3383', creditAccount: '1121', amount: 1200 }],
+  };
+  await request('/finance/cash-transactions', 'POST', insuranceVoucher, 201);
+  await request('/finance/cash-transactions', 'POST', { ...insuranceVoucher, reference: 'bh-2026-10-001' }, 409);
 
   const updated = (await request(`/finance/cash-transactions/${created.key}`, 'PATCH', {
     ...baseVoucher, category: 'Thu tiền theo hóa đơn', amount: 1400, journalLines: [{ ...baseVoucher.journalLines[0], amount: 1400 }], recipientOrPayer: 'Không được ghi đè danh mục',
