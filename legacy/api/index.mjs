@@ -8909,6 +8909,132 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/finance/cash-categories') {
+    await requireAdmin(request);
+    const type = oneOf(url.searchParams.get('type'), 'Loại phiếu', ['Thu', 'Chi']);
+    const [saved, historic] = await Promise.all([
+      db.prepare('SELECT name FROM finance_cash_categories WHERE transaction_type = ? ORDER BY created_at, name').all(type),
+      db.prepare('SELECT DISTINCT category AS name FROM finance_cash_transactions WHERE transaction_type = ? ORDER BY category').all(type),
+    ]);
+    const names = [...CASH_TRANSACTION_CATEGORY_DEFAULTS[type], ...saved.map(row => row.name), ...historic.map(row => row.name)];
+    const uniqueNames = [...new Map(names.filter(Boolean).map(name => [String(name).trim().toLocaleLowerCase('vi-VN'), String(name).trim()])).values()];
+    sendJson(response, 200, { data: uniqueNames });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/cash-categories') {
+    const actor = await requireAdmin(request);
+    const category = validateCashCategory(await readJson(request));
+    const [duplicate, historicDuplicate] = await Promise.all([
+      db.prepare('SELECT id, name FROM finance_cash_categories WHERE transaction_type = ? AND LOWER(name) = LOWER(?) LIMIT 1').get(category.type, category.name),
+      db.prepare('SELECT id FROM finance_cash_transactions WHERE transaction_type = ? AND LOWER(category) = LOWER(?) LIMIT 1').get(category.type, category.name),
+    ]);
+    if (duplicate || historicDuplicate || CASH_TRANSACTION_CATEGORY_DEFAULTS[category.type].some(name => name.toLocaleLowerCase('vi-VN') === category.name.toLocaleLowerCase('vi-VN'))) {
+      throw new HttpError(409, 'Loại phiếu này đã tồn tại.');
+    }
+    const id = randomUUID();
+    const timestamp = now();
+    try {
+      await db.prepare('INSERT INTO finance_cash_categories (id, transaction_type, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(id, category.type, category.name, actor.id, timestamp);
+    } catch (error) {
+      if (String(error?.message || '').toLowerCase().includes('unique')) throw new HttpError(409, 'Loại phiếu này đã tồn tại.');
+      throw error;
+    }
+    await recordAuditEvent(actor.id, 'create_cash_category', 'finance_cash_categories', id, { type: category.type, name: category.name });
+    sendJson(response, 201, { category: { key: id, ...category, createdAt: timestamp } });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/finance/cash-transactions') {
+    await requireAdmin(request);
+    const source = url.searchParams.get('source');
+    if (source && source !== 'bank' && source !== 'petty') throw new HttpError(422, 'Nguồn tiền không hợp lệ.');
+    const rows = source
+      ? await db.prepare('SELECT * FROM finance_cash_transactions WHERE source = ? ORDER BY transaction_date DESC, created_at DESC').all(source)
+      : await db.prepare('SELECT * FROM finance_cash_transactions ORDER BY transaction_date DESC, created_at DESC').all();
+    sendJson(response, 200, { data: rows.map(publicCashTransaction) });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/cash-transactions') {
+    const actor = await requireAdmin(request);
+    await requireAccountingProfile();
+    const transaction = await resolveCashTransactionLinks(validateCashTransaction(await readJson(request)));
+    transaction.attachments = await resolveCashAttachments(transaction.attachments, actor);
+    transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
+    const id = randomUUID();
+    const timestamp = now();
+    await db.prepare(`INSERT INTO finance_cash_transactions (
+      id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+      account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
+      counterparty_contact_id, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        id, transaction.code, transaction.type, transaction.source, transaction.category,
+        transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
+        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.staffEmployeeCode, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, transaction.department || null, transaction.employeeCode || null,
+        transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
+        actor.id, timestamp, timestamp,
+      );
+    await recordAuditEvent(actor.id, 'create_cash_transaction', 'finance_cash_transactions', id, {
+      code: transaction.code, type: transaction.type, amount: transaction.amount, source: transaction.source,
+    });
+    sendJson(response, 201, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
+  const cashTransactionMatch = /^\/finance\/cash-transactions\/([^/]+)$/.exec(resource);
+  if (cashTransactionMatch && request.method === 'PATCH') {
+    const actor = await requireAdmin(request);
+    const id = decodeURIComponent(cashTransactionMatch[1]);
+    const current = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id);
+    if (!current) throw new HttpError(404, 'Không tìm thấy chứng từ thu chi.');
+    if (/^TRF-[0-9a-f-]+-(OUT|IN|FEE)$/i.test(current.code)) {
+      throw new HttpError(409, 'Chứng từ thuộc lệnh điều chuyển. Hãy hủy cả lệnh để bảo toàn hai bên sổ quỹ.');
+    }
+    const payload = await readJson(request);
+    const timestamp = now();
+    if (payload.status === 'Đã hủy') {
+      const linkedPayment = await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.financeTransactionId') = ?").get(id);
+      if (current.code.startsWith('AUTO-') || linkedPayment) throw new HttpError(409, 'Phiếu được sinh từ chứng từ khác. Hãy hủy hoặc điều chỉnh chứng từ nguồn để giữ đúng liên kết sổ sách.');
+      await db.prepare("UPDATE finance_cash_transactions SET status = 'Đã hủy', updated_at = ? WHERE id = ? AND status <> 'Đã hủy'").run(timestamp, id);
+      await recordAuditEvent(actor.id, 'cancel_cash_transaction', 'finance_cash_transactions', id, { code: current.code, amount: Number(current.amount) });
+    } else {
+      if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Chỉ sửa được phiếu đang chờ duyệt. Phiếu đã hoàn thành cần hủy và lập phiếu thay thế để giữ nguyên dấu vết kế toán.');
+      if (current.code.startsWith('AUTO-')) throw new HttpError(409, 'Phiếu được sinh tự động từ chứng từ nguồn và không thể sửa riêng.');
+      if (payload.status && payload.status !== current.status) throw new HttpError(409, 'Không thể đổi trạng thái phiếu khi sửa nội dung.');
+      const linkedPayment = await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.financeTransactionId') = ?").get(id);
+      if (linkedPayment) throw new HttpError(409, 'Phiếu đã liên kết với đề nghị thanh toán. Hãy điều chỉnh chứng từ nguồn.');
+      const transaction = await resolveCashTransactionLinks(validateCashTransaction({
+        type: current.transaction_type, source: current.source, category: current.category, amount: current.amount,
+        date: current.transaction_date, recipientOrPayer: current.counterparty, account: current.account_name,
+        voucherDate: current.voucher_date || current.transaction_date, currency: current.currency || 'VND', reference: current.reference || '',
+        staffEmployeeCode: current.staff_employee_code || '', payerName: current.payer_name || '', counterpartyAddress: current.counterparty_address || '', attachmentCount: Number(current.attachment_count) || 0, sourceDocument: current.source_document || '',
+        status: current.status, note: current.note, department: current.department || '', employeeCode: current.employee_code || '',
+        sourceAccountId: current.source_account_id || '', counterpartyType: current.counterparty_type || 'other',
+        counterpartyContactId: current.counterparty_contact_id || '',
+        attachments: (() => { try { return JSON.parse(current.attachments_json || '[]'); } catch { return []; } })(),
+        journalLines: (() => { try { return JSON.parse(current.journal_lines_json || '[]'); } catch { return []; } })(), ...payload,
+      }));
+      transaction.attachments = await resolveCashAttachments(transaction.attachments, actor);
+      const result = await db.prepare(`UPDATE finance_cash_transactions SET
+        source = ?, category = ?, amount = ?, transaction_date = ?, counterparty = ?, account_name = ?, note = ?,
+        department = ?, employee_code = ?, source_account_id = ?, counterparty_type = ?, counterparty_contact_id = ?, journal_lines_json = ?, attachments_json = ?, voucher_date = ?, currency = ?, reference = ?, staff_employee_code = ?, payer_name = ?, counterparty_address = ?, attachment_count = ?, source_document = ?, updated_at = ?
+        WHERE id = ? AND status = 'Chờ duyệt'`)
+        .run(transaction.source, transaction.category, transaction.amount, transaction.date, transaction.recipientOrPayer,
+          transaction.account, transaction.note, transaction.department || null, transaction.employeeCode || null,
+          transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
+          JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.staffEmployeeCode, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, timestamp, id);
+      if (!result.changes) throw new HttpError(409, 'Phiếu đã được cập nhật ở nơi khác. Hãy tải lại danh sách rồi thử lại.');
+      await recordAuditEvent(actor.id, 'update_cash_transaction', 'finance_cash_transactions', id, {
+        code: current.code, amount: transaction.amount, source: transaction.source,
+      });
+    }
+    sendJson(response, 200, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/finance/internal-transfers') {
     await requireAdmin(request);
     const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_internal_transfers' ORDER BY created_at DESC, record_key").all();
