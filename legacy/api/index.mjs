@@ -2275,6 +2275,49 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.externalStatus = 'Chưa xác minh với cơ quan thuế';
     record.paymentEvidence = [];
   }
+  if (scope === 'finance_loans') {
+    const profile = await requireAccountingProfile();
+    record.direction = oneOf(record.direction || (record.loanType === 'Khế ước cho vay' ? 'lend' : 'borrow'), 'Loại khế ước', ['borrow', 'lend']);
+    record.contractCode = requiredText(record.contractCode, 'Số khế ước', 80);
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loans' AND LOWER(json_extract(payload_json, '$.contractCode')) = LOWER(?) AND record_key <> ? LIMIT 1")
+      .get(record.contractCode, current?.key || '');
+    if (duplicate) throw new HttpError(409, 'Số khế ước đã tồn tại.');
+    record.counterpartyName = requiredText(record.counterpartyName, 'Đối tượng giao dịch', 300);
+    record.principalAmount = requiredAmount(record.principalAmount, 'Giá trị khoản vay');
+    record.termMonths = requiredAmount(record.termMonths, 'Thời hạn vay');
+    record.disbursedDate = requiredIsoDate(record.disbursedDate, 'Ngày giải ngân');
+    record.dueDate = requiredIsoDate(record.dueDate, 'Ngày đáo hạn');
+    if (record.dueDate < record.disbursedDate) throw new HttpError(422, 'Ngày đáo hạn phải bằng hoặc sau ngày giải ngân.');
+    const accountRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+    const chart = accountRows.map(row => parseJsonObject(row.payload_json)).filter(account => account.accountingRegime === profile.accountingRegime);
+    const accountType = record.direction === 'borrow' ? 'Nợ phải trả' : 'Tài sản';
+    const interestType = record.direction === 'borrow' ? 'Chi phí' : 'Doanh thu';
+    const requireLeafAccount = (rawCode, expectedType, label) => {
+      const code = requiredText(rawCode, label, 24).replace(/\s+/g, '').toUpperCase();
+      const account = chart.find(item => String(item.code || '').toUpperCase() === code);
+      if (!account || account.status !== 'Đang sử dụng' || account.accountType !== expectedType || chart.some(item => item.parentCode === account.code)) {
+        throw new HttpError(422, `${label} phải là tài khoản chi tiết đang sử dụng thuộc nhóm ${expectedType} của doanh nghiệp.`);
+      }
+      return account.code;
+    };
+    record.principalAccount = requireLeafAccount(record.principalAccount, accountType, 'Tài khoản nợ gốc');
+    record.interestAccount = requireLeafAccount(record.interestAccount, interestType, 'Tài khoản lãi');
+    if (!Array.isArray(record.rates) || record.rates.length > 100) throw new HttpError(422, 'Danh sách lãi suất không hợp lệ.');
+    const effectiveRateDates = new Set();
+    record.rates = record.rates.map((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new HttpError(422, 'Dòng lãi suất không hợp lệ.');
+      const effectiveFrom = requiredIsoDate(row.effectiveFrom, 'Ngày hiệu lực lãi suất');
+      if (effectiveRateDates.has(effectiveFrom)) throw new HttpError(422, 'Ngày hiệu lực lãi suất không được trùng.');
+      effectiveRateDates.add(effectiveFrom);
+      const rate = row.rate === null || row.rate === '' || row.rate === undefined ? null : Number(row.rate);
+      const overdueRate = row.overdueRate === null || row.overdueRate === '' || row.overdueRate === undefined ? null : Number(row.overdueRate);
+      if ([rate, overdueRate].some(value => value !== null && (!Number.isFinite(value) || value < 0 || value > 100))) throw new HttpError(422, 'Lãi suất phải nằm trong khoảng từ 0 đến 100%.');
+      if (rate === null && overdueRate === null) throw new HttpError(422, 'Mỗi dòng lãi suất cần có lãi suất trong hạn hoặc quá hạn.');
+      return { rate, overdueRate, effectiveFrom, note: optionalText(row.note, 'Ghi chú lãi suất', 500) };
+    });
+    record.accountingRegime = profile.accountingRegime;
+    record.loanType = record.direction === 'borrow' ? 'Khế ước đi vay' : 'Khế ước cho vay';
+  }
   if (scope === 'payroll' && !current) {
     if (record.status === 'Đã chi trả') throw new HttpError(409, 'Phiếu lương mới không thể được tạo ở trạng thái đã chi trả; hãy dùng nghiệp vụ chi lương để lập phiếu chi và bút toán.');
     record.status = oneOf(record.status || 'Chưa chi trả', 'Trạng thái phiếu lương', ['Chưa chi trả', 'Chờ duyệt']);
@@ -2291,9 +2334,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.issueDate = requiredIsoDate(record.issueDate, 'Ngày lập bản nháp');
     record.totalAmount = Number(record.totalAmount);
     if (!Number.isFinite(record.totalAmount) || record.totalAmount <= 0 || record.totalAmount > 1_000_000_000_000_000) throw new HttpError(422, 'Tổng tiền hàng phải lớn hơn 0 và nằm trong giới hạn cho phép.');
-    const vatRate = oneOf(record.vatRate, 'Thuế suất GTGT', ['0%', '5%', '8%', '10%', 'Không chịu thuế']);
-    const rate = vatRate === 'Không chịu thuế' ? 0 : Number(vatRate.replace('%', ''));
-    record.vatRate = vatRate;
+    const suppliedRate = String(record.vatRate ?? '').trim();
+    const rate = suppliedRate === 'Không chịu thuế' ? 0 : Number(suppliedRate.replace(/%$/, ''));
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new HttpError(422, 'Thuế suất GTGT phải từ 0 đến 100% và được đối chiếu theo loại hàng hóa, dịch vụ và thời điểm áp dụng.');
+    record.vatRate = rate;
     record.vatAmount = Math.round(record.totalAmount * rate / 100);
     record.finalAmount = record.totalAmount + record.vatAmount;
     record.status = 'Hóa đơn nháp';

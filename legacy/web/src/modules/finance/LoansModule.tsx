@@ -10,11 +10,11 @@ import {
 } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { KTable } from '../../components/KTable';
-import { filesApi } from '../../api/endpoints';
+import { filesApi, systemApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { Button, Drawer, Form, Input, message, Modal, Select, Tabs } from '../../custom-ui';
-import { hasUniqueLoanContractCode, isValidLoanDateRange, loanDirectionOf, type LoanDirection } from './loanRules';
+import { hasUniqueLoanContractCode, isValidLoanDateRange, loanAccountsFor, loanDirectionOf, type LoanDirection } from './loanRules';
 
 type InterestRateRow = { rate: string; overdueRate: string; effectiveFrom: string; note: string };
 type LoanAttachment = { id: string; name: string; size: number; mimeType?: string };
@@ -75,8 +75,8 @@ const emptyLoan = (direction: LoanDirection, contractCode = '') => ({
   counterpartyName: '',
   creditContract: '',
   purpose: '',
-  principalAccount: direction === 'borrow' ? '341' : '1218',
-  interestAccount: direction === 'borrow' ? '658' : '558',
+  principalAccount: '',
+  interestAccount: '',
   currency: 'VND',
   principalAmount: 0,
   termMonths: 0,
@@ -123,7 +123,21 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
   const [savedAttachments, setSavedAttachments] = useState<LoanAttachment[]>([]);
   const [removedAttachments, setRemovedAttachments] = useState<LoanAttachment[]>([]);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [accountingRegime, setAccountingRegime] = useState('');
+  const [chartAccounts, setChartAccounts] = useState<Array<{ code: string; name: string; parentCode?: string; accountingRegime: string; status: string; accountType: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    systemApi.getCompanyProfile().then(async ({ data: response }) => {
+      const regime = String(response.profile.accountingRegime || '');
+      const accounts = await dataService.refreshGenericData('finance_chart_of_accounts');
+      if (!active) return;
+      setAccountingRegime(regime);
+      setChartAccounts(accounts);
+    }).catch(() => { if (active) message.error('Không tải được chế độ kế toán và danh mục tài khoản cho khoản vay.'); });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const refresh = () => {
@@ -202,12 +216,22 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
       message.error('Số khế ước đã tồn tại. Hãy nhập số khác.');
       return;
     }
-    if (!Number.isFinite(principalAmount) || principalAmount < 0 || !Number.isFinite(termMonths) || termMonths < 0) {
-      message.error('Giá trị khoản vay và thời hạn vay phải là số không âm hợp lệ.');
+    if (!Number.isSafeInteger(principalAmount) || principalAmount <= 0 || !Number.isSafeInteger(termMonths) || termMonths <= 0) {
+      message.error('Giá trị khoản vay và thời hạn vay phải là số nguyên dương hợp lệ.');
       return;
     }
     if (!isValidLoanDateRange(values.disbursedDate, values.dueDate)) {
       message.error('Ngày đáo hạn phải bằng hoặc sau ngày giải ngân.');
+      return;
+    }
+    const principalType = direction === 'borrow' ? 'Nợ phải trả' : 'Tài sản';
+    const interestType = direction === 'borrow' ? 'Chi phí' : 'Doanh thu';
+    if (!loanAccountsFor(chartAccounts, accountingRegime, principalType).some(account => account.code === values.principalAccount)) {
+      message.error(`Chọn tài khoản chi tiết đang sử dụng thuộc nhóm ${principalType} trong danh mục doanh nghiệp.`);
+      return;
+    }
+    if (!loanAccountsFor(chartAccounts, accountingRegime, interestType).some(account => account.code === values.interestAccount)) {
+      message.error(`Chọn tài khoản chi tiết đang sử dụng thuộc nhóm ${interestType} trong danh mục doanh nghiệp.`);
       return;
     }
     const normalizedRates: NonNullable<EnterpriseLoanItem['rates']> = [];
@@ -218,7 +242,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         message.error('Lãi suất phải nằm trong khoảng từ 0 đến 100%.');
         return;
       }
-      if (row.rate || row.overdueRate || row.note) normalizedRates.push({ rate, overdueRate, effectiveFrom: row.effectiveFrom, note: row.note.trim() });
+      if (rate !== null || overdueRate !== null) normalizedRates.push({ rate, overdueRate, effectiveFrom: row.effectiveFrom, note: row.note.trim() });
     }
     const uploadedAttachments: LoanAttachment[] = [];
     setSaving(true);
@@ -246,8 +270,6 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         currency: values.currency || 'VND',
         rates: normalizedRates,
         interestRate: firstRate ?? undefined,
-        monthlyInterest: firstRate === null ? 0 : Math.round(principalAmount * firstRate / 100 / 12),
-        monthlyPrincipal: termMonths > 0 ? Math.round(principalAmount / termMonths) : 0,
         attachments: [...savedAttachments, ...uploadedAttachments],
         loanType: direction === 'borrow' ? 'Khế ước đi vay' : 'Khế ước cho vay',
       };
@@ -328,18 +350,18 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         width="min(1120px, calc(100vw - 32px))"
       >
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 14 }}>
-          {routeDirection === 'all' && <Form.Item name="direction" label="Loại khế ước" rules={[{ required: true }]}><Select options={[{ label: 'Khế ước đi vay', value: 'borrow' }, { label: 'Khế ước cho vay', value: 'lend' }]} onChange={(value: LoanDirection) => { setDraftDirection(value); form.setFieldsValue({ principalAccount: value === 'borrow' ? '341' : '1218', interestAccount: value === 'borrow' ? '658' : '558', disbursementMethod: value === 'borrow' ? 'Chuyển khoản vào tài khoản DN' : 'Chuyển khoản' }); }} /></Form.Item>}
+          {routeDirection === 'all' && <Form.Item name="direction" label="Loại khế ước" rules={[{ required: true }]}><Select options={[{ label: 'Khế ước đi vay', value: 'borrow' }, { label: 'Khế ước cho vay', value: 'lend' }]} onChange={(value: LoanDirection) => { setDraftDirection(value); form.setFieldsValue({ principalAccount: '', interestAccount: '', disbursementMethod: value === 'borrow' ? 'Chuyển khoản vào tài khoản DN' : 'Chuyển khoản' }); }} /></Form.Item>}
           <strong>Thông tin giải ngân</strong>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
             <Form.Item name="contractCode" label="Số khế ước" rules={[{ required: true, whitespace: true }]}><Input maxLength={80} /></Form.Item>
             <Form.Item name="counterpartyName" label={isLend ? 'Đối tượng vay' : 'Đối tượng cho vay'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
             <Form.Item name="creditContract" label="Hợp đồng tín dụng"><Input /></Form.Item>
             <Form.Item name="purpose" label="Mục đích vay"><Input /></Form.Item>
-            <Form.Item name="principalAccount" label="TK hạch toán nợ gốc" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
-            <Form.Item name="interestAccount" label="TK hạch toán lãi vay" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="principalAccount" label="Tài khoản hạch toán nợ gốc" rules={[{ required: true, whitespace: true }]}><Select showSearch optionFilterProp="label" options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Tài sản' : 'Nợ phải trả').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
+            <Form.Item name="interestAccount" label="Tài khoản hạch toán lãi" rules={[{ required: true, whitespace: true }]}><Select showSearch optionFilterProp="label" options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Doanh thu' : 'Chi phí').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
             <Form.Item name="currency" label="Loại tiền" rules={[{ required: true }]}><Select options={[{ label: 'VND', value: 'VND' }]} /></Form.Item>
-            <Form.Item name="principalAmount" label="Giá trị khoản vay" rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>
-            <Form.Item name="termMonths" label="Thời hạn vay (tháng)" rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>
+            <Form.Item name="principalAmount" label="Giá trị khoản vay" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
+            <Form.Item name="termMonths" label="Thời hạn vay (tháng)" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
             <Form.Item name="disbursedDate" label="Ngày giải ngân" rules={[{ required: true }]}><Input type="date" /></Form.Item>
             <Form.Item name="dueDate" label="Ngày đáo hạn" rules={[{ required: true }]}><Input type="date" /></Form.Item>
             <Form.Item name="disbursementMethod" label="Phương thức giải ngân" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>

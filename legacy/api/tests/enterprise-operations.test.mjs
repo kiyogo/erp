@@ -274,7 +274,11 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(invoiceDraft.vatAmount, 100);
   assert.equal(invoiceDraft.finalAmount, 1100);
   assert.equal(invoiceDraft.cqtCode, undefined);
-  await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-invalid', invoiceNumber: 'DRAFT-INVALID', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: '20%' } }, 422);
+  const customRateDraft = (await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-custom-rate', invoiceNumber: 'DRAFT-2', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: 7.25 } }, 201)).record;
+  assert.equal(customRateDraft.vatRate, 7.25);
+  assert.equal(customRateDraft.vatAmount, 73);
+  assert.equal(customRateDraft.finalAmount, 1073);
+  await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-invalid', invoiceNumber: 'DRAFT-INVALID', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: 120 } }, 422);
   await request('/collections/finance_chart_of_accounts', 'POST', { record: { key: 'bypass-chart' } }, 409);
   const existingCash = (await request('/finance/chart-of-accounts', 'POST', { record: {
     code: '111', name: 'Tiền mặt', accountType: 'Tài sản', balanceNature: 'Chưa xác định', effectiveDate: '2026-01-01',
@@ -304,6 +308,17 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(fullChart.length, 184);
   assert.equal(fullChart.find((account) => account.code === '111').key, existingCash.key);
   assert.equal(fullChart.find((account) => account.code === '111').tracksParty, true, 'a matching manual account must not be overwritten');
+  const loanDraft = (await request('/collections/finance_loans', 'POST', { record: {
+    key: 'loan-draft-1', direction: 'borrow', contractCode: 'LOAN-TEST-1', counterpartyName: 'Ngân hàng kiểm thử',
+    principalAmount: 100000, termMonths: 12, disbursedDate: '2026-10-01', dueDate: '2027-10-01',
+    principalAccount: '3411', interestAccount: '635', accountingRegime: 'Forged',
+    rates: [{ rate: 7.25, overdueRate: 10, effectiveFrom: '2026-10-01', note: 'Theo hợp đồng' }],
+  } }, 201)).record;
+  assert.equal(loanDraft.accountingRegime, 'TT99');
+  assert.equal(loanDraft.principalAccount, '3411');
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-duplicate', contractCode: 'loan-test-1' } }, 409);
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-group-account', contractCode: 'LOAN-GROUP', principalAccount: '341' } }, 422);
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-invalid-rate', contractCode: 'LOAN-RATE', rates: [{ rate: 7.25, overdueRate: null, effectiveFrom: '2026-10-01' }, { rate: 8, overdueRate: null, effectiveFrom: '2026-10-01' }] } }, 422);
   const addAccount = (code, accountType, parentCode = '', status = 'Đang sử dụng') => request('/finance/chart-of-accounts', 'POST', { record: {
     code, name: `Tài khoản ${code}`, parentCode, accountType, balanceNature: 'Chưa xác định',
     effectiveDate: '2026-01-01', status, tracksParty: false,

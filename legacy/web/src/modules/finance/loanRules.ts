@@ -31,3 +31,8 @@ export const loanDirectionOf = (loan: { direction?: string; loanType?: string })
   if (loan.direction === 'lend' || loan.loanType === 'Khế ước cho vay') return 'lend';
   return 'borrow';
 };
+
+export const loanAccountsFor = <T extends { accountingRegime?: string; status?: string; accountType?: string; code?: string; parentCode?: string }>(
+  accounts: T[], regime: string, accountType: string,
+): T[] => accounts.filter(account => account.accountingRegime === regime && account.status === 'Đang sử dụng'
+  && account.accountType === accountType && !accounts.some(child => child.parentCode === account.code));
