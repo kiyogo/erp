@@ -264,6 +264,11 @@ export const PayrollModule: React.FC = () => {
       ['employeeHealth', '3384', 'Khấu trừ bảo hiểm y tế người lao động'],
       ['employeeUnemployment', unemploymentInsuranceAccount, 'Khấu trừ bảo hiểm thất nghiệp người lao động'],
     ] as const).map(([field, account, desc]) => ({ desc, debit: 'Nợ TK 334', credit: `Có TK ${account}`, amount: Number(insuranceBreakdown[field]) || 0 })),
+  ] : accountingRegime === 'TT132' ? [
+    { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 91122', credit: 'Có TK 3311', amount: grossPayroll },
+    { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 91122', credit: 'Có TK 3312', amount: Number(employerCharge) || 0 },
+    { desc: 'Khấu trừ bảo hiểm người lao động', debit: 'Nợ TK 3311', credit: 'Có TK 3312', amount: employeeInsurance },
+    { desc: 'Khấu trừ thuế TNCN', debit: 'Nợ TK 3311', credit: 'Có TK 33138', amount: periodData.reduce((sum, item) => sum + (Number(item.taxDeduction) || 0), 0) },
   ] : [
     { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 642', credit: 'Có TK 334', amount: grossPayroll },
     { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 642', credit: 'Có TK 338', amount: Number(employerCharge) || 0 },

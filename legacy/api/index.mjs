@@ -5174,6 +5174,7 @@ function payrollMonth(value) {
 }
 
 function ledgerCashAccount(profile, source) {
+  if (profile.accountingRegime === 'TT132') return source === 'petty' ? '1111' : '1112';
   if (profile.accountingRegime === 'TT133') return source === 'petty' ? '1111' : '1121';
   return source === 'petty' ? '111' : '112';
 }
@@ -5251,6 +5252,14 @@ async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmp
       })),
       { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: totals.tax },
       { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: `TK ${ledgerCashAccount({ accountingRegime }, 'bank')}`, amount: totals.paid },
+    ].filter((line) => line.amount > 0);
+  } else if (accountingRegime === 'TT132') {
+    lines = [
+      { description: `Ghi nhận lương phải trả kỳ ${period}`, debitAccount: 'TK 91122', creditAccount: 'TK 3311', amount: totals.gross },
+      { description: `Trích bảo hiểm phần doanh nghiệp kỳ ${period}`, debitAccount: 'TK 91122', creditAccount: 'TK 3312', amount: employerInsurance },
+      { description: `Khấu trừ bảo hiểm người lao động kỳ ${period}`, debitAccount: 'TK 3311', creditAccount: 'TK 3312', amount: totals.employeeInsurance },
+      { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 3311', creditAccount: 'TK 33138', amount: totals.tax },
+      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 3311', creditAccount: `TK ${ledgerCashAccount({ accountingRegime }, 'bank')}`, amount: totals.paid },
     ].filter((line) => line.amount > 0);
   } else {
     lines = [

@@ -235,6 +235,24 @@ const tt133Accounts = [
   ["711", "Thu nhập khác", ""], ["811", "Chi phí khác", ""], ["821", "Chi phí thuế thu nhập doanh nghiệp", ""], ["911", "Xác định kết quả kinh doanh", ""],
 ].map(([code, name, parentCode]) => ({ code, name, parentCode }));
 
+const tt132Accounts = [
+  ["111", "Tiền", ""], ["1111", "Tiền mặt", "111"], ["1112", "Tiền gửi ngân hàng", "111"],
+  ["131", "Các khoản nợ phải thu", ""], ["1311", "Phải thu của khách hàng", "131"],
+  ["1313", "Thuế GTGT được khấu trừ", "131"], ["1318", "Các khoản nợ phải thu khác", "131"],
+  ["152", "Hàng tồn kho", ""], ["1521", "Nguyên vật liệu, dụng cụ", "152"],
+  ["1524", "Chi phí sản xuất kinh doanh dở dang", "152"], ["1526", "Thành phẩm, hàng hóa", "152"],
+  ["211", "Tài sản cố định", ""], ["331", "Các khoản nợ phải trả", ""],
+  ["3311", "Phải trả người lao động", "331"], ["3312", "Các khoản trích theo lương", "331"],
+  ["3313", "Thuế và các khoản phải nộp nhà nước", "331"], ["33131", "Thuế giá trị gia tăng phải nộp", "3313"],
+  ["33134", "Thuế thu nhập doanh nghiệp", "3313"],
+  ["33138", "Thuế khác, phí, lệ phí và các khoản khác phải nộp Nhà nước", "3313"],
+  ["3318", "Các khoản nợ phải trả khác", "331"], ["411", "Vốn chủ sở hữu", ""],
+  ["4111", "Vốn góp của chủ sở hữu", "411"], ["4118", "Lợi nhuận sau thuế chưa phân phối", "411"],
+  ["911", "Xác định kết quả kinh doanh", ""], ["9111", "Doanh thu và thu nhập", "911"],
+  ["91111", "Doanh thu bán hàng và cung cấp dịch vụ", "9111"], ["91118", "Thu nhập khác", "9111"],
+  ["9112", "Các khoản chi phí", "911"], ["91121", "Giá vốn hàng bán", "9112"], ["91122", "Chi phí khác", "9112"],
+].map(([code, name, parentCode]) => ({ code, name, parentCode }));
+
 export const chartOfAccountsTemplates = Object.freeze({
   TT99: Object.freeze({
     regime: 'TT99',
@@ -251,6 +269,14 @@ export const chartOfAccountsTemplates = Object.freeze({
     source: 'Phụ lục 1, Danh mục hệ thống tài khoản kế toán áp dụng cho doanh nghiệp nhỏ và vừa',
     sourceUrl: 'https://congbao.chinhphu.vn/tai-ve-van-ban-so-133-2016-tt-btc-21048-15524?format=pdf',
     accounts: Object.freeze(tt133Accounts.map((account) => Object.freeze(account))),
+  }),
+  TT132: Object.freeze({
+    regime: 'TT132',
+    name: 'Thông tư 132/2018/TT-BTC',
+    effectiveDate: '2019-04-01',
+    source: 'Phụ lục 2, Hệ thống tài khoản kế toán áp dụng cho doanh nghiệp siêu nhỏ tính thuế TNDN theo thu nhập tính thuế',
+    sourceUrl: 'https://congbao.chinhphu.vn/tai-ve-van-ban-so-132-2018-tt-btc-28371-25710?format=pdf',
+    accounts: Object.freeze(tt132Accounts.map((account) => Object.freeze(account))),
   }),
 });
 

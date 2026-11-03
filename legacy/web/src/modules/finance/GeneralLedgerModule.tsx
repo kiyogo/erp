@@ -150,6 +150,12 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         statusNote: 'Cơ sở dữ liệu quốc gia về VBQPPL ghi nhận văn bản hết hiệu lực một phần. Hãy rà soát phần còn hiệu lực và quy chế kế toán của doanh nghiệp trước khi ghi sổ.',
         statusUrl: 'https://vbpl.moj.gov.vn/bonoivu/Pages/vbpq-thuoctinh.aspx?ItemID=113560&Keyword=',
       },
+      TT132: {
+        name: 'Thông tư 132/2018/TT-BTC',
+        appendix: 'Phụ lục 2',
+        effective: 'Thông tư áp dụng cho năm tài chính bắt đầu từ hoặc sau ngày 01/04/2019. Phụ lục 2 dành cho doanh nghiệp siêu nhỏ tính thuế TNDN trên thu nhập tính thuế; doanh nghiệp tính thuế theo tỷ lệ trên doanh thu có thể lựa chọn chế độ tại Chương II. Dùng để đối chiếu kỳ trước ngày 01/07/2026',
+        sourceUrl: 'https://congbao.chinhphu.vn/tai-ve-van-ban-so-132-2018-tt-btc-28371-25710?format=pdf',
+      },
     }[accountingRegime];
     if (!template) return;
     Modal.confirm({
@@ -615,7 +621,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             Thông tư 58/2026/TT-BTC hướng dẫn ghi sổ theo mẫu dành cho doanh nghiệp siêu nhỏ. Danh mục tài khoản tại đây chỉ phục vụ theo dõi nội bộ; sổ mẫu và quy trình chuyển đổi số dư theo Thông tư 58 chưa được triển khai trong phân hệ này.
           </div>
         )}
-        {['TT99', 'TT133'].includes(accountingRegime) && (
+        {['TT99', 'TT133', 'TT132'].includes(accountingRegime) && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
             <Button icon={<FileSyncOutlined />} loading={chartImporting} onClick={importChartTemplate}>Nạp mẫu {accountingRegime}</Button>
           </div>
