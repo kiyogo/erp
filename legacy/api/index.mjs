@@ -2182,6 +2182,7 @@ const accountingOperationScopes = new Set([
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'finance_cash_counts' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được lập và quản lý biên bản kiểm kê quỹ.');
   if (scope === 'finance_cash_forecast_scenarios' && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được lập và xem kịch bản dự báo dòng tiền.');
   }
@@ -4541,6 +4542,58 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Khóa bản ghi không hợp lệ.');
   }
   if (record.key === undefined) record.key = recordKey;
+  if (scope === 'finance_cash_counts') {
+    record.code = requiredText(record.code, 'Mã kiểm kê', 80);
+    record.countDate = requiredIsoDate(record.countDate, 'Ngày kiểm kê');
+    record.date = requiredIsoDate(record.date, 'Ngày lập');
+    record.time = requiredText(record.time, 'Thời điểm chốt', 5);
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(record.time)) throw new HttpError(422, 'Thời điểm chốt phải có định dạng giờ và phút hợp lệ.');
+    record.cashAccountId = requiredText(record.cashAccountId, 'Quỹ tiền mặt', 160);
+    const cashAccount = (await internalTransferAccounts()).find(account => account.key === record.cashAccountId && account.source === 'petty' && account.status === 'Đang hoạt động');
+    if (!cashAccount) throw new HttpError(422, 'Quỹ tiền mặt không tồn tại hoặc đã ngừng hoạt động.');
+    record.cashAccountName = cashAccount.name;
+    record.counterName = requiredText(record.counterName, 'Người kiểm kê', 160);
+    record.witnessName = optionalText(record.witnessName, 'Người chứng kiến', 160);
+    record.purpose = requiredText(record.purpose, 'Mục đích kiểm kê', 500);
+    record.reference = optionalText(record.reference, 'Chứng từ tham chiếu', 160);
+    record.participants = optionalText(record.participants, 'Thành viên tham gia', 500);
+    record.reconciliation = optionalText(record.reconciliation, 'Nội dung đối chiếu', 2_000);
+    record.reason = optionalText(record.reason, 'Nguyên nhân chênh lệch', 2_000);
+    record.handlingDirection = optionalText(record.handlingDirection, 'Hướng xử lý', 2_000);
+    record.conclusion = optionalText(record.conclusion, 'Kết luận', 2_000);
+    record.currency = oneOf(record.currency || 'VND', 'Loại tiền', ['VND']);
+    if (!Array.isArray(record.lines) || record.lines.length > 200) throw new HttpError(422, 'Danh sách mệnh giá không hợp lệ hoặc vượt 200 dòng.');
+    let actualBalance = 0;
+    record.lines = record.lines.map((line, index) => {
+      if (!line || typeof line !== 'object' || Array.isArray(line)) throw new HttpError(422, `Dòng mệnh giá ${index + 1} không hợp lệ.`);
+      const denomination = Number(line.denomination);
+      const quantity = Number(line.quantity);
+      if (!Number.isSafeInteger(denomination) || denomination < 0 || !Number.isSafeInteger(quantity) || quantity < 0) throw new HttpError(422, `Mệnh giá và số lượng dòng ${index + 1} phải là số nguyên không âm.`);
+      const amount = denomination * quantity;
+      if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(actualBalance + amount)) throw new HttpError(422, 'Tổng tiền kiểm kê vượt giới hạn số nguyên an toàn.');
+      actualBalance += amount;
+      return { key: requiredText(line.key || `denomination-${index + 1}`, `Mã dòng ${index + 1}`, 160), denomination, quantity, note: optionalText(line.note, `Diễn giải dòng ${index + 1}`, 240) };
+    });
+    const balanceRow = await db.prepare(`SELECT COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END), 0) AS balance
+      FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty' AND transaction_date <= ?
+      AND (source_account_id = ? OR (source_account_id IS NULL AND account_name = ?))`)
+      .get(record.countDate, cashAccount.key, cashAccount.name);
+    const bookBalance = Number(balanceRow?.balance || 0);
+    if (!Number.isSafeInteger(bookBalance)) throw new HttpError(422, 'Số dư sổ quỹ vượt giới hạn số nguyên an toàn.');
+    record.bookBalance = bookBalance;
+    record.actualBalance = actualBalance;
+    record.difference = bookBalance - actualBalance;
+    if (!Number.isSafeInteger(record.difference)) throw new HttpError(422, 'Chênh lệch kiểm kê vượt giới hạn số nguyên an toàn.');
+    record.status = current?.status || 'Đã ghi nhận';
+    record.createdBy = current?.createdBy || actor.name;
+    record.createdAt = current?.createdAt || now();
+    record.updatedBy = actor.name;
+    record.updatedAt = now();
+    delete record.resolved;
+    delete record.approvedBy;
+    delete record.approvedById;
+    delete record.approvedAt;
+  }
   if (scope === 'dropdown_positions') {
     record.name = requiredText(record.name, 'Tên vị trí', 160);
     record.code = optionalText(record.code, 'Mã vị trí', 80).toUpperCase();

@@ -1026,6 +1026,26 @@ test('collections support create, read, patch, replacement, delete and concurren
   assert.equal((await request('/collections/audit_test')).data.length, 0);
 });
 
+test('cash counts require a real petty cash account and recompute book balance and discrepancy on the server', async () => {
+  const record = (await request('/collections/finance_cash_counts', 'POST', { record: {
+    key: 'cash-count-server-check', code: 'KKQ-SERVER-001', purpose: 'Kiểm kê quỹ tiền mặt', countDate: '2026-10-30', date: '2026-10-30', time: '16:30',
+    cashAccountId: 'petty:Quỹ tiền mặt', counterName: 'Người kiểm kê', witnessName: 'Người chứng kiến', currency: 'VND',
+    lines: [{ key: 'note-1000', denomination: 1000, quantity: 2, note: 'Mệnh giá 1.000' }], bookBalance: 999999, actualBalance: 999999, difference: 0,
+  } }, 201)).record;
+  assert.equal(record.cashAccountName, 'Quỹ tiền mặt');
+  assert.equal(record.bookBalance, 0);
+  assert.equal(record.actualBalance, 2000);
+  assert.equal(record.difference, -2000);
+  await request('/collections/finance_cash_counts', 'POST', { record: {
+    key: 'cash-count-invalid-account', code: 'KKQ-SERVER-002', purpose: 'Kiểm kê quỹ tiền mặt', countDate: '2026-10-30', date: '2026-10-30', time: '16:30',
+    cashAccountId: 'missing', counterName: 'Người kiểm kê', lines: [],
+  } }, 422);
+  await request('/collections/finance_cash_counts', 'POST', { record: {
+    key: 'cash-count-invalid-quantity', code: 'KKQ-SERVER-003', purpose: 'Kiểm kê quỹ tiền mặt', countDate: '2026-10-30', date: '2026-10-30', time: '16:30',
+    cashAccountId: 'petty:Quỹ tiền mặt', counterName: 'Người kiểm kê', lines: [{ key: 'bad-note', denomination: 1000, quantity: 1.5 }],
+  } }, 422);
+});
+
 test('CRM contacts can be updated without changing their identity or exposing invalid data', async () => {
   const created = (await request('/crm/contacts', 'POST', {
     name: 'Đối tác trước cập nhật', type: 'customer', taxCode: 'CRM-EDIT-001', contactPerson: 'Nguyễn An',

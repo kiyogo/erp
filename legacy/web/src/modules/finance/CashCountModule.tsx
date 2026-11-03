@@ -3,22 +3,31 @@ import { EditOutlined, PaperClipOutlined, PlusOutlined, SearchOutlined } from '@
 import { KTable } from '../../components/KTable';
 import { filesApi, financeCashApi, financePaymentAccountsApi, FinanceCashTransaction, FinancePaymentAccount } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
-import { Button, Input, message, Modal, Select, Tag } from '../../custom-ui';
+import { Button, DatePicker, Input, message, Modal, Select, Tag } from '../../custom-ui';
 
 type CountLine = { key: string; denomination: number; quantity: number; note: string };
 type CountFile = { id: string; name: string; size: number; mimeType?: string };
 type CashCount = {
   key: string; code: string; purpose: string; countDate: string; currency: string; reference: string;
-  date: string; time: string; participants: string; lines: CountLine[]; bookBalance: number;
-  actualBalance: number; difference: number; reconciliation: string; reason: string; conclusion: string;
-  resolved: boolean; attachments: CountFile[]; status: string;
+  date: string; time: string; participants: string; cashAccountId: string; cashAccountName: string; counterName: string; witnessName: string; lines: CountLine[]; bookBalance: number;
+  actualBalance: number; difference: number; reconciliation: string; reason: string; handlingDirection: string; conclusion: string;
+  attachments: CountFile[]; status: string;
 };
 
 const today = () => {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
-const timeNow = () => new Date().toLocaleTimeString('vi-VN', { hour12: false });
+const timeNow = () => {
+  const current = new Date();
+  const minute = Math.floor(current.getMinutes() / 5) * 5;
+  return `${String(current.getHours()).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+};
+const timeOptions = Array.from({ length: 288 }, (_, index) => {
+  const minutes = index * 5;
+  const value = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  return { value, label: value };
+});
 const denominations = [500000, 200000, 100000, 50000, 20000, 10000, 5000, 2000, 1000];
 const cashCountCode = (index: number) => `KKQ${String(index).padStart(5, '0')}`;
 const nextCashCountCode = (rows: CashCount[]) => cashCountCode(Math.max(0, ...rows.map(row => Number(/^KKQ(\d+)$/i.exec(row.code || '')?.[1]) || 0)) + 1);
@@ -35,6 +44,7 @@ export const CashCountModule: React.FC = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmDate, setConfirmDate] = useState(today());
   const [confirmCurrency, setConfirmCurrency] = useState('VND');
+  const [confirmAccountId, setConfirmAccountId] = useState('');
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState('');
   const [referenceSearchBy, setReferenceSearchBy] = useState('code');
@@ -69,12 +79,11 @@ export const CashCountModule: React.FC = () => {
 
   useEffect(() => { void loadData(); }, []);
 
-  const bookBalance = accounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
-  const bookBalanceAt = (date: string) => bookBalance - transactions
-    .filter(item => item.source === 'petty' && item.status === 'Đã hoàn thành' && String(item.date || '').slice(0, 10) > date)
+  const bookBalanceAt = (accountId: string, date: string) => Number(accounts.find(account => account.key === accountId)?.balance || 0) - transactions
+    .filter(item => item.source === 'petty' && item.sourceAccountId === accountId && item.status === 'Đã hoàn thành' && String(item.date || '').slice(0, 10) > date)
     .reduce((sum, item) => sum + (item.type === 'Thu' ? Number(item.amount || 0) : -Number(item.amount || 0)), 0);
   const actualBalance = lines.reduce((sum, line) => sum + Number(line.denomination || 0) * Number(line.quantity || 0), 0);
-  const difference = Number(draft.bookBalance ?? bookBalance) - actualBalance;
+  const difference = Number(draft.bookBalance ?? bookBalanceAt(String(draft.cashAccountId || ''), String(draft.countDate || ''))) - actualBalance;
   const sortedRecords = useMemo(() => [...records].sort((a, b) => `${b.countDate}${b.time}`.localeCompare(`${a.countDate}${a.time}`)), [records]);
 
   const close = () => {
@@ -93,8 +102,9 @@ export const CashCountModule: React.FC = () => {
     const code = nextCashCountCode(records);
     setConfirmDate(date);
     setConfirmCurrency('VND');
+    setConfirmAccountId(accounts[0]?.key || '');
     setEditing(null);
-    setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', bookBalance: bookBalanceAt(date), reconciliation: '', reason: '', conclusion: '', resolved: false, status: 'Đã ghi nhận' });
+    setDraft({ key: crypto.randomUUID(), code, purpose: `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(date)}`, countDate: date, currency: 'VND', reference: '', date, time: timeNow(), participants: '', cashAccountId: accounts[0]?.key || '', cashAccountName: accounts[0]?.name || '', counterName: '', witnessName: '', bookBalance: bookBalanceAt(accounts[0]?.key || '', date), reconciliation: '', reason: '', handlingDirection: '', conclusion: '', status: 'Đã ghi nhận' });
     setLines(blankLines());
     setSavedFiles([]);
     setRemovedFiles([]);
@@ -103,10 +113,14 @@ export const CashCountModule: React.FC = () => {
   };
 
   const confirmCreate = () => {
+    const account = accounts.find(item => item.key === confirmAccountId);
+    if (!account) { message.error('Vui lòng chọn quỹ tiền mặt đang hoạt động.'); return; }
     setField('countDate', confirmDate);
     setField('currency', confirmCurrency);
+    setField('cashAccountId', account.key);
+    setField('cashAccountName', account.name);
     setField('purpose', `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(confirmDate)}`);
-    setField('bookBalance', bookBalanceAt(confirmDate));
+    setField('bookBalance', bookBalanceAt(account.key, confirmDate));
     setConfirmOpen(false);
     setOpen(true);
   };
@@ -132,6 +146,7 @@ export const CashCountModule: React.FC = () => {
 
   const save = async () => {
     if (!draft.countDate || !draft.date || !draft.time) { message.error('Vui lòng nhập ngày kiểm kê, ngày lập và giờ lập.'); return; }
+    if (!draft.cashAccountId || !String(draft.counterName || '').trim()) { message.error('Vui lòng chọn quỹ và nhập người kiểm kê.'); return; }
     if (!String(draft.code || '').trim() || records.some(record => record.key !== editing?.key && record.code.toLocaleLowerCase() === String(draft.code).trim().toLocaleLowerCase())) { message.error('Số phiếu kiểm kê đang trống hoặc đã được sử dụng.'); return; }
     if (lines.some(line => !Number.isFinite(line.denomination) || line.denomination < 0 || !Number.isInteger(line.quantity) || line.quantity < 0)) { message.error('Mệnh giá và số lượng phải là số không âm; số lượng phải là số nguyên.'); return; }
     setSaving(true);
@@ -144,7 +159,9 @@ export const CashCountModule: React.FC = () => {
           uploaded.push({ id: result.id || result.key, name: result.name, size: Number(result.sizeBytes) || file.size, mimeType: result.mime || file.type });
         }
       }
-      const currentBookBalance = Number(draft.bookBalance ?? bookBalance);
+      const cashAccount = accounts.find(item => item.key === draft.cashAccountId);
+      if (!cashAccount || cashAccount.source !== 'petty' || cashAccount.status !== 'Đang hoạt động') throw new Error('Quỹ tiền mặt không tồn tại hoặc đã ngừng hoạt động.');
+      const currentBookBalance = bookBalanceAt(cashAccount.key, String(draft.countDate));
       const currentActualBalance = lines.reduce((sum, line) => sum + line.denomination * line.quantity, 0);
       const record: CashCount = {
         ...(editing || {} as CashCount),
@@ -153,10 +170,11 @@ export const CashCountModule: React.FC = () => {
         code: String(draft.code || nextCashCountCode(records)),
         purpose: String(draft.purpose || '').trim(),
         countDate: String(draft.countDate), currency: String(draft.currency || 'VND'), reference: String(draft.reference || ''),
-        date: String(draft.date), time: String(draft.time), participants: String(draft.participants || ''), lines,
+        date: String(draft.date), time: String(draft.time), participants: String(draft.participants || ''), cashAccountId: cashAccount.key, cashAccountName: cashAccount.name,
+        counterName: String(draft.counterName || '').trim(), witnessName: String(draft.witnessName || '').trim(), lines,
         bookBalance: currentBookBalance, actualBalance: currentActualBalance, difference: currentBookBalance - currentActualBalance,
-        reconciliation: String(draft.reconciliation || ''), reason: String(draft.reason || ''), conclusion: String(draft.conclusion || ''),
-        resolved: Boolean(draft.resolved), attachments: [...savedFiles, ...uploaded], status: String(draft.status || 'Đã ghi nhận'),
+        reconciliation: String(draft.reconciliation || ''), reason: String(draft.reason || ''), handlingDirection: String(draft.handlingDirection || ''), conclusion: String(draft.conclusion || ''),
+        attachments: [...savedFiles, ...uploaded], status: String(draft.status || 'Đã ghi nhận'),
       };
       if (editing) await dataService.updateGenericRecord('finance_cash_counts', record);
       else await dataService.createGenericRecord('finance_cash_counts', record);
@@ -191,6 +209,8 @@ export const CashCountModule: React.FC = () => {
   const columns = [
     { title: 'Số kiểm kê', dataIndex: 'code', key: 'code', width: 150, render: (value: string) => <strong>{value}</strong> },
     { title: 'Kiểm kê đến ngày', dataIndex: 'countDate', key: 'countDate', width: 150, render: (value: string) => dateText(value) },
+    { title: 'Quỹ', dataIndex: 'cashAccountName', key: 'cashAccountName', width: 180 },
+    { title: 'Người kiểm kê', dataIndex: 'counterName', key: 'counterName', width: 180 },
     { title: 'Ngày lập', dataIndex: 'date', key: 'date', width: 130, render: (value: string) => dateText(value) },
     { title: 'Loại tiền', dataIndex: 'currency', key: 'currency', width: 100 },
     { title: 'Số dư theo sổ', dataIndex: 'bookBalance', key: 'bookBalance', width: 160, render: (value: number) => money(value) },
@@ -234,12 +254,15 @@ export const CashCountModule: React.FC = () => {
         <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 14px' }}>
             <label style={labelStyle}>Mục đích<Input value={draft.purpose || ''} onChange={event => setField('purpose', event.target.value)} /></label>
-            <label style={labelStyle}>Kiểm kê đến ngày<Input type="date" value={draft.countDate || ''} onChange={event => { const value = event.target.value; setField('countDate', value); setField('purpose', `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(value)}`); if (!editing) setField('bookBalance', bookBalanceAt(value)); }} /></label>
+            <label style={labelStyle}>Kiểm kê đến ngày<DatePicker aria-label="Kiểm kê đến ngày" value={draft.countDate || undefined} onChange={value => { setField('countDate', value); setField('purpose', `Kiểm kê tiền mặt tại quỹ đến ngày ${dateText(value)}`); setField('bookBalance', bookBalanceAt(String(draft.cashAccountId || ''), value)); }} /></label>
             <label style={labelStyle}>Loại tiền<Select value={draft.currency || 'VND'} onChange={value => setField('currency', value)} options={[{ label: 'VND', value: 'VND' }]} style={{ width: '100%' }} /></label>
+            <label style={labelStyle}>Quỹ tiền mặt<Select aria-label="Quỹ tiền mặt" value={draft.cashAccountId || undefined} onChange={value => { const account = accounts.find(item => item.key === value); setField('cashAccountId', value); setField('cashAccountName', account?.name || ''); setField('bookBalance', bookBalanceAt(value, String(draft.countDate || ''))); }} options={accounts.map(account => ({ value: account.key, label: account.name }))} style={{ width: '100%' }} /></label>
             <label style={labelStyle}>Tham chiếu<div style={{ display: 'flex', gap: 4 }}><Input value={draft.reference || ''} onChange={event => setField('reference', event.target.value)} style={{ flex: 1, minWidth: 0 }} /><Button onClick={() => void openReference()}>Chọn</Button></div></label>
             <label style={labelStyle}>Số<Input value={draft.code || ''} onChange={event => setField('code', event.target.value)} /></label>
-            <label style={labelStyle}>Ngày<Input type="date" value={draft.date || ''} onChange={event => setField('date', event.target.value)} /></label>
-            <label style={labelStyle}>Giờ<Input type="time" value={draft.time || ''} onChange={event => setField('time', event.target.value)} /></label>
+            <label style={labelStyle}>Ngày<DatePicker aria-label="Ngày lập" value={draft.date || undefined} onChange={value => setField('date', value)} /></label>
+            <label style={labelStyle}>Giờ<Select aria-label="Giờ kiểm kê" value={draft.time || undefined} onChange={value => setField('time', value)} options={timeOptions} /></label>
+            <label style={labelStyle}>Người kiểm kê<Input value={draft.counterName || ''} onChange={event => setField('counterName', event.target.value)} /></label>
+            <label style={labelStyle}>Người chứng kiến<Input value={draft.witnessName || ''} onChange={event => setField('witnessName', event.target.value)} /></label>
             <label style={labelStyle}>Thành viên tham gia<Input value={draft.participants || ''} onChange={event => setField('participants', event.target.value)} /></label>
           </div>
 
@@ -248,16 +271,16 @@ export const CashCountModule: React.FC = () => {
           <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setLines(current => [...current, { key: crypto.randomUUID(), denomination: 0, quantity: 0, note: '' }])}>Thêm dòng</Button><Button onClick={() => setLines([])}>Xóa hết dòng</Button></div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '3px 14px' }}>
-            <label style={labelStyle}>Số dư theo sổ kế toán tiền mặt<Input type="number" min={0} value={draft.bookBalance ?? bookBalance} onChange={event => setField('bookBalance', Number(event.target.value))} /></label>
+            <label style={labelStyle}>Số dư theo sổ kế toán tiền mặt<Input value={Number(draft.bookBalance || 0).toLocaleString('vi-VN')} readOnly /></label>
             <label style={labelStyle}>Số dư kiểm kê thực tế<Input value={actualBalance.toLocaleString('vi-VN')} readOnly /></label>
             <label style={labelStyle}>Chênh lệch<Input value={difference.toLocaleString('vi-VN')} readOnly /></label>
             <label style={labelStyle}>Đối chiếu<Input value={draft.reconciliation || ''} onChange={event => setField('reconciliation', event.target.value)} /></label>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '3px 14px' }}>
             <label style={labelStyle}>Lý do<Input.TextArea rows={4} value={draft.reason || ''} onChange={event => setField('reason', event.target.value)} /></label>
+            <label style={labelStyle}>Hướng xử lý<Input.TextArea rows={4} value={draft.handlingDirection || ''} onChange={event => setField('handlingDirection', event.target.value)} /></label>
             <label style={labelStyle}>Kết luận<Input.TextArea rows={4} value={draft.conclusion || ''} onChange={event => setField('conclusion', event.target.value)} /></label>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#334155', fontSize: 13 }}><input type="checkbox" checked={Boolean(draft.resolved)} onChange={event => setField('resolved', event.target.checked)} /> Đã xử lý chênh lệch</label>
 
           <div style={{ display: 'grid', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#475569', fontSize: 13 }}><PaperClipOutlined /> <strong>Đính kèm</strong> Dung lượng tối đa 5 MB</div>
@@ -273,14 +296,15 @@ export const CashCountModule: React.FC = () => {
 
       <Modal title="Kiểm kê quỹ" open={confirmOpen} onCancel={() => setConfirmOpen(false)} footer={null} width={480}>
         <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
-          <label style={labelStyle}>Đến ngày<Input type="date" value={confirmDate} onChange={event => setConfirmDate(event.target.value)} /></label>
+          <label style={labelStyle}>Đến ngày<DatePicker aria-label="Đến ngày" value={confirmDate} onChange={setConfirmDate} /></label>
+          <label style={labelStyle}>Quỹ tiền mặt<Select aria-label="Quỹ tiền mặt" value={confirmAccountId || undefined} onChange={setConfirmAccountId} options={accounts.map(account => ({ value: account.key, label: account.name }))} style={{ width: '100%' }} /></label>
           <label style={labelStyle}>Loại tiền<Select value={confirmCurrency} onChange={setConfirmCurrency} options={[{ label: 'VND', value: 'VND' }]} style={{ width: '100%' }} /></label>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button onClick={() => setConfirmOpen(false)}>Hủy</Button><Button type="primary" onClick={confirmCreate}>Đồng ý</Button></div>
         </div>
       </Modal>
 
       <Modal title="Chọn chứng từ tham chiếu" open={referenceOpen} onCancel={() => setReferenceOpen(false)} footer={null} width="min(1200px, calc(100vw - 32px))">
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 10, margin: '14px 0' }}><label style={{ ...labelStyle, width: 160, flex: '0 0 160px' }}>Tìm theo<Select value={referenceSearchBy} onChange={setReferenceSearchBy} options={[{ label: 'Số chứng từ', value: 'code' }, { label: 'Diễn giải', value: 'description' }, { label: 'Đối tượng', value: 'party' }]} /></label><label style={labelStyle}>Giá trị<Input prefix={<SearchOutlined />} value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} /></label><label style={labelStyle}>Từ<Input type="date" value={referenceFrom} onChange={event => setReferenceFrom(event.target.value)} /></label><label style={labelStyle}>Đến<Input type="date" value={referenceTo} onChange={event => setReferenceTo(event.target.value)} /></label><Button onClick={() => { void financeCashApi.getAll().then(response => setTransactions(response.data.data)).catch(() => message.error('Không tải được chứng từ thu chi.')); }}>Lấy dữ liệu</Button></div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 10, margin: '14px 0' }}><label style={{ ...labelStyle, width: 160, flex: '0 0 160px' }}>Tìm theo<Select value={referenceSearchBy} onChange={setReferenceSearchBy} options={[{ label: 'Số chứng từ', value: 'code' }, { label: 'Diễn giải', value: 'description' }, { label: 'Đối tượng', value: 'party' }]} /></label><label style={labelStyle}>Giá trị<Input prefix={<SearchOutlined />} value={referenceSearch} onChange={event => setReferenceSearch(event.target.value)} /></label><label style={labelStyle}>Từ<DatePicker aria-label="Từ ngày" value={referenceFrom || undefined} onChange={setReferenceFrom} /></label><label style={labelStyle}>Đến<DatePicker aria-label="Đến ngày" value={referenceTo || undefined} onChange={setReferenceTo} /></label><Button onClick={() => { void financeCashApi.getAll().then(response => setTransactions(response.data.data)).catch(() => message.error('Không tải được chứng từ thu chi.')); }}>Lấy dữ liệu</Button></div>
         <KTable dataSource={referenceRows} columns={refColumns} rowKey="key" pagination={{ pageSize: 10 }} locale={{ emptyText: 'Không có chứng từ thu chi.' }} />
       </Modal>
     </div>
