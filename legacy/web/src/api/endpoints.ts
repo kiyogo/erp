@@ -522,8 +522,19 @@ export type FinanceLoanEvent = {
   createdAt: string;
 };
 
+export type FinanceLoanScheduleAdjustment = {
+  key: string;
+  effectiveDate: string;
+  reason: string;
+  previousSchedules: Array<{ key: string; dueDate: string; principalAmount: number; interestAmount: number; note?: string }>;
+  newSchedules: Array<{ key: string; dueDate: string; principalAmount: number; interestAmount: number; note?: string }>;
+  createdBy: string;
+  createdAt: string;
+};
+
 export const financeLoanEventsApi = {
   create: (loanKey: string, data: { eventType: FinanceLoanEvent['eventType']; eventDate: string; scheduleKey?: string; principalAmount: number; interestAmount: number; reference: string; sourceAccountId: string; note?: string }) => api.post<{ event: FinanceLoanEvent; transaction: FinanceCashTransaction; balance: { principalDrawn: number; principalRepaid: number; outstandingPrincipal: number } }>(`/finance/loans/${encodeURIComponent(loanKey)}/events`, data),
+  adjustSchedule: (loanKey: string, data: { effectiveDate: string; reason: string; loanSchedules: FinanceLoanScheduleAdjustment['newSchedules'] }) => api.post<{ loan: Record<string, unknown> & { key: string; loanSchedules: FinanceLoanScheduleAdjustment['newSchedules']; loanScheduleAdjustments: FinanceLoanScheduleAdjustment[] }; adjustment: FinanceLoanScheduleAdjustment }>(`/finance/loans/${encodeURIComponent(loanKey)}/schedule-adjustments`, data),
 };
 
 export const financeCashApi = {

@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { KTable } from '../../components/KTable';
-import { filesApi, financeLoanEventsApi, financePaymentAccountsApi, systemApi, type FinanceLoanEvent, type FinancePaymentAccount } from '../../api/endpoints';
+import { filesApi, financeLoanEventsApi, financePaymentAccountsApi, systemApi, type FinanceLoanEvent, type FinanceLoanScheduleAdjustment, type FinancePaymentAccount } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { Alert, Button, Drawer, Form, Input, message, Modal, Select, Tabs } from '../../custom-ui';
@@ -42,6 +42,7 @@ export interface EnterpriseLoanItem {
   adjustmentMethod?: string;
   rates?: Array<{ rate: number | null; overdueRate: number | null; effectiveFrom: string; note: string }>;
   loanSchedules?: Array<{ key: string; dueDate: string; principalAmount: number; interestAmount: number; note?: string }>;
+  loanScheduleAdjustments?: FinanceLoanScheduleAdjustment[];
   interestRate?: number;
   principalRepayment?: string;
   firstPrincipalDate?: string;
@@ -134,6 +135,10 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
   const [eventModalOpen, setEventModalOpen] = useState(false);
   const [eventLoan, setEventLoan] = useState<EnterpriseLoanItem | null>(null);
   const [eventForm] = Form.useForm();
+  const [scheduleAdjustmentForm] = Form.useForm();
+  const [scheduleAdjustmentOpen, setScheduleAdjustmentOpen] = useState(false);
+  const [scheduleAdjustmentSaving, setScheduleAdjustmentSaving] = useState(false);
+  const [scheduleAdjustmentRows, setScheduleAdjustmentRows] = useState<LoanScheduleRow[]>([]);
   const [accountingRegime, setAccountingRegime] = useState('');
   const [chartAccounts, setChartAccounts] = useState<Array<{ code: string; name: string; parentCode?: string; accountingRegime: string; status: string; accountType: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -260,6 +265,61 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
       message.error(error?.response?.data?.message || error?.message || 'Không thể ghi nhận giao dịch khoản vay.');
     } finally {
       setEventSaving(false);
+    }
+  };
+
+  const openScheduleAdjustment = (loan: EnterpriseLoanItem) => {
+    setScheduleAdjustmentRows((loan.loanSchedules || []).map(row => ({
+      key: row.key,
+      dueDate: row.dueDate,
+      principalAmount: String(row.principalAmount),
+      interestAmount: String(row.interestAmount),
+      note: row.note || '',
+    })));
+    scheduleAdjustmentForm.resetFields();
+    scheduleAdjustmentForm.setFieldsValue({ effectiveDate: todayIso(), reason: '' });
+    setScheduleAdjustmentOpen(true);
+  };
+
+  const closeScheduleAdjustment = () => {
+    setScheduleAdjustmentOpen(false);
+    setScheduleAdjustmentRows([]);
+    scheduleAdjustmentForm.resetFields();
+  };
+
+  const handleScheduleAdjustment = async (values: Record<string, any>) => {
+    if (!selectedLoan || scheduleAdjustmentSaving) return;
+    const schedules = scheduleAdjustmentRows.map(row => ({
+      key: row.key,
+      dueDate: row.dueDate,
+      principalAmount: row.principalAmount.trim() ? Number(row.principalAmount) : 0,
+      interestAmount: row.interestAmount.trim() ? Number(row.interestAmount) : 0,
+      note: row.note.trim(),
+    }));
+    const principalTotal = schedules.reduce((sum, row) => sum + row.principalAmount, 0);
+    if (!schedules.length || schedules.some(row => !row.dueDate || ![row.principalAmount, row.interestAmount].every(amount => Number.isSafeInteger(amount) && amount >= 0))) {
+      message.error('Nhập ít nhất một kỳ với ngày hợp lệ và số tiền gốc, lãi là số nguyên không âm.');
+      return;
+    }
+    if (principalTotal !== Number(selectedLoan.principalAmount)) {
+      message.error('Tổng tiền gốc các kỳ phải bằng giá trị khoản vay; nhập theo phụ lục hợp đồng.');
+      return;
+    }
+    setScheduleAdjustmentSaving(true);
+    try {
+      const response = await financeLoanEventsApi.adjustSchedule(selectedLoan.key, {
+        effectiveDate: String(values.effectiveDate || ''),
+        reason: String(values.reason || '').trim(),
+        loanSchedules: schedules,
+      });
+      setSelectedLoan(response.data.loan as EnterpriseLoanItem);
+      await dataService.refreshGenericData('finance_loans');
+      message.success('Đã lưu điều chỉnh lịch trả nợ và lịch sử trước, sau.');
+      closeScheduleAdjustment();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể điều chỉnh lịch trả nợ.');
+    } finally {
+      setScheduleAdjustmentSaving(false);
     }
   };
 
@@ -644,6 +704,13 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
               </div>;
             })}
           </div> : <div>Lịch trả nợ: Chưa lập</div>}
+          {selectedLoan.loanScheduleAdjustments?.length ? <div style={{ display: 'grid', gap: 6 }}>
+            <div>Lịch sử điều chỉnh lịch trả nợ</div>
+            {selectedLoan.loanScheduleAdjustments.map(adjustment => <div key={adjustment.key}>
+              {adjustment.effectiveDate} · {adjustment.reason} · {adjustment.createdBy} · {adjustment.createdAt}
+              <div>Thay đổi {adjustment.previousSchedules.length} kỳ thành {adjustment.newSchedules.length} kỳ</div>
+            </div>)}
+          </div> : null}
           <div>Đã giải ngân theo sổ: {loanEvents.some(event => event.loanKey === selectedLoan.key) ? money(loanBalance(selectedLoan.key).principalDrawn) : 'Chưa đối chiếu'}</div>
           <div>Dư nợ gốc đã ghi nhận: {loanEvents.some(event => event.loanKey === selectedLoan.key) ? money(loanBalance(selectedLoan.key).principalDrawn - loanBalance(selectedLoan.key).principalRepaid) : 'Chưa đối chiếu'}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -652,6 +719,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
               const remaining = loanScheduleRemaining(selectedLoan.key, schedule);
               return remaining.principalAmount <= 0 && remaining.interestAmount <= 0;
             }))} onClick={() => openLoanEvent(selectedLoan, 'repayment')}>{loanDirectionOf(selectedLoan) === 'borrow' ? 'Ghi nhận trả nợ' : 'Ghi nhận thu nợ'}</Button>
+            <Button onClick={() => openScheduleAdjustment(selectedLoan)}>{selectedLoan.loanSchedules?.length ? 'Điều chỉnh lịch trả nợ' : 'Lập lịch trả nợ'}</Button>
           </div>
           <div style={{ color: '#475569' }}>Giao dịch khoản vay: {loanEvents.filter(event => event.loanKey === selectedLoan.key).length}</div>
           {loanEvents.filter(event => event.loanKey === selectedLoan.key).sort((left, right) => right.eventDate.localeCompare(left.eventDate)).map(event => <div key={event.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -661,6 +729,38 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(selectedLoan); }}>Sửa khế ước</Button>
         </div>}
       </Drawer>
+
+      <Modal
+        title="Điều chỉnh lịch trả nợ"
+        open={scheduleAdjustmentOpen}
+        onCancel={closeScheduleAdjustment}
+        onOk={() => scheduleAdjustmentForm.submit()}
+        confirmLoading={scheduleAdjustmentSaving}
+        width="min(980px, calc(100vw - 32px))"
+      >
+        {selectedLoan && <Form form={scheduleAdjustmentForm} layout="vertical" onFinish={handleScheduleAdjustment} style={{ marginTop: 14 }}>
+          <Alert type="warning" showIcon message="Điều chỉnh chỉ thay đổi lịch đã nhập theo phụ lục hợp đồng. Hệ thống lưu lịch trước, lịch mới, ngày hiệu lực và lý do; không tự tính lại tiền lãi." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', marginTop: 14 }}>
+            <Form.Item name="effectiveDate" label="Ngày hiệu lực" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+            <Form.Item name="reason" label="Lý do điều chỉnh" rules={[{ required: true, whitespace: true }]}><Input maxLength={1000} /></Form.Item>
+          </div>
+          <div style={{ overflowX: 'auto', marginTop: 14 }}>
+            <table style={{ width: '100%', minWidth: 720, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+              <colgroup><col style={{ width: 42 }} /><col style={{ width: 170 }} /><col style={{ width: 150 }} /><col style={{ width: 150 }} /><col /><col style={{ width: 72 }} /></colgroup>
+              <thead><tr style={{ background: '#C5D9C2', textAlign: 'left' }}>{['#', 'Ngày đến hạn', 'Tiền gốc', 'Tiền lãi', 'Ghi chú theo hợp đồng', ''].map((label, index) => <th key={index} scope="col" style={{ padding: '9px 8px', borderBottom: '1px solid #AFC9AC', fontWeight: 700 }}>{label}</th>)}</tr></thead>
+              <tbody>{scheduleAdjustmentRows.map((row, index) => <tr key={row.key} style={{ background: '#FBF7E8', borderBottom: '1px solid #E7DFC7' }}>
+                <td style={{ padding: 4, textAlign: 'center' }}>{index + 1}</td>
+                <td style={{ padding: 4 }}><Input aria-label={`Ngày đến hạn điều chỉnh kỳ ${index + 1}`} type="date" value={row.dueDate} onChange={event => setScheduleAdjustmentRows(current => current.map(item => item.key === row.key ? { ...item, dueDate: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                <td style={{ padding: 4 }}><Input aria-label={`Tiền gốc điều chỉnh kỳ ${index + 1}`} type="number" min={0} step={1} value={row.principalAmount} onChange={event => setScheduleAdjustmentRows(current => current.map(item => item.key === row.key ? { ...item, principalAmount: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                <td style={{ padding: 4 }}><Input aria-label={`Tiền lãi điều chỉnh kỳ ${index + 1}`} type="number" min={0} step={1} value={row.interestAmount} onChange={event => setScheduleAdjustmentRows(current => current.map(item => item.key === row.key ? { ...item, interestAmount: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                <td style={{ padding: 4 }}><Input aria-label={`Ghi chú điều chỉnh kỳ ${index + 1}`} value={row.note} onChange={event => setScheduleAdjustmentRows(current => current.map(item => item.key === row.key ? { ...item, note: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                <td style={{ padding: 4, textAlign: 'center' }}><Button aria-label={`Xóa kỳ điều chỉnh ${index + 1}`} onClick={() => setScheduleAdjustmentRows(current => current.filter(item => item.key !== row.key))}>Xóa</Button></td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+          <Button disabled={scheduleAdjustmentRows.length >= 100} icon={<PlusOutlined />} onClick={() => setScheduleAdjustmentRows(current => [...current, blankLoanSchedule(selectedLoan.disbursedDate || todayIso())])}>Thêm kỳ</Button>
+        </Form>}
+      </Modal>
     </div>
   );
 };

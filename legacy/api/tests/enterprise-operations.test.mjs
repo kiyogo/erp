@@ -362,6 +362,35 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.deepEqual(loanRepayment.balance, { principalDrawn: 100000, principalRepaid: 15000, outstandingPrincipal: 85000 });
   assert.equal(loanRepayment.transaction.amount, 16250);
   assert.deepEqual(loanRepayment.transaction.journalLines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [['3411', '112', 15000], ['635', '112', 1250]]);
+  const loanScheduleAdjustment = await request('/finance/loans/loan-draft-1/schedule-adjustments', 'POST', {
+    effectiveDate: '2026-10-12', reason: 'Điều chỉnh ngày theo phụ lục hợp đồng',
+    loanSchedules: [
+      { ...loanDraft.loanSchedules[0], dueDate: '2027-05-01' },
+      loanDraft.loanSchedules[1],
+    ],
+  }, 201);
+  assert.equal(loanScheduleAdjustment.adjustment.previousSchedules[0].dueDate, '2027-04-01');
+  assert.equal(loanScheduleAdjustment.adjustment.newSchedules[0].dueDate, '2027-05-01');
+  assert.equal(loanScheduleAdjustment.loan.loanScheduleAdjustments.length, 1);
+  await request('/finance/loans/loan-draft-1/schedule-adjustments', 'POST', {
+    effectiveDate: '2026-10-12', reason: 'Không tạo lịch sử nếu không có thay đổi',
+    loanSchedules: loanScheduleAdjustment.loan.loanSchedules,
+  }, 422);
+  const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const futureEffectiveDate = new Date(`${businessDate}T00:00:00Z`);
+  futureEffectiveDate.setUTCDate(futureEffectiveDate.getUTCDate() + 1);
+  await request('/finance/loans/loan-draft-1/schedule-adjustments', 'POST', {
+    effectiveDate: futureEffectiveDate.toISOString().slice(0, 10), reason: 'Không được áp dụng lịch tương lai ngay',
+    loanSchedules: loanDraft.loanSchedules,
+  }, 422);
+  await request('/finance/loans/loan-draft-1/schedule-adjustments', 'POST', {
+    effectiveDate: '2026-10-12', reason: 'Không được giảm thấp hơn số đã trả',
+    loanSchedules: [
+      { ...loanDraft.loanSchedules[0], principalAmount: 10000 },
+      { ...loanDraft.loanSchedules[1], principalAmount: 90000 },
+    ],
+  }, 422);
+  await request('/collections/finance_loans/loan-draft-1', 'PATCH', { patch: { loanScheduleAdjustments: [] } }, 409);
   await request('/finance/loans/loan-draft-1/events', 'POST', {
     eventType: 'repayment', eventDate: '2026-10-12', principalAmount: 6000, interestAmount: 0,
     scheduleKey: 'loan-schedule-1', reference: 'UNC-LOAN-005', sourceAccountId: bank.key,

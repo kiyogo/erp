@@ -2286,10 +2286,13 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         'contractCode', 'direction', 'counterpartyName', 'currency', 'principalAmount', 'termMonths', 'principalAccount', 'interestAccount',
         'disbursedDate', 'dueDate', 'disbursementMethod', 'beneficiaryAccount', 'bankName', 'rates', 'interestRate', 'rateType', 'interestDayBase', 'adjustmentMethod',
         'principalRepayment', 'firstPrincipalDate', 'interestRepayment', 'firstInterestDate', 'repaymentMethod',
-        'repaymentAccount', 'repaymentBankName', 'loanSchedules',
+        'repaymentAccount', 'repaymentBankName', 'loanSchedules', 'loanScheduleAdjustments',
       ];
       if (postedEvents && protectedFields.some(field => JSON.stringify(record[field] ?? null) !== JSON.stringify(current[field] ?? null))) {
         throw new HttpError(409, 'Không thể sửa điều khoản khế ước sau khi đã ghi giao dịch; cần quy trình điều chỉnh lịch có lưu vết.');
+      }
+      if (current.loanScheduleAdjustments?.length && ['loanSchedules', 'loanScheduleAdjustments'].some(field => JSON.stringify(record[field] ?? null) !== JSON.stringify(current[field] ?? null))) {
+        throw new HttpError(409, 'Lịch trả nợ đã được điều chỉnh qua quy trình có lưu vết; không thể sửa trực tiếp.');
       }
     }
     record.direction = oneOf(record.direction || (record.loanType === 'Khế ước cho vay' ? 'lend' : 'borrow'), 'Loại khế ước', ['borrow', 'lend']);
@@ -8584,8 +8587,9 @@ async function handleRequest(request, response) {
         if (scope === 'finance_loans' && db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${recordKey}`]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
-        if (scope === 'finance_loans' && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(fresh.record_key)) {
-          throw new HttpError(409, 'Khế ước đã có giao dịch tiền và Sổ Cái, không thể xóa để bảo toàn lịch sử đối chiếu.');
+        if (scope === 'finance_loans' && (await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(fresh.record_key)
+          || parseJsonObject(fresh.payload_json).loanScheduleAdjustments?.length)) {
+          throw new HttpError(409, 'Khế ước đã có giao dịch hoặc lịch điều chỉnh, không thể xóa để bảo toàn lịch sử đối chiếu.');
         }
         if (scope === 'payroll') {
           const payroll = publicCollectionRecord(fresh);
@@ -9637,6 +9641,105 @@ async function handleRequest(request, response) {
     return;
   }
 
+  const loanScheduleAdjustmentMatch = /^\/finance\/loans\/([^/]+)\/schedule-adjustments$/.exec(resource);
+  if (request.method === 'POST' && loanScheduleAdjustmentMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const loanKey = decodeURIComponent(loanScheduleAdjustmentMatch[1]);
+    const loanRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_loans' AND record_key = ?").get(loanKey);
+    if (!loanRow) throw new HttpError(404, 'Không tìm thấy khế ước vay.');
+    const loan = publicCollectionRecord(loanRow);
+    if (loan.accountingRegime !== profile.accountingRegime) throw new HttpError(409, 'Chế độ kế toán của khế ước không khớp hồ sơ doanh nghiệp hiện tại.');
+    const input = await readJson(request);
+    const effectiveDate = requiredIsoDate(input.effectiveDate, 'Ngày hiệu lực điều chỉnh');
+    if (effectiveDate < loan.disbursedDate || effectiveDate > loan.dueDate) throw new HttpError(422, 'Ngày hiệu lực điều chỉnh phải nằm trong thời hạn khế ước.');
+    const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    if (effectiveDate > businessDate) throw new HttpError(422, 'Ngày hiệu lực điều chỉnh không được ở tương lai vì lịch mới có hiệu lực ngay.');
+    const reason = requiredText(input.reason, 'Lý do điều chỉnh', 1_000);
+    if (!Array.isArray(input.loanSchedules) || input.loanSchedules.length === 0 || input.loanSchedules.length > 100) {
+      throw new HttpError(422, 'Lịch điều chỉnh phải có từ 1 đến 100 kỳ.');
+    }
+    const scheduleKeys = new Set();
+    const scheduleDates = new Set();
+    let scheduledPrincipal = 0;
+    const loanSchedules = input.loanSchedules.map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new HttpError(422, `Kỳ trả nợ ${index + 1} không hợp lệ.`);
+      const key = requiredText(row.key, `Mã kỳ trả nợ ${index + 1}`, 120);
+      if (scheduleKeys.has(key)) throw new HttpError(422, 'Mã kỳ trả nợ không được trùng.');
+      scheduleKeys.add(key);
+      const dueDate = requiredIsoDate(row.dueDate, `Ngày đến hạn kỳ ${index + 1}`);
+      if (dueDate < loan.disbursedDate || dueDate > loan.dueDate) throw new HttpError(422, `Ngày đến hạn kỳ ${index + 1} phải nằm trong thời hạn khế ước.`);
+      if (scheduleDates.has(dueDate)) throw new HttpError(422, 'Mỗi ngày đến hạn chỉ được có một kỳ trả nợ.');
+      scheduleDates.add(dueDate);
+      const amount = (value, label) => {
+        const parsed = value === undefined || value === null || value === '' ? 0 : Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed < 0) throw new HttpError(422, `${label} phải là số nguyên không âm.`);
+        return parsed;
+      };
+      const principalAmount = amount(row.principalAmount, `Tiền gốc kỳ ${index + 1}`);
+      const interestAmount = amount(row.interestAmount, `Tiền lãi kỳ ${index + 1}`);
+      if (principalAmount + interestAmount <= 0) throw new HttpError(422, `Kỳ trả nợ ${index + 1} phải có tiền gốc hoặc tiền lãi.`);
+      scheduledPrincipal += principalAmount;
+      if (!Number.isSafeInteger(scheduledPrincipal) || scheduledPrincipal > Number(loan.principalAmount)) throw new HttpError(422, 'Tổng gốc theo lịch không được vượt giá trị khế ước.');
+      return { key, dueDate, principalAmount, interestAmount, note: optionalText(row.note, `Ghi chú kỳ ${index + 1}`, 500) };
+    }).sort((left, right) => left.dueDate.localeCompare(right.dueDate));
+    if (scheduledPrincipal !== Number(loan.principalAmount)) throw new HttpError(422, 'Tổng tiền gốc các kỳ phải bằng giá trị khoản vay; nhập theo lịch ghi trong hợp đồng.');
+    if (JSON.stringify(loanSchedules) === JSON.stringify([...(loan.loanSchedules || [])].sort((left, right) => left.dueDate.localeCompare(right.dueDate)))) {
+      throw new HttpError(422, 'Lịch mới không có thay đổi so với lịch hiện tại.');
+    }
+    const adjustmentKey = randomUUID();
+    const timestamp = now();
+    let updatedLoan;
+    await db.transaction(async () => {
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${loanKey}`]);
+      const freshRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_loans' AND record_key = ?").get(loanKey);
+      if (!freshRow) throw new HttpError(409, 'Khế ước đã bị xóa; hãy tải lại danh sách.');
+      const freshLoan = publicCollectionRecord(freshRow);
+      if (JSON.stringify(freshLoan.loanSchedules ?? []) !== JSON.stringify(loan.loanSchedules ?? [])
+        || Number(freshLoan.principalAmount) !== Number(loan.principalAmount)
+        || (freshLoan.loanScheduleAdjustments || []).length !== (loan.loanScheduleAdjustments || []).length) {
+        throw new HttpError(409, 'Lịch khoản vay vừa được thay đổi; hãy tải lại trước khi điều chỉnh.');
+      }
+      const priorRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ?").all(loanKey);
+      const priorEvents = priorRows.map(row => parseJsonObject(row.payload_json));
+      if (priorEvents.some(event => event.eventType === 'repayment' && event.eventDate >= effectiveDate)) {
+        throw new HttpError(409, 'Ngày hiệu lực phải sau các khoản trả nợ đã ghi nhận để không thay đổi cách đối chiếu lịch sử.');
+      }
+      if (priorEvents.some(event => event.eventType === 'repayment' && !event.scheduleKey)) {
+        throw new HttpError(409, 'Có khoản trả nợ chưa gắn với kỳ hợp đồng; cần đối chiếu trước khi điều chỉnh lịch.');
+      }
+      const paidBySchedule = new Map();
+      for (const event of priorEvents.filter(item => item.eventType === 'repayment')) {
+        const current = paidBySchedule.get(event.scheduleKey) || { principal: 0, interest: 0 };
+        current.principal += Number(event.principalAmount || 0);
+        current.interest += Number(event.interestAmount || 0);
+        paidBySchedule.set(event.scheduleKey, current);
+      }
+      for (const [key, paid] of paidBySchedule) {
+        const next = loanSchedules.find(row => row.key === key);
+        if (!next) throw new HttpError(422, 'Không thể xóa kỳ đã có giao dịch trả nợ.');
+        if (paid.principal > next.principalAmount || paid.interest > next.interestAmount) {
+          throw new HttpError(422, 'Lịch mới không được thấp hơn số gốc hoặc lãi đã thanh toán của kỳ.');
+        }
+      }
+      const adjustment = {
+        key: adjustmentKey,
+        effectiveDate,
+        reason,
+        previousSchedules: freshLoan.loanSchedules || [],
+        newSchedules: loanSchedules,
+        createdBy: actor.name,
+        createdAt: timestamp,
+      };
+      updatedLoan = { ...freshLoan, loanSchedules, loanScheduleAdjustments: [...(freshLoan.loanScheduleAdjustments || []), adjustment] };
+      await db.prepare("UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE scope = 'finance_loans' AND record_key = ?")
+        .run(JSON.stringify(updatedLoan), timestamp, loanKey);
+      await recordAuditEvent(actor.id, 'adjust_loan_schedule', 'finance_loans', loanKey, { adjustmentKey, effectiveDate, reason });
+    });
+    sendJson(response, 201, { loan: updatedLoan, adjustment: updatedLoan.loanScheduleAdjustments.at(-1) });
+    return;
+  }
+
   const loanEventMatch = /^\/finance\/loans\/([^/]+)\/events$/.exec(resource);
   if (request.method === 'POST' && loanEventMatch) {
     const actor = await requireAdmin(request);
@@ -9738,7 +9841,7 @@ async function handleRequest(request, response) {
         'contractCode', 'direction', 'counterpartyName', 'currency', 'principalAmount', 'termMonths', 'principalAccount', 'interestAccount',
         'disbursedDate', 'dueDate', 'disbursementMethod', 'beneficiaryAccount', 'bankName', 'rates', 'interestRate', 'rateType', 'interestDayBase', 'adjustmentMethod',
         'principalRepayment', 'firstPrincipalDate', 'interestRepayment', 'firstInterestDate', 'repaymentMethod',
-        'repaymentAccount', 'repaymentBankName', 'loanSchedules',
+        'repaymentAccount', 'repaymentBankName', 'loanSchedules', 'loanScheduleAdjustments',
       ];
       if (protectedFields.some(field => JSON.stringify(currentLoan[field] ?? null) !== JSON.stringify(loan[field] ?? null))) {
         throw new HttpError(409, 'Thông tin tài chính của khế ước vừa thay đổi; hãy tải lại trước khi ghi giao dịch.');
