@@ -2181,6 +2181,12 @@ const accountingOperationScopes = new Set([
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'finance_cash_forecast_scenarios' && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được lập và xem kịch bản dự báo dòng tiền.');
+  }
+  if (scope === 'finance_cash_forecast_scenarios' && !['GET', 'HEAD', 'POST'].includes(request.method)) {
+    throw new HttpError(409, 'Kịch bản dự báo đã lưu chỉ được giữ nguyên để bảo toàn dữ liệu đối chiếu; hãy tạo kịch bản mới khi cần điều chỉnh.');
+  }
   if (accountingOperationScopes.has(scope) && !['GET', 'HEAD'].includes(request.method)) {
     await requireAccountingProfile();
   }
@@ -2264,6 +2270,117 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Bản ghi phải là một đối tượng JSON.');
   }
   let record = { ...value };
+  if (scope === 'finance_cash_forecast_scenarios') {
+    record.key = requiredText(record.key, 'Mã kịch bản', 120);
+    if (current) throw new HttpError(409, 'Kịch bản dự báo đã lưu không thể sửa; hãy tạo kịch bản mới để lưu phiên bản điều chỉnh.');
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_cash_forecast_scenarios' AND record_key = ? LIMIT 1").get(record.key);
+    if (duplicate) throw new HttpError(409, 'Mã kịch bản dự báo đã tồn tại.');
+    record.scenarioName = requiredText(record.scenarioName, 'Tên kịch bản', 120);
+    record.startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu dự báo');
+    record.endDate = requiredIsoDate(record.endDate, 'Ngày kết thúc dự báo');
+    const startTime = Date.parse(`${record.startDate}T00:00:00Z`);
+    const endTime = Date.parse(`${record.endDate}T00:00:00Z`);
+    const dayCount = Math.floor((endTime - startTime) / 86_400_000) + 1;
+    if (dayCount < 1 || dayCount > 366) throw new HttpError(422, 'Khoảng dự báo phải từ 1 đến 366 ngày.');
+    const amount = (value, label, allowNegative = false) => {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || (!allowNegative && parsed < 0) || Math.abs(parsed) > 1_000_000_000_000_000) {
+        throw new HttpError(422, `${label} phải là số nguyên hợp lệ.`);
+      }
+      return parsed;
+    };
+    record.openingBalance = amount(record.openingBalance, 'Số dư đầu kỳ', true);
+    record.condition = optionalText(record.condition, 'Điều kiện và căn cứ dự báo', 1000);
+    if (record.receivableProbabilityPct === '' || record.receivableProbabilityPct === null || record.receivableProbabilityPct === undefined) {
+      record.receivableProbabilityPct = null;
+    } else {
+      record.receivableProbabilityPct = Number(record.receivableProbabilityPct);
+      if (!Number.isInteger(record.receivableProbabilityPct) || record.receivableProbabilityPct < 0 || record.receivableProbabilityPct > 100) {
+        throw new HttpError(422, 'Xác suất thu phải là số nguyên từ 0 đến 100%.');
+      }
+    }
+    if (!Array.isArray(record.sourceFlows) || record.sourceFlows.length > 5000) throw new HttpError(422, 'Danh sách nguồn dự báo không hợp lệ hoặc vượt 5.000 dòng.');
+    const flowKeys = new Set();
+    record.sourceFlows = record.sourceFlows.map((flow, index) => {
+      if (!flow || typeof flow !== 'object' || Array.isArray(flow)) throw new HttpError(422, `Dòng nguồn ${index + 1} không hợp lệ.`);
+      const key = requiredText(flow.key, `Mã dòng nguồn ${index + 1}`, 240);
+      if (flowKeys.has(key)) throw new HttpError(422, 'Mã dòng nguồn không được trùng.');
+      flowKeys.add(key);
+      const source = oneOf(flow.source, `Nguồn dòng ${index + 1}`, ['receivable', 'payable', 'loan', 'tax', 'manual']);
+      const direction = oneOf(flow.direction, `Chiều tiền dòng ${index + 1}`, ['inflow', 'outflow']);
+      const date = requiredIsoDate(flow.date, `Ngày dòng nguồn ${index + 1}`);
+      if (date < record.startDate || date > record.endDate) throw new HttpError(422, `Ngày dòng nguồn ${index + 1} nằm ngoài kỳ dự báo.`);
+      const originalDate = requiredIsoDate(flow.originalDate ?? date, `Ngày đến hạn gốc dòng ${index + 1}`);
+      if (originalDate > date || (originalDate < record.startDate && date !== record.startDate)) throw new HttpError(422, `Ngày xếp lịch dòng nguồn ${index + 1} không khớp hạn gốc.`);
+      const originalAmount = amount(flow.originalAmount, `Số tiền gốc dòng ${index + 1}`);
+      const flowAmount = amount(flow.amount, `Số tiền dự báo dòng ${index + 1}`);
+      if (flowAmount <= 0 || originalAmount <= 0) throw new HttpError(422, `Dòng nguồn ${index + 1} phải có số tiền lớn hơn 0.`);
+      if (source === 'receivable' && direction !== 'inflow') throw new HttpError(422, 'Khoản phải thu phải là dòng tiền vào.');
+      if (source === 'payable' && direction !== 'outflow') throw new HttpError(422, 'Khoản phải trả phải là dòng tiền ra.');
+      if (source === 'tax' && direction !== 'outflow') throw new HttpError(422, 'Nghĩa vụ thuế phải là dòng tiền ra.');
+      if (source !== 'receivable' && flowAmount !== originalAmount) throw new HttpError(422, `Dòng nguồn ${index + 1} không thể điều chỉnh theo xác suất phải thu.`);
+      if (source === 'receivable' && record.receivableProbabilityPct !== null
+        && flowAmount !== Number((BigInt(originalAmount) * BigInt(record.receivableProbabilityPct) + 50n) / 100n)) {
+        throw new HttpError(422, `Dòng phải thu ${index + 1} không khớp xác suất đã lưu.`);
+      }
+      return {
+        key, source, direction, date,
+        originalDate,
+        reference: requiredText(flow.reference, `Mã tham chiếu dòng ${index + 1}`, 300),
+        amount: flowAmount, originalAmount,
+        note: optionalText(flow.note, `Ghi chú dòng ${index + 1}`, 500),
+      };
+    });
+    if (!Array.isArray(record.periods) || record.periods.length < 1 || record.periods.length > 53) throw new HttpError(422, 'Các kỳ dự báo không hợp lệ.');
+    const expectedPeriodCount = Math.ceil(dayCount / 7);
+    if (record.periods.length !== expectedPeriodCount) throw new HttpError(422, 'Số kỳ dự báo không khớp khoảng thời gian đã chọn.');
+    let previousClosingBalance = record.openingBalance;
+    record.periods = record.periods.map((period, index) => {
+      if (!period || typeof period !== 'object' || Array.isArray(period)) throw new HttpError(422, `Kỳ dự báo ${index + 1} không hợp lệ.`);
+      const offset = index * 7;
+      const expectedStart = new Date(startTime + offset * 86_400_000).toISOString().slice(0, 10);
+      const expectedEnd = new Date(Math.min(startTime + (offset + 6) * 86_400_000, endTime)).toISOString().slice(0, 10);
+      if (period.startDate !== expectedStart || period.endDate !== expectedEnd) throw new HttpError(422, `Ngày kỳ dự báo ${index + 1} không liên tục.`);
+      const periodFlows = record.sourceFlows.filter(flow => flow.date >= expectedStart && flow.date <= expectedEnd);
+      const inflow = periodFlows.filter(flow => flow.direction === 'inflow').reduce((sum, flow) => sum + flow.amount, 0);
+      const outflow = periodFlows.filter(flow => flow.direction === 'outflow').reduce((sum, flow) => sum + flow.amount, 0);
+      const net = inflow - outflow;
+      const closingBalance = previousClosingBalance + net;
+      if ([period.openingBalance, period.inflow, period.outflow, period.net, period.closingBalance]
+        .some((field, fieldIndex) => amount(field, `Số liệu kỳ dự báo ${index + 1}`, [0, 3, 4].includes(fieldIndex))
+          !== [previousClosingBalance, inflow, outflow, net, closingBalance][fieldIndex])) {
+        throw new HttpError(422, `Số liệu kỳ dự báo ${index + 1} không khớp các dòng nguồn.`);
+      }
+      previousClosingBalance = closingBalance;
+      return { startDate: expectedStart, endDate: expectedEnd, openingBalance: previousClosingBalance - net, inflow, outflow, net, closingBalance };
+    });
+    const totalInflow = record.periods.reduce((sum, period) => sum + period.inflow, 0);
+    const totalOutflow = record.periods.reduce((sum, period) => sum + period.outflow, 0);
+    record.expectedInflow = amount(record.expectedInflow, 'Tổng dự thu');
+    record.expectedOutflow = amount(record.expectedOutflow, 'Tổng dự chi');
+    record.projectedBalance = amount(record.projectedBalance, 'Số dư cuối kỳ', true);
+    if (record.expectedInflow !== totalInflow || record.expectedOutflow !== totalOutflow
+      || record.projectedBalance !== previousClosingBalance) throw new HttpError(422, 'Tổng dự báo không khớp các kỳ và dòng nguồn.');
+    if (record.manualAdjustment !== undefined && record.manualAdjustment !== null) {
+      const adjustment = record.manualAdjustment;
+      if (!adjustment || typeof adjustment !== 'object' || Array.isArray(adjustment)) throw new HttpError(422, 'Khoản điều chỉnh thủ công không hợp lệ.');
+      const adjustmentDate = requiredIsoDate(adjustment.date, 'Ngày điều chỉnh');
+      if (adjustmentDate < record.startDate || adjustmentDate > record.endDate) throw new HttpError(422, 'Ngày điều chỉnh nằm ngoài kỳ dự báo.');
+      record.manualAdjustment = {
+        date: adjustmentDate,
+        direction: oneOf(adjustment.direction, 'Chiều điều chỉnh', ['inflow', 'outflow']),
+        amount: amount(adjustment.amount, 'Số tiền điều chỉnh'),
+        reference: requiredText(adjustment.reference, 'Nội dung điều chỉnh', 300),
+      };
+      if (record.manualAdjustment.amount <= 0 || !record.sourceFlows.some(flow => flow.source === 'manual'
+        && flow.date === adjustmentDate && flow.direction === record.manualAdjustment.direction
+        && flow.amount === record.manualAdjustment.amount && flow.reference === record.manualAdjustment.reference)) {
+        throw new HttpError(422, 'Khoản điều chỉnh không khớp dòng nguồn thủ công đã lưu.');
+      }
+    }
+    record.createdAt = now();
+    record.createdBy = requiredText(actor.name || actor.username || actor.id, 'Người lập kịch bản', 180);
+  }
   if (scope === 'finance_tax') {
     record.code = requiredText(record.code || record.key, 'Mã hồ sơ thuế', 80);
     if (!current) {
