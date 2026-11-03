@@ -64,6 +64,7 @@ import { PayrollModule } from '../../modules/finance/PayrollModule';
 import { PayrollTimesheetModule } from '../../modules/finance/PayrollTimesheetModule';
 import { InvoicesModule } from '../../modules/finance/InvoicesModule';
 import { FinanceOverviewModule } from '../../modules/finance/FinanceOverviewModule';
+import { FinanceAnalysisModule } from '../../modules/finance/FinanceAnalysisModule';
 import { EInvoiceModule } from '../../modules/finance/EInvoiceModule';
 import { DigitalSignatureModule } from '../../modules/finance/DigitalSignatureModule';
 import { TaxModule } from '../../modules/finance/TaxModule';
@@ -316,7 +317,8 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/attendance') return <AttendanceOverviewModule />;
 
   // 7. Finance
-  if (p === '/finance/overview' || p === '/finance/analysis') return <FinanceOverviewModule />;
+  if (p === '/finance/overview') return <FinanceOverviewModule />;
+  if (p === '/finance/analysis') return <FinanceAnalysisModule />;
   if (p === '/finance/cash/flow') return <CashFlowModule />;
   if (p === '/finance/cash/audit') return <CashCountModule />;
   if (p === '/finance/cash/petty') return <Navigate to="/admin/finance/cash/flow" replace />;
