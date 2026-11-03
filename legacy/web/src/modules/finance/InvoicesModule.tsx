@@ -30,6 +30,7 @@ export const InvoicesModule: React.FC = () => {
     setLoading(true);
     try {
       const response = await financeDocumentsApi.getAll({ documentType: 'invoice' });
+      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu hóa đơn không hợp lệ.');
       setData(response.data.data);
     } catch (error: any) {
       setData([]);

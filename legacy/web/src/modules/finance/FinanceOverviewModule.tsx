@@ -34,6 +34,9 @@ export const FinanceOverviewModule: React.FC = () => {
         financeCashApi.getAll(),
         financeDocumentsApi.getAll(),
       ]);
+      if (!Array.isArray(cashResponse.data?.data) || !Array.isArray(documentResponse.data?.data)) {
+        throw new Error('Dữ liệu tổng quan tài chính không hợp lệ.');
+      }
       setTransactions(cashResponse.data.data);
       setDocuments(documentResponse.data.data);
       try {
