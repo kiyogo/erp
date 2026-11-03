@@ -39,7 +39,12 @@ const isPublicPath = (pathname: string) => {
 
 // ===== Response interceptor – handle 401 =====
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    if (typeof res.data === 'string' && res.headers['content-type']?.includes('text/html')) {
+      return Promise.reject(new Error('Máy chủ API trả về dữ liệu không hợp lệ.'));
+    }
+    return res;
+  },
   async (err) => {
     const securityCode = err.response?.data?.code;
     if (securityCode === 'WORKFLOW_OTP_REQUIRED' || securityCode === 'WORKFLOW_OTP_INVALID') {
