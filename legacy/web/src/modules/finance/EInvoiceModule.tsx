@@ -20,12 +20,16 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
-import providerCatalog from '../../data/einvoiceProviderCatalog.json';
+import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
+import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
+
+const providerCatalog = [...archivedProviderCatalog, ...publishedProviderCatalog];
 
 const MISA_API_DOCS = 'https://doc.meinvoice.vn/itg/Doc/GetToken.html';
 const MISA_SANDBOX_URL = 'https://testapi.meinvoice.vn/api/integration/auth/token';
 const VIETTEL_API_DOCS = 'https://www.sinvoice.com.vn/p/tai-ve.html';
 const PROVIDER_LIST_SOURCE = 'https://aba.angiang.vn/tin-noi-bat/danh-sach-to-chuc-cung-cap-giai-phap-hoa-don-dien-tu-dap-ung-day-du-cac-tieu-chi-quy-dinh-tai-kh-220697';
+const PROVIDER_NOTICE_759 = 'https://cdn.thuvienphapluat.vn/uploads/mst/images/MyDuyen/Thang-8/260825/TB-759-TB-CT.pdf';
 
 interface EInvoice {
   key: string;
@@ -172,13 +176,14 @@ export const EInvoiceModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Card title="Danh mục nhà cung cấp hóa đơn điện tử" style={{ borderRadius: 8 }}>
             <div style={{ display: 'grid', gap: 10 }}>
-              <div>Danh mục gồm 128 tổ chức trong danh sách tham khảo được đăng ngày 14/05/2026 theo Thông tư 78/2021/TT-BTC. Đây là dữ liệu tham khảo theo nguồn đã dẫn, không xác nhận tình trạng đủ điều kiện hiện nay theo quy định mới.</div>
+              <div>Danh mục gồm 128 tổ chức trong danh sách tham khảo ngày 14/05/2026 theo quy định trước đây và 3 tổ chức được công bố trong đợt tại Thông báo 759/TB-CT ngày 22/08/2026 theo Thông tư 91/2026/TT-BTC.</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
                 <a href={PROVIDER_LIST_SOURCE} target="_blank" rel="noreferrer">Nguồn danh sách 128 tổ chức</a>
+                <a href={PROVIDER_NOTICE_759} target="_blank" rel="noreferrer">Thông báo 759/TB-CT và danh sách đợt công bố</a>
                 <a href="https://vanban.chinhphu.vn/?docid=218689&pageid=27160&typegroupid=4" target="_blank" rel="noreferrer">Nghị định 254/2026/NĐ-CP</a>
-                <a href="https://vanban.chinhphu.vn/?docid=219006&pageid=27160" target="_blank" rel="noreferrer">Thông tư 91/2026/TT-BTC</a>
+                <a href="https://congbao.chinhphu.vn/van-ban/thong-tu-so-91-2026-tt-btc-470171/67424.htm" target="_blank" rel="noreferrer">Thông tư 91/2026/TT-BTC</a>
               </div>
-              <div>Danh mục tra cứu không đồng nghĩa với tích hợp đang hoạt động. Hiện hệ thống chưa kết nối hoặc phát hành hóa đơn qua nhà cung cấp nào.</div>
+              <div>Thông báo 759 công bố một đợt bổ sung, không phải toàn bộ danh sách đủ điều kiện hiện hành. Các tổ chức trong danh sách tham khảo cũ chưa được xác minh lại theo quy định mới. Hiện hệ thống chưa kết nối hoặc phát hành hóa đơn qua nhà cung cấp nào.</div>
             </div>
           </Card>
           <Input
@@ -198,6 +203,12 @@ export const EInvoiceModule: React.FC = () => {
                 { title: 'STT', dataIndex: 'number', key: 'number', width: 64 },
                 { title: 'Tổ chức cung cấp', dataIndex: 'name', key: 'name' },
                 { title: 'Mã số thuế', dataIndex: 'taxId', key: 'taxId', width: 150 },
+                {
+                  title: 'Nguồn trạng thái', key: 'sourceStatus', width: 260,
+                  render: (_: unknown, provider: (typeof providerCatalog)[number]) => provider.number >= 129
+                    ? <span>Được công bố trong đợt Thông báo 759/TB-CT ngày {'sourceDate' in provider ? provider.sourceDate : ''}</span>
+                    : <span>Danh sách tham khảo ngày 14/05/2026; chưa xác minh theo quy định mới</span>,
+                },
                 {
                   title: 'Website', dataIndex: 'website', key: 'website',
                   render: (website: string) => <a href={website} target="_blank" rel="noreferrer">Mở trang nhà cung cấp</a>,
