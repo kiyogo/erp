@@ -4931,6 +4931,20 @@ function validateCashTransaction(input) {
   };
 }
 
+async function validateLedgerAccountLines(profile, lines) {
+  const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+  const chart = rows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === profile.accountingRegime);
+  if (!chart.length) return;
+  const chartByCode = new Map(chart.map((item) => [String(item.code || '').toUpperCase(), item]));
+  const usedCodes = new Set(lines.flatMap((line) => line.account ? [line.account] : [line.debitAccount, line.creditAccount])
+    .map((value) => String(value || '').replace(/^TK\s*/i, '').split(' (')[0].replace(/\s+/g, '').toUpperCase()).filter(Boolean));
+  for (const code of usedCodes) {
+    const account = chartByCode.get(code);
+    if (!account || account.status !== 'Đang sử dụng') throw new HttpError(422, `Tài khoản ${code} không có hoặc đã ngừng sử dụng trong danh mục ${profile.accountingRegime}.`);
+    if (chart.some((item) => item.parentCode === account.code)) throw new HttpError(422, `Tài khoản ${code} là tài khoản tổng hợp, không được ghi sổ trực tiếp.`);
+  }
+}
+
 async function postCashTransactionToLedger(transaction, id, actor, profile) {
   if (!Array.isArray(transaction.journalLines) || transaction.journalLines.length === 0) {
     throw new HttpError(422, 'Phiếu phải có ít nhất một dòng hạch toán trước khi ghi sổ.');
@@ -4943,6 +4957,7 @@ async function postCashTransactionToLedger(transaction, id, actor, profile) {
   if (transaction.journalLines.some(line => !cashAccount(line).startsWith(cashPrefix))) {
     throw new HttpError(422, `Phiếu ${transaction.type.toLowerCase()} phải hạch toán ${transaction.type === 'Thu' ? 'Nợ' : 'Có'} vào tài khoản ${cashPrefix}.`);
   }
+  await validateLedgerAccountLines(profile, transaction.journalLines);
   const accounts = await internalTransferAccounts();
   const source = accounts.find(account => account.key === transaction.sourceAccountId);
   if (!source || source.status !== 'Đang hoạt động' || source.source !== transaction.source) {
@@ -6098,6 +6113,7 @@ function sendJson(response, status, payload) {
 
 async function runAssetDepreciationBatch(request) {
   const actor = await requireAdmin(request);
+  const profile = await requireAccountingProfile();
   const payload = await readJson(request, 4 * 1024 * 1024);
   const period = requiredText(payload.period, 'Kỳ khấu hao', 7);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new HttpError(422, 'Kỳ khấu hao phải theo định dạng YYYY-MM.');
@@ -6234,7 +6250,9 @@ async function runAssetDepreciationBatch(request) {
         status: 'Đã ghi sổ cái',
         sourceModule: 'asset_depreciation',
         sourceReference,
+        accountingRegime: profile.accountingRegime,
       };
+      await validateLedgerAccountLines(profile, [{ debitAccount: ledgerEntry.debitAccount, creditAccount: ledgerEntry.creditAccount }]);
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`)
         .run(randomUUID(), sourceReference, actor.id, JSON.stringify(ledgerEntry), timestamp, timestamp);
@@ -7713,17 +7731,7 @@ async function handleRequest(request, response) {
       if ((debit > 0) === (credit > 0)) throw new HttpError(422, `Dòng ${index + 1} chỉ được có số tiền bên Nợ hoặc bên Có.`);
       return { account, debit, credit };
     });
-    const chartRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
-    const chart = chartRows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === profile.accountingRegime);
-    if (chart.length) {
-      const chartByCode = new Map(chart.map((item) => [String(item.code || '').toUpperCase(), item]));
-      for (const line of journalLines) {
-        const code = line.account.replace(/^TK\s*/i, '').trim().toUpperCase();
-        const account = chartByCode.get(code);
-        if (!account || account.status !== 'Đang sử dụng') throw new HttpError(422, `Tài khoản ${line.account} không có hoặc đã ngừng sử dụng trong danh mục ${profile.accountingRegime}.`);
-        if (chart.some((item) => item.parentCode === account.code)) throw new HttpError(422, `Tài khoản ${line.account} là tài khoản tổng hợp, không được ghi sổ trực tiếp.`);
-      }
-    }
+    await validateLedgerAccountLines(profile, journalLines);
     const debitTotalCents = journalLines.reduce((sum, line) => sum + Math.round(line.debit * 100), 0);
     const creditTotalCents = journalLines.reduce((sum, line) => sum + Math.round(line.credit * 100), 0);
     if (!Number.isSafeInteger(debitTotalCents) || !Number.isSafeInteger(creditTotalCents) || debitTotalCents > 100_000_000_000_000_000 || debitTotalCents <= 0 || debitTotalCents !== creditTotalCents) {
@@ -7807,6 +7815,7 @@ async function handleRequest(request, response) {
       if (netResult > 0) lines.push({ description: `Kết chuyển lãi quý ${quarter}/${fiscalYear}`, debitAccount: 'TK 911', creditAccount: 'TK 4212', amount: netResult });
       else if (netResult < 0) lines.push({ description: `Kết chuyển lỗ quý ${quarter}/${fiscalYear}`, debitAccount: 'TK 4212', creditAccount: 'TK 911', amount: Math.abs(netResult) });
       if (!quarterRecords.length || !lines.length) throw new HttpError(422, 'Kỳ chưa có bút toán đã ghi sổ đủ điều kiện kết chuyển.');
+      await validateLedgerAccountLines(profile, lines);
       created = lines.map((line, index) => {
         const key = `closing:${period}:${index + 1}`;
         return {
@@ -9298,6 +9307,7 @@ async function handleRequest(request, response) {
           accountingRegime: profile.accountingRegime,
           createdAt: timestamp,
         };
+        await validateLedgerAccountLines(profile, [{ debitAccount, creditAccount }]);
         if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
         const duplicateLedger = await db.prepare(`SELECT record_key FROM collection_records
           WHERE scope = 'finance_general_ledger'
@@ -10175,6 +10185,7 @@ async function handleRequest(request, response) {
         accountingRegime: profile.accountingRegime,
         createdAt: timestamp,
       };
+      await validateLedgerAccountLines(profile, [journalLine]);
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`)
         .run(randomUUID(), ledgerKey, actor.id, JSON.stringify(ledgerEntry), timestamp, timestamp);
@@ -10212,7 +10223,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && ['/finance/payroll/ledger-preview', '/finance/payroll/ledger-post'].includes(resource)) {
     const actor = await requireAdmin(request);
-    await requireAccountingProfile();
+    const profile = await requireAccountingProfile();
     const input = await readJson(request);
     const period = payrollMonth(input.period);
     if (!period) throw new HttpError(422, 'Kỳ lương không hợp lệ.');
@@ -10233,13 +10244,14 @@ async function handleRequest(request, response) {
       if (!posting) return;
       if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== result.fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi ghi sổ.');
       await requireSecurityPin(request, actor);
+      await validateLedgerAccountLines(profile, result.lines);
       const timestamp = now();
       const entryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const insert = await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)");
       for (const [index, line] of result.lines.entries()) {
         const key = `payroll:${period.replace('/', '-')}:${index + 1}`;
         if (await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_general_ledger' AND record_key = ?").get(key)) throw new HttpError(409, 'Mã bút toán đã tồn tại, cần đối chiếu Sổ Cái.');
-        const entry = { key, voucherCode: `BL-${period.replace('/', '')}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, createdById: actor.id, createdAt: timestamp };
+        const entry = { key, voucherCode: `BL-${period.replace('/', '')}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, accountingRegime: profile.accountingRegime, createdById: actor.id, createdAt: timestamp };
         await insert.run(randomUUID(), key, actor.id, JSON.stringify(entry), timestamp, timestamp);
       }
       const snapshot = { key: period, period, employerInsurance, employeeCount: result.employeeCount, fingerprint: result.fingerprint, records: result.records, lines: result.lines, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
@@ -10254,7 +10266,7 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && ['/finance/payroll/adjustment-preview', '/finance/payroll/adjustment-post'].includes(resource)) {
     const actor = await requireAdmin(request);
-    await requireAccountingProfile();
+    const profile = await requireAccountingProfile();
     const input = await readJson(request);
     const period = payrollMonth(input.period);
     if (!period) throw new HttpError(422, 'Kỳ lương không hợp lệ.');
@@ -10297,13 +10309,14 @@ async function handleRequest(request, response) {
       if (!posting) return;
       if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi điều chỉnh.');
       await requireSecurityPin(request, actor);
+      await validateLedgerAccountLines(profile, lines);
       const timestamp = now();
       const id = randomUUID();
       const entryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const insert = await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)");
       for (const [index, line] of lines.entries()) {
         const key = `payroll:${period.replace('/', '-')}:adjustment:${id}:${index + 1}`;
-        const entry = { key, voucherCode: `BL-${period.replace('/', '')}-DC${result.sequence}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, createdById: actor.id, createdAt: timestamp };
+        const entry = { key, voucherCode: `BL-${period.replace('/', '')}-DC${result.sequence}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, accountingRegime: profile.accountingRegime, createdById: actor.id, createdAt: timestamp };
         await insert.run(randomUUID(), key, actor.id, JSON.stringify(entry), timestamp, timestamp);
       }
       const snapshot = { key: id, period, sequence: result.sequence, employerInsurance, records: reviewed.records, lines: reviewed.lines, adjustmentLines: lines, fingerprint, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };

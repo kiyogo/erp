@@ -283,8 +283,19 @@ test('company profile stores all legal fields, validates dates and settings, rej
   } }, 201);
   await addAccount('111', 'Tài sản');
   await addAccount('1111', 'Tài sản', '111');
-  for (const [code, type] of [['112', 'Tài sản'], ['131', 'Tài sản'], ['511', 'Doanh thu'], ['641', 'Chi phí'], ['642', 'Chi phí'], ['999', 'Tài sản']]) await addAccount(code, type, '', code === '999' ? 'Ngừng sử dụng' : 'Đang sử dụng');
+  for (const [code, type] of [['112', 'Tài sản'], ['131', 'Tài sản'], ['511', 'Doanh thu'], ['641', 'Chi phí'], ['642', 'Chi phí'], ['911', 'Xác định kết quả'], ['4212', 'Vốn chủ sở hữu'], ['999', 'Tài sản']]) await addAccount(code, type, '', code === '999' ? 'Ngừng sử dụng' : 'Đang sử dụng');
   await request('/finance/chart-of-accounts', 'POST', { record: { code: '21101', name: 'Mã sai cấp', parentCode: '111', accountType: 'Tài sản', effectiveDate: '2026-01-01' } }, 422);
+  await request('/auth/security-pin', 'POST', { pin: '246810', confirmPin: '246810', currentPassword: env.SEED_ADMIN_PASSWORD }, 200);
+  headers['X-Security-Pin'] = '246810';
+  const autoCashVoucher = {
+    type: 'Thu', source: 'bank', sourceAccountId: bank.key, account: bank.accountNumber, category: 'Thu tiền hàng', amount: 100,
+    date: '2026-10-10', status: 'Đã hoàn thành', recipientOrPayer: 'Khách kiểm thử', counterpartyType: 'other',
+    journalLines: [{ description: 'Thu tiền', debitAccount: '112', creditAccount: '999', amount: 100 }],
+  };
+  await request('/finance/cash-transactions', 'POST', autoCashVoucher, 422);
+  const postedCashVoucher = (await request('/finance/cash-transactions', 'POST', { ...autoCashVoucher, journalLines: [{ ...autoCashVoucher.journalLines[0], creditAccount: '131' }] }, 201)).transaction;
+  assert.equal(postedCashVoucher.status, 'Đã hoàn thành');
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((entry) => entry.sourceReference === `cash-voucher:${postedCashVoucher.key}`).length, 1);
   const journalEntry = async (voucherCode, debitAccount, creditAccount, amount) => request('/finance/general-ledger/entries', 'POST', {
     voucherCode, entryDate: '2026-10-10', description: `Kiểm thử ${voucherCode}`, debitAccount, creditAccount, amount,
   }, 201);
