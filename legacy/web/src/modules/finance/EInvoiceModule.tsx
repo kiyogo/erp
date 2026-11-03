@@ -20,6 +20,12 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import providerCatalog from '../../data/einvoiceProviderCatalog.json';
+
+const MISA_API_DOCS = 'https://doc.meinvoice.vn/itg/Doc/GetToken.html';
+const MISA_SANDBOX_URL = 'https://testapi.meinvoice.vn/api/integration/auth/token';
+const VIETTEL_API_DOCS = 'https://www.sinvoice.com.vn/p/tai-ve.html';
+const PROVIDER_LIST_SOURCE = 'https://aba.angiang.vn/tin-noi-bat/danh-sach-to-chuc-cung-cap-giai-phap-hoa-don-dien-tu-dap-ung-day-du-cac-tieu-chi-quy-dinh-tai-kh-220697';
 
 interface EInvoice {
   key: string;
@@ -47,6 +53,7 @@ export const EInvoiceModule: React.FC = () => {
   const isTemplates = currentPath === '/finance/e-invoice/templates';
   const isLookup = currentPath === '/finance/e-invoice/lookup';
   const isReports = currentPath === '/finance/e-invoice/reports';
+  const isProviders = currentPath === '/finance/e-invoice/providers';
 
   const [data, setData] = useState<EInvoice[]>(INITIAL_INVOICES);
 
@@ -61,6 +68,7 @@ export const EInvoiceModule: React.FC = () => {
   }, []);
 
   const [searchText, setSearchText] = useState('');
+  const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [previewRecord, setPreviewRecord] = useState<EInvoice | null>(null);
   const [form] = Form.useForm();
@@ -124,6 +132,9 @@ export const EInvoiceModule: React.FC = () => {
     'Dữ liệu nội bộ · chưa ký số · chưa gửi cơ quan thuế',
     [`Người mua: ${invoice.buyerName}`, `Mã số thuế: ${invoice.buyerTaxCode || 'Chưa khai báo'}`, `Ngày lập nháp: ${invoice.issueDate}`, `Tiền trước thuế: ${Number(invoice.totalAmount).toLocaleString('vi-VN')} VND`, `Thuế GTGT: ${Number(invoice.vatAmount).toLocaleString('vi-VN')} VND`, `Tổng thanh toán: ${Number(invoice.finalAmount).toLocaleString('vi-VN')} VND`],
   ));
+  const visibleProviders = providerCatalog.filter((provider) =>
+    `${provider.name} ${provider.taxId} ${provider.website}`.toLowerCase().includes(providerSearchText.toLowerCase().trim())
+  );
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
@@ -156,6 +167,54 @@ export const EInvoiceModule: React.FC = () => {
         showIcon
         style={{ marginBottom: 16 }}
       />
+
+      {isProviders && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Card title="Danh mục nhà cung cấp hóa đơn điện tử" style={{ borderRadius: 8 }}>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div>Danh mục gồm 128 tổ chức trong danh sách tham khảo được đăng ngày 14/05/2026 theo Thông tư 78/2021/TT-BTC. Đây là dữ liệu tham khảo theo nguồn đã dẫn, không xác nhận tình trạng đủ điều kiện hiện nay theo quy định mới.</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                <a href={PROVIDER_LIST_SOURCE} target="_blank" rel="noreferrer">Nguồn danh sách 128 tổ chức</a>
+                <a href="https://vanban.chinhphu.vn/?docid=218689&pageid=27160&typegroupid=4" target="_blank" rel="noreferrer">Nghị định 254/2026/NĐ-CP</a>
+                <a href="https://vanban.chinhphu.vn/?docid=219006&pageid=27160" target="_blank" rel="noreferrer">Thông tư 91/2026/TT-BTC</a>
+              </div>
+              <div>Danh mục tra cứu không đồng nghĩa với tích hợp đang hoạt động. Hiện hệ thống chưa kết nối hoặc phát hành hóa đơn qua nhà cung cấp nào.</div>
+            </div>
+          </Card>
+          <Input
+            prefix={<SearchOutlined style={{ color: '#64748B' }} />}
+            placeholder="Tìm theo tên, mã số thuế hoặc website"
+            value={providerSearchText}
+            onChange={(event) => setProviderSearchText(event.target.value)}
+            allowClear
+            style={{ width: 'min(100%, 420px)' }}
+          />
+          <div className="transparent-table-card">
+            <KTable
+              dataSource={visibleProviders}
+              rowKey="number"
+              pagination={{ pageSize: 20 }}
+              columns={[
+                { title: 'STT', dataIndex: 'number', key: 'number', width: 64 },
+                { title: 'Tổ chức cung cấp', dataIndex: 'name', key: 'name' },
+                { title: 'Mã số thuế', dataIndex: 'taxId', key: 'taxId', width: 150 },
+                {
+                  title: 'Website', dataIndex: 'website', key: 'website',
+                  render: (website: string) => <a href={website} target="_blank" rel="noreferrer">Mở trang nhà cung cấp</a>,
+                },
+                {
+                  title: 'Tài liệu API và môi trường thử nghiệm', key: 'integration',
+                  render: (_: unknown, provider: (typeof providerCatalog)[number]) => provider.number === 13
+                    ? <div style={{ display: 'grid', gap: 4 }}><a href={MISA_API_DOCS} target="_blank" rel="noreferrer">Tài liệu API MISA MeInvoice</a><a href={MISA_SANDBOX_URL} target="_blank" rel="noreferrer">URL xác thực sandbox</a><span>Sandbox công khai; cần AppID và tài khoản test do MISA cấp.</span></div>
+                    : provider.number === 20
+                      ? <div style={{ display: 'grid', gap: 4 }}><a href={VIETTEL_API_DOCS} target="_blank" rel="noreferrer">Tài liệu tích hợp Viettel S-Invoice</a><span>Viettel công bố hỗ trợ API; cần liên hệ để xác nhận và cấp tài khoản test.</span></div>
+                      : <span>Chưa xác minh được tài liệu API hoặc sandbox công khai.</span>,
+                },
+              ]}
+            />
+          </div>
+        </div>
+      )}
 
       {/* VIEW: CREATE (Lập hóa đơn điện tử mới trực tiếp) */}
       {isCreate && (
@@ -291,7 +350,7 @@ export const EInvoiceModule: React.FC = () => {
       )}
 
       {/* VIEW: DEFAULT (Danh sách hóa đơn đã phát hành) */}
-      {!isCreate && !isDrafts && !isTemplates && !isLookup && !isReports && (
+      {!isCreate && !isDrafts && !isTemplates && !isLookup && !isReports && !isProviders && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <Input

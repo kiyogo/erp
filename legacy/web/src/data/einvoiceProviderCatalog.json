@@ -1,0 +1,770 @@
+[
+  {
+    "number": 1,
+    "name": "Công ty TNHH Công nghệ Vĩnh Hy (MST 0314743623)",
+    "taxId": "0314743623",
+    "website": "http://ehoadondientu.com/"
+  },
+  {
+    "number": 2,
+    "name": "Công ty TNHH Hệ thống thông tin FPT (MST 0104128565)",
+    "taxId": "0104128565",
+    "website": "https://einvoice.fpt.com.vn/"
+  },
+  {
+    "number": 3,
+    "name": "Công ty Cổ phần Công nghệ tin học EFY Việt Nam (MST 0102519041)",
+    "taxId": "0102519041",
+    "website": "https://ihoadon.vn/"
+  },
+  {
+    "number": 4,
+    "name": "Công ty Cổ phần Đầu tư công nghệ và thương mại Softdreams (MST 0105987432)",
+    "taxId": "0105987432",
+    "website": "https://easyinvoice.vn/"
+  },
+  {
+    "number": 5,
+    "name": "Công ty TNHH L.C.S (MST 0302999571)",
+    "taxId": "0302999571",
+    "website": "https://einvoice.lcs.com.vn/"
+  },
+  {
+    "number": 6,
+    "name": "Công ty TNHH Soft Ware KK VAT (MST 0313963672)",
+    "taxId": "0313963672",
+    "website": "http://kkvat.com.vn/thongtin"
+  },
+  {
+    "number": 7,
+    "name": "Công ty Cổ phần CyberLotus (MST 0105232093)",
+    "taxId": "0105232093",
+    "website": "https://cyberbill.vn/"
+  },
+  {
+    "number": 8,
+    "name": "Công ty TNHH Giải pháp công nghệ Ngô Gia Phát (MST 0311942758)",
+    "taxId": "0311942758",
+    "website": "http://www.ngogiaphat.vn/"
+  },
+  {
+    "number": 9,
+    "name": "Công ty Cổ phần Mắt Bão (MST 0302712571)",
+    "taxId": "0302712571",
+    "website": "https://matbao.in/"
+  },
+  {
+    "number": 10,
+    "name": "Công ty Cổ phần công nghệ thẻ Nacencomm (MST 0103930279)",
+    "taxId": "0103930279",
+    "website": "https://www.nacencomm.com.vn/dich-vu-chi-tiet/hoa-don-dien-tu"
+  },
+  {
+    "number": 11,
+    "name": "Công ty Cổ phần Megabiz Việt Nam (MST 0105844836)",
+    "taxId": "0105844836",
+    "website": "https://vinvoice.vn/"
+  },
+  {
+    "number": 12,
+    "name": "Công ty TNHH Công nghệ LCD Việt Nam (MST 0312483391)",
+    "taxId": "0312483391",
+    "website": "https://azinvoice.com/"
+  },
+  {
+    "number": 13,
+    "name": "Công ty Cổ phần MISA (MST 0101243150)",
+    "taxId": "0101243150",
+    "website": "https://www.meinvoice.vn/"
+  },
+  {
+    "number": 14,
+    "name": "Công ty TNHH Hóa đơn điện tử M-INVOICE (MST 0106026495)",
+    "taxId": "0106026495",
+    "website": "https://minvoice.vn/"
+  },
+  {
+    "number": 15,
+    "name": "Công ty Cổ phần Phát triển công nghệ Nguyễn Minh (MST 0313906508)",
+    "taxId": "0313906508",
+    "website": "http://www.nguyenminhvat.vn/"
+  },
+  {
+    "number": 16,
+    "name": "Công ty TNHH Phát triển công nghệ Thái Sơn (MST 0101300842)",
+    "taxId": "0101300842",
+    "website": "https://www.einvoice.vn/"
+  },
+  {
+    "number": 17,
+    "name": "Công ty TNHH Máy tính và truyền thông công nghệ kết nối (MST 0306784030)",
+    "taxId": "0306784030",
+    "website": "https://ehoadon.online/"
+  },
+  {
+    "number": 18,
+    "name": "Công ty Cổ phần công nghệ số và in đồ họa (MST 0200638946)",
+    "taxId": "0200638946",
+    "website": "https://oinvoice.vn/"
+  },
+  {
+    "number": 19,
+    "name": "Công ty TNHH Win Tech Solution (MST 0312303803)",
+    "taxId": "0312303803",
+    "website": "https://wininvoice.vn/"
+  },
+  {
+    "number": 20,
+    "name": "Tập đoàn Công nghiệp - Viễn thông quân đội (MST 0100109106)",
+    "taxId": "0100109106",
+    "website": "https://viettel.vn/s-invoice"
+  },
+  {
+    "number": 21,
+    "name": "Công ty Cổ phần Công nghệ thông tin Đông Nam Á (MST 0102454468)",
+    "taxId": "0102454468",
+    "website": "https://tax24.com.vn/thuedientu/san-pham-dich-vu/hoa-don-dien-tu"
+  },
+  {
+    "number": 22,
+    "name": "Công ty Cổ phần hóa đơn điện tử New-Invoice (MST 0105937449)",
+    "taxId": "0105937449",
+    "website": "https://newinvoice.com.vn/"
+  },
+  {
+    "number": 23,
+    "name": "Công ty Cổ phần Giải pháp phần mềm 3A (MST 0108516079)",
+    "taxId": "0108516079",
+    "website": "http://3asoft.vn/"
+  },
+  {
+    "number": 24,
+    "name": "Tổng công ty Viễn thông Mobifone (MST 0100686209)",
+    "taxId": "0100686209",
+    "website": "https://itc.mobifone.vn/giai_phap/mobifone-invoice"
+  },
+  {
+    "number": 25,
+    "name": "Công ty Cổ phần BKAV (MST 0101360697)",
+    "taxId": "0101360697",
+    "website": "https://van.ehoadon.vn/"
+  },
+  {
+    "number": 26,
+    "name": "Công ty Cổ phần phát triển phần mềm ASIA (MST 0101162173)",
+    "taxId": "0101162173",
+    "website": "https://asiainvoice.vn/"
+  },
+  {
+    "number": 27,
+    "name": "Công ty Cổ phần thương mại Visnam (MST 0401486901)",
+    "taxId": "0401486901",
+    "website": "https://vin-hoadon.com/"
+  },
+  {
+    "number": 28,
+    "name": "Công ty Cổ phần Thiết bị điện - Điện tử Bách Khoa (MST 0200784873)",
+    "taxId": "0200784873",
+    "website": "https://dinhvibachkhoa.vn/"
+  },
+  {
+    "number": 29,
+    "name": "Tập Đoàn Bưu chính viễn thông Việt Nam (MST 0100684378)",
+    "taxId": "0100684378",
+    "website": "https://vnpt-invoice.com.vn/"
+  },
+  {
+    "number": 30,
+    "name": "Công ty Cổ phần dịch vụ T-VAN HILO",
+    "taxId": "0106713804",
+    "website": "https://hiloinvoice.vn/"
+  },
+  {
+    "number": 31,
+    "name": "Công ty Cổ phần Minh Khang Group (MST 0314209362)",
+    "taxId": "0314209362",
+    "website": "http://hoadondientuvat.com/Thong-tin"
+  },
+  {
+    "number": 32,
+    "name": "Công ty Cổ phần Giải pháp hóa đơn điện tử Việt Nam (MST 0101352495)",
+    "taxId": "0101352495",
+    "website": "https://www.vninvoice.vn/"
+  },
+  {
+    "number": 33,
+    "name": "Công ty Cổ phần giải pháp thanh toán Việt Nam (MST 0102182292)",
+    "taxId": "0102182292",
+    "website": "https://www.vnpay.vn/"
+  },
+  {
+    "number": 34,
+    "name": "Công ty Cổ phần ICORP (MST 0106870211)",
+    "taxId": "0106870211",
+    "website": "https://vietinvoice.vn/"
+  },
+  {
+    "number": 35,
+    "name": "Công ty Cổ phần đầu tư và công nghệ idocNet (MST 0104614692)",
+    "taxId": "0104614692",
+    "website": "https://hoadontvan.com/"
+  },
+  {
+    "number": 36,
+    "name": "Công ty Cổ phần chữ ký số VI NA (MST 0309612872)",
+    "taxId": "0309612872",
+    "website": "http://www.smartsign.com.vn/"
+  },
+  {
+    "number": 37,
+    "name": "Công ty Cổ phần TS24 (MST 0309478306)",
+    "taxId": "0309478306",
+    "website": "https://www.xuathoadon.vn/"
+  },
+  {
+    "number": 38,
+    "name": "Công ty TNHH Hóa đơn điện tử TCT (MST 0315298333)",
+    "taxId": "0315298333",
+    "website": "https://www.tctinvoice.com/"
+  },
+  {
+    "number": 39,
+    "name": "Công ty TNHH Tin học Tia lửa Việt (MST 0303609305)",
+    "taxId": "0303609305",
+    "website": "https://ihoadondientu.com/"
+  },
+  {
+    "number": 40,
+    "name": "Công ty Cổ phần phần mềm quản lý doanh nghiệp (MST 0100727825)",
+    "taxId": "0100727825",
+    "website": "https://www.fast.com.vn/"
+  },
+  {
+    "number": 41,
+    "name": "Công ty TNHH ACCONLINE.VN (MST 0315467091)",
+    "taxId": "0315467091",
+    "website": "http://www.acconine.vn/"
+  },
+  {
+    "number": 42,
+    "name": "Công ty Cổ phần công nghệ hóa đơn điện tử HT (MST 0315638251)",
+    "taxId": "0315638251",
+    "website": "http://htinvoice.com.vn/"
+  },
+  {
+    "number": 43,
+    "name": "Công ty Cổ phần công nghệ ITT (MST 0105958921)",
+    "taxId": "0105958921",
+    "website": "https://cloudinvoice.vn/"
+  },
+  {
+    "number": 44,
+    "name": "Công ty TNHH PA Việt Nam (MST 0302431595)",
+    "taxId": "0302431595",
+    "website": "https://hoadon30s.vn/"
+  },
+  {
+    "number": 45,
+    "name": "Công ty Cổ phần tích hợp công nghệ VNISC (MST 0103018807)",
+    "taxId": "0103018807",
+    "website": "https://vnisc.com.vn/"
+  },
+  {
+    "number": 46,
+    "name": "Công ty TNHH Giải pháp hóa đơn điện tử My – Invoice (MST 0106820789)",
+    "taxId": "0106820789",
+    "website": "https://hoadondientuvn.info/"
+  },
+  {
+    "number": 47,
+    "name": "Công ty Cổ phần Chứng số An toàn (MST 0310151055)",
+    "taxId": "0310151055",
+    "website": "https://www.safeinvoice.vn/"
+  },
+  {
+    "number": 48,
+    "name": "Công ty Cổ phần công nghệ San Phú (MST 0303430876)",
+    "taxId": "0303430876",
+    "website": "http://www.spc-technology.com/"
+  },
+  {
+    "number": 49,
+    "name": "Công ty TNHH Giấy vi tính Liên Sơn (MST 0301452923)",
+    "taxId": "0301452923",
+    "website": "https://hoadondientu.lienson.vn/"
+  },
+  {
+    "number": 50,
+    "name": "Công ty TNHH Thương Mại dịch vụ Online VI NA (MST 0314185087)",
+    "taxId": "0314185087",
+    "website": "https://onlinevina.com.vn/"
+  },
+  {
+    "number": 51,
+    "name": "Công ty Cổ phần dịch vụ viễn thông và in Bưu điện (MST 0100687474)",
+    "taxId": "0100687474",
+    "website": "https://hoadondientu-ptp.vn/"
+  },
+  {
+    "number": 52,
+    "name": "Công ty TNHH Tuần Châu (MST 0400462489)",
+    "taxId": "0400462489",
+    "website": "http://e-invoicetuanchau.com/"
+  },
+  {
+    "number": 53,
+    "name": "Công ty TNHH Minh Thư (MST 3500456910)",
+    "taxId": "3500456910",
+    "website": "https://hoadonminhthuvungtau.com/"
+  },
+  {
+    "number": 54,
+    "name": "Công ty Cổ phần phát triển công nghệ ACMAN (MST 0104908371)",
+    "taxId": "0104908371",
+    "website": "https://www.acman.vn/hoa-don-dien-tu.html"
+  },
+  {
+    "number": 55,
+    "name": "Công ty TNHH Tư vấn thương mại Trí Việt Luật (MST 0315191291)",
+    "taxId": "0315191291",
+    "website": "https://hoadonsovn.net/"
+  },
+  {
+    "number": 56,
+    "name": "Công ty TNHH Đầu tư Hòn Ngọc Việt (MST 0313844107)",
+    "taxId": "0313844107",
+    "website": "http://voice.hoadondientu.net.vn/"
+  },
+  {
+    "number": 57,
+    "name": "Công ty TNHH Dịch vụ Trí Việt Luật (MST 0311622035)",
+    "taxId": "0311622035",
+    "website": "http://congtyinhoadon.com/"
+  },
+  {
+    "number": 58,
+    "name": "Công ty Cổ phần truyền số liệu Việt Nam (MST 0106361479)",
+    "taxId": "0106361479",
+    "website": "https://ahoadon.com/"
+  },
+  {
+    "number": 59,
+    "name": "Công ty TNHH NC9 Việt Nam (MST 0312270160)",
+    "taxId": "0312270160",
+    "website": "http://ameinvoice.com.vn/"
+  },
+  {
+    "number": 60,
+    "name": "Công ty Cổ phần giải pháp First Trust (MST 0104493085)",
+    "taxId": "0104493085",
+    "website": "https://www.fts.com.vn/phan-mem-hoa-don-dien-tu/"
+  },
+  {
+    "number": 61,
+    "name": "Công ty TNHH Phần mềm Nhân Hòa (MST 0101289966)",
+    "taxId": "0101289966",
+    "website": "https://hoadon.biz/"
+  },
+  {
+    "number": 62,
+    "name": "Công ty TNHH Kế toán và tư vấn V.L.C (MST 0303211948)",
+    "taxId": "0303211948",
+    "website": "https://ketoanvlc.com/"
+  },
+  {
+    "number": 63,
+    "name": "Công ty Cổ phần Công nghệ và giải pháp Tâm Việt (MST 0101622374)",
+    "taxId": "0101622374",
+    "website": "http://tamvietgroup.vn/"
+  },
+  {
+    "number": 64,
+    "name": "Công ty TNHH Dịch vụ phần mềm AVSE (MST 0310768095)",
+    "taxId": "0310768095",
+    "website": "http://hoadondientu.link/"
+  },
+  {
+    "number": 65,
+    "name": "Công ty TNHH MTV in Bến Thành (MST 0312961577)",
+    "taxId": "0312961577",
+    "website": "http://tracuuhoadon.benthanhvoice.vn/"
+  },
+  {
+    "number": 66,
+    "name": "Công ty TNHH ZAMO (MST 0313950909)",
+    "taxId": "0313950909",
+    "website": "https://koffi.vn/"
+  },
+  {
+    "number": 67,
+    "name": "Công ty Cổ phần công nghệ VIETINFO (MST 0311928954)",
+    "taxId": "0311928954",
+    "website": "https://hddt.vietinfo.tech/"
+  },
+  {
+    "number": 68,
+    "name": "Công ty Cổ phần phát triển phần mềm và công nghệ Bitware (MST 0103770970)",
+    "taxId": "0103770970",
+    "website": "http://www.bitware.vn/services/hoa-don-dien-tu/"
+  },
+  {
+    "number": 69,
+    "name": "Công ty Cổ phần phần mềm Rosy (MST 0305142231)",
+    "taxId": "0305142231",
+    "website": "https://rosysoft.vn/"
+  },
+  {
+    "number": 70,
+    "name": "Công ty TNHH MTV thương mại dịch vụ Trần Đình Tùng (MST 3702037020)",
+    "taxId": "3702037020",
+    "website": "https://trandinhtung.evat.vn/"
+  },
+  {
+    "number": 71,
+    "name": "Công ty TNHH Tổng công ty Công nghệ và Giải pháp CMC (MST 0101925883)",
+    "taxId": "0101925883",
+    "website": "https://store.cmcts.com.vn/"
+  },
+  {
+    "number": 72,
+    "name": "Công ty TNHH Công nghệ và tư vấn Phương Nam (MST số 0316642395)",
+    "taxId": "0316642395",
+    "website": "https://phuongnam.evat.vn/log"
+  },
+  {
+    "number": 73,
+    "name": "Công ty TNHH Dịch vụ kế toán - Tư vấn thuế TTL (MST 0315194912)",
+    "taxId": "0315194912",
+    "website": "https://ttltax.com/"
+  },
+  {
+    "number": 74,
+    "name": "Công ty Cô phần Công nghệ Phát triển hóa đơn điện tử Việt Nam (MST 0315983667)",
+    "taxId": "0315983667",
+    "website": "http://hoadondientuvietnam.vn/"
+  },
+  {
+    "number": 75,
+    "name": "Công ty TNHH Phần mềm kế toán và dịch vụ thủ tục thuế Sài Gòn (MST 0310926922)",
+    "taxId": "0310926922",
+    "website": "https://invoice.ehcm.vn/"
+  },
+  {
+    "number": 76,
+    "name": "Công ty Cổ phần Phần mềm Thăng Long (MST 0101010702)",
+    "taxId": "0101010702",
+    "website": "http://thanglongsoft.com/index.php/linh-v-c-kinh-doanh/493-l-nh-va-c-kinh-doanh/493-1-l-nh-va-c-kinh-doanh"
+  },
+  {
+    "number": 77,
+    "name": "Công ty Cổ phần Hóa đơn điện tử TIG Thăng Long (MST 0102720409)",
+    "taxId": "0102720409",
+    "website": "http://tigtax.vn/"
+  },
+  {
+    "number": 78,
+    "name": "Công ty TNHH Viễn thông Đông Sài Gòn (MST 0314058603)",
+    "taxId": "0314058603",
+    "website": "https://www.vdsg-invoice.vn/"
+  },
+  {
+    "number": 79,
+    "name": "Công ty Cổ phần Tin học Lạc Việt (MST 0301448733)",
+    "taxId": "0301448733",
+    "website": "https://accnet.vn/hoa-don-dien-tu"
+  },
+  {
+    "number": 80,
+    "name": "Công ty Cổ phần Công nghệ TADU (MST 0313253288)",
+    "taxId": "0313253288",
+    "website": "https://autoinvoice.vn/"
+  },
+  {
+    "number": 81,
+    "name": "Công ty Cổ phần Công nghệ UNIT (MST 0309889835)",
+    "taxId": "0309889835",
+    "website": "https://unit.com.vn/"
+  },
+  {
+    "number": 82,
+    "name": "Công ty Cổ phần phát triển và ứng dụng phần mềm Bách Khoa (MST 0202029650)",
+    "taxId": "0202029650",
+    "website": "https://hoadondientu.pmbk.vn/"
+  },
+  {
+    "number": 83,
+    "name": "Công ty Cổ phần My Software (MST 0108971656)",
+    "taxId": "0108971656",
+    "website": "https://mysoftware.vn/"
+  },
+  {
+    "number": 84,
+    "name": "Công ty TNHH Công nghệ HT Sài Gòn (MST 0312942260)",
+    "taxId": "0312942260",
+    "website": "http://ihoadondientu.net/"
+  },
+  {
+    "number": 85,
+    "name": "Công ty TNHH WEBCASH Việt Nam (MST 1201496252)",
+    "taxId": "1201496252",
+    "website": "https://einvoice.webcashvietnam.com/"
+  },
+  {
+    "number": 86,
+    "name": "Công ty TNHH Phần mềm và Tư vấn Kim Tự Tháp (MST 0303549303)",
+    "taxId": "0303549303",
+    "website": "https://e-invoices.vn/"
+  },
+  {
+    "number": 87,
+    "name": "Công ty TNHH Phần mềm BRB (MST 0311914694)",
+    "taxId": "0311914694",
+    "website": "http://brightbrain.vn/hoa-don-dien-tu/"
+  },
+  {
+    "number": 88,
+    "name": "Công ty TNHH Nhóm Mây (MST 0312617990)",
+    "taxId": "0312617990",
+    "website": "https://www.cloudteam.vn/"
+  },
+  {
+    "number": 89,
+    "name": "Công ty Cổ phần Hóa đơn điện tử VININVOICE (MST 0109282176)",
+    "taxId": "0109282176",
+    "website": "https://vininvoice.vn/"
+  },
+  {
+    "number": 90,
+    "name": "Trung tâm Tin học và Công nghệ số (MST 0102723181)",
+    "taxId": "0102723181",
+    "website": "http://hoadonct.gov.vn/"
+  },
+  {
+    "number": 91,
+    "name": "Công ty Cổ phần VETC (MST 0106858609)",
+    "taxId": "0106858609",
+    "website": "https://vetc.com.vn/"
+  },
+  {
+    "number": 92,
+    "name": "Công ty TNHH Phần mềm PVS (MST 0315151651)",
+    "taxId": "0315151651",
+    "website": "https://pvssolution.com/"
+  },
+  {
+    "number": 93,
+    "name": "Công ty Cổ phần Dịch vụ Thương mại Việt Nam trực tuyến (MST 0310151739)",
+    "taxId": "0310151739",
+    "website": "https://news.yoinvoice.vn/"
+  },
+  {
+    "number": 94,
+    "name": "Công ty TNHH Ecount Việt Nam (MST 0312575123)",
+    "taxId": "0312575123",
+    "website": "https://ecount.com/"
+  },
+  {
+    "number": 95,
+    "name": "Công ty Cổ phần ATIS (MST 0107732197)",
+    "taxId": "0107732197",
+    "website": "https://atis.com.vn/hoa-don-dien-tu"
+  },
+  {
+    "number": 96,
+    "name": "Công ty Cổ phần GMO-Z.com RUNSYSTEM (MST 0101659906)",
+    "taxId": "0101659906",
+    "website": "https://kaike.vn/hoa-don-dien-tu"
+  },
+  {
+    "number": 97,
+    "name": "Công ty Cổ phần Tin học - Viễn thông Hàng không (MST 0103019524)",
+    "taxId": "0103019524",
+    "website": "https://aits.vn/"
+  },
+  {
+    "number": 98,
+    "name": "Công ty TNHH Bizzi VietNam (MST 0316114998)",
+    "taxId": "0316114998",
+    "website": "https://bizzi.vn/"
+  },
+  {
+    "number": 99,
+    "name": "Công ty Cổ phần Công nghệ BEE (MST 0316636497)",
+    "taxId": "0316636497",
+    "website": "http://beetek.vn/"
+  },
+  {
+    "number": 100,
+    "name": "Công ty Cổ phần MONT-E (MST 0106249501)",
+    "taxId": "0106249501",
+    "website": "https://mont-e.com/"
+  },
+  {
+    "number": 101,
+    "name": "Công ty TNHH Tư vấn và Dịch vụ Home Casta (MS 0201802839)",
+    "taxId": "0201802839",
+    "website": "https://homecasta.vn/"
+  },
+  {
+    "number": 102,
+    "name": "Công ty CP Tư vấn và Chuyển giao công nghệ Sơn Phát (MS 4601328480)",
+    "taxId": "4601328480",
+    "website": "https://sonphat.vn/"
+  },
+  {
+    "number": 103,
+    "name": "Công ty Cổ phần công nghệ KIOTVIET (MS 0104359717)",
+    "taxId": "0104359717",
+    "website": "https://hoadondientu.kiotviet.vn/"
+  },
+  {
+    "number": 104,
+    "name": "Công ty Cổ phần công nghệ HARAVAN (MS 0312662961)",
+    "taxId": "0312662961",
+    "website": "https://haravan.com/pages/giai-phap-xuat-hoa-don-dien-tu"
+  },
+  {
+    "number": 105,
+    "name": "Công ty Cổ phần IPOS.VN (MS 0104789847)",
+    "taxId": "0104789847",
+    "website": "https://ipos.vn/"
+  },
+  {
+    "number": 106,
+    "name": "Công ty Cổ phần Dịch vụ Chữ ký số INTRUST (MS 0110333410)",
+    "taxId": "0110333410",
+    "website": "https://intrustdss.vn/san-pham/chi-tiet/4"
+  },
+  {
+    "number": 107,
+    "name": "Công ty Cổ phần SCHOOL TECH (MS 0317509886 )",
+    "taxId": "0317509886",
+    "website": "https://yoyoin.yoyoschool.vn/"
+  },
+  {
+    "number": 108,
+    "name": "Công ty Cổ phần Công nghệ Sapo ( MS 0103243195)",
+    "taxId": "0103243195",
+    "website": "https://www.sapo.vn/blog/sapo-invoice"
+  },
+  {
+    "number": 109,
+    "name": "Công ty TNHH Pancake Việt Nam (MS 0109039397 )",
+    "taxId": "0109039397",
+    "website": "https://pos.pancake.vn/e-invoice"
+  },
+  {
+    "number": 110,
+    "name": "Công ty Cổ phần Technology Convergence Corporation (MS 0109045760)",
+    "taxId": "0109045760",
+    "website": "https://netacom.vn/neta-einvoice.html"
+  },
+  {
+    "number": 111,
+    "name": "Công ty Cổ phần Giải pháp số IGAS (MS 0111090707)",
+    "taxId": "0111090707",
+    "website": "https://hoadon.igas.vn/"
+  },
+  {
+    "number": 112,
+    "name": "Công ty TNHH OG Technologies (MS 0109996406 )",
+    "taxId": "0109996406",
+    "website": "https://invoi.vn/"
+  },
+  {
+    "number": 113,
+    "name": "Công ty Cổ phần giải pháp doanh nghiệp TTC (MS 0318511655)",
+    "taxId": "0318511655",
+    "website": "https://ttc.t-hoadon.vn/"
+  },
+  {
+    "number": 114,
+    "name": "Công ty Cổ phần phần mềm IAM Việt Nam (MS 0109193102 )",
+    "taxId": "0109193102",
+    "website": "https://invoice.iamsoftware.com.vn/"
+  },
+  {
+    "number": 115,
+    "name": "Công ty Cổ phần Công nghệ thông min h SFIN (MS 0109959309 )",
+    "taxId": "0109959309",
+    "website": "https://sfin.vn/"
+  },
+  {
+    "number": 116,
+    "name": "Công ty TNHH Truyền hình cáp SaigonTourist (MS 0301463315)",
+    "taxId": "0301463315",
+    "website": "https://smartinvoice.vn/"
+  },
+  {
+    "number": 117,
+    "name": "Công ty Cổ phần Dịch vụ Di động Trực tuyến (MS 0305289153)",
+    "taxId": "0305289153",
+    "website": "https://mmhoadon.vn/"
+  },
+  {
+    "number": 118,
+    "name": "Công ty Cổ phần Công nghệ Go Việt Nam (MS 0111245245)",
+    "taxId": "0111245245",
+    "website": "https://gohoadon.vn/"
+  },
+  {
+    "number": 119,
+    "name": "Công ty TNHH Công nghệ và Dịch vụ thuế TAXNET (MS 0110784036)",
+    "taxId": "0110784036",
+    "website": "https://taxnet.vn/"
+  },
+  {
+    "number": 120,
+    "name": "Công ty Cổ phần Công nghệ AIBAT (0110585520)",
+    "taxId": "0110585520",
+    "website": "https://hoadon.aibat.vn/"
+  },
+  {
+    "number": 121,
+    "name": "Công ty Cổ phần Nhanh.VN",
+    "taxId": "0108824877",
+    "website": "https://dangky.nhanh.vn/xuat_hoa_don_dien_tu"
+  },
+  {
+    "number": 122,
+    "name": "Công ty Cổ phần Công nghệ NCCA (MS 0106166781)",
+    "taxId": "0106166781",
+    "website": "https://nc-ca.com.vn/"
+  },
+  {
+    "number": 123,
+    "name": "Công ty Cổ phần Ứng dụng Công nghệ Vũ Hải (MS 0108190282)",
+    "taxId": "0108190282",
+    "website": "https://vuhai.co/"
+  },
+  {
+    "number": 124,
+    "name": "Công ty Cổ phần Công nghệ Trường Minh Thịnh (MS 0311174986)",
+    "taxId": "0311174986",
+    "website": "https://wiinvoice.vn/"
+  },
+  {
+    "number": 125,
+    "name": "Công ty TNHH Casso (MS 0316794479)",
+    "taxId": "0316794479",
+    "website": "https://xinvoice.vn/"
+  },
+  {
+    "number": 126,
+    "name": "Công ty Cổ phần Dịch vụ EPAY(MS 0108269133)",
+    "taxId": "0108269133",
+    "website": "https://www.epayjsc.com/"
+  },
+  {
+    "number": 127,
+    "name": "Công ty Cổ phần Giải pháp ATOM (MS 0316887099)",
+    "taxId": "0316887099",
+    "website": "https://1invoice.vn/"
+  },
+  {
+    "number": 128,
+    "name": "Công ty TNHH Dịch vụ và Giải pháp Phần mềm Bado (MS 1602159776)",
+    "taxId": "1602159776",
+    "website": "https://bado.vn/hoa-don-dien-tu"
+  }
+]

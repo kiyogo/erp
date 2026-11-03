@@ -341,6 +341,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
           { id: 'fin-einv-list', title: 'Danh sách hóa đơn', path: '/admin/finance/e-invoice/list' },
           { id: 'fin-einv-draft', title: 'Hóa đơn nháp', path: '/admin/finance/e-invoice/drafts' },
           { id: 'fin-einv-tpl', title: 'Mẫu hóa đơn', path: '/admin/finance/e-invoice/templates' },
+          { id: 'fin-einv-providers', title: 'Nhà cung cấp', path: '/admin/finance/e-invoice/providers' },
           { id: 'fin-einv-lookup', title: 'Tra cứu hóa đơn', path: '/admin/finance/e-invoice/lookup' },
           { id: 'fin-einv-rep', title: 'Báo cáo hóa đơn', path: '/admin/finance/e-invoice/reports' },
         ],
