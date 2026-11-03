@@ -34,13 +34,11 @@ test('payslip confirmation persists by record key and does not claim success aft
     assert.equal(saved.patch.signedStatus, 'Đã xác nhận');
     dataService.getPayroll();
     await new Promise(resolve => setImmediate(resolve));
-    await dataService.updatePayrollStatus('pay-01', 'Đã chi trả');
-    assert.deepEqual(saved, { scope: 'payroll', key: 'pay-01', patch: { status: 'Đã chi trả' } });
-    assert.equal(dataService.getPayroll()[0].status, 'Đã chi trả');
+    assert.equal(typeof dataService.updatePayrollStatus, 'undefined');
+    assert.equal(dataService.getPayroll()[0].status, 'Chưa chi trả');
     const before = JSON.stringify(dataService.getEmployeePayslips());
     reject = true;
     const payrollBeforeFailure = JSON.stringify(dataService.getPayroll());
-    await assert.rejects(dataService.updatePayrollStatus('pay-01', 'Chưa chi trả'), /offline/);
     assert.equal(JSON.stringify(dataService.getPayroll()), payrollBeforeFailure);
     await assert.rejects(dataService.signEmployeePayslip('pay-01', 'Other User'), /offline/);
     assert.equal(JSON.stringify(dataService.getEmployeePayslips()), before);

@@ -8,7 +8,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Select, Button, Input, message, Card, Tag } from '../../custom-ui';
 import { dataService, PayrollRecord } from '../../services/dataService';
-import { payrollLedgerApi, systemApi } from '../../api/endpoints';
+import { financePaymentAccountsApi, FinancePaymentAccount, payrollLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { filterPayrollForMonth, normalizePayrollMonth, payrollBankRows, payrollReportRows } from './payrollExports';
 
@@ -36,8 +36,12 @@ export const PayrollModule: React.FC = () => {
   const [sheetEndDate, setSheetEndDate] = useState('');
   const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'Tiền mặt' | 'Tiền gửi'>('Tiền mặt');
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paymentDate, setPaymentDate] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()));
   const [paymentRows, setPaymentRows] = useState<PayrollRecord[]>([]);
+  const [paymentAccounts, setPaymentAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [paymentAccountId, setPaymentAccountId] = useState('');
+  const [paymentReferences, setPaymentReferences] = useState<Record<string, string>>({});
+  const [loadingPaymentAccounts, setLoadingPaymentAccounts] = useState(false);
   const [insuranceLoaded, setInsuranceLoaded] = useState(false);
   const [insuranceDialog, setInsuranceDialog] = useState(false);
   const [insuranceAmount, setInsuranceAmount] = useState(0);
@@ -105,6 +109,20 @@ export const PayrollModule: React.FC = () => {
     return () => { active = false; };
   }, [isAccounting]);
 
+  useEffect(() => {
+    if (!isDisburse) return;
+    let active = true;
+    setLoadingPaymentAccounts(true);
+    financePaymentAccountsApi.getAccounts().then(({ data: response }) => {
+      if (!active) return;
+      setPaymentAccounts(response.accounts);
+      setPaymentAccountId((current) => current || response.accounts.find((account) => account.source === 'petty')?.key || response.accounts[0]?.key || '');
+    }).catch((error: any) => {
+      if (active) message.error(error?.response?.data?.message || 'Không tải được danh sách tài khoản chi lương.');
+    }).finally(() => { if (active) setLoadingPaymentAccounts(false); });
+    return () => { active = false; };
+  }, [isDisburse]);
+
   const periodData = filterPayrollForMonth(data, selectedMonth);
   const orgUnits = dataService.getOrgUnits();
   const payrollSheets = dataService.getGenericData('finance_payroll_sheets');
@@ -112,7 +130,8 @@ export const PayrollModule: React.FC = () => {
   const grossPayroll = periodData.reduce((sum, item) => sum + item.baseSalary + item.allowance + item.bonus, 0);
   const employerInsurance = periodData.reduce((sum, item) => sum + Math.round(item.baseSalary * 0.215), 0);
   const employeeInsurance = periodData.reduce((sum, item) => sum + item.insuranceDeduction, 0);
-  const paidPayroll = periodData.filter((item) => item.status === 'Đã chi trả').reduce((sum, item) => sum + item.netSalary, 0);
+  const availablePaymentAccounts = paymentAccounts.filter((account) => account.status === 'Đang hoạt động'
+    && account.source === (paymentMethod === 'Tiền mặt' ? 'petty' : 'bank'));
   const availableMonths = Array.from(new Set([selectedMonth, ...postedPeriods, ...data.map((item) => normalizePayrollMonth(item.month)).filter((month): month is string => Boolean(month))]))
     .filter((month) => normalizePayrollMonth(month))
     .sort((a, b) => `${b.slice(3)}-${b.slice(0, 2)}`.localeCompare(`${a.slice(3)}-${a.slice(0, 2)}`))
@@ -200,22 +219,36 @@ export const PayrollModule: React.FC = () => {
     finally { setPostingLedger(false); }
   };
 
-  const handlePayOut = (record: PayrollRecord) => Modal.confirm({
-    title: `Xác nhận đã chuyển lương cho ${record.employeeName}?`,
-    content: `Hệ thống sẽ ghi nhận trạng thái đã chi ${record.netSalary.toLocaleString('vi-VN')} ₫. Chỉ xác nhận sau khi giao dịch ngân hàng hoàn tất.`,
-    okText: 'Đã chuyển khoản',
-    cancelText: 'Hủy',
-    onOk: async () => {
-      try {
-        await dataService.updatePayrollStatus(record.key, 'Đã chi trả', { paymentMethod, paymentDate });
-        loadData();
-        message.success(`Đã ghi nhận trạng thái chi trả cho ${record.employeeName}.`);
-      } catch (error: any) {
-        message.error(error?.response?.data?.message || 'Không thể cập nhật trạng thái chi lương.');
-        throw error;
-      }
-    },
-  });
+  const handlePayOut = (record: PayrollRecord) => {
+    const source = availablePaymentAccounts.find((account) => account.key === paymentAccountId);
+    const settlementReference = (paymentReferences[record.key] || '').trim();
+    if (!source) { message.error('Chọn tài khoản chi đang hoạt động.'); return; }
+    if (!paymentDate) { message.error('Chọn ngày chi lương.'); return; }
+    if (settlementReference.length < 3) { message.error('Nhập mã giao dịch hoặc số chứng từ chi, tối thiểu 3 ký tự.'); return; }
+    if (source.balance < record.netSalary) { message.error(`Số dư ${source.name} không đủ chi lương.`); return; }
+    Modal.confirm({
+      title: `Ghi nhận đã chi lương cho ${record.employeeName}?`,
+      content: `Xác nhận chỉ sau khi đã thực hiện giao dịch ${record.netSalary.toLocaleString('vi-VN')} ₫ từ ${source.name}. Hệ thống sẽ lập phiếu chi, cập nhật số dư và ghi bút toán Nợ TK 334, Có ${source.source === 'petty' ? 'TK 111' : 'TK 112'} theo mã ${settlementReference}.`,
+      okText: 'Đã thực hiện giao dịch',
+      cancelText: 'Hủy',
+      onOk: async () => {
+        try {
+          await payrollLedgerApi.disburse(record.key, { sourceAccountId: source.key, paymentDate, settlementReference });
+          const refreshed = await dataService.refreshGenericData('payroll');
+          setData(refreshed as PayrollRecord[]);
+          setPaymentRows((rows) => rows.filter((row) => row.key !== record.key));
+          setPaymentReferences((references) => { const next = { ...references }; delete next[record.key]; return next; });
+          await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
+          const accounts = (await financePaymentAccountsApi.getAccounts()).data.accounts;
+          setPaymentAccounts(accounts);
+          message.success(`Đã lập phiếu chi và ghi Sổ Cái cho ${record.employeeName}.`);
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể ghi nhận nghiệp vụ chi lương.');
+          throw error;
+        }
+      },
+    });
+  };
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
@@ -348,16 +381,23 @@ export const PayrollModule: React.FC = () => {
       {isDisburse && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'end', gap: 12, flexWrap: 'wrap' }}>
-            <label>Phương thức thanh toán<Select value={paymentMethod} onChange={setPaymentMethod} options={['Tiền mặt', 'Tiền gửi'].map((value) => ({ value, label: value }))} /></label>
+            <label>Phương thức thanh toán<Select value={paymentMethod} onChange={(value: 'Tiền mặt' | 'Tiền gửi') => {
+              setPaymentMethod(value);
+              const source = value === 'Tiền mặt' ? 'petty' : 'bank';
+              setPaymentAccountId(paymentAccounts.find((account) => account.source === source && account.status === 'Đang hoạt động')?.key || '');
+            }} options={['Tiền mặt', 'Tiền gửi'].map((value) => ({ value, label: value }))} /></label>
+            <label style={{ minWidth: 280 }}>Tài khoản chi<Select value={paymentAccountId || undefined} loading={loadingPaymentAccounts} onChange={setPaymentAccountId}
+              options={availablePaymentAccounts.map((account) => ({ value: account.key, label: `${account.name} · Số dư ${account.balance.toLocaleString('vi-VN')} ₫` }))}
+              placeholder="Chọn tài khoản chi" /></label>
             <label>Ngày trả lương<Input type="date" value={paymentDate} onChange={(e: any) => setPaymentDate(e.target.value)} /></label>
-            <Button type="primary" onClick={() => setPaymentRows(periodData.filter((row) => row.status !== 'Đã chi trả'))}>Lấy dữ liệu</Button>
+            <Button type="primary" onClick={() => setPaymentRows(periodData.filter((row) => row.status === 'Chưa chi trả'))}>Lấy dữ liệu</Button>
           </div>
           <div>Thông tin trả lương</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <div>
               <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Lập Lệnh Chi Trả Lương Tự Động Qua Ngân Hàng</h3>
               <p style={{ margin: '4px 0 0 0', fontSize: 12.5, color: '#64748B' }}>
-                Xuất danh sách lệnh chuyển khoản cho nhân viên có tài khoản nhận lương đã duyệt
+                Xuất danh sách lệnh chuyển khoản cho nhân viên có tài khoản nhận lương đã duyệt. Sau khi giao dịch hoàn tất, nhập mã giao dịch để ghi phiếu chi và Sổ Cái.
               </p>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -378,12 +418,13 @@ export const PayrollModule: React.FC = () => {
                 { title: 'Số trả', dataIndex: 'netSalary', key: 'payAmount', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
                 { title: 'Số tài khoản', key: 'account', render: (_: any, r: PayrollRecord) => getEmployeeBankAccount(r.employeeCode)?.accountNumber || '—' },
                 { title: 'Tên ngân hàng', key: 'bank', render: (_: any, r: PayrollRecord) => getEmployeeBankAccount(r.employeeCode)?.bankName || '—' },
+                { title: 'Mã giao dịch hoặc số chứng từ', key: 'reference', render: (_: any, r: PayrollRecord) => <Input value={paymentReferences[r.key] || ''} onChange={(event: any) => setPaymentReferences((references) => ({ ...references, [r.key]: event.target.value }))} placeholder="Nhập mã giao dịch hoặc số phiếu chi" /> },
                 {
                   title: 'Thao tác',
                   key: 'act',
                   render: (_: any, r: PayrollRecord) => (
-                    <Button size="small" type="primary" disabled={r.status === 'Đã chi trả' || r.status !== 'Chưa chi trả'} onClick={() => handlePayOut(r)} style={r.status === 'Chưa chi trả' ? { backgroundColor: '#009688', borderColor: '#009688' } : {}}>
-                      {r.status === 'Đã chi trả' ? 'Đã chi' : r.status === 'Chưa chi trả' ? 'Xác nhận đã chi' : 'Chờ duyệt'}
+                    <Button type="primary" disabled={r.status !== 'Chưa chi trả' || !paymentAccountId || (paymentReferences[r.key] || '').trim().length < 3} onClick={() => handlePayOut(r)} style={r.status === 'Chưa chi trả' ? { backgroundColor: '#009688', borderColor: '#009688' } : {}}>
+                      {r.status === 'Chưa chi trả' ? 'Ghi nhận chi' : 'Chờ duyệt'}
                     </Button>
                   ),
                 },
@@ -404,7 +445,6 @@ export const PayrollModule: React.FC = () => {
                 { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 642', credit: 'Có TK 334', amount: grossPayroll },
                 { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 642', credit: 'Có TK 338', amount: Number(employerCharge) || 0 },
                 { desc: 'Khấu trừ bảo hiểm người lao động', debit: 'Nợ TK 334', credit: 'Có TK 338', amount: employeeInsurance },
-                { desc: 'Ghi nhận lương đã chi', debit: 'Nợ TK 334', credit: 'Có TK 112', amount: paidPayroll },
               ].filter((line) => line.amount > 0).map((bt, idx) => (
                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                   <div>

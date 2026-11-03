@@ -318,15 +318,24 @@ try {
   const pgPayrollEntries = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:08/2031');
   assert.equal(pgPayrollEntries.length, 4);
   await request(`/collections/finance_general_ledger/${encodeURIComponent(pgPayrollEntries[0].key)}`, 'DELETE', undefined, 409); completed++;
-  await request('/collections/payroll/pg-payroll-post', 'PATCH', { patch: { status: 'Đã chi trả' } });
-  const pgAdjustment = await request('/finance/payroll/adjustment-preview', 'POST', pgPayroll);
-  assert.deepEqual(pgAdjustment.lines.map((item) => item.amount), [950]);
-  const pgAdjustmentRace = await Promise.all([1, 2].map(async () => {
-    const response = await fetch(`${base}/finance/payroll/adjustment-post`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin }, body: JSON.stringify({ ...pgPayroll, fingerprint: pgAdjustment.fingerprint }) });
-    return response.status;
+  const payrollBank = (await request('/finance/bank-accounts', 'POST', {
+    bankName: 'PG payroll bank', accountNumber: `PG-PAY-${randomUUID()}`, accountHolder: 'PG', balance: 5000, status: 'Đang hoạt động',
+  }, 201)).account;
+  await request('/collections/payroll/pg-payroll-post', 'PATCH', { patch: { status: 'Đã chi trả' } }, 409);
+  const payrollPayouts = await Promise.all([1, 2].map(async () => {
+    const response = await fetch(`${base}/finance/payroll/pg-payroll-post/disburse`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Security-Pin': securityPin },
+      body: JSON.stringify({ sourceAccountId: payrollBank.key, paymentDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()), settlementReference: 'PG-PAYROLL-TXN-01' }),
+    });
+    return { status: response.status, body: await response.json() };
   }));
-  assert.deepEqual(pgAdjustmentRace.sort((a, b) => a - b), [201, 422]);
-  assert.equal((await request('/collections/finance_payroll_adjustments')).data.filter((item) => item.period === '08/2031').length, 1); completed++;
+  assert.deepEqual(payrollPayouts.map((item) => item.status).sort((a, b) => a - b), [201, 409], JSON.stringify(payrollPayouts.map((item) => item.body)));
+  const payrollPayout = payrollPayouts.find((item) => item.status === 201).body;
+  assert.equal(payrollPayout.payroll.status, 'Đã chi trả');
+  assert.equal(Number(payrollPayout.transaction.amount), 950);
+  assert.equal(payrollPayout.ledgerEntry.sourceModule, 'payroll_payment');
+  assert.equal((await request('/finance/payment-accounts')).accounts.find((item) => item.key === payrollBank.key).balance, 4050);
+  await request('/finance/payroll/adjustment-preview', 'POST', pgPayroll, 422); completed += 5;
   const pgLicense = (await request('/assets/licenses', 'POST', { licenseCode: 'PG-LIC-01', softwareName: 'PG license', vendor: 'PG vendor', category: 'Văn phòng & Cộng tác', licenseType: 'Theo người dùng', productKey: 'PG-SECRET-123', seatsTotal: 1, seatsAllocated: 0, annualCost: 0, billingCycle: 'Hàng năm', purchaseDate: '2026-01-01', expireDate: '2028-01-01', assignedDepartment: 'IT', assignedAdmin: 'PG admin' }, 201)).record;
   const pgLicenseRace = await Promise.all(['one@example.test', 'two@example.test'].map(async (email) => {
     const response = await fetch(`${base}/assets/licenses/${pgLicense.key}/allocate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name: 'PG user', email }) });

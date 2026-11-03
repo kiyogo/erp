@@ -940,14 +940,6 @@ class DataService {
     return this.getGenericData('payroll');
   }
 
-  public async updatePayrollStatus(key: string, status: 'Đã chi trả' | 'Chưa chi trả' | 'Chờ duyệt', payment?: { paymentMethod: string; paymentDate: string }): Promise<void> {
-    const current = this.getPayroll();
-    if (!current.some((record) => record.key === key)) throw new Error('Không tìm thấy phiếu lương cần cập nhật.');
-    await collectionsApi.update('payroll', key, { status, ...(status === 'Đã chi trả' && payment ? payment : {}) });
-    await this.refreshGenericData('payroll');
-    this.logAction('Chi trả', 'Tiền lương', `Cập nhật trạng thái phiếu lương key: ${key}`);
-  }
-
   // 9. Leave Requests (Collections: leave_requests)
   public getLeaveRequests(): LeaveRequest[] {
     return this.getGenericData('leave_requests');

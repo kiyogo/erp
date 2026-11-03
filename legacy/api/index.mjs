@@ -2269,6 +2269,11 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.amountPaid = 0;
     record.status = 'Chờ nộp thuế';
   }
+  if (scope === 'payroll' && !current) {
+    if (record.status === 'Đã chi trả') throw new HttpError(409, 'Phiếu lương mới không thể được tạo ở trạng thái đã chi trả; hãy dùng nghiệp vụ chi lương để lập phiếu chi và bút toán.');
+    record.status = oneOf(record.status || 'Chưa chi trả', 'Trạng thái phiếu lương', ['Chưa chi trả', 'Chờ duyệt']);
+    for (const field of ['financeTransactionId', 'ledgerEntryKey', 'paidBy', 'paidById', 'paidAt', 'paymentReference', 'sourceAccountId', 'sourceAccount']) delete record[field];
+  }
   if (scope === 'finance_einvoices') {
     record.invoiceNumber = requiredText(record.invoiceNumber, 'Mã bản nháp hóa đơn', 80);
     if (!current) {
@@ -4760,7 +4765,7 @@ async function payrollLedgerPreview(period, employerInsurance, actor, allowEmpty
     const net = readMoney('netSalary');
     if (gross - insurance - tax !== net) throw new HttpError(422, `Phiếu lương ${record.employeeCode} không cân đối.`);
     totals.gross += gross; totals.employeeInsurance += insurance; totals.tax += tax;
-    if (record.status === 'Đã chi trả') totals.paid += net;
+    if (record.status === 'Đã chi trả' && !record.financeTransactionId) totals.paid += net;
   }
   if (!Object.values(totals).every(Number.isSafeInteger) || (records.length && totals.gross <= 0)) throw new HttpError(422, 'Tổng tiền lương không hợp lệ.');
   const lines = [
@@ -7788,6 +7793,7 @@ async function handleRequest(request, response) {
   if (collectionMatch && request.method === 'PUT') {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
     const actor = await requireCollectionActor(request, scope);
+    if (scope === 'payroll') throw new HttpError(409, 'Bảng lương không được thay thế hàng loạt; hãy cập nhật từng phiếu để bảo toàn lịch sử chi trả.');
     if (['payroll', 'employee_payslips'].includes(scope)) await requireSecurityPin(request, actor);
     const payload = await readJson(request, 4 * 1024 * 1024);
     if (!Array.isArray(payload.records) || payload.records.length > 1_000) {
@@ -7924,6 +7930,15 @@ async function handleRequest(request, response) {
       const payload = await readJson(request, 256 * 1024);
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
+      if (scope === 'payroll' && Object.hasOwn(patch, 'status')) {
+        throw new HttpError(409, 'Trạng thái chi lương chỉ được cập nhật qua nghiệp vụ chi trả có phiếu chi và bút toán.');
+      }
+      if (scope === 'payroll' && ['financeTransactionId', 'ledgerEntryKey', 'paidBy', 'paidById', 'paidAt', 'paymentReference', 'sourceAccountId', 'sourceAccount'].some((field) => Object.hasOwn(patch, field))) {
+        throw new HttpError(409, 'Thông tin chi trả chỉ được lưu qua nghiệp vụ chi lương.');
+      }
+      if (scope === 'payroll' && publicCollectionRecord(existing)?.status === 'Đã chi trả') {
+        throw new HttpError(409, 'Phiếu lương đã chi trả không thể sửa trực tiếp; hãy lập nghiệp vụ điều chỉnh có đối chiếu.');
+      }
       if (scope === 'finance_purchase_requests' && (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'supplierKey'))) {
         throw new HttpError(422, 'Yêu cầu mua sắm chỉ được cập nhật qua thao tác xác định nhà cung cấp.');
       }
@@ -8169,6 +8184,14 @@ async function handleRequest(request, response) {
         if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [scope]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        if (scope === 'payroll') {
+          const payroll = publicCollectionRecord(fresh);
+          const period = payrollMonth(payroll?.month);
+          const hasPosting = period && await db.prepare("SELECT id FROM collection_records WHERE scope IN ('finance_payroll_postings', 'finance_payroll_adjustments') AND (record_key = ? OR json_extract(payload_json, '$.period') = ?) LIMIT 1").get(period, period);
+          if (payroll?.status !== 'Chưa chi trả' || payroll.financeTransactionId || hasPosting) {
+            throw new HttpError(409, 'Không thể xóa phiếu lương đã ghi sổ hoặc đã chi; hãy giữ hồ sơ để đối chiếu và điều chỉnh.');
+          }
+        }
         if (scope === 'finance_general_ledger' && (publicCollectionRecord(fresh)?.sourceModule === 'payroll' || String(publicCollectionRecord(fresh)?.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
         if (scope === 'attendance_explanations' && publicCollectionRecord(fresh)?.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể xóa.');
         if (scope === 'hr_recruitment_candidates' && publicCollectionRecord(fresh)?.status !== 'rejected') {
@@ -9806,6 +9829,125 @@ async function handleRequest(request, response) {
     await requireAdmin(request);
     const rows = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_payroll_postings' ORDER BY record_key").all();
     sendJson(response, 200, { periods: rows.map((row) => payrollMonth(row.record_key)).filter(Boolean) });
+    return;
+  }
+
+  const payrollDisbursementMatch = /^\/finance\/payroll\/([^/]+)\/disburse$/.exec(resource);
+  if (request.method === 'POST' && payrollDisbursementMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const payrollKey = requiredText(decodeURIComponent(payrollDisbursementMatch[1]), 'Khóa phiếu lương', 160);
+    const input = await readJson(request, 16 * 1024);
+    const sourceAccountId = requiredText(input.sourceAccountId, 'Tài khoản chi', 200);
+    const paymentDate = requiredIsoDate(input.paymentDate, 'Ngày chi lương');
+    const settlementReference = requiredText(input.settlementReference, 'Mã giao dịch hoặc số chứng từ chi', 120);
+    if (settlementReference.length < 3) throw new HttpError(422, 'Mã giao dịch hoặc số chứng từ chi phải có ít nhất 3 ký tự.');
+    await requireSecurityPin(request, actor);
+
+    let result;
+    await db.transaction(async () => {
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('payroll'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      }
+      await lockTransferLedger();
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(payrollKey);
+      if (!row) throw new HttpError(404, 'Không tìm thấy phiếu lương.');
+      const payroll = publicCollectionRecord(row);
+      if (payroll.status !== 'Chưa chi trả') throw new HttpError(409, 'Chỉ có thể chi trả phiếu lương đang ở trạng thái chưa chi trả.');
+      const period = payrollMonth(payroll.month);
+      if (!period) throw new HttpError(422, 'Phiếu lương chưa có kỳ lương hợp lệ.');
+
+      const postingRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payroll_postings' AND record_key = ? LIMIT 1").get(period);
+      if (!postingRow) throw new HttpError(409, 'Kỳ lương chưa được ghi nhận trong Sổ Cái. Hãy hạch toán lương trước khi chi trả.');
+      const adjustmentRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payroll_adjustments' AND json_extract(payload_json, '$.period') = ?").all(period);
+      const latestAdjustment = adjustmentRows.map(publicCollectionRecord).sort((a, b) => a.sequence - b.sequence).at(-1);
+      const accountingSnapshot = latestAdjustment || publicCollectionRecord(postingRow);
+      const accountedPayroll = (Array.isArray(accountingSnapshot?.records) ? accountingSnapshot.records : []).find(record => record.key === payroll.key);
+      const financialFields = ['baseSalary', 'allowance', 'bonus', 'insuranceDeduction', 'taxDeduction', 'netSalary'];
+      if (!accountedPayroll || accountedPayroll.employeeCode !== payroll.employeeCode || accountedPayroll.employeeName !== payroll.employeeName
+        || financialFields.some(field => Number(accountedPayroll[field]) !== Number(payroll[field]))) {
+        throw new HttpError(409, 'Số liệu phiếu lương chưa khớp kỳ đã ghi sổ. Hãy lập và ghi điều chỉnh trước khi chi trả.');
+      }
+
+      const source = (await internalTransferAccounts()).find(account => account.key === sourceAccountId);
+      if (!source || source.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản chi không tồn tại hoặc đã ngừng hoạt động.');
+      const amount = requiredAmount(payroll.netSalary, 'Số tiền thực lĩnh');
+      if (!Number.isSafeInteger(source.balance) || source.balance < amount) throw new HttpError(422, 'Số dư tài khoản chi không đủ.');
+      await requireOpenLedgerPeriod(paymentDate, profile);
+      if (await db.prepare("SELECT id FROM finance_cash_transactions WHERE reference = ? AND status <> 'Đã hủy' LIMIT 1").get(settlementReference)) {
+        throw new HttpError(409, 'Mã giao dịch hoặc số chứng từ chi đã được ghi nhận.');
+      }
+
+      const ledgerKey = `payroll:payout:${createHash('sha256').update(payroll.key).digest('hex')}`;
+      const transactionId = randomUUID();
+      const transactionCode = `BL-${period.replace('/', '')}-CT-${transactionId.slice(0, 8).toUpperCase()}`;
+      const creditAccount = source.source === 'petty' ? 'TK 111' : 'TK 112';
+      const journalLine = { description: `Chi lương ${period} - ${payroll.employeeName}`, debitAccount: 'TK 334', creditAccount, amount };
+      const duplicateLedger = await db.prepare(`SELECT record_key FROM collection_records
+        WHERE scope = 'finance_general_ledger'
+          AND (record_key = ? OR json_extract(payload_json, '$.sourceReference') = ? OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?))
+        LIMIT 1`).get(ledgerKey, ledgerKey, transactionCode);
+      if (duplicateLedger) throw new HttpError(409, 'Phiếu lương đã có bút toán chi; cần đối chiếu trước khi thao tác lại.');
+
+      const timestamp = now();
+      await db.prepare(`INSERT INTO finance_cash_transactions (
+        id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+        account_name, status, note, journal_lines_json, reference, employee_code, source_account_id,
+        counterparty_type, created_by, created_at, updated_at
+      ) VALUES (?, ?, 'Chi', ?, 'Chi lương', ?, ?, ?, ?, 'Đã hoàn thành', ?, ?, ?, ?, ?, 'employee', ?, ?, ?)`)
+        .run(transactionId, transactionCode, source.source, amount, paymentDate, payroll.employeeName, source.name,
+          `Chi lương kỳ ${period}; mã giao dịch: ${settlementReference}`.slice(0, 1_000), JSON.stringify([journalLine]), settlementReference,
+          payroll.employeeCode || null, source.key, actor.id, timestamp, timestamp);
+
+      const ledgerEntry = {
+        key: ledgerKey,
+        voucherCode: transactionCode,
+        entryDate: paymentDate,
+        description: `Chi lương kỳ ${period} cho ${payroll.employeeName}`,
+        debitAccount: 'TK 334',
+        creditAccount,
+        amount,
+        author: actor.name,
+        authorId: actor.id,
+        status: 'Đã ghi sổ cái',
+        sourceModule: 'payroll_payment',
+        sourceReference: ledgerKey,
+        accountingRegime: profile.accountingRegime,
+        createdAt: timestamp,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`)
+        .run(randomUUID(), ledgerKey, actor.id, JSON.stringify(ledgerEntry), timestamp, timestamp);
+
+      const updatedPayroll = {
+        ...payroll,
+        status: 'Đã chi trả',
+        paymentMethod: source.source === 'petty' ? 'Tiền mặt' : 'Tiền gửi',
+        paymentDate,
+        paymentReference: settlementReference,
+        sourceAccountId: source.key,
+        sourceAccount: source.name,
+        financeTransactionId: transactionId,
+        ledgerEntryKey: ledgerKey,
+        paidBy: actor.name,
+        paidById: actor.id,
+        paidAt: timestamp,
+        history: [...(Array.isArray(payroll.history) ? payroll.history : []), {
+          action: 'Ghi nhận chi trả lương', status: 'Đã chi trả', actor: actor.name, actorId: actor.id,
+          at: timestamp, reference: settlementReference, sourceAccount: source.name,
+          financeTransactionId: transactionId, ledgerEntryKey: ledgerKey,
+        }],
+      };
+      const updated = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?')
+        .run(JSON.stringify(updatedPayroll), timestamp, row.id, row.payload_json);
+      if (!updated.changes) throw new HttpError(409, 'Phiếu lương vừa được cập nhật ở nơi khác. Hãy tải lại danh sách.');
+      await recordAuditEvent(actor.id, 'disburse_payroll', 'finance_general_ledger', ledgerKey, {
+        period, employeeCode: payroll.employeeCode, amount, sourceAccountId: source.key, transactionId,
+      });
+      result = { payroll: updatedPayroll, transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(transactionId)), ledgerEntry };
+    });
+    sendJson(response, 201, result);
     return;
   }
 
