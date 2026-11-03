@@ -10206,6 +10206,45 @@ async function handleRequest(request, response) {
     await requireAdmin(request);
     const source = url.searchParams.get('source');
     if (source && source !== 'bank' && source !== 'petty') throw new HttpError(422, 'Nguồn tiền không hợp lệ.');
+    const pageParam = url.searchParams.get('page');
+    const limitParam = url.searchParams.get('limit');
+    if (pageParam !== null || limitParam !== null || url.searchParams.has('q') || url.searchParams.has('type') || url.searchParams.has('status')) {
+      const page = pageParam === null ? 1 : Number(pageParam);
+      const limit = limitParam === null ? 20 : Number(limitParam);
+      const query = String(url.searchParams.get('q') || '').trim().slice(0, 120);
+      const type = url.searchParams.get('type') || 'all';
+      const status = url.searchParams.get('status') || 'all';
+      if (!Number.isInteger(page) || page < 1 || page > 1_000_000) throw new HttpError(422, 'Trang danh sách không hợp lệ.');
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(422, 'Số dòng mỗi trang phải từ 1 đến 100.');
+      if (!['all', 'Thu', 'Chi'].includes(type)) throw new HttpError(422, 'Loại chứng từ không hợp lệ.');
+      if (!['all', 'Chờ duyệt', 'Đã hoàn thành', 'Đã hủy'].includes(status)) throw new HttpError(422, 'Trạng thái chứng từ không hợp lệ.');
+      const where = [];
+      const params = [];
+      if (source) { where.push('source = ?'); params.push(source); }
+      if (type !== 'all') { where.push('transaction_type = ?'); params.push(type); }
+      if (status !== 'all') { where.push('status = ?'); params.push(status); }
+      if (query) {
+        where.push("(LOWER(code) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(counterparty) LIKE LOWER(?) OR LOWER(account_name) LIKE LOWER(?))");
+        const pattern = `%${query}%`;
+        params.push(pattern, pattern, pattern, pattern);
+      }
+      const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const total = Number((await db.prepare(`SELECT COUNT(*) AS total FROM finance_cash_transactions ${clause}`).get(...params)).total) || 0;
+      const rows = await db.prepare(`SELECT * FROM finance_cash_transactions ${clause} ORDER BY transaction_date DESC, created_at DESC LIMIT ? OFFSET ?`)
+        .all(...params, limit, (page - 1) * limit);
+      const aggregateWhere = source ? 'WHERE source = ?' : '';
+      const summary = await db.prepare(`SELECT
+        COALESCE(SUM(CASE WHEN transaction_type = 'Thu' AND status = 'Đã hoàn thành' THEN amount ELSE 0 END), 0) AS totalIncome,
+        COALESCE(SUM(CASE WHEN transaction_type = 'Chi' AND status = 'Đã hoàn thành' THEN amount ELSE 0 END), 0) AS totalExpense,
+        COALESCE(SUM(CASE WHEN status = 'Chờ duyệt' THEN 1 ELSE 0 END), 0) AS pendingCount
+        FROM finance_cash_transactions ${aggregateWhere}`).get(...(source ? [source] : []));
+      sendJson(response, 200, {
+        data: rows.map(publicCashTransaction),
+        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        summary: { totalIncome: Number(summary.totalIncome) || 0, totalExpense: Number(summary.totalExpense) || 0, pendingCount: Number(summary.pendingCount) || 0 },
+      });
+      return;
+    }
     const rows = source
       ? await db.prepare('SELECT * FROM finance_cash_transactions WHERE source = ? ORDER BY transaction_date DESC, created_at DESC').all(source)
       : await db.prepare('SELECT * FROM finance_cash_transactions ORDER BY transaction_date DESC, created_at DESC').all();

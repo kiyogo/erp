@@ -539,6 +539,11 @@ export const financeLoanEventsApi = {
 
 export const financeCashApi = {
   getAll: (source?: FinanceCashTransaction['source']) => api.get<{ data: FinanceCashTransaction[] }>('/finance/cash-transactions', { params: source ? { source } : undefined }),
+  getPage: (params: { page: number; limit: number; q?: string; type?: FinanceCashTransaction['type']; status?: FinanceCashTransaction['status']; source?: FinanceCashTransaction['source'] }) => api.get<{
+    data: FinanceCashTransaction[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+    summary: { totalIncome: number; totalExpense: number; pendingCount: number };
+  }>('/finance/cash-transactions', { params }),
   getCategories: (type: FinanceCashTransaction['type']) => api.get<{ data: string[] }>('/finance/cash-categories', { params: { type } }),
   addCategory: (type: FinanceCashTransaction['type'], name: string) => api.post<{ category: { key: string; type: FinanceCashTransaction['type']; name: string; createdAt: string } }>('/finance/cash-categories', { type, name }),
   create: (data: CreateFinanceCashTransaction) => api.post<{ transaction: FinanceCashTransaction }>('/finance/cash-transactions', data),

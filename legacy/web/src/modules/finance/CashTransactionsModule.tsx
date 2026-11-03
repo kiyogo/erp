@@ -43,6 +43,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'Thu' | 'Chi' | 'pending'>(typeFilterDefault);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalRows, setTotalRows] = useState(0);
+  const [cashSummary, setCashSummary] = useState({ totalIncome: 0, totalExpense: 0, pendingCount: 0 });
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [categoryForm] = Form.useForm();
@@ -80,11 +84,26 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const loadData = async () => {
     setLoading(true);
     try {
-      const response = await financeCashApi.getAll();
+      const response = await financeCashApi.getPage({
+        page: currentPage,
+        limit: pageSize,
+        q: searchText.trim() || undefined,
+        type: pinnedType || (typeFilter === 'Thu' || typeFilter === 'Chi' ? typeFilter : undefined),
+        status: typeFilter === 'pending' ? 'Chờ duyệt' : undefined,
+      });
       if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu sổ thu chi không hợp lệ.');
+      const lastPage = Math.max(1, response.data.pagination.totalPages);
+      if (currentPage > lastPage) {
+        setCurrentPage(lastPage);
+        return;
+      }
       setData(response.data.data);
+      setTotalRows(response.data.pagination.total);
+      setCashSummary(response.data.summary);
     } catch (error: any) {
       setData([]);
+      setTotalRows(0);
+      setCashSummary({ totalIncome: 0, totalExpense: 0, pendingCount: 0 });
       message.error(error?.response?.data?.message || 'Không tải được sổ thu chi. Vui lòng thử lại.');
     } finally {
       setLoading(false);
@@ -105,7 +124,6 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   };
 
   useEffect(() => {
-    void loadData();
     void loadCategories();
     void financePaymentAccountsApi.getAccounts().then(response => {
       if (!Array.isArray(response.data?.accounts)) throw new Error('Dữ liệu tài khoản không hợp lệ.');
@@ -121,6 +139,11 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   }, []);
 
   useEffect(() => {
+    const timeout = setTimeout(() => void loadData(), searchText ? 300 : 0);
+    return () => clearTimeout(timeout);
+  }, [currentPage, pageSize, searchText, typeFilter, typeFilterDefault]);
+
+  useEffect(() => {
     if (!referenceOpen) return;
     void financeDocumentsApi.getAll().then(response => {
       if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu chứng từ không hợp lệ.');
@@ -130,16 +153,13 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
   useEffect(() => {
     setTypeFilter(typeFilterDefault);
+    setCurrentPage(1);
   }, [typeFilterDefault]);
 
-  const totalIncome = data
-    .filter((d) => d.type === 'Thu' && d.status === 'Đã hoàn thành')
-    .reduce((sum, d) => sum + d.amount, 0);
-  const totalExpense = data
-    .filter((d) => d.type === 'Chi' && d.status === 'Đã hoàn thành')
-    .reduce((sum, d) => sum + d.amount, 0);
+  const totalIncome = cashSummary.totalIncome;
+  const totalExpense = cashSummary.totalExpense;
   const netCashFlow = totalIncome - totalExpense;
-  const pendingCount = data.filter((d) => d.status === 'Chờ duyệt').length;
+  const pendingCount = cashSummary.pendingCount;
 
   const activeCashAccounts = cashAccounts.filter(account => account.source === sourceFilter && account.status === 'Đang hoạt động');
   const partyOptionsFor = (type: 'Thu' | 'Chi' | undefined) => [
@@ -388,18 +408,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     });
   };
 
-  const filteredData = data.filter((item) => {
-    const matchSearch =
-      (item.code || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.category || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.recipientOrPayer || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.account || '').toLowerCase().includes(searchText.toLowerCase());
-
-    if (typeFilter === 'all') return matchSearch && (!pinnedType || item.type === pinnedType);
-    if (typeFilter === 'pending') return matchSearch && item.status === 'Chờ duyệt' && (!pinnedType || item.type === pinnedType);
-    if (pinnedType) return matchSearch && item.type === pinnedType;
-    return matchSearch && item.type === typeFilter;
-  });
+  const filteredData = data;
 
   const activeVoucherType: 'Thu' | 'Chi' = form.getFieldValue('type') === 'Chi' ? 'Chi' : 'Thu';
   const accountCodes = Array.from(new Set(data.flatMap(item => (item.journalLines || []).flatMap(line => [line.debitAccount, line.creditAccount])).filter(Boolean))).sort();
@@ -562,7 +571,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               key={tab.key}
               size="small"
               icon={tab.icon}
-              onClick={() => setTypeFilter(tab.key as any)}
+              onClick={() => { setTypeFilter(tab.key as any); setCurrentPage(1); }}
               style={{
                 backgroundColor: typeFilter === tab.key ? '#E0F2F1' : '#FFFFFF',
                 borderColor: typeFilter === tab.key ? '#009688' : '#CBD5E1',
@@ -580,7 +589,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
             placeholder="Tìm theo mã phiếu, nội dung, đối tác..."
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); }}
             style={{ width: 280 }}
             allowClear
           />
@@ -602,7 +611,13 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
       {/* Main Table */}
           <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 20 }} />
+        <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{
+          current: currentPage,
+          pageSize,
+          total: totalRows,
+          showSizeChanger: true,
+          onChange: (page, size) => { setCurrentPage(page); setPageSize(size); },
+        }} />
       </div>
 
       {/* MODAL: Lập phiếu thu / chi */}

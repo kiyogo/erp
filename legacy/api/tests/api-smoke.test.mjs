@@ -930,6 +930,12 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(created.attachmentCount, baseVoucher.attachmentCount);
   assert.equal(created.sourceDocument, baseVoucher.sourceDocument);
   assert.deepEqual(created.journalLines, baseVoucher.journalLines);
+  const searchedCash = await request(`/finance/cash-transactions?page=1&limit=1&type=Thu&q=${encodeURIComponent(created.code)}`);
+  assert.equal(searchedCash.pagination.total, 1);
+  assert.equal(searchedCash.data[0].key, created.key);
+  assert.deepEqual(Object.keys(searchedCash.summary).sort(), ['pendingCount', 'totalExpense', 'totalIncome']);
+  await request('/finance/cash-transactions?page=0&limit=1', 'GET', undefined, 422);
+  await request('/finance/cash-transactions?page=1&limit=101', 'GET', undefined, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, staffEmployeeCode: 'NOT-FOUND' }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, currency: 'EUR' }, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, attachmentCount: 1.5 }, 422);

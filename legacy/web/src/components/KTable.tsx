@@ -375,7 +375,7 @@ export function KTable<T extends object>({
     ...(typeof pagination === 'object' ? pagination : {}),
     current: currentPage,
     pageSize: pageSize,
-    total: sourceRows.length,
+    total: typeof pagination === 'object' && typeof pagination.total === 'number' ? pagination.total : sourceRows.length,
     onChange: (page: number, size: number) => {
       React.startTransition(() => {
         setCurrentPage(page);
@@ -387,7 +387,7 @@ export function KTable<T extends object>({
     },
   };
 
-  const mobileInfiniteMode = isMobileTable && pagination !== false;
+  const mobileInfiniteMode = isMobileTable && pagination !== false && !(typeof pagination === 'object' && pagination.onChange);
   const visibleDataSource = mobileInfiniteMode ? sourceRows.slice(0, mobileVisibleCount) : dataSource;
   const visiblePagination = mobileInfiniteMode ? false : mergedPagination;
 
