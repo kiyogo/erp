@@ -17,7 +17,7 @@ import api from '../../api/axios';
 import { downloadFile, generateValidPdfBlob } from '../../utils/fileExporter';
 
 export const SystemSettingsModule: React.FC = () => {
-  const [profile, setProfile] = useState<CompanyProfile>({ companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false, accountingEffectiveDate: '', fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '' });
+  const [profile, setProfile] = useState<CompanyProfile>({ companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false, accountingEffectiveDate: '', fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '', citMethod: '' });
   const [emailConfig, setEmailConfig] = useState<EmailGatewayConfig>({ host: '', port: 587, username: '', senderEmail: '', senderName: '', security: 'STARTTLS', portalUrl: '', enabled: false, passwordConfigured: false, configured: false });
   const [bankAccounts, setBankAccounts] = useState<FinanceBankAccount[]>([]);
   const [activeTab, setActiveTab] = useState<'legal' | 'accounting' | 'network' | 'smtp' | 'payment'>('legal');
@@ -258,6 +258,12 @@ export const SystemSettingsModule: React.FC = () => {
                 ]} />
               </label>
               {profile.vatMethod === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả phương pháp GTGT<Input aria-label="Mô tả phương pháp GTGT khác" value={profile.vatMethodOther} onChange={event => changeProfile('vatMethodOther', event.target.value)} /></label>}
+              {profile.accountingRegime === 'TT58' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Phương pháp thuế TNDN
+                <Select aria-label="Phương pháp thuế TNDN" value={profile.citMethod || undefined} onChange={value => changeProfile('citMethod', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} options={[
+                  { value: 'revenue_percentage', label: 'Theo tỷ lệ phần trăm trên doanh thu' },
+                  { value: 'taxable_income', label: 'Theo thu nhập tính thuế' },
+                ]} />
+              </label>}
             </div>
             <div style={{ color: '#64748B', fontSize: 12 }}>Hộ kinh doanh chọn TT152. Hợp tác xã chọn TT71 cho năm tài chính bắt đầu từ 01/01/2025; kỳ trước đó dùng TT24 và chỉ HTX quy mô lớn mới có thể chọn TT133 theo điều kiện áp dụng. Doanh nghiệp siêu nhỏ chọn TT132 hoặc TT58 theo ngày bắt đầu năm tài chính; TT133 chỉ dành cho doanh nghiệp nhỏ và vừa đủ điều kiện. Xác nhận theo hồ sơ pháp lý trước khi ghi sổ.</div>
           </div>

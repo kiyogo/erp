@@ -238,7 +238,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   for (const invalid of [
     { establishedDate: '2026-02-30' }, { email: 'invalid' }, { website: 'javascript:alert(1)' },
     { domain: 'user:password@example.test' }, { domain: 'example.test/path' }, { timezone: 'Invented' },
-    { currency: 'Invented' }, { bankAccountId: 'missing' }, { legalForm: 'invented' },
+    { currency: 'Invented' }, { bankAccountId: 'missing' }, { legalForm: 'invented' }, { citMethod: 'invented' },
     { accountingRegime: 'TT58' }, { legalForm: 'household_business', accountingRegime: 'TT99' },
     { companySize: 'medium', accountingRegime: 'TT132' },
     { companySize: 'micro', accountingRegime: 'TT58', fiscalYearStartMonth: 1, fiscalYearStartDay: 1 },
@@ -248,20 +248,27 @@ test('company profile stores all legal fields, validates dates and settings, rej
   ]) await request('/system/company-profile', 'PUT', { ...profile, ...invalid }, 422);
   const household = (await request('/system/company-profile', 'PUT', { ...profile, legalForm: 'household_business', companySize: 'micro', accountingRegime: 'TT152' })).profile;
   assert.equal(household.accountingProfileComplete, true);
-  const microTT58 = (await request('/system/company-profile', 'PUT', { ...household, legalForm: 'llc_single', companySize: 'micro', accountingRegime: 'TT58', accountingEffectiveDate: '2026-07-01', fiscalYearStartMonth: 7, fiscalYearStartDay: 1 })).profile;
+  const tt58WithoutCitMethod = (await request('/system/company-profile', 'PUT', { ...household, legalForm: 'llc_single', companySize: 'micro', accountingRegime: 'TT58', accountingEffectiveDate: '2026-07-01', fiscalYearStartMonth: 7, fiscalYearStartDay: 1, citMethod: '' })).profile;
+  assert.equal(tt58WithoutCitMethod.accountingProfileComplete, false);
+  assert.ok(tt58WithoutCitMethod.accountingProfileMissing.includes('Phương pháp thuế TNDN'));
+  await request('/collections/finance_tax', 'POST', { record: { key: 'tax-tt58-incomplete', code: 'TAX-TT58-INCOMPLETE' } }, 409);
+  const tt58UnsupportedVat = (await request('/system/company-profile', 'PUT', { ...tt58WithoutCitMethod, citMethod: 'taxable_income', vatMethod: 'direct_added_value' })).profile;
+  assert.equal(tt58UnsupportedVat.accountingProfileComplete, false);
+  assert.ok(tt58UnsupportedVat.accountingProfileMissing.includes('Phương pháp thuế GTGT phù hợp với sổ TT58'));
+  const microTT58 = (await request('/system/company-profile', 'PUT', { ...tt58UnsupportedVat, vatMethod: 'deduction' })).profile;
   assert.equal(microTT58.accountingProfileComplete, true);
   const cooperative = (await request('/system/company-profile', 'PUT', { ...microTT58, legalForm: 'cooperative', companySize: 'large', accountingRegime: 'TT71' })).profile;
   assert.equal(cooperative.accountingProfileComplete, true);
   await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT24' }, 422);
   await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT133', cooperativeUsesTT133: true }, 422);
   const saved = (await request('/system/company-profile', 'PUT', { ...profile, updatedAt: cooperative.updatedAt, revision: cooperative.revision })).profile;
-  assert.equal(saved.taxCode, '0012345678'); assert.equal(saved.updatedBy, session.user.name); assert.equal(saved.revision, 4);
+  assert.equal(saved.taxCode, '0012345678'); assert.equal(saved.updatedBy, session.user.name); assert.equal(saved.revision, 6);
   assert.equal(saved.accountingProfileComplete, true);
-  for (const key of ['fullName', 'shortName', 'companyCode', 'businessType', 'establishedDate', 'registrationDate', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'phone', 'fax', 'email', 'website', 'domain', 'timezone', 'currency', 'bankAccountId', 'legalForm', 'companySize', 'industry', 'accountingRegime', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod']) assert.equal(saved[key], profile[key], key);
+  for (const key of ['fullName', 'shortName', 'companyCode', 'businessType', 'establishedDate', 'registrationDate', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'phone', 'fax', 'email', 'website', 'domain', 'timezone', 'currency', 'bankAccountId', 'legalForm', 'companySize', 'industry', 'accountingRegime', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'citMethod']) assert.equal(saved[key], profile[key], key);
   assert.deepEqual((await request('/system/company-profile')).profile, saved);
   await request('/system/company-profile', 'PUT', { ...profile, companyName: 'Stale' }, 409);
   const second = (await request('/system/company-profile', 'PUT', { ...saved, shortName: 'NEW' })).profile;
-  assert.equal(second.revision, 5);
+  assert.equal(second.revision, 7);
   await request('/system/company-profile', 'PUT', { ...saved, companyName: 'Stale again' }, 409);
   assert.equal((await request('/system/company-profile')).profile.shortName, 'NEW');
   const taxDraft = (await request('/collections/finance_tax', 'POST', { record: { key: 'tax-draft-profile', code: 'TAX-TEST', taxType: 'Thuế GTGT', period: 'Quý IV/2026', deadline: '2027-01-30', amountPayable: 1200, amountPaid: 1200, status: 'Đã nộp đủ' } }, 201)).record;

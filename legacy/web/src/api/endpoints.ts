@@ -217,6 +217,7 @@ export type CompanyProfile = {
   accountingEffectiveDate: string;
   fiscalYearStartMonth: number | null; fiscalYearStartDay: number | null;
   vatMethod: '' | 'deduction' | 'direct_revenue' | 'direct_added_value' | 'other'; vatMethodOther: string;
+  citMethod: '' | 'revenue_percentage' | 'taxable_income' | 'other';
   accountingProfileComplete?: boolean; accountingProfileMissing?: string[];
   updatedAt?: string; updatedBy?: string; revision?: number;
 };

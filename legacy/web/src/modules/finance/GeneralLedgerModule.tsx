@@ -16,6 +16,7 @@ import { Modal, Form, Input, Select, Button, message, Card, Tag } from '../../cu
 import { chartOfAccountsApi, generalLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { buildQuarterClosingLines, calculateQuarterLedger, getFiscalQuarterPeriod, summarizeLedgerAccounts } from './ledgerCalculations';
+import { getTT58RequiredBooks, tt58OptionalBooks } from './tt58AccountingBooks';
 
 interface LedgerEntry {
   key: string;
@@ -69,6 +70,8 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [data, setData] = useState<LedgerEntry[]>(INITIAL_ENTRIES);
   const [chartData, setChartData] = useState<ChartAccount[]>([]);
   const [accountingRegime, setAccountingRegime] = useState('');
+  const [vatMethod, setVatMethod] = useState('');
+  const [citMethod, setCitMethod] = useState('');
   const [advanceData, setAdvanceData] = useState<any[]>([]);
   const [selectedQuarter, setSelectedQuarter] = useState(() => {
     return getFiscalQuarterPeriod(new Date(), 1, 1);
@@ -102,6 +105,8 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         setSelectedQuarter(getFiscalQuarterPeriod(new Date(), month, day));
       }
       setAccountingRegime(String(response.profile.accountingRegime || ''));
+      setVatMethod(String(response.profile.vatMethod || ''));
+      setCitMethod(String(response.profile.citMethod || ''));
     }).catch(() => {});
   }, []);
 
@@ -116,6 +121,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [chartImporting, setChartImporting] = useState(false);
   const [editingAccount, setEditingAccount] = useState<ChartAccount | null>(null);
   const activeChart = chartData.filter((account) => account.accountingRegime === accountingRegime);
+  const tt58Books = getTT58RequiredBooks(vatMethod, citMethod);
 
   const saveChartAccount = async (values: Record<string, any>) => {
     const record = { ...values, tracksParty: Boolean(values.tracksParty), tracksForeignCurrency: Boolean(values.tracksForeignCurrency), tracksDebt: Boolean(values.tracksDebt), tracksDetails: Boolean(values.tracksDetails), status: values.status || 'Đang sử dụng' };
@@ -618,7 +624,14 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       >
         {accountingRegime === 'TT58' && (
           <div style={{ color: '#64748B', marginBottom: 14 }}>
-            Thông tư 58/2026/TT-BTC hướng dẫn ghi sổ theo mẫu dành cho doanh nghiệp siêu nhỏ. Danh mục tài khoản tại đây chỉ phục vụ theo dõi nội bộ; sổ mẫu và quy trình chuyển đổi số dư theo Thông tư 58 chưa được triển khai trong phân hệ này.
+            <div>Danh mục tài khoản ở đây chỉ phục vụ theo dõi nội bộ. Sổ theo Thông tư 58 được xác định theo phương pháp thuế GTGT và TNDN:</div>
+            {tt58Books ? <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+              <span>Sổ bắt buộc theo hồ sơ thuế:</span>
+              {tt58Books.map(book => <Tag key={book.code}>{book.code} · {book.name}</Tag>)}
+              <span>Sổ chi tiết có thể mở theo nhu cầu:</span>
+              {tt58OptionalBooks.map(book => <Tag key={book.code}>{book.code} · {book.name}</Tag>)}
+              <span>Dữ liệu sổ TT58 và chuyển số dư từ TT132 chưa được lập tự động trong phân hệ.</span>
+            </div> : <div style={{ marginTop: 8 }}>Hãy khai báo phương pháp GTGT và TNDN phù hợp trong Hồ sơ kế toán để xác định danh mục sổ TT58.</div>}
           </div>
         )}
         {['TT99', 'TT133', 'TT132'].includes(accountingRegime) && (
