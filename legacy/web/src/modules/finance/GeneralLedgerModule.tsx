@@ -560,6 +560,11 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         footer={null}
         width={1100}
       >
+        {accountingRegime === 'TT58' && (
+          <div style={{ color: '#64748B', marginBottom: 14 }}>
+            Thông tư 58/2026/TT-BTC hướng dẫn ghi sổ theo mẫu dành cho doanh nghiệp siêu nhỏ. Danh mục tài khoản tại đây chỉ phục vụ theo dõi nội bộ; sổ mẫu và quy trình chuyển đổi số dư theo Thông tư 58 chưa được triển khai trong phân hệ này.
+          </div>
+        )}
         <Form form={chartForm} layout="vertical" onFinish={saveChartAccount} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gap: 10 }}>
             <Form.Item name="code" label="Mã tài khoản" rules={[{ required: true }]}><Input maxLength={20} placeholder="Ví dụ: 111" /></Form.Item>
