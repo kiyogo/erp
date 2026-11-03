@@ -41,11 +41,110 @@ interface EInvoice {
   buyerTaxCode: string;
   issueDate: string;
   totalAmount: number;
-  vatRate?: number | string;
+  vatRate?: number | string | null;
   vatAmount: number;
   finalAmount: number;
   status: 'Đã phát hành & Ký số' | 'Hóa đơn nháp' | 'Đã hủy';
   externalStatus?: string;
+  items?: EInvoiceItem[];
+}
+
+interface EInvoiceItem {
+  key: string;
+  productKey?: string;
+  sku?: string;
+  name: string;
+  unit: string;
+  quantity: number;
+  unitPrice: number;
+  discountAmount: number;
+  amount: number;
+  vatRate: number;
+  vatAmount: number;
+  finalAmount: number;
+}
+
+interface EInvoiceProduct {
+  key: string;
+  sku: string;
+  name: string;
+  unit: string;
+  status: string;
+}
+
+interface EInvoiceLineDraft {
+  key: string;
+  productKey: string;
+  sku: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  unitPrice: string;
+  discountAmount: string;
+  vatRate: string;
+}
+
+const blankInvoiceLine = (): EInvoiceLineDraft => ({
+  key: crypto.randomUUID(), productKey: '', sku: '', name: '', unit: '', quantity: '1', unitPrice: '', discountAmount: '0', vatRate: '',
+});
+
+function EInvoiceItemsEditor({
+  lines, products, onChange, onAdd, onRemove,
+}: {
+  lines: EInvoiceLineDraft[];
+  products: EInvoiceProduct[];
+  onChange: (key: string, patch: Partial<EInvoiceLineDraft>) => void;
+  onAdd: () => void;
+  onRemove: (key: string) => void;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <span>Hàng hóa, dịch vụ</span>
+        <Button icon={<PlusOutlined />} onClick={onAdd}>Thêm dòng</Button>
+      </div>
+      {lines.map((line, index) => {
+        const quantity = Number(line.quantity) || 0;
+        const unitPrice = Number(line.unitPrice) || 0;
+        const discountAmount = Number(line.discountAmount) || 0;
+        const vatRate = Number(line.vatRate) || 0;
+        const amount = Math.max(0, Math.round(quantity * unitPrice) - discountAmount);
+        const vatAmount = Math.round(amount * vatRate / 100);
+        const selectedProduct = products.find(product => product.key === line.productKey);
+        return (
+          <div key={line.key} style={{ display: 'grid', gap: 8, paddingBottom: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 32px', gap: 6, alignItems: 'center' }}>
+              <Select
+                value={line.productKey || undefined}
+                placeholder="Chọn hàng hóa trong danh mục hoặc nhập dịch vụ"
+                options={products.map(product => ({ value: product.key, label: `${product.sku} · ${product.name}` }))}
+                onChange={value => {
+                  const product = products.find(item => item.key === value);
+                  onChange(line.key, product
+                    ? { productKey: product.key, sku: product.sku, name: product.name, unit: product.unit }
+                    : { productKey: '', sku: '', name: '', unit: '' });
+                }}
+                allowClear
+              />
+              <Button icon={<DeleteOutlined />} style={{ width: 32, height: 32, padding: 0 }} title={`Xóa dòng ${index + 1}`} disabled={lines.length === 1} onClick={() => onRemove(line.key)} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 2fr) repeat(5, minmax(90px, 1fr))', gap: 6 }}>
+              <Input value={line.name} placeholder="Tên hàng hóa hoặc dịch vụ" disabled={Boolean(selectedProduct)} onChange={event => onChange(line.key, { name: event.target.value })} />
+              <Input value={line.unit} placeholder="Đơn vị tính" disabled={Boolean(selectedProduct)} onChange={event => onChange(line.key, { unit: event.target.value })} />
+              <Input type="number" min={0.001} step="0.001" value={line.quantity} placeholder="Số lượng" onChange={event => onChange(line.key, { quantity: event.target.value })} />
+              <Input type="number" min={0} step={1} value={line.unitPrice} placeholder="Đơn giá" onChange={event => onChange(line.key, { unitPrice: event.target.value })} />
+              <Input type="number" min={0} step={1} value={line.discountAmount} placeholder="Chiết khấu" onChange={event => onChange(line.key, { discountAmount: event.target.value })} />
+              <Input type="number" min={0} max={100} step="any" value={line.vatRate} placeholder="Thuế suất (%)" onChange={event => onChange(line.key, { vatRate: event.target.value })} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', color: '#64748B', fontSize: 12 }}>
+              Tiền hàng {amount.toLocaleString('vi-VN')} ₫ · thuế tạm tính {vatAmount.toLocaleString('vi-VN')} ₫ · tổng { (amount + vatAmount).toLocaleString('vi-VN') } ₫
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ color: '#64748B', fontSize: 12 }}>Thuế suất phải được đối chiếu theo hàng hóa, dịch vụ và ngày giao dịch; bản nháp chưa được xác nhận pháp lý hoặc phát hành.</div>
+    </div>
+  );
 }
 
 const INITIAL_INVOICES: EInvoice[] = [];
@@ -62,6 +161,8 @@ export const EInvoiceModule: React.FC = () => {
   const isProviders = currentPath === '/finance/e-invoice/providers';
 
   const [data, setData] = useState<EInvoice[]>(INITIAL_INVOICES);
+  const [products, setProducts] = useState<EInvoiceProduct[]>([]);
+  const [invoiceLines, setInvoiceLines] = useState<EInvoiceLineDraft[]>(() => [blankInvoiceLine()]);
 
   useEffect(() => {
     const list = dataService.getGenericData('finance_einvoices');
@@ -69,7 +170,10 @@ export const EInvoiceModule: React.FC = () => {
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('finance_einvoices');
       setData(Array.isArray(updated) ? updated : []);
+      const inventory = dataService.getGenericData('finance_inventory');
+      setProducts(Array.isArray(inventory) ? inventory as EInvoiceProduct[] : []);
     });
+    void dataService.refreshGenericData('finance_inventory').then(rows => setProducts(Array.isArray(rows) ? rows as EInvoiceProduct[] : []));
     return unsub;
   }, []);
 
@@ -81,12 +185,49 @@ export const EInvoiceModule: React.FC = () => {
   const [form] = Form.useForm();
   const [createForm] = Form.useForm();
 
+  const updateInvoiceLine = (key: string, patch: Partial<EInvoiceLineDraft>) => {
+    setInvoiceLines(current => current.map(line => line.key === key ? { ...line, ...patch } : line));
+  };
+
+  const prepareInvoiceItems = () => {
+    if (!invoiceLines.length) {
+      message.error('Thêm ít nhất một dòng hàng hóa hoặc dịch vụ.');
+      return null;
+    }
+    const items: EInvoiceItem[] = [];
+    for (const [index, line] of invoiceLines.entries()) {
+      const quantity = Number(line.quantity);
+      const unitPrice = Number(line.unitPrice);
+      const discountAmount = Number(line.discountAmount || 0);
+      const vatRate = Number(line.vatRate);
+      if (!line.name.trim() || !line.unit.trim() || !Number.isFinite(quantity) || quantity <= 0
+        || !Number.isSafeInteger(unitPrice) || unitPrice < 0 || !Number.isSafeInteger(discountAmount) || discountAmount < 0
+        || !Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
+        message.error(`Kiểm tra tên, đơn vị tính, số lượng, đơn giá, chiết khấu và thuế suất ở dòng ${index + 1}.`);
+        return null;
+      }
+      const grossAmount = Math.round(quantity * unitPrice);
+      if (discountAmount > grossAmount) {
+        message.error(`Chiết khấu dòng ${index + 1} không được vượt thành tiền.`);
+        return null;
+      }
+      const amount = grossAmount - discountAmount;
+      const vatAmount = Math.round(amount * vatRate / 100);
+      items.push({
+        key: line.key, productKey: line.productKey || '', sku: line.sku, name: line.name.trim(), unit: line.unit.trim(),
+        quantity, unitPrice, discountAmount, amount, vatRate, vatAmount, finalAmount: amount + vatAmount,
+      });
+    }
+    return items;
+  };
+
   const handleCreate = async (values: any) => {
-    const total = Number(values.totalAmount) || 0;
-    const rateText = String(values.vatRate || '');
-    const vatRate = rateText === 'Không chịu thuế' ? 0 : Number(rateText.replace('%', ''));
-    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
-      message.error('Nhập số tiền và thuế suất GTGT hợp lệ trước khi lưu bản nháp.');
+    const items = prepareInvoiceItems();
+    if (!items) return;
+    const total = items.reduce((sum, item) => sum + item.amount, 0);
+    const vat = items.reduce((sum, item) => sum + item.vatAmount, 0);
+    if (total <= 0 || !Number.isSafeInteger(total + vat)) {
+      message.error('Tổng tiền hàng và thuế không hợp lệ hoặc vượt giới hạn an toàn.');
       return;
     }
     if (editingRecord) {
@@ -96,19 +237,18 @@ export const EInvoiceModule: React.FC = () => {
           invoiceNumber: String(values.invoiceNumber || '').trim(),
           buyerName: String(values.buyerName || '').trim(),
           buyerTaxCode: String(values.buyerTaxCode || '').trim(),
-          totalAmount: total,
-          vatRate: rateText,
+          items,
         });
         message.success(`Đã cập nhật bản nháp ${values.invoiceNumber}.`);
         setModalOpen(false);
         setEditingRecord(null);
         form.resetFields();
+        setInvoiceLines([blankInvoiceLine()]);
       } catch (error: any) {
         message.error(error?.response?.data?.message || error?.message || 'Không thể cập nhật bản nháp hóa đơn.');
       }
       return;
     }
-    const vat = Math.round(total * vatRate / 100);
     const newInv: EInvoice = {
       ...values,
       key: crypto.randomUUID(),
@@ -118,6 +258,8 @@ export const EInvoiceModule: React.FC = () => {
       totalAmount: total,
       vatAmount: vat,
       finalAmount: total + vat,
+      vatRate: new Set(items.map(item => item.vatRate)).size === 1 ? items[0].vatRate : null,
+      items,
       status: 'Hóa đơn nháp',
       externalStatus: 'Chưa gửi nhà cung cấp',
     };
@@ -127,6 +269,7 @@ export const EInvoiceModule: React.FC = () => {
       setModalOpen(false);
       form.resetFields();
       createForm.resetFields();
+      setInvoiceLines([blankInvoiceLine()]);
     } catch (error: any) {
       message.error(error?.response?.data?.message || error?.message || 'Không thể lưu bản nháp hóa đơn.');
     }
@@ -143,12 +286,16 @@ export const EInvoiceModule: React.FC = () => {
 
   const openDraftEditor = (record: EInvoice) => {
     setEditingRecord(record);
+    setInvoiceLines(Array.isArray(record.items) && record.items.length
+      ? record.items.map(line => ({
+        key: line.key || crypto.randomUUID(), productKey: line.productKey || '', sku: line.sku || '', name: line.name || '', unit: line.unit || '',
+        quantity: String(line.quantity ?? ''), unitPrice: String(line.unitPrice ?? ''), discountAmount: String(line.discountAmount ?? 0), vatRate: String(line.vatRate ?? ''),
+      }))
+      : [{ ...blankInvoiceLine(), quantity: '1', unitPrice: String(record.totalAmount || ''), vatRate: String(record.vatRate ?? '') }]);
     form.setFieldsValue({
       invoiceNumber: record.invoiceNumber,
       buyerName: record.buyerName,
       buyerTaxCode: record.buyerTaxCode,
-      totalAmount: record.totalAmount,
-      vatRate: Number(record.vatRate) === 0 ? 'Không chịu thuế' : `${record.vatRate}%`,
     });
     setModalOpen(true);
   };
@@ -157,6 +304,7 @@ export const EInvoiceModule: React.FC = () => {
     setModalOpen(false);
     setEditingRecord(null);
     form.resetFields();
+    setInvoiceLines([blankInvoiceLine()]);
   };
 
   const filteredData = data.filter(
@@ -290,17 +438,11 @@ export const EInvoiceModule: React.FC = () => {
               <Form.Item name="buyerAddress" label="Địa chỉ trụ sở khách hàng">
               <Input />
             </Form.Item>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Form.Item name="totalAmount" label="Tổng tiền hàng trước thuế (VNĐ)" rules={[{ required: true, message: 'Nhập số tiền' }]}>
-                <Input type="number" min={0} placeholder="Ví dụ: 100000000" />
-              </Form.Item>
-              <Form.Item name="vatRate" label="Thuế suất GTGT (%)" rules={[{ required: true, message: 'Nhập thuế suất đã đối chiếu' }]}>
-                <Input type="number" min={0} max={100} step="any" placeholder="Nhập theo phân loại hàng hóa và kỳ áp dụng" />
-              </Form.Item>
-            </div>
-            <div style={{ color: '#64748B', marginTop: -8 }}>Bản nháp không tự chọn thuế suất; đối chiếu mức áp dụng cho mặt hàng và thời điểm giao dịch trước khi lưu.</div>
+            <EInvoiceItemsEditor lines={invoiceLines} products={products} onChange={updateInvoiceLine}
+              onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
+              onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-              <Button onClick={() => createForm.resetFields()}>Làm mới form</Button>
+              <Button onClick={() => { createForm.resetFields(); setInvoiceLines([blankInvoiceLine()]); }}>Làm mới form</Button>
               <Button type="primary" htmlType="submit" icon={<SafetyCertificateOutlined />} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 Lưu bản nháp
               </Button>
@@ -503,7 +645,7 @@ export const EInvoiceModule: React.FC = () => {
         open={modalOpen}
         onCancel={closeDraftEditor}
         footer={null}
-        width={500}
+        width={960}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${String(data.length + 1).padStart(5, '0')}`} rules={[{ required: true }]}>
@@ -515,12 +657,9 @@ export const EInvoiceModule: React.FC = () => {
           <Form.Item name="buyerTaxCode" label="Mã số thuế người mua" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="totalAmount" label="Tổng tiền trước thuế (VNĐ)" rules={[{ required: true }]}>
-            <Input type="number" min={1} step={1} />
-          </Form.Item>
-          <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true, message: 'Chọn thuế suất GTGT' }]}>
-            <Select options={[{ label: '10%', value: '10%' }, { label: '8%', value: '8%' }, { label: '5%', value: '5%' }, { label: '0%', value: '0%' }, { label: 'Không chịu thuế GTGT', value: 'Không chịu thuế' }]} />
-          </Form.Item>
+          <EInvoiceItemsEditor lines={invoiceLines} products={products} onChange={updateInvoiceLine}
+            onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
+            onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={closeDraftEditor}>Hủy</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>

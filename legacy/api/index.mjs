@@ -2508,14 +2508,74 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.buyerName = requiredText(record.buyerName, 'Tên người mua', 300);
     record.buyerTaxCode = optionalText(record.buyerTaxCode, 'Mã số thuế người mua', 32);
     record.issueDate = requiredIsoDate(record.issueDate, 'Ngày lập bản nháp');
-    record.totalAmount = Number(record.totalAmount);
-    if (!Number.isFinite(record.totalAmount) || record.totalAmount <= 0 || record.totalAmount > 1_000_000_000_000_000) throw new HttpError(422, 'Tổng tiền hàng phải lớn hơn 0 và nằm trong giới hạn cho phép.');
-    const suppliedRate = String(record.vatRate ?? '').trim();
-    const rate = suppliedRate === 'Không chịu thuế' ? 0 : Number(suppliedRate.replace(/%$/, ''));
-    if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new HttpError(422, 'Thuế suất GTGT phải từ 0 đến 100% và được đối chiếu theo loại hàng hóa, dịch vụ và thời điểm áp dụng.');
-    record.vatRate = rate;
-    record.vatAmount = Math.round(record.totalAmount * rate / 100);
-    record.finalAmount = record.totalAmount + record.vatAmount;
+    if (record.items !== undefined) {
+      if (!Array.isArray(record.items) || record.items.length < 1 || record.items.length > 200) {
+        throw new HttpError(422, 'Hóa đơn cần từ 1 đến 200 dòng hàng hóa hoặc dịch vụ.');
+      }
+      const products = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_inventory'").all();
+      const productByKey = new Map(products.map(row => [row.record_key, parseJsonObject(row.payload_json)]));
+      let totalAmount = 0;
+      let vatAmount = 0;
+      const rates = new Set();
+      record.items = record.items.map((line, index) => {
+        if (!line || typeof line !== 'object' || Array.isArray(line)) throw new HttpError(422, `Dòng hàng hóa ${index + 1} không hợp lệ.`);
+        const allowedLineFields = new Set(['key', 'productKey', 'sku', 'name', 'unit', 'quantity', 'unitPrice', 'discountAmount', 'vatRate']);
+        if (Object.keys(line).some(field => !allowedLineFields.has(field))) throw new HttpError(422, `Dòng hàng hóa ${index + 1} có trường không hỗ trợ.`);
+        const productKey = optionalText(line.productKey, `Mặt hàng dòng ${index + 1}`, 160);
+        const product = productKey ? productByKey.get(productKey) : null;
+        if (productKey && !product) throw new HttpError(422, `Mặt hàng dòng ${index + 1} không còn trong danh mục hàng hóa.`);
+        const quantityInput = Number(line.quantity);
+        const quantityMilli = Math.round(quantityInput * 1000);
+        const quantity = quantityMilli / 1000;
+        if (!Number.isFinite(quantityInput) || quantityInput <= 0 || quantityInput > 1_000_000_000 || Math.abs(quantityInput - quantity) > 0.0000001) {
+          throw new HttpError(422, `Số lượng dòng ${index + 1} phải lớn hơn 0 và tối đa 3 chữ số thập phân.`);
+        }
+        const unitPrice = Number(line.unitPrice);
+        const discountAmount = line.discountAmount === undefined || line.discountAmount === '' ? 0 : Number(line.discountAmount);
+        if (!Number.isSafeInteger(unitPrice) || unitPrice < 0 || !Number.isSafeInteger(discountAmount) || discountAmount < 0) {
+          throw new HttpError(422, `Đơn giá và chiết khấu dòng ${index + 1} phải là số tiền nguyên không âm.`);
+        }
+        const grossAmount = Math.round(quantity * unitPrice);
+        if (!Number.isSafeInteger(grossAmount) || grossAmount > 1_000_000_000_000_000 || discountAmount > grossAmount) {
+          throw new HttpError(422, `Chiết khấu dòng ${index + 1} không được vượt thành tiền.`);
+        }
+        const suppliedRate = String(line.vatRate ?? '').trim();
+        const rate = Number(suppliedRate.replace(/%$/, ''));
+        if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+          throw new HttpError(422, `Thuế suất dòng ${index + 1} phải từ 0 đến 100% và được đối chiếu theo hàng hóa, dịch vụ và ngày áp dụng.`);
+        }
+        const amount = grossAmount - discountAmount;
+        const lineVatAmount = Math.round(amount * rate / 100);
+        if (!Number.isSafeInteger(totalAmount + amount) || !Number.isSafeInteger(vatAmount + lineVatAmount)) {
+          throw new HttpError(422, 'Tổng tiền hóa đơn vượt giới hạn số nguyên an toàn.');
+        }
+        totalAmount += amount;
+        vatAmount += lineVatAmount;
+        rates.add(rate);
+        return {
+          key: requiredText(line.key || `invoice-line-${index + 1}`, `Mã dòng ${index + 1}`, 160),
+          productKey: product ? product.key : '',
+          sku: product ? product.sku : optionalText(line.sku, `Mã hàng dòng ${index + 1}`, 80),
+          name: product ? requiredText(product.name, `Tên mặt hàng ${index + 1}`, 255) : requiredText(line.name, `Tên hàng hóa hoặc dịch vụ dòng ${index + 1}`, 255),
+          unit: product ? requiredText(product.unit, `Đơn vị tính ${index + 1}`, 80) : requiredText(line.unit, `Đơn vị tính dòng ${index + 1}`, 80),
+          quantity, unitPrice, discountAmount, amount, vatRate: rate, vatAmount: lineVatAmount, finalAmount: amount + lineVatAmount,
+        };
+      });
+      if (totalAmount <= 0) throw new HttpError(422, 'Tổng tiền hàng sau chiết khấu phải lớn hơn 0.');
+      record.totalAmount = totalAmount;
+      record.vatAmount = vatAmount;
+      record.finalAmount = totalAmount + vatAmount;
+      record.vatRate = rates.size === 1 ? [...rates][0] : null;
+    } else {
+      record.totalAmount = Number(record.totalAmount);
+      if (!Number.isFinite(record.totalAmount) || record.totalAmount <= 0 || record.totalAmount > 1_000_000_000_000_000) throw new HttpError(422, 'Tổng tiền hàng phải lớn hơn 0 và nằm trong giới hạn cho phép.');
+      const suppliedRate = String(record.vatRate ?? '').trim();
+      const rate = suppliedRate === 'Không chịu thuế' ? 0 : Number(suppliedRate.replace(/%$/, ''));
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new HttpError(422, 'Thuế suất GTGT phải từ 0 đến 100% và được đối chiếu theo loại hàng hóa, dịch vụ và thời điểm áp dụng.');
+      record.vatRate = rate;
+      record.vatAmount = Math.round(record.totalAmount * rate / 100);
+      record.finalAmount = record.totalAmount + record.vatAmount;
+    }
     record.status = 'Hóa đơn nháp';
     record.externalStatus = 'Chưa gửi nhà cung cấp';
     delete record.cqtCode;
@@ -8711,7 +8771,7 @@ async function handleRequest(request, response) {
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
       if (scope === 'finance_einvoices') {
-        const editableFields = new Set(['key', 'invoiceNumber', 'buyerName', 'buyerTaxCode', 'totalAmount', 'vatRate']);
+        const editableFields = new Set(['key', 'invoiceNumber', 'buyerName', 'buyerTaxCode', 'totalAmount', 'vatRate', 'items']);
         if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
           throw new HttpError(422, 'Bản nháp chỉ cho phép sửa mã bản nháp, thông tin người mua, tiền hàng và thuế suất.');
         }

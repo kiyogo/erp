@@ -80,17 +80,26 @@ test('ledger posting requires an accounting chart for the active regime before a
 
 test('e-invoice drafts can be edited without allowing forged issue state or duplicate draft numbers', async () => {
   const firstNumber = `DRAFT-EDIT-${Date.now()}`;
+  const productKey = `einvoice-product-${Date.now()}`;
+  await request('/collections/finance_inventory', 'POST', { record: {
+    key: productKey, sku: `INV-${Date.now()}`, name: 'Thiết bị kiểm thử', unit: 'Cái',
+  } }, 201);
   const first = (await request('/collections/finance_einvoices', 'POST', { record: {
     key: `einvoice-edit-${Date.now()}`, invoiceNumber: firstNumber, buyerName: 'Khách hàng thử', buyerTaxCode: '0101234567',
-    issueDate: '2026-11-04', totalAmount: 100000, vatRate: '8%', status: 'Đã phát hành', externalStatus: 'CQT đã cấp mã',
+    issueDate: '2026-11-04', totalAmount: 1, vatRate: '100%', status: 'Đã phát hành', externalStatus: 'CQT đã cấp mã',
+    items: [{ key: 'line-1', productKey, sku: 'MA-GIA', name: 'Tên giả', unit: 'Sai', quantity: 2, unitPrice: 50000, discountAmount: 0, vatRate: 8 }],
   } }, 201)).record;
   assert.equal(first.status, 'Hóa đơn nháp');
   assert.equal(first.externalStatus, 'Chưa gửi nhà cung cấp');
+  assert.equal(first.totalAmount, 100000);
   assert.equal(first.vatAmount, 8000);
+  assert.equal(first.items[0].sku.startsWith('INV-'), true);
+  assert.equal(first.items[0].name, 'Thiết bị kiểm thử');
+  assert.equal(first.items[0].unit, 'Cái');
 
   const updated = (await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: {
     key: first.key, invoiceNumber: `${firstNumber}-SUA`, buyerName: 'Khách hàng đã cập nhật', buyerTaxCode: '0101234567',
-    totalAmount: 250000, vatRate: 'Không chịu thuế',
+    items: [{ key: 'line-1', productKey, quantity: 5, unitPrice: 50000, discountAmount: 0, vatRate: 0 }],
   } })).record;
   assert.equal(updated.invoiceNumber, `${firstNumber}-SUA`);
   assert.equal(updated.buyerName, 'Khách hàng đã cập nhật');
@@ -101,7 +110,9 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
   assert.equal(updated.externalStatus, 'Chưa gửi nhà cung cấp');
 
   await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { status: 'Đã phát hành' } }, 422);
-  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { totalAmount: -1 } }, 422);
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: {
+    items: [{ key: 'line-1', productKey, quantity: -1, unitPrice: 50000, vatRate: 0 }],
+  } }, 422);
   const second = (await request('/collections/finance_einvoices', 'POST', { record: {
     key: `einvoice-edit-duplicate-${Date.now()}`, invoiceNumber: `DRAFT-OTHER-${Date.now()}`, buyerName: 'Khách hàng khác',
     issueDate: '2026-11-04', totalAmount: 100000, vatRate: '0%',
