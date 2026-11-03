@@ -1114,10 +1114,10 @@ export const payrollLedgerApi = {
   postedPeriods: () => api.get<{ periods: string[] }>('/finance/payroll/posted-periods'),
   disburse: (key: string, data: { sourceAccountId: string; paymentDate: string; settlementReference: string }) =>
     api.post<{ payroll: Record<string, unknown>; transaction: FinanceCashTransaction; ledgerEntry: Record<string, unknown> }>(`/finance/payroll/${encodeURIComponent(key)}/disburse`, data),
-  preview: (data: { period: string; employerInsurance: number }) => api.post<{ period: string; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/ledger-preview', data),
-  post: (data: { period: string; employerInsurance: number; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/ledger-post', data),
-  previewAdjustment: (data: { period: string; employerInsurance: number }) => api.post<{ period: string; sequence: number; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/adjustment-preview', data),
-  postAdjustment: (data: { period: string; employerInsurance: number; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/adjustment-post', data),
+  preview: (data: { period: string; employerInsurance: number; insuranceBreakdown?: Record<string, number>; costAccount?: string }) => api.post<{ period: string; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/ledger-preview', data),
+  post: (data: { period: string; employerInsurance: number; insuranceBreakdown?: Record<string, number>; costAccount?: string; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/ledger-post', data),
+  previewAdjustment: (data: { period: string; employerInsurance: number; insuranceBreakdown?: Record<string, number>; costAccount?: string }) => api.post<{ period: string; sequence: number; employeeCount: number; fingerprint: string; lines: Array<{ description: string; debitAccount: string; creditAccount: string; amount: number }> }>('/finance/payroll/adjustment-preview', data),
+  postAdjustment: (data: { period: string; employerInsurance: number; insuranceBreakdown?: Record<string, number>; costAccount?: string; fingerprint: string }) => api.post<{ lines: Array<{ amount: number }> }>('/finance/payroll/adjustment-post', data),
 };
 
 export const assetTransfersApi = {

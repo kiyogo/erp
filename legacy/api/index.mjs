@@ -4749,7 +4749,7 @@ function payrollMonth(value) {
   return month >= 1 && month <= 12 && year ? `${String(month).padStart(2, '0')}/${year}` : '';
 }
 
-async function payrollLedgerPreview(period, employerInsurance, actor, allowEmpty = false) {
+async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmpty = false, accountingRegime = '', insuranceBreakdown: rawInsuranceBreakdown, costAccount: rawCostAccount } = {}) {
   const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll' ORDER BY record_key ASC").all();
   const records = rows.map(publicCollectionRecord).filter((record) => record && payrollMonth(record.month) === period);
   if (!records.length && !allowEmpty) throw new HttpError(422, 'Kỳ lương không có dữ liệu hợp lệ để hạch toán.');
@@ -4774,15 +4774,65 @@ async function payrollLedgerPreview(period, employerInsurance, actor, allowEmpty
     if (record.status === 'Đã chi trả' && !record.financeTransactionId) totals.paid += net;
   }
   if (!Object.values(totals).every(Number.isSafeInteger) || (records.length && totals.gross <= 0)) throw new HttpError(422, 'Tổng tiền lương không hợp lệ.');
-  const lines = [
-    { description: `Ghi nhận lương phải trả kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 334', amount: totals.gross },
-    { description: `Trích bảo hiểm phần doanh nghiệp kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 338', amount: employerInsurance },
-    { description: `Khấu trừ bảo hiểm người lao động kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 338', amount: totals.employeeInsurance },
-    { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: totals.tax },
-    { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 112', amount: totals.paid },
-  ].filter((line) => line.amount > 0);
-  const fingerprint = createHash('sha256').update(JSON.stringify({ period, employerInsurance, actorId: actor.id, records })).digest('hex');
-  return { period, employerInsurance, employeeCount: records.length, lines, fingerprint, records };
+  let lines;
+  let insuranceBreakdown;
+  let costAccount = '';
+  let detailedTT99Chart = false;
+  if (accountingRegime === 'TT99') {
+    const chartRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+    const chart = chartRows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === 'TT99');
+    if (!chart.length) throw new HttpError(422, 'Nạp danh mục tài khoản TT99 trước khi hạch toán lương.');
+    const codes = new Set(chart.map((item) => String(item.code || '')));
+    const requiredCodes = ['334', '3383', '3384', '3386', '3335', '112'];
+    const missingCodes = requiredCodes.filter((code) => !codes.has(code));
+    if (missingCodes.length) throw new HttpError(422, `Danh mục TT99 thiếu tài khoản chi tiết cần cho hạch toán lương: ${missingCodes.join(', ')}.`);
+    costAccount = requiredText(rawCostAccount, 'Tài khoản chi phí lương', 20).replace(/^TK\s*/i, '').trim();
+    const selectedCostAccount = chart.find((item) => String(item.code || '') === costAccount);
+    if (!selectedCostAccount || selectedCostAccount.status !== 'Đang sử dụng' || selectedCostAccount.accountType !== 'Chi phí'
+      || chart.some((item) => item.parentCode === costAccount)) throw new HttpError(422, 'Chọn tài khoản chi phí chi tiết đang sử dụng trong danh mục TT99.');
+    detailedTT99Chart = true;
+  }
+  if (detailedTT99Chart) {
+    const fields = ['employerSocial', 'employerHealth', 'employerUnemployment', 'employeeSocial', 'employeeHealth', 'employeeUnemployment'];
+    if (!rawInsuranceBreakdown || typeof rawInsuranceBreakdown !== 'object' || Array.isArray(rawInsuranceBreakdown)) {
+      throw new HttpError(422, 'Cần nhập riêng số bảo hiểm xã hội, y tế và thất nghiệp của doanh nghiệp và người lao động để hạch toán theo TT99.');
+    }
+    insuranceBreakdown = Object.fromEntries(fields.map((field) => {
+      const value = rawInsuranceBreakdown[field];
+      if (value === undefined || value === null || value === '') throw new HttpError(422, `Thiếu số liệu bảo hiểm ${field}.`);
+      return [field, optionalAmount(value, `Bảo hiểm ${field}`)];
+    }));
+    const employerTotal = insuranceBreakdown.employerSocial + insuranceBreakdown.employerHealth + insuranceBreakdown.employerUnemployment;
+    const employeeTotal = insuranceBreakdown.employeeSocial + insuranceBreakdown.employeeHealth + insuranceBreakdown.employeeUnemployment;
+    if (!Number.isSafeInteger(employerTotal) || employerTotal !== employerInsurance) throw new HttpError(422, 'Tổng bảo hiểm doanh nghiệp phải bằng tổng ba khoản BHXH, BHYT và BHTN đã đối chiếu.');
+    if (!Number.isSafeInteger(employeeTotal) || employeeTotal !== totals.employeeInsurance) throw new HttpError(422, 'Tổng bảo hiểm người lao động phải bằng khoản khấu trừ bảo hiểm trên các phiếu lương.');
+    const contributions = [
+      ['Social', '3383', 'bảo hiểm xã hội'],
+      ['Health', '3384', 'bảo hiểm y tế'],
+      ['Unemployment', '3386', 'bảo hiểm thất nghiệp'],
+    ];
+    lines = [
+      { description: `Ghi nhận lương phải trả kỳ ${period}`, debitAccount: `TK ${costAccount}`, creditAccount: 'TK 334', amount: totals.gross },
+      ...contributions.filter(([suffix]) => insuranceBreakdown[`employer${suffix}`] > 0).map(([suffix, account, label]) => ({
+        description: `Trích ${label} phần doanh nghiệp kỳ ${period}`, debitAccount: `TK ${costAccount}`, creditAccount: `TK ${account}`, amount: insuranceBreakdown[`employer${suffix}`],
+      })),
+      ...contributions.filter(([suffix]) => insuranceBreakdown[`employee${suffix}`] > 0).map(([suffix, account, label]) => ({
+        description: `Khấu trừ ${label} người lao động kỳ ${period}`, debitAccount: 'TK 334', creditAccount: `TK ${account}`, amount: insuranceBreakdown[`employee${suffix}`],
+      })),
+      { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: totals.tax },
+      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 112', amount: totals.paid },
+    ].filter((line) => line.amount > 0);
+  } else {
+    lines = [
+      { description: `Ghi nhận lương phải trả kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 334', amount: totals.gross },
+      { description: `Trích bảo hiểm phần doanh nghiệp kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 338', amount: employerInsurance },
+      { description: `Khấu trừ bảo hiểm người lao động kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 338', amount: totals.employeeInsurance },
+      { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: totals.tax },
+      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 112', amount: totals.paid },
+    ].filter((line) => line.amount > 0);
+  }
+  const fingerprint = createHash('sha256').update(JSON.stringify({ period, employerInsurance, insuranceBreakdown, costAccount, accountingRegime, actorId: actor.id, records })).digest('hex');
+  return { period, employerInsurance, insuranceBreakdown, costAccount, employeeCount: records.length, lines, fingerprint, records };
 }
 
 function salePromotionKeys(input) {
@@ -10317,7 +10367,7 @@ async function handleRequest(request, response) {
       const existing = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceReference') = ? LIMIT 1").get(sourceReference);
       const existingSnapshot = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_payroll_postings' AND record_key = ? LIMIT 1").get(period);
       if (existing || existingSnapshot) throw new HttpError(409, 'Kỳ lương đã có bút toán trong Sổ Cái, cần đối chiếu trước khi xử lý tiếp.');
-      result = await payrollLedgerPreview(period, employerInsurance, actor);
+      result = await payrollLedgerPreview(period, employerInsurance, actor, { accountingRegime: profile.accountingRegime, insuranceBreakdown: input.insuranceBreakdown, costAccount: input.costAccount });
       if (!posting) return;
       if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== result.fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi ghi sổ.');
       await requireSecurityPin(request, actor);
@@ -10331,7 +10381,7 @@ async function handleRequest(request, response) {
         const entry = { key, voucherCode: `BL-${period.replace('/', '')}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, accountingRegime: profile.accountingRegime, createdById: actor.id, createdAt: timestamp };
         await insert.run(randomUUID(), key, actor.id, JSON.stringify(entry), timestamp, timestamp);
       }
-      const snapshot = { key: period, period, employerInsurance, employeeCount: result.employeeCount, fingerprint: result.fingerprint, records: result.records, lines: result.lines, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
+      const snapshot = { key: period, period, employerInsurance, insuranceBreakdown: result.insuranceBreakdown, costAccount: result.costAccount, employeeCount: result.employeeCount, fingerprint: result.fingerprint, records: result.records, lines: result.lines, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
       await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_payroll_postings', ?, ?, ?, ?, ?)")
         .run(randomUUID(), period, actor.id, JSON.stringify(snapshot), timestamp, timestamp);
       await recordAuditEvent(actor.id, 'post_payroll', 'finance_general_ledger', sourceReference, { employeeCount: result.employeeCount, entries: result.lines.length, employerInsurance });
@@ -10365,7 +10415,7 @@ async function handleRequest(request, response) {
       const adjustmentRows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_payroll_adjustments' AND json_extract(payload_json, '$.period') = ?").all(period);
       const adjustments = adjustmentRows.map(publicCollectionRecord).sort((a, b) => a.sequence - b.sequence);
       const previous = adjustments.at(-1) || original;
-      const reviewed = await payrollLedgerPreview(period, employerInsurance, actor, true);
+      const reviewed = await payrollLedgerPreview(period, employerInsurance, actor, { allowEmpty: true, accountingRegime: profile.accountingRegime, insuranceBreakdown: input.insuranceBreakdown, costAccount: input.costAccount });
       const accountKey = (line) => `${line.debitAccount}|${line.creditAccount}`;
       const priorLines = new Map(previous.lines.map((line) => [accountKey(line), line]));
       const currentLines = new Map(reviewed.lines.map((line) => [accountKey(line), line]));
@@ -10382,7 +10432,7 @@ async function handleRequest(request, response) {
       }
       if (!lines.length) throw new HttpError(422, 'Không có chênh lệch cần ghi sổ.');
       const fingerprint = createHash('sha256').update(JSON.stringify({ actorId: actor.id, period, previousKey: previous.key, sequence: adjustments.length, priorLines: previous.lines, reviewedFingerprint: reviewed.fingerprint, lines })).digest('hex');
-      result = { period, employerInsurance, employeeCount: reviewed.employeeCount, sequence: adjustments.length + 1, lines, fingerprint };
+      result = { period, employerInsurance, insuranceBreakdown: reviewed.insuranceBreakdown, costAccount: reviewed.costAccount, employeeCount: reviewed.employeeCount, sequence: adjustments.length + 1, lines, fingerprint };
       if (!posting) return;
       if (requiredText(input.fingerprint, 'Kết quả xem trước', 64) !== fingerprint) throw new HttpError(409, 'Dữ liệu kỳ lương đã thay đổi. Vui lòng xem lại trước khi điều chỉnh.');
       await requireSecurityPin(request, actor);
@@ -10396,7 +10446,7 @@ async function handleRequest(request, response) {
         const entry = { key, voucherCode: `BL-${period.replace('/', '')}-DC${result.sequence}-${index + 1}`, entryDate, ...line, author: actor.name, status: 'Đã ghi sổ cái', sourceModule: 'payroll', sourceReference, accountingRegime: profile.accountingRegime, createdById: actor.id, createdAt: timestamp };
         await insert.run(randomUUID(), key, actor.id, JSON.stringify(entry), timestamp, timestamp);
       }
-      const snapshot = { key: id, period, sequence: result.sequence, employerInsurance, records: reviewed.records, lines: reviewed.lines, adjustmentLines: lines, fingerprint, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
+      const snapshot = { key: id, period, sequence: result.sequence, employerInsurance, insuranceBreakdown: reviewed.insuranceBreakdown, costAccount: reviewed.costAccount, records: reviewed.records, lines: reviewed.lines, adjustmentLines: lines, fingerprint, createdAt: timestamp, createdBy: actor.name, createdById: actor.id };
       await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_payroll_adjustments', ?, ?, ?, ?, ?)")
         .run(randomUUID(), id, actor.id, JSON.stringify(snapshot), timestamp, timestamp);
       await recordAuditEvent(actor.id, 'adjust_payroll', 'finance_general_ledger', sourceReference, { sequence: result.sequence, entries: lines.length });

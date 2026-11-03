@@ -24,6 +24,13 @@ export const PayrollModule: React.FC = () => {
   const [data, setData] = useState<PayrollRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).format(new Date()).split('-').reverse().join('/'));
   const [employerCharge, setEmployerCharge] = useState('');
+  const [accountingRegime, setAccountingRegime] = useState('');
+  const [chartAccounts, setChartAccounts] = useState<any[]>([]);
+  const [costAccount, setCostAccount] = useState('');
+  const [insuranceBreakdown, setInsuranceBreakdown] = useState({
+    employerSocial: '', employerHealth: '', employerUnemployment: '',
+    employeeSocial: '', employeeHealth: '', employeeUnemployment: '',
+  });
   const [postingLedger, setPostingLedger] = useState(false);
   const [postedPeriods, setPostedPeriods] = useState<string[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<PayrollRecord | null>(null);
@@ -104,6 +111,15 @@ export const PayrollModule: React.FC = () => {
   useEffect(() => {
     if (!isAccounting) return;
     let active = true;
+    systemApi.getCompanyProfile().then(async ({ data: response }) => {
+      const regime = String(response.profile.accountingRegime || '');
+      if (!active) return;
+      setAccountingRegime(regime);
+      if (regime === 'TT99') {
+        const accounts = await dataService.refreshGenericData('finance_chart_of_accounts');
+        if (active) setChartAccounts(accounts.filter((account) => account.accountingRegime === 'TT99' && account.status === 'Đang sử dụng' && account.accountType === 'Chi phí' && !accounts.some((item) => item.parentCode === account.code)));
+      }
+    }).catch(() => { if (active) message.error('Không tải được chế độ kế toán và danh mục tài khoản doanh nghiệp.'); });
     payrollLedgerApi.postedPeriods().then(({ data: response }) => { if (active) setPostedPeriods(response.periods); })
       .catch(() => { if (active) message.error('Không tải được các kỳ lương đã ghi sổ.'); });
     return () => { active = false; };
@@ -138,6 +154,46 @@ export const PayrollModule: React.FC = () => {
     .map((value) => ({ value, label: `Tháng ${value.slice(0, 2)} / ${value.slice(3)}` }));
   if (data.some((item) => !normalizePayrollMonth(item.month))) availableMonths.push({ value: 'Chưa xác định kỳ', label: 'Chưa xác định kỳ' });
 
+  const prepareLedgerRequest = () => {
+    if (!normalizePayrollMonth(selectedMonth)) { message.error('Chọn kỳ lương hợp lệ để ghi sổ.'); return null; }
+    if (!accountingRegime) { message.error('Chưa xác định được chế độ kế toán của doanh nghiệp.'); return null; }
+    if (accountingRegime === 'TT99') {
+      const values = Object.fromEntries(Object.entries(insuranceBreakdown).map(([key, value]) => [key, Number(value)])) as Record<keyof typeof insuranceBreakdown, number>;
+      if (Object.values(insuranceBreakdown).some((value) => value.trim() === '')
+        || Object.values(values).some((value) => !Number.isSafeInteger(value) || value < 0)) {
+        message.error('Nhập số nguyên không âm cho từng khoản BHXH, BHYT và BHTN đã đối chiếu.'); return null;
+      }
+      const employerTotal = values.employerSocial + values.employerHealth + values.employerUnemployment;
+      const employeeTotal = values.employeeSocial + values.employeeHealth + values.employeeUnemployment;
+      if (!Number.isSafeInteger(employerTotal) || !Number.isSafeInteger(employeeTotal)) { message.error('Tổng các khoản bảo hiểm vượt giới hạn số tiền hợp lệ.'); return null; }
+      if (employeeTotal !== employeeInsurance) { message.error('Tổng BHXH, BHYT và BHTN người lao động phải bằng tổng khấu trừ bảo hiểm của kỳ lương.'); return null; }
+      if (!costAccount) { message.error('Chọn tài khoản chi phí phù hợp với bộ phận lương đã đối chiếu.'); return null; }
+      return { period: selectedMonth, employerInsurance: employerTotal, insuranceBreakdown: values, costAccount };
+    }
+    if (employerCharge.trim() === '' || !Number.isSafeInteger(Number(employerCharge)) || Number(employerCharge) < 0) {
+      message.error('Nhập số tiền bảo hiểm doanh nghiệp đã đối chiếu.'); return null;
+    }
+    return { period: selectedMonth, employerInsurance: Number(employerCharge) };
+  };
+
+  const payrollAccountingLines = accountingRegime === 'TT99' ? [
+    { desc: 'Ghi nhận tiền lương phải trả', debit: `Nợ TK ${costAccount || '—'}`, credit: 'Có TK 334', amount: grossPayroll },
+    ...([
+      ['employerSocial', '3383', 'Trích bảo hiểm xã hội phần doanh nghiệp'],
+      ['employerHealth', '3384', 'Trích bảo hiểm y tế phần doanh nghiệp'],
+      ['employerUnemployment', '3386', 'Trích bảo hiểm thất nghiệp phần doanh nghiệp'],
+    ] as const).map(([field, account, desc]) => ({ desc, debit: `Nợ TK ${costAccount || '—'}`, credit: `Có TK ${account}`, amount: Number(insuranceBreakdown[field]) || 0 })),
+    ...([
+      ['employeeSocial', '3383', 'Khấu trừ bảo hiểm xã hội người lao động'],
+      ['employeeHealth', '3384', 'Khấu trừ bảo hiểm y tế người lao động'],
+      ['employeeUnemployment', '3386', 'Khấu trừ bảo hiểm thất nghiệp người lao động'],
+    ] as const).map(([field, account, desc]) => ({ desc, debit: 'Nợ TK 334', credit: `Có TK ${account}`, amount: Number(insuranceBreakdown[field]) || 0 })),
+  ] : [
+    { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 642', credit: 'Có TK 334', amount: grossPayroll },
+    { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 642', credit: 'Có TK 338', amount: Number(employerCharge) || 0 },
+    { desc: 'Khấu trừ bảo hiểm người lao động', debit: 'Nợ TK 334', credit: 'Có TK 338', amount: employeeInsurance },
+  ];
+
   const exportPayrollReport = (report: 'payroll' | 'attendance' | 'insurance', fileName: string, successText: string) => {
     downloadFile(fileName, generateValidXlsxBlob(payrollReportRows(periodData, report, selectedMonth)));
     message.success(successText);
@@ -163,17 +219,14 @@ export const PayrollModule: React.FC = () => {
   };
 
   const postPayrollToLedger = async () => {
-    if (!normalizePayrollMonth(selectedMonth)) { message.error('Chọn kỳ lương hợp lệ để ghi sổ.'); return; }
-    if (employerCharge.trim() === '' || !Number.isSafeInteger(Number(employerCharge)) || Number(employerCharge) < 0) {
-      message.error('Nhập số tiền bảo hiểm doanh nghiệp đã đối chiếu.'); return;
-    }
-    const request = { period: selectedMonth, employerInsurance: Number(employerCharge) };
+    const request = prepareLedgerRequest();
+    if (!request) return;
     setPostingLedger(true);
     try {
       const preview = (await payrollLedgerApi.preview(request)).data;
       Modal.confirm({
         title: `Ghi sổ các bút toán lương kỳ ${preview.period}?`,
-        content: <div><div>{preview.employeeCount} phiếu lương</div>{preview.lines.map((line) => <div key={line.description}>{line.description}: {line.amount.toLocaleString('vi-VN')} ₫</div>)}</div>,
+        content: <div><div>{preview.employeeCount} phiếu lương</div>{preview.lines.map((line) => <div key={line.description}>{line.description}: Nợ {line.debitAccount}, Có {line.creditAccount}, {line.amount.toLocaleString('vi-VN')} ₫</div>)}</div>,
         okText: 'Ghi sổ', cancelText: 'Hủy',
         onOk: async () => {
           try {
@@ -192,11 +245,8 @@ export const PayrollModule: React.FC = () => {
   };
 
   const adjustPayrollLedger = async () => {
-    if (!normalizePayrollMonth(selectedMonth)) { message.error('Chọn kỳ lương hợp lệ để điều chỉnh.'); return; }
-    if (employerCharge.trim() === '' || !Number.isSafeInteger(Number(employerCharge)) || Number(employerCharge) < 0) {
-      message.error('Nhập số tiền bảo hiểm doanh nghiệp đã đối chiếu.'); return;
-    }
-    const request = { period: selectedMonth, employerInsurance: Number(employerCharge) };
+    const request = prepareLedgerRequest();
+    if (!request) return;
     setPostingLedger(true);
     try {
       const preview = (await payrollLedgerApi.previewAdjustment(request)).data;
@@ -255,7 +305,7 @@ export const PayrollModule: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {!isAttendance && !isInsurance && !isDisburse && !isAccounting && <Button onClick={() => setSheetDialog(true)}>Thêm bảng lương</Button>}
         <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>Kỳ lương:</span>
-        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); }} options={availableMonths} style={{ width: 160 }} />
+        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); setInsuranceBreakdown({ employerSocial: '', employerHealth: '', employerUnemployment: '', employeeSocial: '', employeeHealth: '', employeeUnemployment: '' }); }} options={availableMonths} style={{ width: 160 }} />
       </div>
       <Modal title="Thêm bảng lương" open={sheetDialog} onCancel={() => setSheetDialog(false)} onOk={() => {
         if (!sheetName.trim() || selectedUnits.length === 0) { message.error('Nhập tên bảng lương và chọn ít nhất một đơn vị.'); return; }
@@ -441,11 +491,7 @@ export const PayrollModule: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}><label style={{ flex: 1 }}>Chọn bảng lương<Select value={accountingSheetKey} onChange={setAccountingSheetKey} options={payrollSheets.map((sheet: any) => ({ value: sheet.key, label: sheet.name }))} placeholder="Bảng lương" /></label><Button onClick={() => { const sheet = payrollSheets.find((item: any) => item.key === accountingSheetKey); if (!sheet) { message.error('Chọn bảng lương trước.'); return; } setSelectedMonth(`${sheet.month}/${sheet.year}`); }}>Đồng ý</Button></div>
           <Card title={`Bút Toán Hạch Toán Kế Toán Lương Tháng ${selectedMonth}`} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
-              {[
-                { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 642', credit: 'Có TK 334', amount: grossPayroll },
-                { desc: 'Trích bảo hiểm phần doanh nghiệp', debit: 'Nợ TK 642', credit: 'Có TK 338', amount: Number(employerCharge) || 0 },
-                { desc: 'Khấu trừ bảo hiểm người lao động', debit: 'Nợ TK 334', credit: 'Có TK 338', amount: employeeInsurance },
-              ].filter((line) => line.amount > 0).map((bt, idx) => (
+              {payrollAccountingLines.filter((line) => line.amount > 0).map((bt, idx) => (
                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                   <div>
                     <strong style={{ fontSize: 13, color: '#0F172A' }}>{bt.desc}</strong>
@@ -455,9 +501,30 @@ export const PayrollModule: React.FC = () => {
                 </div>
               ))}
             </div>
-            <label style={{ display: 'block', marginBottom: 14 }}>Bảo hiểm doanh nghiệp đã đối chiếu
-              <Input type="number" min={0} value={employerCharge} onChange={(event) => setEmployerCharge(event.target.value)} placeholder="Nhập số tiền" />
-            </label>
+            {accountingRegime === 'TT99' ? (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ marginBottom: 8, color: '#64748B' }}>Nhập số liệu đã đối chiếu với bảng lương và bảng kê bảo hiểm. Phần mềm không tự suy tính tỷ lệ đóng.</div>
+                {chartAccounts.length ? (
+                  <label style={{ display: 'block', marginBottom: 10 }}>Tài khoản chi phí lương
+                    <Select value={costAccount || undefined} onChange={setCostAccount} options={chartAccounts.map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết theo bộ phận" />
+                  </label>
+                ) : <div style={{ marginBottom: 10, color: '#B45309' }}>Chưa có tài khoản chi phí TT99. Hãy nạp mẫu tại Tổng hợp → Hệ thống tài khoản.</div>}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                  {([
+                    ['employerSocial', 'Doanh nghiệp đóng BHXH'], ['employerHealth', 'Doanh nghiệp đóng BHYT'], ['employerUnemployment', 'Doanh nghiệp đóng BHTN'],
+                    ['employeeSocial', 'Người lao động đóng BHXH'], ['employeeHealth', 'Người lao động đóng BHYT'], ['employeeUnemployment', 'Người lao động đóng BHTN'],
+                  ] as const).map(([field, label]) => (
+                    <label key={field}>{label}
+                      <Input type="number" min={0} step={1} value={insuranceBreakdown[field]} onChange={(event) => setInsuranceBreakdown((current) => ({ ...current, [field]: event.target.value }))} placeholder="Số tiền đã đối chiếu" />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <label style={{ display: 'block', marginBottom: 14 }}>Bảo hiểm doanh nghiệp đã đối chiếu
+                <Input type="number" min={0} value={employerCharge} onChange={(event) => setEmployerCharge(event.target.value)} placeholder="Nhập số tiền" />
+              </label>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button icon={<AuditOutlined />} loading={postingLedger} disabled={!normalizePayrollMonth(selectedMonth)} onClick={adjustPayrollLedger}>Điều chỉnh bút toán</Button>
               <Button type="primary" icon={<AuditOutlined />} loading={postingLedger} disabled={periodData.length === 0 || !normalizePayrollMonth(selectedMonth)} onClick={postPayrollToLedger} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>

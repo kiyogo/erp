@@ -61,7 +61,7 @@ async function request(route, method = 'GET', payload, expected = 200, authHeade
 const profile = (await request('/system/company-profile')).profile;
 await request('/system/company-profile', 'PUT', {
   ...profile, companyName: 'Doanh nghiệp kiểm thử', taxCode: '0012345678', legalForm: 'llc_single',
-  companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99',
+  companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT133',
   fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
 });
 

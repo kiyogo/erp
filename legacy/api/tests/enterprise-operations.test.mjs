@@ -314,6 +314,29 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/finance/chart-of-accounts', 'POST', { record: { code: '21101', name: 'Mã sai cấp', parentCode: '111', accountType: 'Tài sản', effectiveDate: '2026-01-01' } }, 422);
   await request('/auth/security-pin', 'POST', { pin: '246810', confirmPin: '246810', currentPassword: env.SEED_ADMIN_PASSWORD }, 200);
   headers['X-Security-Pin'] = '246810';
+  await request('/collections/payroll', 'POST', { record: {
+    key: 'tt99-payroll-ledger', employeeCode: 'TT99-PAY-1', employeeName: 'Nhân viên kiểm thử', month: '2032-09', status: 'Chưa chi trả',
+    baseSalary: 1000, allowance: 0, bonus: 0, insuranceDeduction: 100, taxDeduction: 0, netSalary: 900,
+  } }, 201);
+  const tt99Payroll = {
+    period: '09/2032', employerInsurance: 200, costAccount: '6421',
+    insuranceBreakdown: { employerSocial: 150, employerHealth: 40, employerUnemployment: 10, employeeSocial: 75, employeeHealth: 20, employeeUnemployment: 5 },
+  };
+  const tt99PayrollPreview = await request('/finance/payroll/ledger-preview', 'POST', tt99Payroll);
+  assert.deepEqual(tt99PayrollPreview.lines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [
+    ['TK 6421', 'TK 334', 1000], ['TK 6421', 'TK 3383', 150], ['TK 6421', 'TK 3384', 40], ['TK 6421', 'TK 3386', 10],
+    ['TK 334', 'TK 3383', 75], ['TK 334', 'TK 3384', 20], ['TK 334', 'TK 3386', 5],
+  ]);
+  await request('/finance/payroll/ledger-preview', 'POST', { ...tt99Payroll, insuranceBreakdown: { ...tt99Payroll.insuranceBreakdown, employeeSocial: 70 } }, 422);
+  await request('/finance/payroll/ledger-preview', 'POST', { ...tt99Payroll, costAccount: '642' }, 422);
+  await request('/finance/payroll/ledger-post', 'POST', { ...tt99Payroll, fingerprint: tt99PayrollPreview.fingerprint }, 201);
+  const tt99PayrollEntries = (await request('/collections/finance_general_ledger')).data.filter((entry) => entry.sourceReference === 'payroll:09/2032');
+  assert.equal(tt99PayrollEntries.length, 7);
+  assert.ok(tt99PayrollEntries.every((entry) => {
+    const debit = entry.debitAccount.replace(/^TK\s*/, '');
+    const credit = entry.creditAccount.replace(/^TK\s*/, '');
+    return !['642', '338'].includes(debit) && !['642', '338'].includes(credit);
+  }));
   const autoCashVoucher = {
     type: 'Thu', source: 'bank', sourceAccountId: bank.key, account: bank.accountNumber, category: 'Thu tiền hàng', amount: 100,
     date: '2026-10-10', status: 'Đã hoàn thành', recipientOrPayer: 'Khách kiểm thử', counterpartyType: 'other',
@@ -349,7 +372,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   }, 422);
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'SALE-Q4-1', entryDate: '2026-10-10', description: 'Trùng', debitAccount: 'TK 131', creditAccount: 'TK 511', amount: 1000 }, 409);
   const closeResult = await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 201);
-  assert.equal(closeResult.entries, 4);
+  assert.equal(closeResult.entries, 5);
   assert.ok(closeResult.records.every(record => record.status === 'Đã ghi sổ cái'));
   await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 409);
   await request('/collections/finance_general_ledger', 'PUT', { records: [] }, 409);
@@ -362,10 +385,13 @@ test('company profile stores all legal fields, validates dates and settings, rej
   const bytes = Buffer.from(await word.arrayBuffer());
   assert.equal(bytes.readUInt32LE(0), 0x04034b50);
   for (const field of ['fullName', 'taxCode', 'representative', 'representativeTitle', 'address']) assert.ok(bytes.toString('utf8').includes(profile[field]), field);
-  const staffLogin = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'staff@example.test', password: 'Operations-Test-26!Safe' }) });
+  await request('/users', 'POST', { email: 'chart-import-user@example.test', name: 'Chart import user', employeeCode: 'CHART-IMPORT-USER', role: 'USER', password: 'Chart-Import-26!Secure' }, 201);
+  const staffLogin = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'chart-import-user@example.test', password: 'Chart-Import-26!Secure' }) });
   const staff = await staffLogin.json();
-  for (const method of ['GET', 'PUT']) assert.equal((await fetch(`${base}/system/company-profile`, { method, headers: { Authorization: `Bearer ${staff.access_token}`, 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify(second) : undefined })).status, 403);
-  assert.equal((await fetch(`${base}/finance/chart-of-accounts/templates/import`, { method: 'POST', headers: { Authorization: `Bearer ${staff.access_token}`, 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+  assert.equal(staffLogin.status, 200, JSON.stringify(staff));
+  const staffHeaders = { Authorization: `Bearer ${staff.access_token || staff.token}`, 'Content-Type': 'application/json' };
+  for (const method of ['GET', 'PUT']) assert.equal((await fetch(`${base}/system/company-profile`, { method, headers: staffHeaders, body: method === 'PUT' ? JSON.stringify(second) : undefined })).status, 403);
+  assert.equal((await fetch(`${base}/finance/chart-of-accounts/templates/import`, { method: 'POST', headers: staffHeaders, body: '{}' })).status, 403);
 });
 
 test('SMTP configuration keeps credentials encrypted, supports updates without revealing the saved password and reports failed delivery', async () => {
