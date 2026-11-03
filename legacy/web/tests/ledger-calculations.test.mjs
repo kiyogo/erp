@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import ts from 'typescript';
-
-const source = readFileSync(new URL('../src/modules/finance/ledgerCalculations.ts', import.meta.url), 'utf8');
-const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
-const ledger = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+import * as ledger from '../src/modules/finance/ledgerCalculations.ts';
 
 test('ledger account summaries aggregate only actual debit and credit movements', () => {
   assert.deepEqual(ledger.summarizeLedgerAccounts([
@@ -59,4 +54,17 @@ test('fiscal quarters follow the configured non-calendar year start', () => {
   assert.equal(result.startDate, '2026-10-01');
   assert.equal(result.endDate, '2026-12-31');
   assert.deepEqual(result.records.map(record => record.amount), [100, 200]);
+});
+
+test('fiscal quarter reports clamp day 31 at short months without dropping boundary dates', () => {
+  const result = ledger.calculateQuarterLedger([
+    { entryDate: '2026-11-29', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 10 },
+    { entryDate: '2026-11-30', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 20 },
+    { entryDate: '2027-02-27', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 30 },
+    { entryDate: '2027-02-28', status: 'Đã ghi sổ cái', debitAccount: 'TK 112', creditAccount: 'TK 511', amount: 40 },
+  ], '2026-Q3', 5, 31);
+
+  assert.equal(result.startDate, '2026-11-30');
+  assert.equal(result.endExclusive, '2027-02-28');
+  assert.deepEqual(result.records.map(record => record.amount), [20, 30]);
 });

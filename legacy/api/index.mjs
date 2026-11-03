@@ -13,6 +13,7 @@ import cryptoService, { encryptField, decryptField, isEncrypted, computeBlindInd
 import logger from './logger.mjs';
 import { createBackupManager } from './backups.mjs';
 import { createDocxFromText } from './document-files.mjs';
+import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -7566,12 +7567,10 @@ async function handleRequest(request, response) {
         const sourceReference = parseJsonObject(row.payload_json).sourceReference;
         const match = /^period-close:(\d{4}-Q[1-4])$/.exec(String(sourceReference || ''));
         if (!match) continue;
-        const [, fiscalYear, quarter] = /^(\d{4})-Q([1-4])$/.exec(match[1]);
         const startMonth = Number(profile.fiscalYearStartMonth);
         const startDay = Number(profile.fiscalYearStartDay);
-        const start = new Date(Date.UTC(Number(fiscalYear), startMonth - 1 + (Number(quarter) - 1) * 3, startDay)).toISOString().slice(0, 10);
-        const end = new Date(Date.UTC(Number(fiscalYear), startMonth - 1 + Number(quarter) * 3, startDay)).toISOString().slice(0, 10);
-        if (entryDate >= start && entryDate < end) throw new HttpError(409, 'Kỳ tài chính đã kết chuyển; không thể ghi thêm bút toán vào kỳ đã khóa.');
+        const dates = getFiscalQuarterDates(match[1], startMonth, startDay);
+        if (dates && entryDate >= dates.startDate && entryDate < dates.endExclusive) throw new HttpError(409, 'Kỳ tài chính đã kết chuyển; không thể ghi thêm bút toán vào kỳ đã khóa.');
       }
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), key, actor.id, JSON.stringify(record), timestamp, timestamp);
@@ -7592,9 +7591,9 @@ async function handleRequest(request, response) {
     const quarter = Number(match[2]);
     const startMonth = Number(profile.fiscalYearStartMonth);
     const startDay = Number(profile.fiscalYearStartDay);
-    const startDate = new Date(Date.UTC(fiscalYear, startMonth - 1 + (quarter - 1) * 3, startDay)).toISOString().slice(0, 10);
-    const endExclusive = new Date(Date.UTC(fiscalYear, startMonth - 1 + quarter * 3, startDay)).toISOString().slice(0, 10);
-    const endDate = new Date(Date.parse(`${endExclusive}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+    const dates = getFiscalQuarterDates(period, startMonth, startDay);
+    if (!dates) throw new HttpError(422, 'Ngày bắt đầu năm tài chính trong hồ sơ doanh nghiệp không hợp lệ.');
+    const { startDate, endExclusive, endDate } = dates;
     let created = [];
     await db.transaction(async () => {
       if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");

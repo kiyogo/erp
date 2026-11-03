@@ -1,3 +1,5 @@
+import { getFiscalQuarterDates } from '../../../../shared/finance-periods.mjs';
+
 export type LedgerCalculationRecord = {
   debitAccount?: string;
   creditAccount?: string;
@@ -9,17 +11,7 @@ export type LedgerCalculationRecord = {
 export type AccountMovement = { account: string; debit: number; credit: number };
 export type ClosingLine = { description: string; debitAccount: string; creditAccount: string; amount: number };
 
-export function getFiscalQuarterDates(period: string, startMonth = 1, startDay = 1) {
-  const match = /^(\d{4})-Q([1-4])$/.exec(period);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const quarter = Number(match[2]);
-  const start = new Date(Date.UTC(year, startMonth - 1 + (quarter - 1) * 3, startDay));
-  const endExclusive = new Date(Date.UTC(year, startMonth - 1 + quarter * 3, startDay));
-  const end = new Date(endExclusive.getTime() - 86_400_000);
-  const toIso = (value: Date) => value.toISOString().slice(0, 10);
-  return { year: String(year), quarter: String(quarter), startDate: toIso(start), endDate: toIso(end), endExclusive: toIso(endExclusive) };
-}
+export { getFiscalQuarterDates };
 
 export function getFiscalQuarterPeriod(date: Date, startMonth = 1, startDay = 1) {
   const dateKey = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())).toISOString().slice(0, 10);
