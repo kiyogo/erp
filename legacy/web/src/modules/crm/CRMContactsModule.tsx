@@ -73,6 +73,7 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
     setLoading(true);
     try {
       const response = await crmContactsApi.getAll(type === 'all' ? undefined : type);
+      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu danh sách đối tác không hợp lệ.');
       setData(response.data.data);
     } catch (error: any) {
       setData([]);

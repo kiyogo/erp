@@ -37,7 +37,7 @@ test('directive action parsing requires actual tasks, removes blank lines and en
 test('directive XLSX rows reflect only the supplied records and actual status/progress/reminders', () => {
   const rows = noteExportRows([{
     key: 'CD-1', noteCode: 'CD-1', title: 'Kiểm tra điện', category: 'Ý kiến chỉ đạo BGĐ', priority: 'Khẩn cấp P1',
-    author: 'Người chỉ đạo', authorRole: 'Giám đốc', assignedToDept: 'Kỹ thuật', deadline: '2026-10-30',
+    author: 'Người chỉ đạo', authorRole: 'Giám đốc', assignedToDept: 'Kỹ thuật', deadline: '9999-10-30',
     createdDate: '2026-10-28T00:00:00.000Z', isPinned: true, content: 'Kiểm tra tủ điện',
     actionItems: [{ id: 1, text: 'Đo tải', done: true }, { id: 2, text: 'Lập biên bản', done: false }],
     reminderHistory: [{ actor: 'Admin', actorId: 'admin-1', at: '2026-10-28T01:00:00Z', recipientCount: 3 }], status: 'Đang thực hiện',

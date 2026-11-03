@@ -80,6 +80,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
     setLoading(true);
     try {
       const response = await financeCashApi.getAll();
+      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu sổ thu chi không hợp lệ.');
       setData(response.data.data);
     } catch (error: any) {
       setData([]);
@@ -95,6 +96,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         financeCashApi.getCategories('Thu'),
         financeCashApi.getCategories('Chi'),
       ]);
+      if (!Array.isArray(income.data?.data) || !Array.isArray(expense.data?.data)) throw new Error('Dữ liệu loại phiếu không hợp lệ.');
       setCashCategories({ Thu: income.data.data, Chi: expense.data.data });
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không tải được danh mục loại phiếu. Vui lòng thử lại.');
@@ -104,7 +106,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   useEffect(() => {
     void loadData();
     void loadCategories();
-    void financePaymentsApi.getAccounts().then(response => setCashAccounts(response.data.accounts)).catch(() => setCashAccounts([]));
+    void financePaymentsApi.getAccounts().then(response => {
+      if (!Array.isArray(response.data?.accounts)) throw new Error('Dữ liệu tài khoản không hợp lệ.');
+      setCashAccounts(response.data.accounts);
+    }).catch(() => { setCashAccounts([]); message.error('Không tải được danh sách tài khoản.'); });
     void crmContactsApi.getAll().then(response => setContacts(response.data.data.filter(contact => ['Đang hoạt động', 'Đang hợp tác'].includes(contact.status)))).catch(() => setContacts([]));
     void employeesApi.getAll().then(response => setEmployees(response.data.data.filter(employee => employee.isActive))).catch(() => setEmployees([]));
     void Promise.all([dataService.fetchOrgUnitsList(), dataService.fetchDropdownOptions('positions'), dataService.fetchDropdownOptions('work_statuses')]).then(([units, positions, statuses]) => {
@@ -116,7 +121,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
 
   useEffect(() => {
     if (!referenceOpen) return;
-    void financeDocumentsApi.getAll().then(response => setReferenceDocuments(response.data.data)).catch(() => { setReferenceDocuments([]); message.error('Không tải được chứng từ mua bán và hóa đơn.'); });
+    void financeDocumentsApi.getAll().then(response => {
+      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu chứng từ không hợp lệ.');
+      setReferenceDocuments(response.data.data);
+    }).catch(() => { setReferenceDocuments([]); message.error('Không tải được chứng từ mua bán và hóa đơn.'); });
   }, [referenceOpen]);
 
   useEffect(() => {
