@@ -77,8 +77,7 @@ export const TaxModule: React.FC = () => {
       status: 'Chờ nộp thuế',
     };
     try {
-      const saved = await dataService.createGenericRecord('finance_tax', newTax);
-      setData(current => [saved, ...current]);
+      await dataService.createGenericRecord('finance_tax', newTax);
       message.success(`Đã lưu hồ sơ thuế ${values.taxType} - ${values.period} ở trạng thái chờ nộp.`);
       setModalOpen(false);
       form.resetFields();
