@@ -59,7 +59,7 @@ try {
   const profile = (await (await fetch(`${apiUrl}/system/company-profile`, { headers })).json()).profile;
   const configuredProfile = await fetch(`${apiUrl}/system/company-profile`, { method: 'PUT', headers, body: JSON.stringify({
     ...profile, companyName: 'Doanh nghiệp kiểm thử lương', taxCode: '0012345678', legalForm: 'llc_single',
-    companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99', fiscalYearStartMonth: 1,
+    companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01', fiscalYearStartMonth: 1,
     fiscalYearStartDay: 1, vatMethod: 'deduction',
   }) });
   assert.equal(configuredProfile.status, 200);

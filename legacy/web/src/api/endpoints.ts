@@ -214,6 +214,7 @@ export type CompanyProfile = {
   legalForm: '' | 'private_enterprise' | 'llc_single' | 'llc_multiple' | 'joint_stock' | 'partnership' | 'household_business' | 'cooperative' | 'branch' | 'state_owned_enterprise' | 'public_company' | 'foreign_invested' | 'nonprofit_organization' | 'public_unit' | 'foreign_representative_office' | 'other';
   legalFormOther: string; companySize: '' | 'micro' | 'small' | 'medium' | 'large' | 'not_applicable'; industry: string;
   accountingRegime: '' | 'TT99' | 'TT133' | 'TT132' | 'TT58' | 'TT24' | 'TT71' | 'TT152' | 'other'; accountingRegimeOther: string; cooperativeUsesTT133: boolean;
+  accountingEffectiveDate: string;
   fiscalYearStartMonth: number | null; fiscalYearStartDay: number | null;
   vatMethod: '' | 'deduction' | 'direct_revenue' | 'direct_added_value' | 'other'; vatMethodOther: string;
   accountingProfileComplete?: boolean; accountingProfileMissing?: string[];

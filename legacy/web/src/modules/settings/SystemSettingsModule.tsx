@@ -11,13 +11,13 @@ import {
   DollarOutlined,
   CreditCardOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Select, message, Tag, Card, Tooltip } from '../../custom-ui';
+import { Button, DatePicker, Input, Select, message, Tag, Card, Tooltip } from '../../custom-ui';
 import { CompanyProfile, EmailGatewayConfig, FinanceBankAccount, financeBankAccountsApi, systemApi } from '../../api/endpoints';
 import api from '../../api/axios';
 import { downloadFile, generateValidPdfBlob } from '../../utils/fileExporter';
 
 export const SystemSettingsModule: React.FC = () => {
-  const [profile, setProfile] = useState<CompanyProfile>({ companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false, fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '' });
+  const [profile, setProfile] = useState<CompanyProfile>({ companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '', establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '', address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '', legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false, accountingEffectiveDate: '', fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '' });
   const [emailConfig, setEmailConfig] = useState<EmailGatewayConfig>({ host: '', port: 587, username: '', senderEmail: '', senderName: '', security: 'STARTTLS', portalUrl: '', enabled: false, passwordConfigured: false, configured: false });
   const [bankAccounts, setBankAccounts] = useState<FinanceBankAccount[]>([]);
   const [activeTab, setActiveTab] = useState<'legal' | 'accounting' | 'network' | 'smtp' | 'payment'>('legal');
@@ -115,7 +115,7 @@ export const SystemSettingsModule: React.FC = () => {
     `Ma so thue: ${profile.taxCode || 'Chua khai bao'}`, `Dia chi: ${profile.address || 'Chua khai bao'}`, ...legalFields.map(field => `${field.label}: ${profile[field.key] || 'Chua khai bao'}`),
     `Ten mien: ${profile.domain || 'Chua khai bao'}`, `Mui gio hien thi: ${profile.timezone}`, `Tien te hien thi: ${profile.currency}`, `Cap nhat may chu: ${profile.updatedAt || 'Chua luu'}`,
         `Loai hinh phap nhan: ${profile.legalForm || 'Chua chon'}`, `Quy mo doanh nghiep: ${profile.companySize || 'Chua chon'}`, `Nganh nghe: ${profile.industry || 'Chua khai bao'}`,
-        `Che do ke toan: ${profile.accountingRegime || 'Chua chon'}`, `Nam tai chinh bat dau: ${profile.fiscalYearStartMonth || '?'}/${profile.fiscalYearStartDay || '?'}`, `Phuong phap GTGT: ${profile.vatMethod || 'Chua chon'}`,
+        `Che do ke toan: ${profile.accountingRegime || 'Chua chon'}`, `Ngay ap dung che do: ${profile.accountingEffectiveDate || 'Chua khai bao'}`, `Nam tai chinh bat dau: ${profile.fiscalYearStartMonth || '?'}/${profile.fiscalYearStartDay || '?'}`, `Phuong phap GTGT: ${profile.vatMethod || 'Chua chon'}`,
     `Cong email: ${emailConfig.host || 'Chua cau hinh'}:${emailConfig.port}`, `Trang thai: ${emailConfig.configured ? 'Da cau hinh, chua xac nhan phat thu' : 'Chua du cau hinh'}`,
   ]));
 
@@ -239,6 +239,9 @@ export const SystemSettingsModule: React.FC = () => {
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Ngành nghề chính<Input aria-label="Ngành nghề chính" value={profile.industry} onChange={event => changeProfile('industry', event.target.value)} placeholder="Khai báo theo hoạt động thực tế" /></label>
               <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Chế độ kế toán
                 <Select aria-label="Chế độ kế toán" value={profile.accountingRegime || undefined} onChange={changeAccountingRegime} style={{ display: 'block', width: '100%', marginTop: 6 }} options={regimeChoices} />
+              </label>
+              <label style={{ fontSize: 12.5, fontWeight: 400, color: '#334155' }}>Ngày bắt đầu áp dụng chế độ kế toán
+                <DatePicker aria-label="Ngày bắt đầu áp dụng chế độ kế toán" value={profile.accountingEffectiveDate || undefined} onChange={value => changeProfile('accountingEffectiveDate', value)} style={{ display: 'block', width: '100%', marginTop: 6 }} />
               </label>
               {profile.legalForm === 'cooperative' && profile.companySize === 'large' && profile.accountingRegime === 'TT133' && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: '#334155' }}><input aria-label="Xác nhận điều kiện hợp tác xã áp dụng TT133" type="checkbox" checked={profile.cooperativeUsesTT133} onChange={event => changeProfile('cooperativeUsesTT133', event.target.checked)} />Hợp tác xã có quy mô lớn, có nhiều giao dịch mà chế độ kế toán HTX áp dụng cho kỳ này chưa quy định và xác nhận áp dụng Thông tư 133 cho các giao dịch đó.</label>}
               {profile.accountingRegime === 'other' && <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>Mô tả chế độ kế toán<Input aria-label="Mô tả chế độ kế toán khác" value={profile.accountingRegimeOther} onChange={event => changeProfile('accountingRegimeOther', event.target.value)} /></label>}

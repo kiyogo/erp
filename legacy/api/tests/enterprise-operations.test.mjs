@@ -234,7 +234,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   ]) await request(route, 'POST', payload, 409);
   await request('/system/company-profile', 'PUT', { ...initial, companyName: '' }, 422);
   const bank = (await request('/finance/bank-accounts', 'POST', { bankName: 'Configured Bank', accountNumber: '0012345', accountHolder: 'Configured Company', balance: 0, status: 'Đang hoạt động' }, 201)).account;
-  const profile = { ...initial, companyName: 'Doanh nghiệp cấu hình', fullName: 'Tên pháp nhân đầy đủ', shortName: 'DN', companyCode: 'DN-001', taxCode: '0012345678', businessType: 'Công nghệ', establishedDate: '2020-02-29', registrationDate: '2020-03-01', registrationNo: 'DK-001', registrationIssuer: 'Nơi cấp đã nhập', representative: 'Đại diện đã nhập', representativeTitle: 'Giám đốc đã nhập', address: 'Địa chỉ đã nhập', phone: '+84900000000', fax: '0100000000', email: 'office@example.test', website: 'https://example.test/vi', domain: 'portal.example.test', timezone: 'UTC', currency: 'USD', bankAccountId: bank.key, legalForm: 'llc_single', companySize: 'small', industry: 'Công nghệ', accountingRegime: 'TT99', fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction', updatedBy: 'forged' };
+  const profile = { ...initial, companyName: 'Doanh nghiệp cấu hình', fullName: 'Tên pháp nhân đầy đủ', shortName: 'DN', companyCode: 'DN-001', taxCode: '0012345678', businessType: 'Công nghệ', establishedDate: '2020-02-29', registrationDate: '2020-03-01', registrationNo: 'DK-001', registrationIssuer: 'Nơi cấp đã nhập', representative: 'Đại diện đã nhập', representativeTitle: 'Giám đốc đã nhập', address: 'Địa chỉ đã nhập', phone: '+84900000000', fax: '0100000000', email: 'office@example.test', website: 'https://example.test/vi', domain: 'portal.example.test', timezone: 'UTC', currency: 'USD', bankAccountId: bank.key, legalForm: 'llc_single', companySize: 'small', industry: 'Công nghệ', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01', fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction', updatedBy: 'forged' };
   for (const invalid of [
     { establishedDate: '2026-02-30' }, { email: 'invalid' }, { website: 'javascript:alert(1)' },
     { domain: 'user:password@example.test' }, { domain: 'example.test/path' }, { timezone: 'Invented' },
@@ -248,7 +248,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   ]) await request('/system/company-profile', 'PUT', { ...profile, ...invalid }, 422);
   const household = (await request('/system/company-profile', 'PUT', { ...profile, legalForm: 'household_business', companySize: 'micro', accountingRegime: 'TT152' })).profile;
   assert.equal(household.accountingProfileComplete, true);
-  const microTT58 = (await request('/system/company-profile', 'PUT', { ...household, legalForm: 'llc_single', companySize: 'micro', accountingRegime: 'TT58', fiscalYearStartMonth: 7, fiscalYearStartDay: 1 })).profile;
+  const microTT58 = (await request('/system/company-profile', 'PUT', { ...household, legalForm: 'llc_single', companySize: 'micro', accountingRegime: 'TT58', accountingEffectiveDate: '2026-07-01', fiscalYearStartMonth: 7, fiscalYearStartDay: 1 })).profile;
   assert.equal(microTT58.accountingProfileComplete, true);
   const cooperative = (await request('/system/company-profile', 'PUT', { ...microTT58, legalForm: 'cooperative', companySize: 'large', accountingRegime: 'TT71' })).profile;
   assert.equal(cooperative.accountingProfileComplete, true);

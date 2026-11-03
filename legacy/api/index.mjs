@@ -721,6 +721,7 @@ const ACCOUNTING_PROFILE_FIELDS = [
   ['companySize', 'Quy mô doanh nghiệp'],
   ['industry', 'Ngành nghề'],
   ['accountingRegime', 'Chế độ kế toán'],
+  ['accountingEffectiveDate', 'Ngày bắt đầu áp dụng chế độ kế toán'],
   ['fiscalYearStartMonth', 'Tháng bắt đầu năm tài chính'],
   ['fiscalYearStartDay', 'Ngày bắt đầu năm tài chính'],
   ['vatMethod', 'Phương pháp thuế GTGT'],
@@ -795,7 +796,7 @@ async function getCompanyProfile() {
     companyName: '', fullName: '', shortName: '', companyCode: '', taxCode: '', businessType: '',
     establishedDate: '', registrationDate: '', registrationNo: '', registrationIssuer: '', representative: '', representativeTitle: '',
     address: '', phone: '', fax: '', email: '', website: '', domain: '', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND', bankAccountId: '',
-    legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false,
+    legalForm: '', legalFormOther: '', companySize: '', industry: '', accountingRegime: '', accountingRegimeOther: '', cooperativeUsesTT133: false, accountingEffectiveDate: '',
     fiscalYearStartMonth: null, fiscalYearStartDay: null, vatMethod: '', vatMethodOther: '',
     ...parseJsonObject(row?.setting_value),
   };
@@ -12337,6 +12338,7 @@ async function handleRequest(request, response) {
       }
       if (payload.cooperativeUsesTT133 !== undefined && typeof payload.cooperativeUsesTT133 !== 'boolean') throw new HttpError(422, 'Xác nhận điều kiện áp dụng TT133 phải là giá trị đúng hoặc sai.');
       profile.cooperativeUsesTT133 = profile.legalForm === 'cooperative' && profile.accountingRegime === 'TT133' && payload.cooperativeUsesTT133 === true;
+      profile.accountingEffectiveDate = payload.accountingEffectiveDate ? requiredIsoDate(payload.accountingEffectiveDate, 'Ngày bắt đầu áp dụng chế độ kế toán') : '';
       for (const field of ['fiscalYearStartMonth', 'fiscalYearStartDay']) {
         const raw = payload[field];
         profile[field] = raw === '' || raw === null || raw === undefined ? null : Number(raw);
@@ -12372,13 +12374,13 @@ async function handleRequest(request, response) {
       if (profile.legalForm !== 'other') profile.legalFormOther = '';
       if (profile.accountingRegime !== 'other') profile.accountingRegimeOther = '';
       if (profile.vatMethod !== 'other') profile.vatMethodOther = '';
-      const accountingFields = ['legalForm', 'legalFormOther', 'companySize', 'industry', 'accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'vatMethodOther'];
+      const accountingFields = ['legalForm', 'legalFormOther', 'companySize', 'industry', 'accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133', 'accountingEffectiveDate', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'vatMethodOther'];
       const changedAccountingFields = accountingFields.filter(field => JSON.stringify(profile[field] ?? null) !== JSON.stringify(current[field] ?? null));
       const currentAccountingBasisConfigured = Boolean(current.legalForm && current.companySize && current.industry && current.accountingRegime && current.fiscalYearStartMonth && current.fiscalYearStartDay);
       if (changedAccountingFields.length && currentAccountingBasisConfigured) {
         const existingLedgerEntries = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all();
         if (existingLedgerEntries.length) {
-          const regimeOnlyChange = changedAccountingFields.every(field => ['accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133'].includes(field));
+          const regimeOnlyChange = changedAccountingFields.every(field => ['accountingRegime', 'accountingRegimeOther', 'cooperativeUsesTT133', 'accountingEffectiveDate'].includes(field));
           const fiscalYearStart = accountingFiscalYearStartDate(current);
           const activeYearHasEntries = !fiscalYearStart || existingLedgerEntries.some(row => {
             const entryDate = parseJsonObject(row.payload_json).entryDate;

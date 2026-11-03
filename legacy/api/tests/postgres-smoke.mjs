@@ -86,7 +86,7 @@ try {
   const blankCompanyProfile = (await request('/system/company-profile')).profile;
   const configuredCompanyProfile = (await request('/system/company-profile', 'PUT', {
     ...blankCompanyProfile, companyName: 'PG company', taxCode: '0012345678', bankAccountId: accountingBank.key,
-    legalForm: 'llc_single', companySize: 'small', industry: 'PostgreSQL tests', accountingRegime: 'TT99',
+    legalForm: 'llc_single', companySize: 'small', industry: 'PostgreSQL tests', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01',
     fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
   })).profile;
   assert.equal(configuredCompanyProfile.accountingProfileComplete, true);

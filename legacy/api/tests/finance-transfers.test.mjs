@@ -57,7 +57,7 @@ async function request(route, method = 'GET', payload, expected = 200, headerOve
 const profile = (await request('/system/company-profile')).profile;
 await request('/system/company-profile', 'PUT', {
   ...profile, companyName: 'Doanh nghiệp kiểm thử', taxCode: '0012345678', legalForm: 'llc_single',
-  companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99',
+  companySize: 'small', industry: 'Kiểm thử', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01',
   fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
 });
 await request('/auth/security-pin', 'POST', { pin: '789012', confirmPin: '789012', currentPassword: env.SEED_ADMIN_PASSWORD });
