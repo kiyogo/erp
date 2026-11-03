@@ -1,5 +1,5 @@
 import { dataService } from '../../services/dataService';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   useLocation } from 'react-router-dom';
 import {
@@ -20,6 +20,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
 import { FinancePaymentAccount, FinancePaymentRequest, financePaymentAccountsApi, financePaymentsApi } from '../../api/endpoints';
+import { hasOpenTaxPayment, isValidTaxPaymentAmount, validateTaxFiling } from './taxWorkflowRules';
 
 interface TaxFiling {
   key: string;
@@ -49,6 +50,7 @@ export const TaxModule: React.FC = () => {
 
   const [data, setData] = useState<TaxFiling[]>(INITIAL_TAX_DATA);
   const [payments, setPayments] = useState<FinancePaymentRequest[]>([]);
+  const [paymentsLoaded, setPaymentsLoaded] = useState(false);
   const [paymentAccounts, setPaymentAccounts] = useState<FinancePaymentAccount[]>([]);
 
   useEffect(() => {
@@ -72,13 +74,17 @@ export const TaxModule: React.FC = () => {
   const [settlementModalOpen, setSettlementModalOpen] = useState(false);
   const [selectedTax, setSelectedTax] = useState<TaxFiling | null>(null);
   const [selectedPayment, setSelectedPayment] = useState<FinancePaymentRequest | null>(null);
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const paymentSubmitLock = useRef(false);
 
   const loadPayments = async () => {
+    setPaymentsLoaded(false);
     const response = await financePaymentsApi.getAll(1, 200);
     if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu đề nghị nộp thuế không hợp lệ.');
     const remainingPages = Array.from({ length: Math.max(0, response.data.pagination.totalPages - 1) }, (_, index) => index + 2);
     const otherPages = await Promise.all(remainingPages.map(page => financePaymentsApi.getAll(page, 200)));
     setPayments([...response.data.data, ...otherPages.flatMap(page => page.data.data)].filter(payment => payment.sourceModule === 'finance_tax'));
+    setPaymentsLoaded(true);
   };
 
   const totalPayable = data.reduce((sum, item) => sum + item.amountPayable, 0);
@@ -88,10 +94,23 @@ export const TaxModule: React.FC = () => {
   const deadlineRows = data.filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.deadline || '')).sort((a, b) => a.deadline.localeCompare(b.deadline));
 
   const handleCreate = async (values: any) => {
-    const payable = Number(values.amountPayable) || 0;
+    const payable = values.amountPayable === '' || values.amountPayable === null || values.amountPayable === undefined
+      ? Number.NaN
+      : Number(values.amountPayable);
+    const validationError = validateTaxFiling({
+      code: String(values.code || ''),
+      taxType: String(values.taxType || ''),
+      period: String(values.period || ''),
+      deadline: String(values.deadline || ''),
+      amountPayable: payable,
+    }, data.map(item => item.code));
+    if (validationError) {
+      message.error(validationError);
+      return;
+    }
     const newTax: TaxFiling = {
       ...values,
-      key: String(Date.now()),
+      key: crypto.randomUUID(),
       amountPayable: payable,
       amountPaid: 0,
       status: 'Chờ nộp thuế',
@@ -107,19 +126,39 @@ export const TaxModule: React.FC = () => {
   };
 
   const openTaxPayment = (record: TaxFiling) => {
+    if (!paymentsLoaded) {
+      message.warning('Chưa tải được danh sách đề nghị nộp thuế. Hãy tải lại trước khi tạo đề nghị.');
+      return;
+    }
+    if (hasOpenTaxPayment(payments, record.key)) {
+      message.warning('Hồ sơ thuế này đã có đề nghị nộp đang xử lý.');
+      return;
+    }
     setSelectedTax(record);
     paymentForm.setFieldsValue({ amount: Math.max(0, record.amountPayable - record.amountPaid) });
     setPaymentModalOpen(true);
   };
 
   const submitTaxPayment = async (values: { amount: number; debitAccount: string }) => {
-    if (!selectedTax) return;
+    if (!selectedTax || paymentSubmitLock.current) return;
+    const outstanding = Math.max(0, selectedTax.amountPayable - selectedTax.amountPaid);
+    const amount = Number(values.amount);
+    if (!isValidTaxPaymentAmount(amount, outstanding)) {
+      message.error('Số tiền đề nghị phải là số nguyên dương và không vượt quá số còn phải nộp.');
+      return;
+    }
+    if (hasOpenTaxPayment(payments, selectedTax.key)) {
+      message.error('Hồ sơ thuế đã có đề nghị nộp đang xử lý. Tải lại dữ liệu trước khi tạo đề nghị khác.');
+      return;
+    }
+    paymentSubmitLock.current = true;
+    setPaymentSaving(true);
     try {
       const response = await financePaymentsApi.create({
         beneficiary: selectedTax.taxAuthority || 'Ngân sách Nhà nước',
         bankAccountInfo: 'Nộp ngân sách Nhà nước theo hồ sơ thuế nội bộ',
         category: `Nộp ${selectedTax.taxType} kỳ ${selectedTax.period}`,
-        amount: Number(values.amount),
+        amount,
         paymentMethod: 'Nộp ngân sách nhà nước',
         debitAccount: values.debitAccount,
         sourceModule: 'finance_tax',
@@ -132,6 +171,9 @@ export const TaxModule: React.FC = () => {
       message.success(`Đã tạo đề nghị ${response.data.payment.code}; cần phê duyệt và ghi nhận giao dịch ngân hàng.`);
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tạo đề nghị nộp thuế.');
+    } finally {
+      paymentSubmitLock.current = false;
+      setPaymentSaving(false);
     }
   };
 
@@ -436,11 +478,11 @@ export const TaxModule: React.FC = () => {
                   render: (_: any, record: TaxFiling) => (
                     <Button
                       type="primary"
-                      disabled={record.amountPayable <= record.amountPaid}
+                      disabled={!paymentsLoaded || record.amountPayable <= record.amountPaid || hasOpenTaxPayment(payments, record.key)}
                       onClick={() => openTaxPayment(record)}
                       style={{ backgroundColor: '#009688', borderColor: '#009688' }}
                     >
-                      {record.amountPayable <= record.amountPaid ? 'Đã ghi nhận đủ' : 'Lập đề nghị nộp'}
+                      {!paymentsLoaded ? 'Đang tải đề nghị' : record.amountPayable <= record.amountPaid ? 'Đã ghi nhận đủ' : hasOpenTaxPayment(payments, record.key) ? 'Đề nghị đang xử lý' : 'Lập đề nghị nộp'}
                     </Button>
                   ),
                 },
@@ -509,14 +551,14 @@ export const TaxModule: React.FC = () => {
             Còn phải nộp: {selectedTax ? Math.max(0, selectedTax.amountPayable - selectedTax.amountPaid).toLocaleString('vi-VN') : '0'} ₫. Đề nghị sẽ đi qua bước phê duyệt và ghi nhận giao dịch riêng.
           </div>
           <Form.Item name="amount" label="Số tiền đề nghị" rules={[{ required: true, message: 'Nhập số tiền đề nghị.' }]}>
-            <Input type="number" min={1} step={1} />
+            <Input type="number" min={1} max={selectedTax ? Math.max(0, selectedTax.amountPayable - selectedTax.amountPaid) : undefined} step={1} />
           </Form.Item>
           <Form.Item name="debitAccount" label="Tài khoản Nợ phải trả thuế" rules={[{ required: true, whitespace: true, message: 'Nhập tài khoản Nợ theo hệ thống tài khoản doanh nghiệp.' }]}>
             <Input maxLength={24} placeholder="Nhập mã tài khoản thuế phải trả" />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button onClick={() => { setPaymentModalOpen(false); paymentForm.resetFields(); setSelectedTax(null); }}>Hủy</Button>
-            <Button type="primary" htmlType="submit">Tạo đề nghị</Button>
+            <Button type="primary" htmlType="submit" loading={paymentSaving}>Tạo đề nghị</Button>
           </div>
         </Form>
       </Modal>
