@@ -43,6 +43,14 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'Thu' | 'Chi' | 'pending'>(typeFilterDefault);
+  const [statusFilter, setStatusFilter] = useState<'all' | FinanceCashTransaction['status']>('all');
+  const [listSourceFilter, setListSourceFilter] = useState<'all' | 'bank' | 'petty'>('all');
+  const [accountFilter, setAccountFilter] = useState('');
+  const [counterpartyFilter, setCounterpartyFilter] = useState('');
+  const [employeeFilter, setEmployeeFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [totalRows, setTotalRows] = useState(0);
@@ -89,7 +97,14 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         limit: pageSize,
         q: searchText.trim() || undefined,
         type: pinnedType || (typeFilter === 'Thu' || typeFilter === 'Chi' ? typeFilter : undefined),
-        status: typeFilter === 'pending' ? 'Chờ duyệt' : undefined,
+        status: typeFilter === 'pending' ? 'Chờ duyệt' : statusFilter === 'all' ? undefined : statusFilter,
+        source: listSourceFilter === 'all' ? undefined : listSourceFilter,
+        accountId: accountFilter || undefined,
+        counterpartyId: counterpartyFilter || undefined,
+        employeeCode: employeeFilter || undefined,
+        department: departmentFilter || undefined,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
       });
       if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu sổ thu chi không hợp lệ.');
       const lastPage = Math.max(1, response.data.pagination.totalPages);
@@ -141,7 +156,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   useEffect(() => {
     const timeout = setTimeout(() => void loadData(), searchText ? 300 : 0);
     return () => clearTimeout(timeout);
-  }, [currentPage, pageSize, searchText, typeFilter, typeFilterDefault]);
+  }, [currentPage, pageSize, searchText, typeFilter, statusFilter, typeFilterDefault, listSourceFilter, accountFilter, counterpartyFilter, employeeFilter, departmentFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     if (!referenceOpen) return;
@@ -607,6 +622,27 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             {pinnedType === 'Thu' ? 'Lập phiếu thu' : pinnedType === 'Chi' ? 'Lập phiếu chi' : 'Lập phiếu thu / chi'}
           </Button>
         </div>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Input aria-label="Từ ngày" type="date" value={dateFrom} onChange={event => { setDateFrom(event.target.value); setCurrentPage(1); }} style={{ width: 160 }} />
+        <Input aria-label="Đến ngày" type="date" value={dateTo} onChange={event => { setDateTo(event.target.value); setCurrentPage(1); }} style={{ width: 160 }} />
+        <Select aria-label="Trạng thái chứng từ" value={statusFilter} onChange={value => { setStatusFilter(value as typeof statusFilter); setCurrentPage(1); }} style={{ width: 180 }} options={[
+          { label: 'Mọi trạng thái', value: 'all' },
+          { label: 'Chờ duyệt', value: 'Chờ duyệt' },
+          { label: 'Đã hoàn thành', value: 'Đã hoàn thành' },
+          { label: 'Đã hủy', value: 'Đã hủy' },
+        ]} />
+        <Select aria-label="Nguồn tiền" value={listSourceFilter} onChange={value => { setListSourceFilter(value as typeof listSourceFilter); setCurrentPage(1); }} style={{ width: 180 }} options={[
+          { label: 'Mọi nguồn tiền', value: 'all' },
+          { label: 'Ngân hàng', value: 'bank' },
+          { label: 'Quỹ tiền mặt', value: 'petty' },
+        ]} />
+        <Select aria-label="Tài khoản quỹ hoặc ngân hàng" value={accountFilter || undefined} onChange={value => { setAccountFilter(String(value || '')); setCurrentPage(1); }} allowClear placeholder="Mọi tài khoản" style={{ width: 220 }} options={cashAccounts.map(account => ({ label: `${account.name} · ${account.source === 'petty' ? 'Quỹ' : 'Ngân hàng'}`, value: account.key }))} />
+        <Select aria-label="Đối tượng giao dịch" value={counterpartyFilter || undefined} onChange={value => { setCounterpartyFilter(String(value || '')); setCurrentPage(1); }} allowClear placeholder="Mọi đối tượng" showSearch optionFilterProp="label" style={{ width: 220 }} options={contacts.filter(contact => ['customer', 'supplier', 'partner'].includes(contact.type)).map(contact => ({ label: `${contact.name} (${contact.code})`, value: contact.key }))} />
+        <Select aria-label="Nhân viên liên quan" value={employeeFilter || undefined} onChange={value => { setEmployeeFilter(String(value || '')); setCurrentPage(1); }} allowClear placeholder="Mọi nhân viên" showSearch optionFilterProp="label" style={{ width: 220 }} options={employees.map(employee => ({ label: `${employee.name || employee.fullName} (${employee.employeeCode || employee.code})`, value: employee.employeeCode || employee.code }))} />
+        <Select aria-label="Phòng ban" value={departmentFilter || undefined} onChange={value => { setDepartmentFilter(String(value || '')); setCurrentPage(1); }} allowClear placeholder="Mọi phòng ban" showSearch optionFilterProp="label" style={{ width: 200 }} options={orgUnitOptions} />
+        <Button onClick={() => { setListSourceFilter('all'); setAccountFilter(''); setCounterpartyFilter(''); setEmployeeFilter(''); setDepartmentFilter(''); setDateFrom(''); setDateTo(''); setStatusFilter('all'); setCurrentPage(1); }}>Xóa bộ lọc</Button>
       </div>
 
       {/* Main Table */}

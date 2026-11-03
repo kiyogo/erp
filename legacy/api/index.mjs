@@ -10208,21 +10208,36 @@ async function handleRequest(request, response) {
     if (source && source !== 'bank' && source !== 'petty') throw new HttpError(422, 'Nguồn tiền không hợp lệ.');
     const pageParam = url.searchParams.get('page');
     const limitParam = url.searchParams.get('limit');
-    if (pageParam !== null || limitParam !== null || url.searchParams.has('q') || url.searchParams.has('type') || url.searchParams.has('status')) {
+    if (pageParam !== null || limitParam !== null || ['q', 'type', 'status', 'accountId', 'counterpartyId', 'employeeCode', 'department', 'dateFrom', 'dateTo'].some(key => url.searchParams.has(key))) {
       const page = pageParam === null ? 1 : Number(pageParam);
       const limit = limitParam === null ? 20 : Number(limitParam);
       const query = String(url.searchParams.get('q') || '').trim().slice(0, 120);
       const type = url.searchParams.get('type') || 'all';
       const status = url.searchParams.get('status') || 'all';
+      const accountId = String(url.searchParams.get('accountId') || '').trim().slice(0, 120);
+      const counterpartyId = String(url.searchParams.get('counterpartyId') || '').trim().slice(0, 120);
+      const employeeCode = String(url.searchParams.get('employeeCode') || '').trim().slice(0, 80);
+      const department = String(url.searchParams.get('department') || '').trim().slice(0, 180);
+      const dateFromRaw = url.searchParams.get('dateFrom');
+      const dateToRaw = url.searchParams.get('dateTo');
       if (!Number.isInteger(page) || page < 1 || page > 1_000_000) throw new HttpError(422, 'Trang danh sách không hợp lệ.');
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(422, 'Số dòng mỗi trang phải từ 1 đến 100.');
       if (!['all', 'Thu', 'Chi'].includes(type)) throw new HttpError(422, 'Loại chứng từ không hợp lệ.');
       if (!['all', 'Chờ duyệt', 'Đã hoàn thành', 'Đã hủy'].includes(status)) throw new HttpError(422, 'Trạng thái chứng từ không hợp lệ.');
+      const dateFrom = dateFromRaw ? requiredIsoDate(dateFromRaw, 'Từ ngày') : '';
+      const dateTo = dateToRaw ? requiredIsoDate(dateToRaw, 'Đến ngày') : '';
+      if (dateFrom && dateTo && dateFrom > dateTo) throw new HttpError(422, 'Từ ngày phải bằng hoặc trước đến ngày.');
       const where = [];
       const params = [];
       if (source) { where.push('source = ?'); params.push(source); }
       if (type !== 'all') { where.push('transaction_type = ?'); params.push(type); }
       if (status !== 'all') { where.push('status = ?'); params.push(status); }
+      if (accountId) { where.push('source_account_id = ?'); params.push(accountId); }
+      if (counterpartyId) { where.push('counterparty_contact_id = ?'); params.push(counterpartyId); }
+      if (employeeCode) { where.push('(employee_code = ? OR staff_employee_code = ?)'); params.push(employeeCode, employeeCode); }
+      if (department) { where.push('department = ?'); params.push(department); }
+      if (dateFrom) { where.push('transaction_date >= ?'); params.push(dateFrom); }
+      if (dateTo) { where.push('transaction_date <= ?'); params.push(dateTo); }
       if (query) {
         where.push("(LOWER(code) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(counterparty) LIKE LOWER(?) OR LOWER(account_name) LIKE LOWER(?))");
         const pattern = `%${query}%`;

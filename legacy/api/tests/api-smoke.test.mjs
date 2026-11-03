@@ -934,6 +934,10 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(searchedCash.pagination.total, 1);
   assert.equal(searchedCash.data[0].key, created.key);
   assert.deepEqual(Object.keys(searchedCash.summary).sort(), ['pendingCount', 'totalExpense', 'totalIncome']);
+  const filteredCash = await request(`/finance/cash-transactions?page=1&limit=5&accountId=${encodeURIComponent(account.key)}&counterpartyId=${encodeURIComponent(contact.key)}&employeeCode=CASH-STAFF&dateFrom=2026-10-29&dateTo=2026-10-29&q=${encodeURIComponent(created.code)}`);
+  assert.equal(filteredCash.pagination.total, 1);
+  assert.equal(filteredCash.data[0].key, created.key);
+  await request('/finance/cash-transactions?page=1&limit=5&dateFrom=2026-11-01&dateTo=2026-10-01', 'GET', undefined, 422);
   await request('/finance/cash-transactions?page=0&limit=1', 'GET', undefined, 422);
   await request('/finance/cash-transactions?page=1&limit=101', 'GET', undefined, 422);
   await request('/finance/cash-transactions', 'POST', { ...baseVoucher, staffEmployeeCode: 'NOT-FOUND' }, 422);
@@ -965,8 +969,13 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
 
   const accountsBefore = (await request('/finance/payment-accounts')).accounts;
   const accountBefore = accountsBefore.find(item => item.key === account.key);
-  const completed = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', category: 'Thu đã ghi nhận' }, 201)).transaction;
+  const completed = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', category: 'Thu tiền theo hóa đơn' }, 201)).transaction;
   assert.equal(completed.status, 'Đã hoàn thành');
+  const firstCashPage = await request('/finance/cash-transactions?page=1&limit=1&type=Thu&q=Thu%20ti%E1%BB%81n%20theo%20h%C3%B3a%20%C4%91%C6%A1n');
+  const secondCashPage = await request('/finance/cash-transactions?page=2&limit=1&type=Thu&q=Thu%20ti%E1%BB%81n%20theo%20h%C3%B3a%20%C4%91%C6%A1n');
+  assert.equal(firstCashPage.pagination.total, 2);
+  assert.equal(secondCashPage.pagination.total, 2);
+  assert.notEqual(firstCashPage.data[0].key, secondCashPage.data[0].key);
   assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, accountBefore.balance + 1200);
   const postedLines = (await request('/collections/finance_general_ledger')).data.filter(item => item.sourceReference === `cash-voucher:${completed.key}`);
   assert.equal(postedLines.length, 1);
