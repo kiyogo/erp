@@ -1067,6 +1067,12 @@ export const generalLedgerApi = {
     api.post<{ period: string; startDate: string; endDate: string; entries: number; records: Record<string, any>[] }>('/finance/general-ledger/close', { period }),
 };
 
+export const chartOfAccountsApi = {
+  create: (record: Record<string, unknown>) => api.post<{ record: Record<string, any> }>('/finance/chart-of-accounts', { record }),
+  update: (key: string, patch: Record<string, unknown>) => api.patch<{ record: Record<string, any> }>(`/finance/chart-of-accounts/${encodeURIComponent(key)}`, { patch }),
+  remove: (key: string) => api.delete<{ deleted: boolean }>(`/finance/chart-of-accounts/${encodeURIComponent(key)}`),
+};
+
 export const documentNotesApi = {
   remind: (recordKey: string) => api.post<{ record: Record<string, any>; recipientCount: number }>(`/document-notes/${encodeURIComponent(recordKey)}/remind`),
 };

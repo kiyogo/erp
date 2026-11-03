@@ -2175,7 +2175,7 @@ const accountingOperationScopes = new Set([
   'finance_advances', 'finance_cash_transactions', 'finance_cash_counts', 'finance_costing', 'finance_einvoices', 'finance_equity',
   'finance_fixed_assets', 'finance_general_ledger', 'finance_internal_transfers', 'finance_inventory',
   'finance_inventory_transactions', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
-  'finance_payroll_postings', 'finance_prepaid', 'finance_tax',
+  'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts',
 ]);
 
 async function requireCollectionActor(request, scope) {
@@ -2185,6 +2185,9 @@ async function requireCollectionActor(request, scope) {
   }
   if (scope === 'finance_general_ledger' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Sổ Cái chỉ được ghi qua API hạch toán có kiểm tra cân đối và kỳ kế toán.');
+  }
+  if (scope === 'finance_chart_of_accounts' && !['GET', 'HEAD'].includes(request.method)) {
+    throw new HttpError(409, 'Danh mục tài khoản chỉ được thay đổi qua API có kiểm tra cấu trúc và bút toán đã ghi sổ.');
   }
   if (['finance_tax', 'finance_einvoices'].includes(scope) && !['GET', 'HEAD'].includes(request.method)) {
     await requireAccountingProfile();
@@ -7611,6 +7614,76 @@ async function handleRequest(request, response) {
     if (backupMatch[2] === 'restore' && request.method === 'POST') throw new HttpError(409, 'Khôi phục tự động chưa được hỗ trợ. Hãy kiểm tra bản sao lưu và lập kế hoạch khôi phục ngoại tuyến.');
   }
 
+  const chartAccountMatch = /^\/finance\/chart-of-accounts(?:\/([^/]+))?$/.exec(resource);
+  if (chartAccountMatch && ['POST', 'PATCH', 'DELETE'].includes(request.method)) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const timestamp = now();
+    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+    const accounts = rows.map(publicCollectionRecord).filter((item) => item?.accountingRegime === profile.accountingRegime);
+    const key = chartAccountMatch[1] ? decodeURIComponent(chartAccountMatch[1]) : '';
+    const current = accounts.find((item) => item.key === key || item.code === key);
+    const journalRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all();
+    const postedCodes = new Set(journalRows.flatMap((row) => {
+      const entry = parseJsonObject(row.payload_json);
+      if (entry.accountingRegime && entry.accountingRegime !== profile.accountingRegime) return [];
+      const lines = Array.isArray(entry.lines) ? entry.lines : [
+        ...(entry.debitAccount ? [{ account: entry.debitAccount }] : []),
+        ...(entry.creditAccount ? [{ account: entry.creditAccount }] : []),
+      ];
+      return lines.map((line) => String(line.account || '').replace(/^TK\s*/i, '').trim().toUpperCase());
+    }));
+    if (request.method === 'DELETE') {
+      if (!current) throw new HttpError(404, 'Không tìm thấy tài khoản trong danh mục hiện hành.');
+      if (postedCodes.has(current.code.toUpperCase())) throw new HttpError(409, 'Không thể xóa tài khoản đã có bút toán ghi sổ; hãy chuyển trạng thái sang Ngừng sử dụng.');
+      if (accounts.some((item) => item.parentCode === current.code)) throw new HttpError(409, 'Không thể xóa tài khoản đang có tài khoản cấp dưới.');
+      await db.prepare("DELETE FROM collection_records WHERE scope = 'finance_chart_of_accounts' AND record_key = ?").run(current.key);
+      await recordAuditEvent(actor.id, 'delete', 'finance_chart_of_accounts', current.key, { accountingRegime: profile.accountingRegime });
+      sendJson(response, 200, { deleted: true });
+      return;
+    }
+    const payload = await readJson(request, 16 * 1024);
+    const source = request.method === 'PATCH' ? { ...current, ...(payload.patch || {}) } : (payload.record || {});
+    if (request.method === 'PATCH' && !current) throw new HttpError(404, 'Không tìm thấy tài khoản trong danh mục hiện hành.');
+    const code = requiredText(source.code, 'Mã tài khoản', 20).replace(/^TK\s*/i, '').trim();
+    const name = requiredText(source.name, 'Tên tài khoản', 200);
+    if (!/^[0-9]{3,6}(?:\.[0-9]{1,4})?$/.test(code)) throw new HttpError(422, 'Mã tài khoản phải gồm 3 đến 6 chữ số, có thể kèm mã chi tiết sau dấu chấm.');
+    if (accounts.some((item) => item.code.toUpperCase() === code.toUpperCase() && item.key !== current?.key)) throw new HttpError(409, 'Mã tài khoản đã tồn tại trong chế độ kế toán hiện hành.');
+    if (current && current.code !== code && postedCodes.has(current.code.toUpperCase())) throw new HttpError(409, 'Không thể đổi mã tài khoản đã có bút toán ghi sổ.');
+    if (current && current.code !== code && accounts.some((item) => item.parentCode === current.code)) throw new HttpError(409, 'Không thể đổi mã tài khoản đang có tài khoản cấp dưới.');
+    const parentCode = String(source.parentCode || '').trim();
+    if (parentCode) {
+      const parent = accounts.find((item) => item.code === parentCode && item.key !== current?.key);
+      if (!parent) throw new HttpError(422, 'Tài khoản cấp trên không tồn tại trong danh mục hiện hành.');
+      if (!code.startsWith(parentCode) || code === parentCode) throw new HttpError(422, 'Mã tài khoản chi tiết phải bắt đầu bằng mã tài khoản cấp trên.');
+      if (parentCode.startsWith(code)) throw new HttpError(422, 'Cấu trúc tài khoản không được tạo vòng lặp.');
+    }
+    const types = ['Tài sản', 'Nợ phải trả', 'Vốn chủ sở hữu', 'Doanh thu', 'Chi phí', 'Thu nhập khác', 'Chi phí khác', 'Xác định kết quả'];
+    const natures = ['Dư Nợ', 'Dư Có', 'Lưỡng tính', 'Chưa xác định'];
+    const accountType = requiredText(source.accountType, 'Loại tài khoản', 40);
+    const balanceNature = requiredText(source.balanceNature || 'Chưa xác định', 'Tính chất số dư', 40);
+    if (!types.includes(accountType) || !natures.includes(balanceNature)) throw new HttpError(422, 'Loại tài khoản hoặc tính chất số dư không hợp lệ.');
+    const effectiveDate = requiredIsoDate(source.effectiveDate, 'Ngày hiệu lực');
+    const status = source.status === 'Ngừng sử dụng' ? 'Ngừng sử dụng' : 'Đang sử dụng';
+    const record = {
+      key: current?.key || randomUUID(), code, name, parentCode,
+      level: parentCode ? (accounts.find((item) => item.code === parentCode)?.level || 1) + 1 : 1,
+      accountType, balanceNature,
+      tracksParty: Boolean(source.tracksParty), tracksForeignCurrency: Boolean(source.tracksForeignCurrency),
+      tracksDebt: Boolean(source.tracksDebt), tracksDetails: Boolean(source.tracksDetails),
+      effectiveDate, status, accountingRegime: profile.accountingRegime,
+      createdAt: current?.createdAt || timestamp, updatedAt: timestamp,
+    };
+    const ownerId = current ? (rows.find((row) => row.record_key === current.key)?.owner_id || actor.id) : actor.id;
+    await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+      VALUES (?, 'finance_chart_of_accounts', ?, ?, ?, ?, ?)
+      ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`)
+      .run(current?.id || randomUUID(), record.key, ownerId, JSON.stringify(record), current?.createdAt || timestamp, timestamp);
+    await recordAuditEvent(actor.id, current ? 'update' : 'create', 'finance_chart_of_accounts', record.key, { code, accountingRegime: profile.accountingRegime });
+    sendJson(response, current ? 200 : 201, { record });
+    return;
+  }
+
   if (request.method === 'POST' && resource === '/finance/general-ledger/entries') {
     const actor = await requireUser(request);
     const profile = await requireAccountingProfile();
@@ -7640,6 +7713,17 @@ async function handleRequest(request, response) {
       if ((debit > 0) === (credit > 0)) throw new HttpError(422, `Dòng ${index + 1} chỉ được có số tiền bên Nợ hoặc bên Có.`);
       return { account, debit, credit };
     });
+    const chartRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+    const chart = chartRows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === profile.accountingRegime);
+    if (chart.length) {
+      const chartByCode = new Map(chart.map((item) => [String(item.code || '').toUpperCase(), item]));
+      for (const line of journalLines) {
+        const code = line.account.replace(/^TK\s*/i, '').trim().toUpperCase();
+        const account = chartByCode.get(code);
+        if (!account || account.status !== 'Đang sử dụng') throw new HttpError(422, `Tài khoản ${line.account} không có hoặc đã ngừng sử dụng trong danh mục ${profile.accountingRegime}.`);
+        if (chart.some((item) => item.parentCode === account.code)) throw new HttpError(422, `Tài khoản ${line.account} là tài khoản tổng hợp, không được ghi sổ trực tiếp.`);
+      }
+    }
     const debitTotalCents = journalLines.reduce((sum, line) => sum + Math.round(line.debit * 100), 0);
     const creditTotalCents = journalLines.reduce((sum, line) => sum + Math.round(line.credit * 100), 0);
     if (!Number.isSafeInteger(debitTotalCents) || !Number.isSafeInteger(creditTotalCents) || debitTotalCents > 100_000_000_000_000_000 || debitTotalCents <= 0 || debitTotalCents !== creditTotalCents) {
@@ -7839,6 +7923,7 @@ async function handleRequest(request, response) {
       'positions',
       'job_titles',
       'work_statuses',
+      'finance_chart_of_accounts',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -7967,6 +8052,7 @@ async function handleRequest(request, response) {
       'positions',
       'job_titles',
       'work_statuses',
+      'finance_chart_of_accounts',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',

@@ -275,10 +275,23 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(invoiceDraft.finalAmount, 1100);
   assert.equal(invoiceDraft.cqtCode, undefined);
   await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-invalid', invoiceNumber: 'DRAFT-INVALID', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: '20%' } }, 422);
+  await request('/collections/finance_chart_of_accounts', 'POST', { record: { key: 'bypass-chart' } }, 409);
+  const addAccount = (code, accountType, parentCode = '', status = 'Đang sử dụng') => request('/finance/chart-of-accounts', 'POST', { record: {
+    code, name: `Tài khoản ${code}`, parentCode, accountType, balanceNature: 'Chưa xác định',
+    effectiveDate: '2026-01-01', status, tracksParty: false,
+    tracksForeignCurrency: false, tracksDebt: false, tracksDetails: false,
+  } }, 201);
+  await addAccount('111', 'Tài sản');
+  await addAccount('1111', 'Tài sản', '111');
+  for (const [code, type] of [['112', 'Tài sản'], ['131', 'Tài sản'], ['511', 'Doanh thu'], ['641', 'Chi phí'], ['642', 'Chi phí'], ['999', 'Tài sản']]) await addAccount(code, type, '', code === '999' ? 'Ngừng sử dụng' : 'Đang sử dụng');
+  await request('/finance/chart-of-accounts', 'POST', { record: { code: '21101', name: 'Mã sai cấp', parentCode: '111', accountType: 'Tài sản', effectiveDate: '2026-01-01' } }, 422);
   const journalEntry = async (voucherCode, debitAccount, creditAccount, amount) => request('/finance/general-ledger/entries', 'POST', {
     voucherCode, entryDate: '2026-10-10', description: `Kiểm thử ${voucherCode}`, debitAccount, creditAccount, amount,
   }, 201);
   await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'INVALID-JOURNAL', entryDate: '2026-10-10', description: 'Sai', debitAccount: 'TK 642', creditAccount: 'TK 642', amount: 100 }, 422);
+  await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'UNKNOWN-ACCOUNT', entryDate: '2026-10-10', description: 'Tài khoản chưa khai báo', debitAccount: 'TK 999', creditAccount: 'TK 112', amount: 100 }, 422);
+  await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'GROUP-ACCOUNT', entryDate: '2026-10-10', description: 'Tài khoản tổng hợp', debitAccount: 'TK 111', creditAccount: 'TK 112', amount: 100 }, 422);
+  await request('/finance/general-ledger/entries', 'POST', { voucherCode: 'INACTIVE-ACCOUNT', entryDate: '2026-10-10', description: 'Tài khoản ngừng', debitAccount: 'TK 999', creditAccount: 'TK 112', amount: 100 }, 422);
   await journalEntry('SALE-Q4-1', 'TK 131', 'TK 511', 1000);
   await journalEntry('EXPENSE-Q4-1', 'TK 642', 'TK 112', 400);
   const multiLineJournal = (await request('/finance/general-ledger/entries', 'POST', {
@@ -303,6 +316,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/finance/general-ledger/close', 'POST', { period: '2026-Q4' }, 409);
   await request('/collections/finance_general_ledger', 'PUT', { records: [] }, 409);
   await request('/collections/finance_general_ledger/SALE-Q4-1', 'DELETE', undefined, 409);
+  await request('/finance/chart-of-accounts/112', 'DELETE', undefined, 409);
   const currentProfile = (await request('/system/company-profile')).profile;
   await request('/system/company-profile', 'PUT', { ...currentProfile, accountingRegime: 'TT133' }, 409);
   const contract = (await request('/contracts', 'POST', { code: 'HD-COMPANY-CONFIG', name: 'Company profile output', contractTemplate: 'Test', employeeCode: 'STAFF-TEST', employeeName: 'Actual staff' }, 201)).contract;

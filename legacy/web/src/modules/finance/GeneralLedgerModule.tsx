@@ -9,10 +9,11 @@ import {
   BookOutlined,
   FileSyncOutlined,
   FilePdfOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag } from '../../custom-ui';
-import { generalLedgerApi, systemApi } from '../../api/endpoints';
+import { chartOfAccountsApi, generalLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { buildQuarterClosingLines, calculateQuarterLedger, getFiscalQuarterPeriod, summarizeLedgerAccounts } from './ledgerCalculations';
 
@@ -37,6 +38,23 @@ interface JournalLine {
   credit: number;
 }
 
+interface ChartAccount {
+  key: string;
+  code: string;
+  name: string;
+  parentCode?: string;
+  level: number;
+  accountType: string;
+  balanceNature: string;
+  tracksParty: boolean;
+  tracksForeignCurrency: boolean;
+  tracksDebt: boolean;
+  tracksDetails: boolean;
+  effectiveDate: string;
+  status: string;
+  accountingRegime: string;
+}
+
 const INITIAL_ENTRIES: LedgerEntry[] = [];
 
 export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
@@ -49,6 +67,8 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const isAdvance = currentPath === '/finance/general/advance';
 
   const [data, setData] = useState<LedgerEntry[]>(INITIAL_ENTRIES);
+  const [chartData, setChartData] = useState<ChartAccount[]>([]);
+  const [accountingRegime, setAccountingRegime] = useState('');
   const [advanceData, setAdvanceData] = useState<any[]>([]);
   const [selectedQuarter, setSelectedQuarter] = useState(() => {
     return getFiscalQuarterPeriod(new Date(), 1, 1);
@@ -58,11 +78,15 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   useEffect(() => {
     const list = dataService.getGenericData('finance_general_ledger');
     setData(Array.isArray(list) ? list : []);
+    const initialChart = dataService.getGenericData('finance_chart_of_accounts');
+    setChartData(Array.isArray(initialChart) ? initialChart : []);
     const advances = dataService.getGenericData('finance_advances');
     setAdvanceData(Array.isArray(advances) ? advances : []);
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('finance_general_ledger');
       setData(Array.isArray(updated) ? updated : []);
+      const nextChart = dataService.getGenericData('finance_chart_of_accounts');
+      setChartData(Array.isArray(nextChart) ? nextChart : []);
       const nextAdvances = dataService.getGenericData('finance_advances');
       setAdvanceData(Array.isArray(nextAdvances) ? nextAdvances : []);
     });
@@ -77,6 +101,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         setFiscalYearStart({ month, day, ready: Boolean(response.profile.accountingProfileComplete) });
         setSelectedQuarter(getFiscalQuarterPeriod(new Date(), month, day));
       }
+      setAccountingRegime(String(response.profile.accountingRegime || ''));
     }).catch(() => {});
   }, []);
 
@@ -85,6 +110,44 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [saving, setSaving] = useState(false);
   const [journalLines, setJournalLines] = useState<JournalLine[]>([{ account: '', debit: 0, credit: 0 }]);
   const [form] = Form.useForm();
+  const [chartForm] = Form.useForm();
+  const [chartModalOpen, setChartModalOpen] = useState(false);
+  const [chartSaving, setChartSaving] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<ChartAccount | null>(null);
+  const activeChart = chartData.filter((account) => account.accountingRegime === accountingRegime);
+
+  const saveChartAccount = async (values: Record<string, any>) => {
+    const record = { ...values, tracksParty: Boolean(values.tracksParty), tracksForeignCurrency: Boolean(values.tracksForeignCurrency), tracksDebt: Boolean(values.tracksDebt), tracksDetails: Boolean(values.tracksDetails), status: values.status || 'Đang sử dụng' };
+    try {
+      setChartSaving(true);
+      if (editingAccount) await chartOfAccountsApi.update(editingAccount.key, record);
+      else await chartOfAccountsApi.create(record);
+      await dataService.refreshGenericData('finance_chart_of_accounts');
+      message.success(editingAccount ? 'Đã cập nhật tài khoản.' : 'Đã thêm tài khoản.');
+      setEditingAccount(null);
+      chartForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu tài khoản.');
+    } finally {
+      setChartSaving(false);
+    }
+  };
+
+  const deleteChartAccount = (account: ChartAccount) => Modal.confirm({
+    title: 'Xóa tài khoản',
+    content: `Xóa ${account.code} · ${account.name}? Tài khoản đã dùng trong bút toán hoặc còn tài khoản cấp dưới sẽ được giữ lại.`,
+    okText: 'Xóa',
+    cancelText: 'Hủy',
+    onOk: async () => {
+      try {
+        await chartOfAccountsApi.remove(account.key);
+        await dataService.refreshGenericData('finance_chart_of_accounts');
+        message.success('Đã xóa tài khoản.');
+      } catch (error: any) {
+        message.error(error?.response?.data?.message || 'Không thể xóa tài khoản.');
+      }
+    },
+  });
 
   const totalAmount = data.reduce((sum, item) => sum + item.amount, 0);
   const getLines = (item: LedgerEntry): JournalLine[] => Array.isArray(item.lines) && item.lines.length
@@ -368,6 +431,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
               allowClear
             />
             <div style={{ display: 'flex', gap: 8 }}>
+              <Button icon={<BookOutlined />} onClick={() => setChartModalOpen(true)}>Danh mục tài khoản</Button>
               <Button icon={<DownloadOutlined />} onClick={exportLedger}>
                 Xuất Sổ Cái
               </Button>
@@ -465,7 +529,9 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
               <KTable
                 dataSource={journalLines.map((line, index) => ({ ...line, lineIndex: index, key: String(index) }))}
                 columns={[
-                  { title: 'Tài khoản', key: 'account', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} maxLength={24} value={line.account} placeholder="Mã tài khoản" onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, account: event.target.value } : row))} /> },
+                  { title: 'Tài khoản', key: 'account', render: (_: unknown, line: JournalLine & { lineIndex: number }) => activeChart.length
+                    ? <Select aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} value={line.account || undefined} placeholder="Chọn tài khoản" options={activeChart.filter((account) => account.status === 'Đang sử dụng' && !activeChart.some((child) => child.parentCode === account.code)).map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} onChange={(value) => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, account: value } : row))} />
+                    : <Input aria-label={`Tài khoản dòng ${line.lineIndex + 1}`} maxLength={24} value={line.account} placeholder="Mã tài khoản" onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, account: event.target.value } : row))} /> },
                   { title: 'Phát sinh Nợ', key: 'debit', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Phát sinh Nợ dòng ${line.lineIndex + 1}`} type="number" min={0} step="0.01" value={line.debit || ''} onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, debit: Number(event.target.value) || 0 } : row))} /> },
                   { title: 'Phát sinh Có', key: 'credit', render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Input aria-label={`Phát sinh Có dòng ${line.lineIndex + 1}`} type="number" min={0} step="0.01" value={line.credit || ''} onChange={event => setJournalLines(current => current.map((row, index) => index === line.lineIndex ? { ...row, credit: Number(event.target.value) || 0 } : row))} /> },
                   { title: '', key: 'action', width: 48, render: (_: unknown, line: JournalLine & { lineIndex: number }) => <Button className="ant-btn-square-icon" aria-label={`Xóa dòng ${line.lineIndex + 1}`} icon={<DeleteOutlined />} disabled={journalLines.length <= 2} onClick={() => setJournalLines(current => current.filter((_, index) => index !== line.lineIndex))} /> },
@@ -486,6 +552,51 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             </Button>
           </div>
         </Form>
+      </Modal>
+      <Modal
+        title={`Danh mục tài khoản${accountingRegime ? ` · ${accountingRegime}` : ''}`}
+        open={chartModalOpen}
+        onCancel={() => { setChartModalOpen(false); setEditingAccount(null); chartForm.resetFields(); }}
+        footer={null}
+        width={1100}
+      >
+        <Form form={chartForm} layout="vertical" onFinish={saveChartAccount} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gap: 10 }}>
+            <Form.Item name="code" label="Mã tài khoản" rules={[{ required: true }]}><Input maxLength={20} placeholder="Ví dụ: 111" /></Form.Item>
+            <Form.Item name="name" label="Tên tài khoản" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item>
+            <Form.Item name="parentCode" label="Tài khoản cấp trên"><Select allowClear placeholder="Không có" options={activeChart.filter((item) => item.key !== editingAccount?.key).map((item) => ({ value: item.code, label: `${item.code} · ${item.name}` }))} /></Form.Item>
+            <Form.Item name="accountType" label="Loại tài khoản" rules={[{ required: true }]}><Select options={['Tài sản', 'Nợ phải trả', 'Vốn chủ sở hữu', 'Doanh thu', 'Chi phí', 'Thu nhập khác', 'Chi phí khác', 'Xác định kết quả'].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="balanceNature" label="Tính chất số dư" initialValue="Chưa xác định" rules={[{ required: true }]}><Select options={['Dư Nợ', 'Dư Có', 'Lưỡng tính', 'Chưa xác định'].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="effectiveDate" label="Ngày hiệu lực" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+            <Form.Item name="status" label="Trạng thái" initialValue="Đang sử dụng"><Select options={['Đang sử dụng', 'Ngừng sử dụng'].map((value) => ({ value, label: value }))} /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(150px, 1fr))', gap: 8 }}>
+            {[
+              ['tracksParty', 'Theo dõi đối tượng'],
+              ['tracksForeignCurrency', 'Theo dõi ngoại tệ'],
+              ['tracksDebt', 'Theo dõi công nợ'],
+              ['tracksDetails', 'Mở sổ chi tiết'],
+            ].map(([name, label]) => <Form.Item key={name} name={name} label={label} initialValue={false}><Select options={[{ value: false, label: 'Không' }, { value: true, label: 'Có' }]} /></Form.Item>)}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
+            {editingAccount && <Button onClick={() => { setEditingAccount(null); chartForm.resetFields(); }}>Hủy sửa</Button>}
+            <Button type="primary" htmlType="submit" loading={chartSaving} icon={<PlusOutlined />}>{editingAccount ? 'Lưu thay đổi' : 'Thêm tài khoản'}</Button>
+          </div>
+        </Form>
+        <KTable
+          dataSource={activeChart.slice().sort((left, right) => left.code.localeCompare(right.code, 'vi', { numeric: true }))}
+          columns={[
+            { title: 'Mã', dataIndex: 'code', key: 'code' },
+            { title: 'Tên tài khoản', dataIndex: 'name', key: 'name' },
+            { title: 'Cấp', dataIndex: 'level', key: 'level' },
+            { title: 'Loại', dataIndex: 'accountType', key: 'accountType' },
+            { title: 'Số dư', dataIndex: 'balanceNature', key: 'balanceNature' },
+            { title: 'Trạng thái', dataIndex: 'status', key: 'status' },
+            { title: 'Thao tác', key: 'actions', render: (_: unknown, item: ChartAccount) => <div style={{ display: 'flex', gap: 4 }}><Button className="ant-btn-square-icon" aria-label={`Sửa tài khoản ${item.code}`} icon={<EditOutlined />} onClick={() => { setEditingAccount(item); chartForm.setFieldsValue(item); }} /><Button className="ant-btn-square-icon" aria-label={`Xóa tài khoản ${item.code}`} icon={<DeleteOutlined />} onClick={() => deleteChartAccount(item)} /></div> },
+          ]}
+          pagination={{ pageSize: 12 }}
+        />
+        {!activeChart.length && <div style={{ color: '#64748B', padding: '8px 0' }}>Chưa có tài khoản cho chế độ kế toán này. Thêm danh mục đã được doanh nghiệp phê duyệt trước khi ghi sổ.</div>}
       </Modal>
     </div>
   );
