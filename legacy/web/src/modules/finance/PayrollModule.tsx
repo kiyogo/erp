@@ -71,6 +71,7 @@ export const PayrollModule: React.FC = () => {
       `Phu cap: ${record.allowance.toLocaleString('vi-VN')} VND`,
       `Thuong: ${record.bonus.toLocaleString('vi-VN')} VND`,
       `Khau tru bao hiem: ${record.insuranceDeduction.toLocaleString('vi-VN')} VND`,
+      `Thue TNCN: ${(Number(record.taxDeduction) || 0).toLocaleString('vi-VN')} VND`,
       `Thuc linh: ${record.netSalary.toLocaleString('vi-VN')} VND`,
     ];
     downloadFile(`phieu_luong_${record.employeeCode}_${selectedMonth.replace('/', '-')}.pdf`, generateValidPdfBlob('PHIEU LUONG', 'Bang tinh luong theo du lieu hien co', lines));
@@ -90,6 +91,7 @@ export const PayrollModule: React.FC = () => {
       `Phụ cấp: ${record.allowance.toLocaleString('vi-VN')} ₫`,
       `Thưởng: ${record.bonus.toLocaleString('vi-VN')} ₫`,
       `Khấu trừ bảo hiểm: ${record.insuranceDeduction.toLocaleString('vi-VN')} ₫`,
+      `Thuế TNCN: ${(Number(record.taxDeduction) || 0).toLocaleString('vi-VN')} ₫`,
       `Thực lĩnh: ${record.netSalary.toLocaleString('vi-VN')} ₫`,
     ].join('\n');
     try {
@@ -668,7 +670,7 @@ export const PayrollModule: React.FC = () => {
                   key: 'deductions',
                   render: (_: any, record: PayrollRecord) => (
                     <span style={{ color: '#DC2626' }}>
-                      -{record.insuranceDeduction.toLocaleString('vi-VN')} ₫
+                      -{(record.insuranceDeduction + (Number(record.taxDeduction) || 0)).toLocaleString('vi-VN')} ₫
                     </span>
                   ),
                 },
@@ -748,7 +750,7 @@ export const PayrollModule: React.FC = () => {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Ngày công làm việc:</span>
-                <strong>{selectedRecord.workDays} / 22 ngày</strong>
+                <strong>{selectedRecord.workDays} ngày</strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#16A34A' }}>
                 <span>Phụ cấp chức vụ &amp; ăn trưa:</span>
@@ -759,8 +761,12 @@ export const PayrollModule: React.FC = () => {
                 <strong>+{selectedRecord.bonus.toLocaleString('vi-VN')} ₫</strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#DC2626' }}>
-                <span>Khấu trừ BHXH (10.5%):</span>
+                <span>Khấu trừ bảo hiểm:</span>
                 <strong>-{selectedRecord.insuranceDeduction.toLocaleString('vi-VN')} ₫</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#DC2626' }}>
+                <span>Thuế thu nhập cá nhân đã khấu trừ:</span>
+                <strong>-{(Number(selectedRecord.taxDeduction) || 0).toLocaleString('vi-VN')} ₫</strong>
               </div>
               <div style={{ height: 1, background: '#E2E8F0', margin: '8px 0' }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, color: '#009688' }}>
