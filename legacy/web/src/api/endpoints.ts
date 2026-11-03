@@ -1182,6 +1182,8 @@ export const generalLedgerApi = {
     api.post<{ record: Record<string, any> }>('/finance/general-ledger/entries', record),
   closeQuarter: (period: string) =>
     api.post<{ period: string; startDate: string; endDate: string; entries: number; records: Record<string, any>[] }>('/finance/general-ledger/close', { period }),
+  previewTT132ToTT58Transition: () =>
+    api.get<{ preview: { openingDate: string; sourceEntryCount: number; totalDebitCents: number; totalCreditCents: number; balanced: boolean; accounts: Array<{ accountCode: string; debitBalanceCents: number; creditBalanceCents: number; targetBookCode: string | null; detailRequired: boolean; reconciliationNote: string }> } }>('/finance/accounting-transitions/tt132-to-tt58'),
 };
 
 export const chartOfAccountsApi = {

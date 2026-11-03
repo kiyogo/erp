@@ -56,6 +56,22 @@ interface ChartAccount {
   accountingRegime: string;
 }
 
+interface TT58TransitionPreview {
+  openingDate: string;
+  sourceEntryCount: number;
+  totalDebitCents: number;
+  totalCreditCents: number;
+  balanced: boolean;
+  accounts: Array<{
+    accountCode: string;
+    debitBalanceCents: number;
+    creditBalanceCents: number;
+    targetBookCode: string | null;
+    detailRequired: boolean;
+    reconciliationNote: string;
+  }>;
+}
+
 const INITIAL_ENTRIES: LedgerEntry[] = [];
 
 export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
@@ -120,8 +136,27 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
   const [chartSaving, setChartSaving] = useState(false);
   const [chartImporting, setChartImporting] = useState(false);
   const [editingAccount, setEditingAccount] = useState<ChartAccount | null>(null);
+  const [transitionPreview, setTransitionPreview] = useState<TT58TransitionPreview | null>(null);
+  const [transitionLoading, setTransitionLoading] = useState(false);
   const activeChart = chartData.filter((account) => account.accountingRegime === accountingRegime);
   const tt58Books = getTT58RequiredBooks(vatMethod, citMethod);
+
+  const loadTT58TransitionPreview = async () => {
+    try {
+      setTransitionLoading(true);
+      const { data: response } = await generalLedgerApi.previewTT132ToTT58Transition();
+      setTransitionPreview(response.preview);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể đối chiếu số dư TT132.');
+    } finally {
+      setTransitionLoading(false);
+    }
+  };
+
+  const formatTransitionAmount = (cents: number) => new Intl.NumberFormat('vi-VN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
 
   const saveChartAccount = async (values: Record<string, any>) => {
     const record = { ...values, tracksParty: Boolean(values.tracksParty), tracksForeignCurrency: Boolean(values.tracksForeignCurrency), tracksDebt: Boolean(values.tracksDebt), tracksDetails: Boolean(values.tracksDetails), status: values.status || 'Đang sử dụng' };
@@ -630,7 +665,28 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
               {tt58Books.map(book => <Tag key={book.code}>{book.code} · {book.name}</Tag>)}
               <span>Sổ chi tiết có thể mở theo nhu cầu:</span>
               {tt58OptionalBooks.map(book => <Tag key={book.code}>{book.code} · {book.name}</Tag>)}
-              <span>Dữ liệu sổ TT58 và chuyển số dư từ TT132 chưa được lập tự động trong phân hệ.</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                <Button icon={<FileSyncOutlined />} loading={transitionLoading} onClick={() => void loadTT58TransitionPreview()}>
+                  Đối chiếu số dư TT132
+                </Button>
+                <span>Bản xem trước chỉ đọc số dư đã ghi sổ trước ngày hiệu lực; chưa tạo bút toán đầu kỳ và chưa lưu sổ chi tiết.</span>
+              </div>
+              {transitionPreview && <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                <span>Ngày mở sổ {transitionPreview.openingDate} · {transitionPreview.sourceEntryCount} bút toán nguồn · Nợ {formatTransitionAmount(transitionPreview.totalDebitCents)} · Có {formatTransitionAmount(transitionPreview.totalCreditCents)}</span>
+                {!transitionPreview.balanced && <Tag color="red">Tổng số dư chưa cân bằng, cần xử lý trước khi chuyển sổ</Tag>}
+                {!transitionPreview.accounts.length && <span>Không có số dư TT132 đã ghi sổ trước ngày mở sổ.</span>}
+                {!!transitionPreview.accounts.length && <KTable
+                  dataSource={transitionPreview.accounts.map(account => ({ ...account, key: account.accountCode }))}
+                  columns={[
+                    { title: 'Tài khoản', dataIndex: 'accountCode', key: 'accountCode' },
+                    { title: 'Dư Nợ', key: 'debitBalanceCents', render: (_: unknown, account: TT58TransitionPreview['accounts'][number]) => formatTransitionAmount(account.debitBalanceCents) },
+                    { title: 'Dư Có', key: 'creditBalanceCents', render: (_: unknown, account: TT58TransitionPreview['accounts'][number]) => formatTransitionAmount(account.creditBalanceCents) },
+                    { title: 'Sổ đích', key: 'targetBookCode', render: (_: unknown, account: TT58TransitionPreview['accounts'][number]) => account.targetBookCode || 'Cần đối chiếu' },
+                    { title: 'Theo dõi chi tiết', key: 'reconciliationNote', render: (_: unknown, account: TT58TransitionPreview['accounts'][number]) => account.detailRequired ? account.reconciliationNote : 'Không yêu cầu' },
+                  ]}
+                  pagination={false}
+                />}
+              </div>}
             </div> : <div style={{ marginTop: 8 }}>Hãy khai báo phương pháp GTGT và TNDN phù hợp trong Hồ sơ kế toán để xác định danh mục sổ TT58.</div>}
           </div>
         )}

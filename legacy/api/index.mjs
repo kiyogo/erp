@@ -15,6 +15,7 @@ import { createBackupManager } from './backups.mjs';
 import { createDocxFromText } from './document-files.mjs';
 import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
+import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -8272,6 +8273,24 @@ async function handleRequest(request, response) {
       return { status: current ? 200 : 201, body: { record } };
     });
     sendJson(response, result.status, result.body);
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/finance/accounting-transitions/tt132-to-tt58') {
+    await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    if (profile.accountingRegime !== 'TT58') throw new HttpError(409, 'Hồ sơ hiện tại chưa áp dụng TT58.');
+    const openingDate = String(profile.accountingEffectiveDate || '');
+    if (openingDate < '2026-07-01' || accountingFiscalYearStartDate(profile, openingDate) !== openingDate) {
+      throw new HttpError(422, 'Ngày áp dụng TT58 phải là ngày bắt đầu năm tài chính từ 01/07/2026 trở đi.');
+    }
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all();
+    const records = rows.map(row => parseJsonObject(row.payload_json));
+    if (records.some(record => record.accountingRegime === 'TT132' && record.status === 'Đã ghi sổ cái' && record.entryDate >= openingDate)) {
+      throw new HttpError(409, 'Có bút toán TT132 sau ngày bắt đầu áp dụng TT58; cần đối chiếu kỳ trước khi xem chuyển số dư.');
+    }
+    const preview = buildTT132ToTT58BalancePreview(records, { openingDate, vatMethod: profile.vatMethod, citMethod: profile.citMethod });
+    sendJson(response, 200, { preview });
     return;
   }
 
