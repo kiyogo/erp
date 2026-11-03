@@ -22,6 +22,10 @@ function ledgerLines(record: LedgerCalculationRecord) {
 
 export { getFiscalQuarterDates };
 
+export function postedLedgerRecords<T extends LedgerCalculationRecord>(records: T[]): T[] {
+  return records.filter((record) => record.status === 'Đã ghi sổ cái');
+}
+
 export function getFiscalQuarterPeriod(date: Date, startMonth = 1, startDay = 1) {
   const dateKey = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())).toISOString().slice(0, 10);
   let fiscalYear = date.getFullYear();
