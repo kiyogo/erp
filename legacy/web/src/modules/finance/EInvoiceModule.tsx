@@ -88,8 +88,7 @@ export const EInvoiceModule: React.FC = () => {
       externalStatus: 'Chưa gửi nhà cung cấp',
     };
     try {
-      const saved = await dataService.createGenericRecord('finance_einvoices', newInv);
-      setData(current => [saved, ...current]);
+      await dataService.createGenericRecord('finance_einvoices', newInv);
       message.success(`Đã lưu bản nháp ${values.invoiceNumber}. Hóa đơn chưa được ký số hoặc gửi cơ quan thuế.`);
       setModalOpen(false);
       form.resetFields();
