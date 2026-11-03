@@ -147,6 +147,8 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         appendix: 'Phụ lục 1',
         effective: 'áp dụng cho năm tài chính bắt đầu hoặc sau ngày 01/01/2017',
         sourceUrl: 'https://congbao.chinhphu.vn/tai-ve-van-ban-so-133-2016-tt-btc-21048-15524?format=pdf',
+        statusNote: 'Cơ sở dữ liệu quốc gia về VBQPPL ghi nhận văn bản hết hiệu lực một phần. Hãy rà soát phần còn hiệu lực và quy chế kế toán của doanh nghiệp trước khi ghi sổ.',
+        statusUrl: 'https://vbpl.moj.gov.vn/bonoivu/Pages/vbpq-thuoctinh.aspx?ItemID=113560&Keyword=',
       },
     }[accountingRegime];
     if (!template) return;
@@ -156,6 +158,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
       <div>
         <div>Chỉ thêm các tài khoản còn thiếu theo {template.appendix} {template.name}, {template.effective}. Tài khoản đã có sẽ được giữ nguyên; nếu mã trùng nhưng thông tin khác, toàn bộ thao tác sẽ bị từ chối.</div>
         <a href={template.sourceUrl} target="_blank" rel="noreferrer">Xem văn bản tại Công báo Chính phủ</a>
+        {template.statusNote && <div><div>{template.statusNote}</div><a href={template.statusUrl} target="_blank" rel="noreferrer">Xem tình trạng hiệu lực trên Cơ sở dữ liệu quốc gia về VBQPPL</a></div>}
       </div>
     ),
     okText: 'Nạp mẫu',
