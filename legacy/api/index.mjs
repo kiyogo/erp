@@ -5173,6 +5173,11 @@ function payrollMonth(value) {
   return month >= 1 && month <= 12 && year ? `${String(month).padStart(2, '0')}/${year}` : '';
 }
 
+function ledgerCashAccount(profile, source) {
+  if (profile.accountingRegime === 'TT133') return source === 'petty' ? '1111' : '1121';
+  return source === 'petty' ? '111' : '112';
+}
+
 async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmpty = false, accountingRegime = '', insuranceBreakdown: rawInsuranceBreakdown, costAccount: rawCostAccount } = {}) {
   const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll' ORDER BY record_key ASC").all();
   const records = rows.map(publicCollectionRecord).filter((record) => record && payrollMonth(record.month) === period);
@@ -5201,25 +5206,26 @@ async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmp
   let lines;
   let insuranceBreakdown;
   let costAccount = '';
-  let detailedTT99Chart = false;
-  if (accountingRegime === 'TT99') {
+  let detailedChart = false;
+  if (['TT99', 'TT133'].includes(accountingRegime)) {
     const chartRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
-    const chart = chartRows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === 'TT99');
-    if (!chart.length) throw new HttpError(422, 'Nạp danh mục tài khoản TT99 trước khi hạch toán lương.');
+    const chart = chartRows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === accountingRegime);
+    if (!chart.length) throw new HttpError(422, `Nạp danh mục tài khoản ${accountingRegime} trước khi hạch toán lương.`);
     const codes = new Set(chart.map((item) => String(item.code || '')));
-    const requiredCodes = ['334', '3383', '3384', '3386', '3335', '112'];
+    const unemploymentAccount = accountingRegime === 'TT133' ? '3385' : '3386';
+    const requiredCodes = ['334', '3383', '3384', unemploymentAccount, '3335', '112'];
     const missingCodes = requiredCodes.filter((code) => !codes.has(code));
-    if (missingCodes.length) throw new HttpError(422, `Danh mục TT99 thiếu tài khoản chi tiết cần cho hạch toán lương: ${missingCodes.join(', ')}.`);
+    if (missingCodes.length) throw new HttpError(422, `Danh mục ${accountingRegime} thiếu tài khoản chi tiết cần cho hạch toán lương: ${missingCodes.join(', ')}.`);
     costAccount = requiredText(rawCostAccount, 'Tài khoản chi phí lương', 20).replace(/^TK\s*/i, '').trim();
     const selectedCostAccount = chart.find((item) => String(item.code || '') === costAccount);
     if (!selectedCostAccount || selectedCostAccount.status !== 'Đang sử dụng' || selectedCostAccount.accountType !== 'Chi phí'
-      || chart.some((item) => item.parentCode === costAccount)) throw new HttpError(422, 'Chọn tài khoản chi phí chi tiết đang sử dụng trong danh mục TT99.');
-    detailedTT99Chart = true;
+      || chart.some((item) => item.parentCode === costAccount)) throw new HttpError(422, `Chọn tài khoản chi phí chi tiết đang sử dụng trong danh mục ${accountingRegime}.`);
+    detailedChart = true;
   }
-  if (detailedTT99Chart) {
+  if (detailedChart) {
     const fields = ['employerSocial', 'employerHealth', 'employerUnemployment', 'employeeSocial', 'employeeHealth', 'employeeUnemployment'];
     if (!rawInsuranceBreakdown || typeof rawInsuranceBreakdown !== 'object' || Array.isArray(rawInsuranceBreakdown)) {
-      throw new HttpError(422, 'Cần nhập riêng số bảo hiểm xã hội, y tế và thất nghiệp của doanh nghiệp và người lao động để hạch toán theo TT99.');
+      throw new HttpError(422, `Cần nhập riêng số bảo hiểm xã hội, y tế và thất nghiệp của doanh nghiệp và người lao động để hạch toán theo ${accountingRegime}.`);
     }
     insuranceBreakdown = Object.fromEntries(fields.map((field) => {
       const value = rawInsuranceBreakdown[field];
@@ -5233,7 +5239,7 @@ async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmp
     const contributions = [
       ['Social', '3383', 'bảo hiểm xã hội'],
       ['Health', '3384', 'bảo hiểm y tế'],
-      ['Unemployment', '3386', 'bảo hiểm thất nghiệp'],
+      ['Unemployment', accountingRegime === 'TT133' ? '3385' : '3386', 'bảo hiểm thất nghiệp'],
     ];
     lines = [
       { description: `Ghi nhận lương phải trả kỳ ${period}`, debitAccount: `TK ${costAccount}`, creditAccount: 'TK 334', amount: totals.gross },
@@ -5244,7 +5250,7 @@ async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmp
         description: `Khấu trừ ${label} người lao động kỳ ${period}`, debitAccount: 'TK 334', creditAccount: `TK ${account}`, amount: insuranceBreakdown[`employee${suffix}`],
       })),
       { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: totals.tax },
-      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 112', amount: totals.paid },
+      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: `TK ${ledgerCashAccount({ accountingRegime }, 'bank')}`, amount: totals.paid },
     ].filter((line) => line.amount > 0);
   } else {
     lines = [
@@ -5252,7 +5258,7 @@ async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmp
       { description: `Trích bảo hiểm phần doanh nghiệp kỳ ${period}`, debitAccount: 'TK 642', creditAccount: 'TK 338', amount: employerInsurance },
       { description: `Khấu trừ bảo hiểm người lao động kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 338', amount: totals.employeeInsurance },
       { description: `Khấu trừ thuế TNCN kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 3335', amount: totals.tax },
-      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: 'TK 112', amount: totals.paid },
+      { description: `Ghi nhận lương đã chi kỳ ${period}`, debitAccount: 'TK 334', creditAccount: `TK ${ledgerCashAccount({ accountingRegime }, 'bank')}`, amount: totals.paid },
     ].filter((line) => line.amount > 0);
   }
   const fingerprint = createHash('sha256').update(JSON.stringify({ period, employerInsurance, insuranceBreakdown, costAccount, accountingRegime, actorId: actor.id, records })).digest('hex');
@@ -9830,7 +9836,7 @@ async function handleRequest(request, response) {
         if (current.paymentMethod === 'Chuyển khoản TCB' && !/techcombank|\btcb\b/i.test(source.name)) throw new HttpError(422, 'Hãy chọn tài khoản Techcombank phù hợp với phương thức thanh toán.');
         if (!Number.isSafeInteger(source.balance) || source.balance < amount) throw new HttpError(422, 'Số dư tài khoản nguồn không đủ cho khoản chi.');
         const debitAccount = requiredText(current.debitAccount, 'Tài khoản Nợ', 24);
-        const creditAccount = source.source === 'petty' ? 'TK 111' : 'TK 112';
+        const creditAccount = `TK ${ledgerCashAccount(profile, source.source)}`;
         const accountPattern = /^(?:TK\s*)?\d{3,6}(?:\.\d{1,4})?$/i;
         if (!accountPattern.test(debitAccount) || debitAccount.replace(/\s+/g, '').toUpperCase() === creditAccount.replace(/\s+/g, '').toUpperCase()) {
           throw new HttpError(422, 'Tài khoản Nợ phải hợp lệ và khác tài khoản tiền nguồn.');
@@ -11090,7 +11096,7 @@ async function handleRequest(request, response) {
       const ledgerKey = `payroll:payout:${createHash('sha256').update(payroll.key).digest('hex')}`;
       const transactionId = randomUUID();
       const transactionCode = `BL-${period.replace('/', '')}-CT-${transactionId.slice(0, 8).toUpperCase()}`;
-      const creditAccount = source.source === 'petty' ? 'TK 111' : 'TK 112';
+      const creditAccount = `TK ${ledgerCashAccount(profile, source.source)}`;
       const journalLine = { description: `Chi lương ${period} - ${payroll.employeeName}`, debitAccount: 'TK 334', creditAccount, amount };
       const duplicateLedger = await db.prepare(`SELECT record_key FROM collection_records
         WHERE scope = 'finance_general_ledger'

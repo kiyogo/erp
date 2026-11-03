@@ -134,12 +134,28 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
     }
   };
 
-  const importChartTemplate = () => Modal.confirm({
-    title: 'Nạp mẫu tài khoản TT99',
+  const importChartTemplate = () => {
+    const template = {
+      TT99: {
+        name: 'Thông tư 99/2025/TT-BTC',
+        appendix: 'Phụ lục II',
+        effective: 'áp dụng cho năm tài chính bắt đầu từ hoặc sau ngày 01/01/2026',
+        sourceUrl: 'https://congbao.chinhphu.vn/van-ban/thong-tu-so-99-2025-tt-btc-46529/59643.htm',
+      },
+      TT133: {
+        name: 'Thông tư 133/2016/TT-BTC',
+        appendix: 'Phụ lục 1',
+        effective: 'áp dụng cho năm tài chính bắt đầu hoặc sau ngày 01/01/2017',
+        sourceUrl: 'https://congbao.chinhphu.vn/tai-ve-van-ban-so-133-2016-tt-btc-21048-15524?format=pdf',
+      },
+    }[accountingRegime];
+    if (!template) return;
+    Modal.confirm({
+    title: `Nạp mẫu tài khoản ${accountingRegime}`,
     content: (
       <div>
-        <div>Chỉ thêm các tài khoản còn thiếu theo Phụ lục II Thông tư 99/2025/TT-BTC, áp dụng cho năm tài chính bắt đầu từ hoặc sau ngày 01/01/2026. Tài khoản đã có sẽ được giữ nguyên; nếu mã trùng nhưng thông tin khác, toàn bộ thao tác sẽ bị từ chối.</div>
-        <a href="https://congbao.chinhphu.vn/van-ban/thong-tu-so-99-2025-tt-btc-46529/59643.htm" target="_blank" rel="noreferrer">Xem văn bản tại Công báo Chính phủ</a>
+        <div>Chỉ thêm các tài khoản còn thiếu theo {template.appendix} {template.name}, {template.effective}. Tài khoản đã có sẽ được giữ nguyên; nếu mã trùng nhưng thông tin khác, toàn bộ thao tác sẽ bị từ chối.</div>
+        <a href={template.sourceUrl} target="_blank" rel="noreferrer">Xem văn bản tại Công báo Chính phủ</a>
       </div>
     ),
     okText: 'Nạp mẫu',
@@ -156,7 +172,8 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
         setChartImporting(false);
       }
     },
-  });
+    });
+  };
 
   const deleteChartAccount = (account: ChartAccount) => Modal.confirm({
     title: 'Xóa tài khoản',
@@ -595,9 +612,9 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             Thông tư 58/2026/TT-BTC hướng dẫn ghi sổ theo mẫu dành cho doanh nghiệp siêu nhỏ. Danh mục tài khoản tại đây chỉ phục vụ theo dõi nội bộ; sổ mẫu và quy trình chuyển đổi số dư theo Thông tư 58 chưa được triển khai trong phân hệ này.
           </div>
         )}
-        {accountingRegime === 'TT99' && (
+        {['TT99', 'TT133'].includes(accountingRegime) && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-            <Button icon={<FileSyncOutlined />} loading={chartImporting} onClick={importChartTemplate}>Nạp mẫu TT99</Button>
+            <Button icon={<FileSyncOutlined />} loading={chartImporting} onClick={importChartTemplate}>Nạp mẫu {accountingRegime}</Button>
           </div>
         )}
         <Form form={chartForm} layout="vertical" onFinish={saveChartAccount} style={{ marginTop: 14 }}>

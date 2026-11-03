@@ -70,16 +70,12 @@ test('ledger posting requires an accounting chart for the active regime before a
     voucherCode: 'NO-CHART-001', entryDate: '2026-10-30', description: 'Kiểm tra bắt buộc có danh mục tài khoản',
     lines: [{ account: '111', debit: 100, credit: 0 }, { account: '511', debit: 0, credit: 100 }],
   }, 422);
-  for (const [code, name, accountType] of [
-    ['111', 'Tiền mặt', 'Tài sản'], ['112', 'Tiền gửi ngân hàng', 'Tài sản'], ['1121', 'Tiền gửi ngân hàng VND', 'Tài sản'], ['131', 'Phải thu khách hàng', 'Tài sản'],
-    ['2141', 'Hao mòn tài sản cố định hữu hình', 'Tài sản'], ['331', 'Phải trả người bán', 'Nợ phải trả'], ['33311', 'Thuế GTGT phải nộp', 'Nợ phải trả'], ['3335', 'Thuế thu nhập cá nhân', 'Nợ phải trả'],
-    ['334', 'Phải trả người lao động', 'Nợ phải trả'], ['338', 'Phải trả, phải nộp khác', 'Nợ phải trả'], ['3383', 'Bảo hiểm xã hội', 'Nợ phải trả'], ['3384', 'Bảo hiểm y tế', 'Nợ phải trả'],
-    ['3386', 'Bảo hiểm thất nghiệp', 'Nợ phải trả'], ['511', 'Doanh thu bán hàng', 'Doanh thu'], ['642', 'Chi phí quản lý', 'Chi phí'], ['6421', 'Chi phí quản lý chi tiết', 'Chi phí'],
-  ]) {
-    await request('/finance/chart-of-accounts', 'POST', { record: {
-      code, name, parentCode: '', accountType, balanceNature: 'Chưa xác định', effectiveDate: '2026-01-01', status: 'Đang sử dụng',
-    } }, 201);
-  }
+  const imported = await request('/finance/chart-of-accounts/templates/import', 'POST', {}, 201);
+  assert.equal(imported.template.name, 'Thông tư 133/2016/TT-BTC');
+  assert.equal(imported.createdCount, 123);
+  const repeated = await request('/finance/chart-of-accounts/templates/import', 'POST', {}, 200);
+  assert.equal(repeated.createdCount, 0);
+  assert.equal(repeated.skippedCount, 123);
 });
 
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
@@ -374,9 +370,10 @@ test('payroll ledger posts reviewed figures atomically and prevents duplicate or
   const record = { key: 'payroll-ledger-test-1', employeeCode: 'P-ONE', employeeName: 'Nhân viên', month: '2030-10', status: 'Chưa chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 };
   await request('/collections/payroll', 'POST', { record: { ...record, key: 'payroll-forged-paid', status: 'Đã chi trả' } }, 409);
   await request('/collections/payroll', 'POST', { record }, 201);
-  const input = { period: '10/2030', employerInsurance: 200 };
+  const insuranceBreakdown = { employerSocial: 100, employerHealth: 50, employerUnemployment: 50, employeeSocial: 50, employeeHealth: 25, employeeUnemployment: 25 };
+  const input = { period: '10/2030', employerInsurance: 200, insuranceBreakdown, costAccount: '6422' };
   const preview = await request('/finance/payroll/ledger-preview', 'POST', input);
-  assert.deepEqual(preview.lines.map((line) => line.amount), [1100, 200, 100, 50]);
+  assert.deepEqual(preview.lines.map((line) => line.amount), [1100, 100, 50, 50, 50, 25, 25, 50]);
   await request('/collections/payroll/payroll-ledger-test-1', 'PATCH', { patch: { allowance: 200, netSalary: 1050 } });
   await request('/finance/payroll/ledger-post', 'POST', { ...input, fingerprint: preview.fingerprint }, 409);
   const updatedPreview = await request('/finance/payroll/ledger-preview', 'POST', input);
@@ -386,7 +383,7 @@ test('payroll ledger posts reviewed figures atomically and prevents duplicate or
   }));
   assert.deepEqual(race.map((item) => item.status).sort((a, b) => a - b), [201, 409]);
   const ledger = (await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:10/2030');
-  assert.equal(ledger.length, 4);
+  assert.equal(ledger.length, 8);
   const snapshot = (await request('/collections/finance_payroll_postings/10%2F2030')).record;
   assert.equal(snapshot.records[0].netSalary, 1050);
   assert.equal(snapshot.createdById, session.user.id);
@@ -412,19 +409,19 @@ test('payroll ledger posts reviewed figures atomically and prevents duplicate or
   assert.equal(disbursement.transaction.amount, 1050);
   assert.equal(disbursement.transaction.reference, 'PAYROLL-TXN-004');
   assert.equal(disbursement.transaction.journalLines[0].debitAccount, 'TK 334');
-  assert.equal(disbursement.transaction.journalLines[0].creditAccount, 'TK 112');
+  assert.equal(disbursement.transaction.journalLines[0].creditAccount, 'TK 1121');
   assert.equal(disbursement.ledgerEntry.sourceModule, 'payroll_payment');
   assert.equal(disbursement.ledgerEntry.amount, 1050);
   assert.equal((await request('/finance/payment-accounts')).accounts.find((item) => item.key === payrollSource.key).balance, 3950);
   await request('/finance/payroll/payroll-ledger-test-1/disburse', 'POST', { sourceAccountId: payrollSource.key, paymentDate: '2030-10-30', settlementReference: 'PAYROLL-TXN-004' }, 409);
   await request('/collections/payroll/payroll-ledger-test-1', 'PATCH', { patch: { status: 'Chưa chi trả' } }, 409);
   await request('/collections/payroll/payroll-ledger-test-1', 'DELETE', undefined, 409);
-  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:10/2030').length, 4);
+  assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:10/2030').length, 8);
   await request('/finance/payroll/ledger-preview', 'POST', { period: '13/2030', employerInsurance: 0 }, 422);
   await request('/finance/payroll/ledger-preview', 'POST', { period: '10/2031', employerInsurance: 0 }, 422);
   await request('/collections/payroll', 'POST', { record: { ...record, key: 'payroll-ledger-test-bad', month: '11/2030' } }, 201);
-  const collision = await request('/finance/payroll/ledger-preview', 'POST', { period: '11/2030', employerInsurance: 200 });
-  await request('/finance/payroll/ledger-post', 'POST', { period: '11/2030', employerInsurance: 200, fingerprint: collision.fingerprint }, 409);
+  const collision = await request('/finance/payroll/ledger-preview', 'POST', { ...input, period: '11/2030' });
+  await request('/finance/payroll/ledger-post', 'POST', { ...input, period: '11/2030', fingerprint: collision.fingerprint }, 409);
   assert.equal((await request('/collections/finance_general_ledger')).data.filter((item) => item.sourceReference === 'payroll:11/2030').length, 0);
   await request('/users', 'POST', { email: 'payroll-ledger-user@example.test', name: 'Người thử', password: 'Payroll-Ledger-26!Secure', employeeCode: 'PAYROLL-TEST', role: 'USER' }, 201);
   const user = await request('/auth/login', 'POST', { email: 'payroll-ledger-user@example.test', password: 'Payroll-Ledger-26!Secure' });
@@ -434,14 +431,15 @@ test('payroll ledger posts reviewed figures atomically and prevents duplicate or
 test('payroll ledger adjustments preserve prior snapshots and post only reviewed differences', async () => {
   const record = { key: 'adjust-payroll-1', employeeCode: 'ADJ-ONE', employeeName: 'Điều chỉnh', month: '2032-01', status: 'Chưa chi trả', baseSalary: 1000, allowance: 100, bonus: 0, insuranceDeduction: 100, taxDeduction: 50, netSalary: 950 };
   await request('/collections/payroll', 'POST', { record }, 201);
-  const input = { period: '01/2032', employerInsurance: 200 };
+  const insuranceBreakdown = { employerSocial: 100, employerHealth: 50, employerUnemployment: 50, employeeSocial: 50, employeeHealth: 25, employeeUnemployment: 25 };
+  const input = { period: '01/2032', employerInsurance: 200, insuranceBreakdown, costAccount: '6422' };
   const initial = await request('/finance/payroll/ledger-preview', 'POST', input);
   await request('/finance/payroll/ledger-post', 'POST', { ...input, fingerprint: initial.fingerprint }, 201);
   await request('/finance/payroll/adjustment-preview', 'POST', input, 422);
   await request('/collections/payroll/adjust-payroll-1', 'PATCH', { patch: { status: 'Chưa chi trả' } }, 409);
   await request('/collections/payroll/adjust-payroll-1', 'PATCH', { patch: { allowance: 0, netSalary: 850 } });
   const stale = await request('/finance/payroll/adjustment-preview', 'POST', input);
-  assert.deepEqual(stale.lines.map((item) => [item.debitAccount, item.creditAccount, item.amount]), [['TK 334', 'TK 642', 100]]);
+  assert.deepEqual(stale.lines.map((item) => [item.debitAccount, item.creditAccount, item.amount]), [['TK 334', 'TK 6422', 100]]);
   await request('/collections/payroll/adjust-payroll-1', 'PATCH', { patch: { bonus: 10, netSalary: 860 } });
   await request('/finance/payroll/adjustment-post', 'POST', { ...input, fingerprint: stale.fingerprint }, 409);
   const current = await request('/finance/payroll/adjustment-preview', 'POST', input);
@@ -458,13 +456,16 @@ test('payroll ledger adjustments preserve prior snapshots and post only reviewed
   await request('/collections/payroll/adjust-payroll-1', 'DELETE', undefined, 409);
   assert.ok((await request('/finance/payroll/posted-periods')).periods.includes(input.period));
   await request('/finance/payroll/adjustment-preview', 'POST', input, 422);
-  const employerInsuranceCorrection = { period: input.period, employerInsurance: 0 };
+  const employerInsuranceCorrection = { ...input, employerInsurance: 0, insuranceBreakdown: { ...insuranceBreakdown, employerSocial: 0, employerHealth: 0, employerUnemployment: 0 } };
   const correction = await request('/finance/payroll/adjustment-preview', 'POST', employerInsuranceCorrection);
-  assert.deepEqual(correction.lines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [['TK 338', 'TK 642', 200]]);
+  assert.deepEqual(correction.lines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [
+    ['TK 3383', 'TK 6422', 100], ['TK 3384', 'TK 6422', 50], ['TK 3385', 'TK 6422', 50],
+  ]);
   await request('/finance/payroll/adjustment-post', 'POST', { ...employerInsuranceCorrection, fingerprint: correction.fingerprint }, 201);
   await request('/finance/payroll/adjustment-preview', 'POST', employerInsuranceCorrection, 422);
   await request('/finance/payroll/adjustment-preview', 'POST', { period: '12/2031', employerInsurance: 0 }, 409);
-  const user = await request('/auth/login', 'POST', { email: 'payroll-ledger-user@example.test', password: 'Payroll-Ledger-26!Secure' });
+  await request('/users', 'POST', { email: 'payroll-adjustment-user@example.test', name: 'Người thử điều chỉnh', password: 'Payroll-Adjustment-26!Secure', employeeCode: 'PAYROLL-ADJUSTMENT', role: 'USER' }, 201);
+  const user = await request('/auth/login', 'POST', { email: 'payroll-adjustment-user@example.test', password: 'Payroll-Adjustment-26!Secure' });
   await request('/finance/payroll/adjustment-preview', 'POST', input, 403, { ...headers, Authorization: `Bearer ${user.access_token || user.token}` });
 });
 
@@ -796,7 +797,7 @@ test('payment requests persist actual actors and enforce approval, rejection and
   await request('/collections/finance_payments', 'PUT', { records: [] }, 409, headers);
   await request(`/finance/payments/${payment.key}/reject`, 'POST', { reason: '' }, 422, headers);
 
-  const createdSecond = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp hai', bankAccountInfo: 'VCB 77665544', category: 'Chi phí vận hành', amount: 900000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 642' }, 201, userHeaders)).payment;
+  const createdSecond = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp hai', bankAccountInfo: 'VCB 77665544', category: 'Chi phí vận hành', amount: 900000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 6422' }, 201, userHeaders)).payment;
   const competing = await Promise.all(['POST', 'POST'].map(() => fetch(`${base}/finance/payments/${createdSecond.key}/approve`, { method: 'POST', headers, body: '{}' })));
   assert.deepEqual(competing.map((response) => response.status).sort(), [200, 409]);
   const approved = (await request('/finance/payments')).data.find((record) => record.key === createdSecond.key);
@@ -827,18 +828,18 @@ test('payment requests persist actual actors and enforce approval, rejection and
   assert.equal(expenseVoucher.amount, createdSecond.amount);
   assert.equal(expenseVoucher.account, `Vietcombank (${paymentSource.accountNumber})`);
   assert.equal(expenseVoucher.journalLines.length, 1);
-  assert.equal(expenseVoucher.journalLines[0].debitAccount, 'TK 642');
-  assert.equal(expenseVoucher.journalLines[0].creditAccount, 'TK 112');
+  assert.equal(expenseVoucher.journalLines[0].debitAccount, 'TK 6422');
+  assert.equal(expenseVoucher.journalLines[0].creditAccount, 'TK 1121');
   const ledgerEntry = (await request('/collections/finance_general_ledger')).data.find((item) => item.key === paid.ledgerEntryKey);
   assert.equal(ledgerEntry.sourceModule, 'finance_payment');
   assert.equal(ledgerEntry.amount, createdSecond.amount);
-  assert.equal(ledgerEntry.debitAccount, 'TK 642');
-  assert.equal(ledgerEntry.creditAccount, 'TK 112');
+  assert.equal(ledgerEntry.debitAccount, 'TK 6422');
+  assert.equal(ledgerEntry.creditAccount, 'TK 1121');
   const balances = (await request('/finance/payment-accounts')).accounts;
   assert.equal(balances.find((item) => item.key === paymentSource.key).balance, 2100000);
   await request(`/finance/payments/${createdSecond.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-TXN-2026-001' }, 409, posterHeaders);
 
-  const overBalance = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp vượt số dư', bankAccountInfo: 'VCB 77665544', category: 'Kiểm tra số dư', amount: 2500000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 642' }, 201, userHeaders)).payment;
+  const overBalance = (await request('/finance/payments', 'POST', { beneficiary: 'Nhà cung cấp vượt số dư', bankAccountInfo: 'VCB 77665544', category: 'Kiểm tra số dư', amount: 2500000, paymentMethod: 'Chuyển khoản VCB', debitAccount: 'TK 6422' }, 201, userHeaders)).payment;
   await request(`/finance/payments/${overBalance.key}/approve`, 'POST', {});
   await request(`/finance/payments/${overBalance.key}/execute`, 'POST', { sourceAccountId: paymentSource.key, settlementReference: 'VCB-INSUFFICIENT-01' }, 422, posterHeaders);
   assert.equal((await request('/finance/payments')).data.find((item) => item.key === overBalance.key).status, 'Đã phê duyệt');

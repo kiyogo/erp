@@ -52,7 +52,7 @@ export const PayrollModule: React.FC = () => {
   const [insuranceLoaded, setInsuranceLoaded] = useState(false);
   const [insuranceDialog, setInsuranceDialog] = useState(false);
   const [insuranceCashTransactions, setInsuranceCashTransactions] = useState<any[]>([]);
-  const [insuranceAllocations, setInsuranceAllocations] = useState({ '3383': '', '3384': '', '3386': '' });
+  const [insuranceAllocations, setInsuranceAllocations] = useState({ '3383': '', '3384': '', '3385': '', '3386': '' });
   const [insurancePaymentReference, setInsurancePaymentReference] = useState('');
   const [submittingInsurance, setSubmittingInsurance] = useState(false);
   const [accountingSheetKey, setAccountingSheetKey] = useState('');
@@ -153,10 +153,11 @@ export const PayrollModule: React.FC = () => {
   const employeeInsurance = periodData.reduce((sum, item) => sum + item.insuranceDeduction, 0);
   const payrollCostAccounts = chartAccounts.filter((account) => account.accountType === 'Chi phí' && !chartAccounts.some((item) => item.parentCode === account.code));
   const insuranceBreakdownValues = Object.fromEntries(Object.entries(insuranceBreakdown).map(([key, value]) => [key, Number(value)])) as Record<keyof typeof insuranceBreakdown, number>;
+  const unemploymentInsuranceAccount = accountingRegime === 'TT133' ? '3385' : '3386';
   const insuranceDueRows = [
     { code: '3383', name: 'Bảo hiểm xã hội', due: insuranceBreakdownValues.employerSocial + insuranceBreakdownValues.employeeSocial },
     { code: '3384', name: 'Bảo hiểm y tế', due: insuranceBreakdownValues.employerHealth + insuranceBreakdownValues.employeeHealth },
-    { code: '3386', name: 'Bảo hiểm thất nghiệp', due: insuranceBreakdownValues.employerUnemployment + insuranceBreakdownValues.employeeUnemployment },
+    { code: unemploymentInsuranceAccount, name: 'Bảo hiểm thất nghiệp', due: insuranceBreakdownValues.employerUnemployment + insuranceBreakdownValues.employeeUnemployment },
   ];
   const insurancePeriodPayments = insuranceCashTransactions.filter((transaction) => transaction.status === 'Đã hoàn thành'
     && transaction.category === 'Nộp bảo hiểm' && String(transaction.note || '').includes(`Nộp bảo hiểm kỳ ${selectedMonth}`));
@@ -166,7 +167,7 @@ export const PayrollModule: React.FC = () => {
   const availablePaymentAccounts = paymentAccounts.filter((account) => account.status === 'Đang hoạt động'
     && account.source === (paymentMethod === 'Tiền mặt' ? 'petty' : 'bank'));
   const loadInsuranceDue = () => {
-    if (accountingRegime !== 'TT99') { message.error('Chức năng này cần danh mục tài khoản TT99 đã được xác minh.'); return; }
+    if (!['TT99', 'TT133'].includes(accountingRegime)) { message.error('Chức năng này cần danh mục tài khoản TT99 hoặc TT133 đã được xác minh.'); return; }
     if (insuranceDueRows.some((row) => !Number.isSafeInteger(row.due) || row.due < 0)) { message.error('Tổng nghĩa vụ bảo hiểm vượt giới hạn số tiền hợp lệ.'); return; }
     if (Object.values(insuranceBreakdown).some((value) => value.trim() === '')
       || Object.values(insuranceBreakdownValues).some((value) => !Number.isSafeInteger(value) || value < 0)) {
@@ -174,10 +175,10 @@ export const PayrollModule: React.FC = () => {
     }
     const employeeTotal = insuranceBreakdownValues.employeeSocial + insuranceBreakdownValues.employeeHealth + insuranceBreakdownValues.employeeUnemployment;
     if (employeeTotal !== employeeInsurance) { message.error('Số bảo hiểm người lao động phải khớp khoản khấu trừ trên bảng lương.'); return; }
-    if (['3383', '3384', '3386'].some((code) => !chartAccounts.some((account) => account.code === code && account.accountingRegime === 'TT99' && account.accountType === 'Nợ phải trả'))) {
-      message.error('Danh mục TT99 cần có đủ tài khoản chi tiết 3383, 3384 và 3386 trước khi ghi phiếu chi.'); return;
+    if (['3383', '3384', unemploymentInsuranceAccount].some((code) => !chartAccounts.some((account) => account.code === code && account.accountingRegime === accountingRegime && account.accountType === 'Nợ phải trả'))) {
+      message.error(`Danh mục ${accountingRegime} cần có đủ tài khoản chi tiết 3383, 3384 và ${unemploymentInsuranceAccount} trước khi ghi phiếu chi.`); return;
     }
-    setInsuranceAllocations({ '3383': '', '3384': '', '3386': '' });
+    setInsuranceAllocations({ '3383': '', '3384': '', '3385': '', '3386': '' });
     setInsuranceLoaded(true);
   };
   const submitInsurancePayment = async () => {
@@ -206,14 +207,16 @@ export const PayrollModule: React.FC = () => {
         sourceAccountId: source.key, counterpartyType: 'other',
         journalLines: allocations.filter((row) => row.amount > 0).map((row) => ({
           description: `Nộp bảo hiểm kỳ ${selectedMonth} · ${row.name}`,
-          debitAccount: `TK ${row.code}`, creditAccount: source.source === 'petty' ? 'TK 111' : 'TK 112', amount: row.amount,
+          debitAccount: `TK ${row.code}`, creditAccount: accountingRegime === 'TT133'
+            ? source.source === 'petty' ? 'TK 1111' : 'TK 1121'
+            : source.source === 'petty' ? 'TK 111' : 'TK 112', amount: row.amount,
         })),
       });
       const { data: latestTransactions } = await financeCashApi.getAll();
       setInsuranceCashTransactions(latestTransactions.data);
       await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
       setPaymentAccounts((await financePaymentAccountsApi.getAccounts()).data.accounts);
-      setInsuranceAllocations({ '3383': '', '3384': '', '3386': '' });
+      setInsuranceAllocations({ '3383': '', '3384': '', '3385': '', '3386': '' });
       setInsurancePaymentReference('');
       setInsuranceDialog(false);
       message.success('Đã ghi phiếu chi bảo hiểm và bút toán vào Sổ Cái.');
@@ -230,7 +233,7 @@ export const PayrollModule: React.FC = () => {
   const prepareLedgerRequest = () => {
     if (!normalizePayrollMonth(selectedMonth)) { message.error('Chọn kỳ lương hợp lệ để ghi sổ.'); return null; }
     if (!accountingRegime) { message.error('Chưa xác định được chế độ kế toán của doanh nghiệp.'); return null; }
-    if (accountingRegime === 'TT99') {
+    if (['TT99', 'TT133'].includes(accountingRegime)) {
       const values = Object.fromEntries(Object.entries(insuranceBreakdown).map(([key, value]) => [key, Number(value)])) as Record<keyof typeof insuranceBreakdown, number>;
       if (Object.values(insuranceBreakdown).some((value) => value.trim() === '')
         || Object.values(values).some((value) => !Number.isSafeInteger(value) || value < 0)) {
@@ -249,17 +252,17 @@ export const PayrollModule: React.FC = () => {
     return { period: selectedMonth, employerInsurance: Number(employerCharge) };
   };
 
-  const payrollAccountingLines = accountingRegime === 'TT99' ? [
+  const payrollAccountingLines = ['TT99', 'TT133'].includes(accountingRegime) ? [
     { desc: 'Ghi nhận tiền lương phải trả', debit: `Nợ TK ${costAccount || '—'}`, credit: 'Có TK 334', amount: grossPayroll },
     ...([
       ['employerSocial', '3383', 'Trích bảo hiểm xã hội phần doanh nghiệp'],
       ['employerHealth', '3384', 'Trích bảo hiểm y tế phần doanh nghiệp'],
-      ['employerUnemployment', '3386', 'Trích bảo hiểm thất nghiệp phần doanh nghiệp'],
+      ['employerUnemployment', unemploymentInsuranceAccount, 'Trích bảo hiểm thất nghiệp phần doanh nghiệp'],
     ] as const).map(([field, account, desc]) => ({ desc, debit: `Nợ TK ${costAccount || '—'}`, credit: `Có TK ${account}`, amount: Number(insuranceBreakdown[field]) || 0 })),
     ...([
       ['employeeSocial', '3383', 'Khấu trừ bảo hiểm xã hội người lao động'],
       ['employeeHealth', '3384', 'Khấu trừ bảo hiểm y tế người lao động'],
-      ['employeeUnemployment', '3386', 'Khấu trừ bảo hiểm thất nghiệp người lao động'],
+      ['employeeUnemployment', unemploymentInsuranceAccount, 'Khấu trừ bảo hiểm thất nghiệp người lao động'],
     ] as const).map(([field, account, desc]) => ({ desc, debit: 'Nợ TK 334', credit: `Có TK ${account}`, amount: Number(insuranceBreakdown[field]) || 0 })),
   ] : [
     { desc: 'Ghi nhận tiền lương phải trả', debit: 'Nợ TK 642', credit: 'Có TK 334', amount: grossPayroll },
@@ -452,7 +455,7 @@ export const PayrollModule: React.FC = () => {
             <label>Ngày nộp bảo hiểm<Input type="date" value={paymentDate} onChange={(e: any) => setPaymentDate(e.target.value)} /></label>
             <Button type="primary" onClick={loadInsuranceDue}>Lấy nghĩa vụ đã đối chiếu</Button>
           </div>
-          <div style={{ color: '#64748B' }}>{accountingRegime === 'TT99' ? 'Nhập số liệu đã đối chiếu trong mục Hạch toán lương. Tỷ lệ và số phải nộp không được phần mềm tự ước tính.' : 'Thanh toán bảo hiểm hiện yêu cầu doanh nghiệp dùng danh mục tài khoản TT99 đã xác minh.'}</div>
+          <div style={{ color: '#64748B' }}>{['TT99', 'TT133'].includes(accountingRegime) ? 'Nhập số liệu đã đối chiếu trong mục Hạch toán lương. Tỷ lệ và số phải nộp không được phần mềm tự ước tính.' : 'Thanh toán bảo hiểm hiện yêu cầu doanh nghiệp dùng danh mục tài khoản TT99 hoặc TT133 đã xác minh.'}</div>
           {insuranceLoaded && <div className="transparent-table-card"><KTable dataSource={insuranceDueRows.map((row) => ({ ...row, paid: insurancePaidAmount(row.code), remaining: Math.max(0, row.due - insurancePaidAmount(row.code)) }))}
             columns={[{ title: 'Khoản phải nộp', dataIndex: 'name', key: 'name' }, { title: 'Tài khoản', dataIndex: 'code', key: 'code' },
               { title: 'Nghĩa vụ đã đối chiếu', dataIndex: 'due', key: 'due', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
@@ -577,7 +580,7 @@ export const PayrollModule: React.FC = () => {
                 </div>
               ))}
             </div>
-            {accountingRegime === 'TT99' ? (
+            {['TT99', 'TT133'].includes(accountingRegime) ? (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ marginBottom: 8, color: '#64748B' }}>Nhập số liệu đã đối chiếu với bảng lương và bảng kê bảo hiểm. Phần mềm không tự suy tính tỷ lệ đóng.</div>
                 {payrollCostAccounts.length ? (
