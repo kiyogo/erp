@@ -9,6 +9,7 @@ import {
   FileDoneOutlined,
   SafetyCertificateOutlined,
   EyeOutlined,
+  EditOutlined,
   SendOutlined,
   FilePdfOutlined,
   CheckCircleOutlined,
@@ -40,6 +41,7 @@ interface EInvoice {
   buyerTaxCode: string;
   issueDate: string;
   totalAmount: number;
+  vatRate?: number | string;
   vatAmount: number;
   finalAmount: number;
   status: 'Đã phát hành & Ký số' | 'Hóa đơn nháp' | 'Đã hủy';
@@ -74,6 +76,7 @@ export const EInvoiceModule: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<EInvoice | null>(null);
   const [previewRecord, setPreviewRecord] = useState<EInvoice | null>(null);
   const [form] = Form.useForm();
   const [createForm] = Form.useForm();
@@ -84,6 +87,25 @@ export const EInvoiceModule: React.FC = () => {
     const vatRate = rateText === 'Không chịu thuế' ? 0 : Number(rateText.replace('%', ''));
     if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
       message.error('Nhập số tiền và thuế suất GTGT hợp lệ trước khi lưu bản nháp.');
+      return;
+    }
+    if (editingRecord) {
+      try {
+        await dataService.updateGenericRecord('finance_einvoices', {
+          key: editingRecord.key,
+          invoiceNumber: String(values.invoiceNumber || '').trim(),
+          buyerName: String(values.buyerName || '').trim(),
+          buyerTaxCode: String(values.buyerTaxCode || '').trim(),
+          totalAmount: total,
+          vatRate: rateText,
+        });
+        message.success(`Đã cập nhật bản nháp ${values.invoiceNumber}.`);
+        setModalOpen(false);
+        setEditingRecord(null);
+        form.resetFields();
+      } catch (error: any) {
+        message.error(error?.response?.data?.message || error?.message || 'Không thể cập nhật bản nháp hóa đơn.');
+      }
       return;
     }
     const vat = Math.round(total * vatRate / 100);
@@ -117,6 +139,24 @@ export const EInvoiceModule: React.FC = () => {
     } catch (error: any) {
       message.error(error?.response?.data?.message || error?.message || 'Không thể xóa bản nháp.');
     }
+  };
+
+  const openDraftEditor = (record: EInvoice) => {
+    setEditingRecord(record);
+    form.setFieldsValue({
+      invoiceNumber: record.invoiceNumber,
+      buyerName: record.buyerName,
+      buyerTaxCode: record.buyerTaxCode,
+      totalAmount: record.totalAmount,
+      vatRate: Number(record.vatRate) === 0 ? 'Không chịu thuế' : `${record.vatRate}%`,
+    });
+    setModalOpen(true);
+  };
+
+  const closeDraftEditor = () => {
+    setModalOpen(false);
+    setEditingRecord(null);
+    form.resetFields();
   };
 
   const filteredData = data.filter(
@@ -293,6 +333,7 @@ export const EInvoiceModule: React.FC = () => {
                   key: 'act',
                   render: (_: any, r: any) => (
                     <div style={{ display: 'flex', gap: 6 }}>
+                      <Button icon={<EditOutlined />} onClick={() => openDraftEditor(r)}>Sửa nháp</Button>
                       <Button size="small" type="primary" disabled title="Chưa kết nối nhà cung cấp hóa đơn điện tử" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                         Chưa kết nối
                       </Button>
@@ -381,6 +422,7 @@ export const EInvoiceModule: React.FC = () => {
                 icon={<PlusOutlined />}
                 onClick={() => {
                   form.resetFields();
+                  setEditingRecord(null);
                   setModalOpen(true);
                 }}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -442,6 +484,7 @@ export const EInvoiceModule: React.FC = () => {
                   key: 'actions',
                   render: (_: unknown, record: EInvoice) => (
                     <div style={{ display: 'flex', gap: 6 }}>
+                      {record.status === 'Hóa đơn nháp' && <Button icon={<EditOutlined />} onClick={() => openDraftEditor(record)}>Sửa nháp</Button>}
                       <Button size="small" icon={<EyeOutlined />} onClick={() => setPreviewRecord(record)}>Xem</Button>
                       <Button size="small" icon={<FilePdfOutlined />} onClick={() => exportInvoicePdf(record)}>Bản PDF nội bộ</Button>
                     </div>
@@ -456,9 +499,9 @@ export const EInvoiceModule: React.FC = () => {
 
       {/* Modal Add Invoice */}
       <Modal
-        title="Lập hóa đơn điện tử mới"
+        title={editingRecord ? `Sửa bản nháp ${editingRecord.invoiceNumber}` : 'Lập hóa đơn điện tử mới'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={closeDraftEditor}
         footer={null}
         width={500}
       >
@@ -479,9 +522,9 @@ export const EInvoiceModule: React.FC = () => {
             <Select options={[{ label: '10%', value: '10%' }, { label: '8%', value: '8%' }, { label: '5%', value: '5%' }, { label: '0%', value: '0%' }, { label: 'Không chịu thuế GTGT', value: 'Không chịu thuế' }]} />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
+            <Button onClick={closeDraftEditor}>Hủy</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lưu bản nháp
+              {editingRecord ? 'Lưu thay đổi' : 'Lưu bản nháp'}
             </Button>
           </div>
         </Form>

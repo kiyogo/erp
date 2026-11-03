@@ -78,6 +78,37 @@ test('ledger posting requires an accounting chart for the active regime before a
   assert.equal(repeated.skippedCount, 123);
 });
 
+test('e-invoice drafts can be edited without allowing forged issue state or duplicate draft numbers', async () => {
+  const firstNumber = `DRAFT-EDIT-${Date.now()}`;
+  const first = (await request('/collections/finance_einvoices', 'POST', { record: {
+    key: `einvoice-edit-${Date.now()}`, invoiceNumber: firstNumber, buyerName: 'Khách hàng thử', buyerTaxCode: '0101234567',
+    issueDate: '2026-11-04', totalAmount: 100000, vatRate: '8%', status: 'Đã phát hành', externalStatus: 'CQT đã cấp mã',
+  } }, 201)).record;
+  assert.equal(first.status, 'Hóa đơn nháp');
+  assert.equal(first.externalStatus, 'Chưa gửi nhà cung cấp');
+  assert.equal(first.vatAmount, 8000);
+
+  const updated = (await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: {
+    key: first.key, invoiceNumber: `${firstNumber}-SUA`, buyerName: 'Khách hàng đã cập nhật', buyerTaxCode: '0101234567',
+    totalAmount: 250000, vatRate: 'Không chịu thuế',
+  } })).record;
+  assert.equal(updated.invoiceNumber, `${firstNumber}-SUA`);
+  assert.equal(updated.buyerName, 'Khách hàng đã cập nhật');
+  assert.equal(updated.vatRate, 0);
+  assert.equal(updated.vatAmount, 0);
+  assert.equal(updated.finalAmount, 250000);
+  assert.equal(updated.status, 'Hóa đơn nháp');
+  assert.equal(updated.externalStatus, 'Chưa gửi nhà cung cấp');
+
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { status: 'Đã phát hành' } }, 422);
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { totalAmount: -1 } }, 422);
+  const second = (await request('/collections/finance_einvoices', 'POST', { record: {
+    key: `einvoice-edit-duplicate-${Date.now()}`, invoiceNumber: `DRAFT-OTHER-${Date.now()}`, buyerName: 'Khách hàng khác',
+    issueDate: '2026-11-04', totalAmount: 100000, vatRate: '0%',
+  } }, 201)).record;
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { invoiceNumber: second.invoiceNumber } }, 409);
+});
+
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
   await request('/collections/business_org_units', 'POST', {

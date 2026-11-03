@@ -2215,7 +2215,7 @@ async function requireCollectionActor(request, scope) {
   if (['finance_tax', 'finance_einvoices'].includes(scope) && !['GET', 'HEAD'].includes(request.method)) {
     await requireAccountingProfile();
     if (scope === 'finance_tax' && request.method !== 'POST') throw new HttpError(409, 'Hồ sơ thuế chỉ được tạo mới tại đây; trạng thái nộp thuế cần tích hợp hoặc chứng từ đối chiếu.');
-    if (scope === 'finance_einvoices' && !['POST', 'DELETE'].includes(request.method)) throw new HttpError(409, 'Hóa đơn chỉ được lưu thành nháp cho đến khi có kết nối nhà cung cấp đã xác minh.');
+    if (scope === 'finance_einvoices' && !['POST', 'PATCH', 'DELETE'].includes(request.method)) throw new HttpError(409, 'Hóa đơn chỉ được lưu thành nháp cho đến khi có kết nối nhà cung cấp đã xác minh.');
   }
   if (scope.startsWith('dropdown_') && !['GET', 'HEAD'].includes(request.method) && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được thay đổi danh mục dùng chung.');
@@ -2502,10 +2502,9 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   }
   if (scope === 'finance_einvoices') {
     record.invoiceNumber = requiredText(record.invoiceNumber, 'Mã bản nháp hóa đơn', 80);
-    if (!current) {
-      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_einvoices' AND LOWER(json_extract(payload_json, '$.invoiceNumber')) = LOWER(?) LIMIT 1").get(record.invoiceNumber);
-      if (duplicate) throw new HttpError(409, 'Mã bản nháp hóa đơn đã tồn tại.');
-    }
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_einvoices' AND LOWER(json_extract(payload_json, '$.invoiceNumber')) = LOWER(?) AND record_key <> ? LIMIT 1")
+      .get(record.invoiceNumber, String(current?.key || ''));
+    if (duplicate) throw new HttpError(409, 'Mã bản nháp hóa đơn đã tồn tại.');
     record.buyerName = requiredText(record.buyerName, 'Tên người mua', 300);
     record.buyerTaxCode = optionalText(record.buyerTaxCode, 'Mã số thuế người mua', 32);
     record.issueDate = requiredIsoDate(record.issueDate, 'Ngày lập bản nháp');
@@ -8711,6 +8710,15 @@ async function handleRequest(request, response) {
       const payload = await readJson(request, 256 * 1024);
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
+      if (scope === 'finance_einvoices') {
+        const editableFields = new Set(['key', 'invoiceNumber', 'buyerName', 'buyerTaxCode', 'totalAmount', 'vatRate']);
+        if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
+          throw new HttpError(422, 'Bản nháp chỉ cho phép sửa mã bản nháp, thông tin người mua, tiền hàng và thuế suất.');
+        }
+        if (publicCollectionRecord(existing)?.status !== 'Hóa đơn nháp') {
+          throw new HttpError(409, 'Chỉ được sửa hóa đơn còn ở trạng thái nháp.');
+        }
+      }
       if (scope === 'payroll' && Object.hasOwn(patch, 'status')) {
         throw new HttpError(409, 'Trạng thái chi lương chỉ được cập nhật qua nghiệp vụ chi trả có phiếu chi và bút toán.');
       }
@@ -8860,7 +8868,9 @@ async function handleRequest(request, response) {
         if (scope === 'asset_maintenances' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
-        if (scope === 'finance_einvoices' && publicCollectionRecord(fresh)?.status !== 'Hóa đơn nháp') throw new HttpError(409, 'Chỉ được xóa hóa đơn nháp chưa gửi nhà cung cấp.');
+        if (scope === 'finance_einvoices' && parseJsonObject(fresh.payload_json).status !== 'Hóa đơn nháp') {
+          throw new HttpError(409, 'Hóa đơn đã rời trạng thái nháp và không thể sửa trực tiếp.');
+        }
         const current = publicCollectionRecord(fresh) || {};
         if (scope === 'asset_todos' && (fresh.updated_at !== existing.updated_at || fresh.payload_json !== existing.payload_json)) {
           throw new HttpError(409, 'Nhiệm vụ vừa được cập nhật; vui lòng tải lại trước khi sửa.');
@@ -8968,6 +8978,9 @@ async function handleRequest(request, response) {
         if (scope === 'finance_loans' && db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${recordKey}`]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        if (scope === 'finance_einvoices' && publicCollectionRecord(fresh)?.status !== 'Hóa đơn nháp') {
+          throw new HttpError(409, 'Chỉ được xóa hóa đơn còn ở trạng thái nháp.');
+        }
         if (scope === 'finance_loans' && (await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(fresh.record_key)
           || parseJsonObject(fresh.payload_json).loanScheduleAdjustments?.length)) {
           throw new HttpError(409, 'Khế ước đã có giao dịch hoặc lịch điều chỉnh, không thể xóa để bảo toàn lịch sử đối chiếu.');
