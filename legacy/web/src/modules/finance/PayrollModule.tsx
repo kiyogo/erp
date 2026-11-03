@@ -8,7 +8,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Select, Button, Input, message, Card, Tag } from '../../custom-ui';
 import { dataService, PayrollRecord } from '../../services/dataService';
-import { financePaymentAccountsApi, FinancePaymentAccount, payrollLedgerApi, systemApi } from '../../api/endpoints';
+import { financeCashApi, financePaymentAccountsApi, FinancePaymentAccount, payrollLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { filterPayrollForMonth, normalizePayrollMonth, payrollBankRows, payrollReportRows } from './payrollExports';
 
@@ -51,7 +51,10 @@ export const PayrollModule: React.FC = () => {
   const [loadingPaymentAccounts, setLoadingPaymentAccounts] = useState(false);
   const [insuranceLoaded, setInsuranceLoaded] = useState(false);
   const [insuranceDialog, setInsuranceDialog] = useState(false);
-  const [insuranceAmount, setInsuranceAmount] = useState(0);
+  const [insuranceCashTransactions, setInsuranceCashTransactions] = useState<any[]>([]);
+  const [insuranceAllocations, setInsuranceAllocations] = useState({ '3383': '', '3384': '', '3386': '' });
+  const [insurancePaymentReference, setInsurancePaymentReference] = useState('');
+  const [submittingInsurance, setSubmittingInsurance] = useState(false);
   const [accountingSheetKey, setAccountingSheetKey] = useState('');
 
   const loadData = () => {
@@ -109,45 +112,113 @@ export const PayrollModule: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isAccounting) return;
+    if (!isAccounting && !isInsurance) return;
     let active = true;
     systemApi.getCompanyProfile().then(async ({ data: response }) => {
       const regime = String(response.profile.accountingRegime || '');
       if (!active) return;
       setAccountingRegime(regime);
-      if (regime === 'TT99') {
-        const accounts = await dataService.refreshGenericData('finance_chart_of_accounts');
-        if (active) setChartAccounts(accounts.filter((account) => account.accountingRegime === 'TT99' && account.status === 'Đang sử dụng' && account.accountType === 'Chi phí' && !accounts.some((item) => item.parentCode === account.code)));
-      }
+      const accounts = await dataService.refreshGenericData('finance_chart_of_accounts');
+      if (active) setChartAccounts(accounts.filter((account) => account.accountingRegime === regime && account.status === 'Đang sử dụng'));
     }).catch(() => { if (active) message.error('Không tải được chế độ kế toán và danh mục tài khoản doanh nghiệp.'); });
-    payrollLedgerApi.postedPeriods().then(({ data: response }) => { if (active) setPostedPeriods(response.periods); })
-      .catch(() => { if (active) message.error('Không tải được các kỳ lương đã ghi sổ.'); });
+    if (isAccounting) {
+      payrollLedgerApi.postedPeriods().then(({ data: response }) => { if (active) setPostedPeriods(response.periods); })
+        .catch(() => { if (active) message.error('Không tải được các kỳ lương đã ghi sổ.'); });
+    }
     return () => { active = false; };
-  }, [isAccounting]);
+  }, [isAccounting, isInsurance]);
 
   useEffect(() => {
-    if (!isDisburse) return;
+    if (!isDisburse && !isInsurance) return;
     let active = true;
     setLoadingPaymentAccounts(true);
-    financePaymentAccountsApi.getAccounts().then(({ data: response }) => {
+    Promise.all([financePaymentAccountsApi.getAccounts(), financeCashApi.getAll()]).then(([{ data: response }, { data: transactions }]) => {
       if (!active) return;
       setPaymentAccounts(response.accounts);
       setPaymentAccountId((current) => current || response.accounts.find((account) => account.source === 'petty')?.key || response.accounts[0]?.key || '');
+      setInsuranceCashTransactions(transactions.data);
     }).catch((error: any) => {
       if (active) message.error(error?.response?.data?.message || 'Không tải được danh sách tài khoản chi lương.');
     }).finally(() => { if (active) setLoadingPaymentAccounts(false); });
     return () => { active = false; };
-  }, [isDisburse]);
+  }, [isDisburse, isInsurance]);
 
   const periodData = filterPayrollForMonth(data, selectedMonth);
   const orgUnits = dataService.getOrgUnits();
   const payrollSheets = dataService.getGenericData('finance_payroll_sheets');
   const totalPayroll = periodData.reduce((sum, item) => sum + item.netSalary, 0);
   const grossPayroll = periodData.reduce((sum, item) => sum + item.baseSalary + item.allowance + item.bonus, 0);
-  const employerInsurance = periodData.reduce((sum, item) => sum + Math.round(item.baseSalary * 0.215), 0);
   const employeeInsurance = periodData.reduce((sum, item) => sum + item.insuranceDeduction, 0);
+  const payrollCostAccounts = chartAccounts.filter((account) => account.accountType === 'Chi phí' && !chartAccounts.some((item) => item.parentCode === account.code));
+  const insuranceBreakdownValues = Object.fromEntries(Object.entries(insuranceBreakdown).map(([key, value]) => [key, Number(value)])) as Record<keyof typeof insuranceBreakdown, number>;
+  const insuranceDueRows = [
+    { code: '3383', name: 'Bảo hiểm xã hội', due: insuranceBreakdownValues.employerSocial + insuranceBreakdownValues.employeeSocial },
+    { code: '3384', name: 'Bảo hiểm y tế', due: insuranceBreakdownValues.employerHealth + insuranceBreakdownValues.employeeHealth },
+    { code: '3386', name: 'Bảo hiểm thất nghiệp', due: insuranceBreakdownValues.employerUnemployment + insuranceBreakdownValues.employeeUnemployment },
+  ];
+  const insurancePeriodPayments = insuranceCashTransactions.filter((transaction) => transaction.status === 'Đã hoàn thành'
+    && transaction.category === 'Nộp bảo hiểm' && String(transaction.note || '').includes(`Nộp bảo hiểm kỳ ${selectedMonth}`));
+  const insurancePaidAmount = (accountCode: string) => insurancePeriodPayments.reduce((sum, transaction) => sum + (transaction.journalLines || [])
+    .filter((line: any) => String(line.debitAccount || '').replace(/^TK\s*/i, '').trim() === accountCode)
+    .reduce((lineSum: number, line: any) => lineSum + Number(line.amount || 0), 0), 0);
   const availablePaymentAccounts = paymentAccounts.filter((account) => account.status === 'Đang hoạt động'
     && account.source === (paymentMethod === 'Tiền mặt' ? 'petty' : 'bank'));
+  const loadInsuranceDue = () => {
+    if (accountingRegime !== 'TT99') { message.error('Chức năng này cần danh mục tài khoản TT99 đã được xác minh.'); return; }
+    if (insuranceDueRows.some((row) => !Number.isSafeInteger(row.due) || row.due < 0)) { message.error('Tổng nghĩa vụ bảo hiểm vượt giới hạn số tiền hợp lệ.'); return; }
+    if (Object.values(insuranceBreakdown).some((value) => value.trim() === '')
+      || Object.values(insuranceBreakdownValues).some((value) => !Number.isSafeInteger(value) || value < 0)) {
+      message.error('Nhập số liệu BHXH, BHYT và BHTN đã đối chiếu tại mục Hạch toán lương trước.'); return;
+    }
+    const employeeTotal = insuranceBreakdownValues.employeeSocial + insuranceBreakdownValues.employeeHealth + insuranceBreakdownValues.employeeUnemployment;
+    if (employeeTotal !== employeeInsurance) { message.error('Số bảo hiểm người lao động phải khớp khoản khấu trừ trên bảng lương.'); return; }
+    if (['3383', '3384', '3386'].some((code) => !chartAccounts.some((account) => account.code === code && account.accountingRegime === 'TT99' && account.accountType === 'Nợ phải trả'))) {
+      message.error('Danh mục TT99 cần có đủ tài khoản chi tiết 3383, 3384 và 3386 trước khi ghi phiếu chi.'); return;
+    }
+    setInsuranceAllocations({ '3383': '', '3384': '', '3386': '' });
+    setInsuranceLoaded(true);
+  };
+  const submitInsurancePayment = async () => {
+    if (!insuranceLoaded) { message.error('Hãy lấy nghĩa vụ bảo hiểm đã đối chiếu trước.'); return; }
+    const source = availablePaymentAccounts.find((account) => account.key === paymentAccountId);
+    if (!source) { message.error('Chọn tài khoản tiền mặt hoặc tiền gửi đang hoạt động.'); return; }
+    if (!paymentDate || insurancePaymentReference.trim().length < 3) { message.error('Nhập ngày nộp và mã chứng từ hoặc mã giao dịch thực tế.'); return; }
+    const allocations = insuranceDueRows.map((row) => {
+      const value = insuranceAllocations[row.code as keyof typeof insuranceAllocations].trim();
+      return { ...row, amount: value === '' ? 0 : Number(value), remaining: Math.max(0, row.due - insurancePaidAmount(row.code)) };
+    });
+    if (allocations.some(({ amount }) => !Number.isSafeInteger(amount) || amount < 0)) { message.error('Số tiền phân bổ phải là số nguyên không âm.'); return; }
+    if (allocations.some(({ amount, remaining }) => amount > remaining)) { message.error('Số tiền nộp cho từng tài khoản không được vượt phần nghĩa vụ còn lại.'); return; }
+    const total = allocations.reduce((sum, row) => sum + row.amount, 0);
+    if (!Number.isSafeInteger(total) || total <= 0) { message.error('Nhập số tiền nộp lớn hơn 0 cho ít nhất một khoản bảo hiểm.'); return; }
+    if (total > source.balance) { message.error('Số tiền nộp vượt số dư tài khoản thanh toán đã chọn.'); return; }
+    const duplicateReference = insuranceCashTransactions.some((transaction) => transaction.status !== 'Đã hủy'
+      && transaction.category === 'Nộp bảo hiểm' && transaction.reference?.trim().toLowerCase() === insurancePaymentReference.trim().toLowerCase());
+    if (duplicateReference) { message.error('Mã chứng từ này đã được dùng cho một phiếu nộp bảo hiểm khác.'); return; }
+    setSubmittingInsurance(true);
+    try {
+      await financeCashApi.create({
+        type: 'Chi', source: source.source, category: 'Nộp bảo hiểm', amount: total, date: paymentDate,
+        reference: insurancePaymentReference.trim(), recipientOrPayer: 'Cơ quan Bảo hiểm xã hội', account: source.name,
+        status: 'Đã hoàn thành', note: `Nộp bảo hiểm kỳ ${selectedMonth}; mã chứng từ ${insurancePaymentReference.trim()}`,
+        sourceAccountId: source.key, counterpartyType: 'other',
+        journalLines: allocations.filter((row) => row.amount > 0).map((row) => ({
+          description: `Nộp bảo hiểm kỳ ${selectedMonth} · ${row.name}`,
+          debitAccount: `TK ${row.code}`, creditAccount: source.source === 'petty' ? 'TK 111' : 'TK 112', amount: row.amount,
+        })),
+      });
+      const { data: latestTransactions } = await financeCashApi.getAll();
+      setInsuranceCashTransactions(latestTransactions.data);
+      await dataService.refreshGenericData('finance_general_ledger').catch(() => {});
+      setPaymentAccounts((await financePaymentAccountsApi.getAccounts()).data.accounts);
+      setInsuranceAllocations({ '3383': '', '3384': '', '3386': '' });
+      setInsurancePaymentReference('');
+      setInsuranceDialog(false);
+      message.success('Đã ghi phiếu chi bảo hiểm và bút toán vào Sổ Cái.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không ghi được phiếu chi bảo hiểm.');
+    } finally { setSubmittingInsurance(false); }
+  };
   const availableMonths = Array.from(new Set([selectedMonth, ...postedPeriods, ...data.map((item) => normalizePayrollMonth(item.month)).filter((month): month is string => Boolean(month))]))
     .filter((month) => normalizePayrollMonth(month))
     .sort((a, b) => `${b.slice(3)}-${b.slice(0, 2)}`.localeCompare(`${a.slice(3)}-${a.slice(0, 2)}`))
@@ -305,7 +376,7 @@ export const PayrollModule: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {!isAttendance && !isInsurance && !isDisburse && !isAccounting && <Button onClick={() => setSheetDialog(true)}>Thêm bảng lương</Button>}
         <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>Kỳ lương:</span>
-        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); setInsuranceBreakdown({ employerSocial: '', employerHealth: '', employerUnemployment: '', employeeSocial: '', employeeHealth: '', employeeUnemployment: '' }); }} options={availableMonths} style={{ width: 160 }} />
+        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); setInsuranceBreakdown({ employerSocial: '', employerHealth: '', employerUnemployment: '', employeeSocial: '', employeeHealth: '', employeeUnemployment: '' }); setInsuranceLoaded(false); setInsuranceAllocations({ '3383': '', '3384': '', '3386': '' }); setInsurancePaymentReference(''); }} options={availableMonths} style={{ width: 160 }} />
       </div>
       <Modal title="Thêm bảng lương" open={sheetDialog} onCancel={() => setSheetDialog(false)} onOk={() => {
         if (!sheetName.trim() || selectedUnits.length === 0) { message.error('Nhập tên bảng lương và chọn ít nhất một đơn vị.'); return; }
@@ -375,31 +446,38 @@ export const PayrollModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'end', gap: 12, flexWrap: 'wrap' }}>
             <label>Phương thức thanh toán<Select value={paymentMethod} onChange={setPaymentMethod} options={['Tiền mặt', 'Tiền gửi'].map((value) => ({ value, label: value }))} /></label>
+            <label style={{ minWidth: 280 }}>Tài khoản chi<Select value={paymentAccountId || undefined} loading={loadingPaymentAccounts} onChange={setPaymentAccountId} options={availablePaymentAccounts.map((account) => ({ value: account.key, label: `${account.name} · Số dư ${account.balance.toLocaleString('vi-VN')} ₫` }))} placeholder="Chọn tài khoản chi" /></label>
             <label>Ngày nộp bảo hiểm<Input type="date" value={paymentDate} onChange={(e: any) => setPaymentDate(e.target.value)} /></label>
-            <Button type="primary" onClick={() => { setInsuranceAmount(employerInsurance + employeeInsurance); setInsuranceLoaded(true); }}>Lấy dữ liệu</Button>
+            <Button type="primary" onClick={loadInsuranceDue}>Lấy nghĩa vụ đã đối chiếu</Button>
           </div>
-          {insuranceLoaded && <div className="transparent-table-card"><KTable dataSource={[
-            { key: 'insurance-total', item: 'BHXH, BHYT, BHTN', due: employerInsurance + employeeInsurance },
-          ]} columns={[{ title: 'Khoản phải nộp', dataIndex: 'item', key: 'item' }, { title: 'Số phải nộp', dataIndex: 'due', key: 'due', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` }, { title: 'Số nộp lần này', key: 'pay', render: () => <Input type="number" min={0} value={insuranceAmount} onChange={(event: any) => setInsuranceAmount(Math.max(0, Number(event.target.value) || 0))} /> }]} /><div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px' }}><span>Tổng</span><span>{(employerInsurance + employeeInsurance).toLocaleString('vi-VN')} ₫</span><span>{insuranceAmount.toLocaleString('vi-VN')} ₫</span></div><div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 12px 12px' }}><Button type="primary" onClick={() => setInsuranceDialog(true)}>Nộp bảo hiểm</Button></div></div>}
-          <Modal title="Nộp bảo hiểm" open={insuranceDialog} onCancel={() => setInsuranceDialog(false)} onOk={() => {
-            const rows = dataService.getGenericData('finance_payroll_insurance_payments');
-            dataService.saveGenericData('finance_payroll_insurance_payments', [{ key: String(Date.now()), period: selectedMonth, method: paymentMethod, date: paymentDate, dueAmount: employerInsurance + employeeInsurance, paidAmount: insuranceAmount, createdAt: new Date().toISOString() }, ...rows]);
-            setInsuranceDialog(false); message.success('Đã lưu thông tin nộp bảo hiểm.');
-          }} okText="Nộp bảo hiểm" cancelText="Hủy" width={460}><div>Phương thức thanh toán: {paymentMethod}</div><div>Ngày nộp bảo hiểm: {paymentDate}</div><div>Số tiền nộp: {insuranceAmount.toLocaleString('vi-VN')} ₫</div></Modal>
+          <div style={{ color: '#64748B' }}>{accountingRegime === 'TT99' ? 'Nhập số liệu đã đối chiếu trong mục Hạch toán lương. Tỷ lệ và số phải nộp không được phần mềm tự ước tính.' : 'Thanh toán bảo hiểm hiện yêu cầu doanh nghiệp dùng danh mục tài khoản TT99 đã xác minh.'}</div>
+          {insuranceLoaded && <div className="transparent-table-card"><KTable dataSource={insuranceDueRows.map((row) => ({ ...row, paid: insurancePaidAmount(row.code), remaining: Math.max(0, row.due - insurancePaidAmount(row.code)) }))}
+            columns={[{ title: 'Khoản phải nộp', dataIndex: 'name', key: 'name' }, { title: 'Tài khoản', dataIndex: 'code', key: 'code' },
+              { title: 'Nghĩa vụ đã đối chiếu', dataIndex: 'due', key: 'due', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+              { title: 'Đã nộp', dataIndex: 'paid', key: 'paid', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+              { title: 'Còn phải nộp', dataIndex: 'remaining', key: 'remaining', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
+              { title: 'Nộp lần này', key: 'pay', render: (_: any, row: any) => <Input type="number" min={0} step={1} value={insuranceAllocations[row.code as keyof typeof insuranceAllocations]} onChange={(event: any) => setInsuranceAllocations((current) => ({ ...current, [row.code]: event.target.value }))} /> }]}
+          /><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end', padding: '10px 12px', gap: 12, flexWrap: 'wrap' }}>
+            <label>Mã chứng từ hoặc mã giao dịch<Input value={insurancePaymentReference} onChange={(event: any) => setInsurancePaymentReference(event.target.value)} placeholder="Mã giao dịch đã thanh toán" /></label>
+            <Button type="primary" disabled={!paymentAccountId} onClick={() => setInsuranceDialog(true)}>Lập phiếu chi bảo hiểm</Button>
+          </div></div>}
+          <Modal title="Xác nhận phiếu chi bảo hiểm" open={insuranceDialog} onCancel={() => setInsuranceDialog(false)} onOk={submitInsurancePayment} confirmLoading={submittingInsurance}
+            okText="Ghi phiếu chi" cancelText="Hủy" width={460}>
+            <div>Phương thức thanh toán: {paymentMethod}</div><div>Ngày nộp: {paymentDate}</div>
+            <div>Số tiền: {insuranceDueRows.reduce((sum, row) => sum + (Number(insuranceAllocations[row.code as keyof typeof insuranceAllocations]) || 0), 0).toLocaleString('vi-VN')} ₫</div>
+            <div>Mã chứng từ: {insurancePaymentReference || '—'}</div>
+            <div style={{ marginTop: 10, color: '#64748B' }}>Hệ thống ghi nhận phiếu chi đã thanh toán và tạo bút toán Sổ Cái theo tài khoản nguồn đã chọn.</div>
+          </Modal>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Ước tính doanh nghiệp đóng</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-                {employerInsurance.toLocaleString('vi-VN')} ₫
-              </div>
-              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>Ước tính 21,5% lương cơ bản, cần đối chiếu</div>
+              <div style={{ fontSize: 12.5, color: '#1E40AF' }}>Doanh nghiệp đóng theo bảng kê đã đối chiếu</div>
+              <div style={{ fontSize: 20, color: '#2563EB', marginTop: 4 }}>{(insuranceBreakdownValues.employerSocial + insuranceBreakdownValues.employerHealth + insuranceBreakdownValues.employerUnemployment).toLocaleString('vi-VN')} ₫</div>
+              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>Số nhập tại mục Hạch toán lương</div>
             </div>
             <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 12.5, color: '#92400E', fontWeight: 600 }}>Người lao động trích nộp (10.5%)</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: '#D97706', marginTop: 4 }}>
-                {(periodData.reduce((s, i) => s + i.insuranceDeduction, 0)).toLocaleString('vi-VN')} ₫
-              </div>
-              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>BHXH 8% + BHYT 1.5% + BHTN 1%</div>
+              <div style={{ fontSize: 12.5, color: '#92400E' }}>Người lao động bị khấu trừ</div>
+              <div style={{ fontSize: 20, color: '#D97706', marginTop: 4 }}>{employeeInsurance.toLocaleString('vi-VN')} ₫</div>
+              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>Theo dữ liệu bảng lương kỳ đã chọn</div>
             </div>
           </div>
 
@@ -416,11 +494,7 @@ export const PayrollModule: React.FC = () => {
               columns={[
                 { title: 'Mã NV & Họ tên', key: 'name', render: (_: any, r: PayrollRecord) => <div><strong>{r.employeeName}</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>{r.employeeCode} - {r.department}</div></div> },
                 { title: 'Lương đóng BH', dataIndex: 'baseSalary', key: 'baseSalary', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'BHXH NLĐ (8%)', dataIndex: 'baseSalary', key: 'bhxh', render: (v: number) => `${Math.round(v * 0.08).toLocaleString('vi-VN')} ₫` },
-                { title: 'BHYT NLĐ (1.5%)', dataIndex: 'baseSalary', key: 'bhyt', render: (v: number) => `${Math.round(v * 0.015).toLocaleString('vi-VN')} ₫` },
-                { title: 'BHTN NLĐ (1%)', dataIndex: 'baseSalary', key: 'bhtn', render: (v: number) => `${Math.round(v * 0.01).toLocaleString('vi-VN')} ₫` },
-                { title: 'Tổng trừ lương NLĐ (10.5%)', dataIndex: 'insuranceDeduction', key: 'tot', render: (v: number) => <strong style={{ color: '#DC2626' }}>-{v.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'DN đóng (21.5%)', dataIndex: 'baseSalary', key: 'comp', render: (v: number) => <span style={{ color: '#2563EB', fontWeight: 600 }}>{Math.round(v * 0.215).toLocaleString('vi-VN')} ₫</span> },
+                { title: 'Khấu trừ bảo hiểm theo bảng lương', dataIndex: 'insuranceDeduction', key: 'insuranceDeduction', render: (v: number) => `-${v.toLocaleString('vi-VN')} ₫` },
               ]}
             />
           </div>
@@ -504,9 +578,9 @@ export const PayrollModule: React.FC = () => {
             {accountingRegime === 'TT99' ? (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ marginBottom: 8, color: '#64748B' }}>Nhập số liệu đã đối chiếu với bảng lương và bảng kê bảo hiểm. Phần mềm không tự suy tính tỷ lệ đóng.</div>
-                {chartAccounts.length ? (
+                {payrollCostAccounts.length ? (
                   <label style={{ display: 'block', marginBottom: 10 }}>Tài khoản chi phí lương
-                    <Select value={costAccount || undefined} onChange={setCostAccount} options={chartAccounts.map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết theo bộ phận" />
+                    <Select value={costAccount || undefined} onChange={setCostAccount} options={payrollCostAccounts.map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết theo bộ phận" />
                   </label>
                 ) : <div style={{ marginBottom: 10, color: '#B45309' }}>Chưa có tài khoản chi phí TT99. Hãy nạp mẫu tại Tổng hợp → Hệ thống tài khoản.</div>}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>

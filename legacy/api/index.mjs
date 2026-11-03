@@ -9570,6 +9570,12 @@ async function handleRequest(request, response) {
         await lockTransferLedger();
         if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
       }
+      if (transaction.category === 'Nộp bảo hiểm' && transaction.reference) {
+        const duplicateReference = await db.prepare(`SELECT id FROM finance_cash_transactions
+          WHERE category = ? AND lower(reference) = lower(?) AND status <> 'Đã hủy' LIMIT 1`)
+          .get(transaction.category, transaction.reference);
+        if (duplicateReference) throw new HttpError(409, 'Mã chứng từ này đã được dùng cho một phiếu nộp bảo hiểm khác.');
+      }
       await db.prepare(`INSERT INTO finance_cash_transactions (
         id, code, transaction_type, source, category, amount, transaction_date, counterparty,
         account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
