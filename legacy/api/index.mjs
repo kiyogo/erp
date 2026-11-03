@@ -2176,7 +2176,7 @@ const accountingOperationScopes = new Set([
   'finance_advances', 'finance_cash_transactions', 'finance_cash_counts', 'finance_costing', 'finance_einvoices', 'finance_equity',
   'finance_fixed_assets', 'finance_general_ledger', 'finance_internal_transfers', 'finance_inventory',
   'finance_inventory_transactions', 'finance_loan_events', 'finance_loans', 'finance_payments', 'finance_payroll_adjustments',
-  'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts',
+  'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts', 'finance_bank_statements',
 ]);
 
 async function requireCollectionActor(request, scope) {
@@ -2190,6 +2190,8 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'finance_loan_events' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Giao dịch khoản vay chỉ được ghi qua API có liên kết phiếu tiền và Sổ Cái.');
   }
+  if (scope === 'finance_bank_statements' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được nhập và xem sao kê ngân hàng.');
+  if (scope === 'finance_bank_statements' && !['GET', 'HEAD', 'POST'].includes(request.method)) throw new HttpError(409, 'Sao kê đã nhập được giữ làm chứng từ đối chiếu và không thể sửa hoặc xóa.');
   if (scope === 'finance_chart_of_accounts' && !['GET', 'HEAD'].includes(request.method)) {
     throw new HttpError(409, 'Danh mục tài khoản chỉ được thay đổi qua API có kiểm tra cấu trúc và bút toán đã ghi sổ.');
   }
@@ -2391,6 +2393,77 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.externalStatus = 'Chưa gửi nhà cung cấp';
     delete record.cqtCode;
     delete record.signature;
+  }
+  if (scope === 'finance_bank_statements') {
+    record.bankAccountId = requiredText(record.bankAccountId, 'Tài khoản ngân hàng', 160);
+    if (!await db.prepare("SELECT id FROM finance_bank_accounts WHERE id = ? AND status = 'Đang hoạt động'").get(record.bankAccountId)) {
+      throw new HttpError(422, 'Chọn tài khoản ngân hàng đang hoạt động.');
+    }
+    record.fileHash = requiredText(record.fileHash, 'Dấu kiểm tra tệp sao kê', 64).toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(record.fileHash)) throw new HttpError(422, 'Dấu kiểm tra tệp sao kê không hợp lệ.');
+    record.fileName = requiredText(record.fileName, 'Tên tệp sao kê', 255);
+    if (!/\.(csv|xlsx|xls)$/i.test(record.fileName)) throw new HttpError(422, 'Chỉ chấp nhận tệp sao kê CSV, XLSX hoặc XLS.');
+    record.currency = requiredText(record.currency, 'Tiền tệ sao kê', 3).toUpperCase();
+    if (!/^[A-Z]{3}$/.test(record.currency)) throw new HttpError(422, 'Mã tiền tệ phải gồm 3 chữ cái.');
+    const optionalBalance = (value, label) => {
+      if (value === undefined || value === null || value === '') return null;
+      const amount = Number(value);
+      if (!Number.isFinite(amount) || Math.abs(amount) > Number.MAX_SAFE_INTEGER / 100) throw new HttpError(422, `${label} không hợp lệ.`);
+      if (record.currency === 'VND' && !Number.isSafeInteger(amount)) throw new HttpError(422, `${label} bằng VND phải là số nguyên.`);
+      return Math.round(amount * 100) / 100;
+    };
+    record.openingBalance = optionalBalance(record.openingBalance, 'Số dư đầu kỳ');
+    record.closingBalance = optionalBalance(record.closingBalance, 'Số dư cuối kỳ');
+    if (!Array.isArray(record.lines) || record.lines.length < 1 || record.lines.length > 1000) throw new HttpError(422, 'Sao kê phải có từ 1 đến 1.000 giao dịch.');
+    record.lines = record.lines.map((line, index) => {
+      if (!line || typeof line !== 'object' || Array.isArray(line)) throw new HttpError(422, `Dòng sao kê ${index + 1} không hợp lệ.`);
+      const amount = Number(line.amount);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > Number.MAX_SAFE_INTEGER / 100 || (record.currency === 'VND' && !Number.isSafeInteger(amount))) {
+        throw new HttpError(422, `Số tiền giao dịch dòng ${index + 1} không hợp lệ.`);
+      }
+      const rowNumber = Number(line.rowNumber);
+      if (!Number.isSafeInteger(rowNumber) || rowNumber < 1) throw new HttpError(422, `Số dòng sao kê ${index + 1} không hợp lệ.`);
+      const valueDate = line.valueDate ? requiredIsoDate(line.valueDate, `Ngày giá trị dòng ${index + 1}`) : '';
+      const balance = optionalBalance(line.balance, `Số dư dòng ${index + 1}`);
+      return {
+        key: requiredText(line.key || `line-${rowNumber}`, `Mã dòng sao kê ${index + 1}`, 120),
+        rowNumber,
+        transactionDate: requiredIsoDate(line.transactionDate, `Ngày giao dịch dòng ${index + 1}`),
+        valueDate,
+        direction: oneOf(line.direction, `Loại giao dịch dòng ${index + 1}`, ['Thu', 'Chi']),
+        amount: Math.round(amount * 100) / 100,
+        ...(balance === null ? {} : { balance }),
+        description: optionalText(line.description, `Nội dung dòng ${index + 1}`, 1000),
+        counterparty: optionalText(line.counterparty, `Đối tác dòng ${index + 1}`, 300),
+        counterpartyAccount: optionalText(line.counterpartyAccount, `Tài khoản đối tác dòng ${index + 1}`, 64),
+        reference: optionalText(line.reference, `Mã tham chiếu dòng ${index + 1}`, 160),
+        transactionId: optionalText(line.transactionId, `Mã giao dịch dòng ${index + 1}`, 160),
+        currency: record.currency,
+        duplicate: false,
+      };
+    });
+    const importedRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_bank_statements' AND json_extract(payload_json, '$.bankAccountId') = ?")
+      .all(record.bankAccountId);
+    const normalizeDuplicateText = value => String(value || '').normalize('NFKC').trim().toLocaleLowerCase('vi-VN').replace(/\s+/g, ' ');
+    const fingerprintLine = line => [
+      normalizeDuplicateText(line.transactionId), line.transactionDate, line.direction, Number(line.amount).toFixed(2),
+      normalizeDuplicateText(line.reference), normalizeDuplicateText(line.description),
+    ].join('|');
+    const fingerprints = new Set(importedRows.flatMap(row => {
+      const imported = parseJsonObject(row.payload_json);
+      return Array.isArray(imported.lines) ? imported.lines.map(fingerprintLine) : [];
+    }));
+    record.lines = record.lines.map(line => {
+      const fingerprint = fingerprintLine(line);
+      const duplicate = fingerprints.has(fingerprint);
+      fingerprints.add(fingerprint);
+      return { ...line, duplicate };
+    });
+    record.status = 'Đã nhập · chưa đối soát';
+    record.importedAt = now();
+    record.importedBy = actor.name;
+    record.importedById = actor.id;
+    delete record.rawFile;
   }
   if (scope === 'tickets') {
     const at = now();
@@ -8239,7 +8312,7 @@ async function handleRequest(request, response) {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionMatch[1]));
     const actor = await requireCollectionActor(request, scope);
     if (['payroll', 'employee_payslips'].includes(scope)) await requireSecurityPin(request, actor);
-    const payload = await readJson(request, 256 * 1024);
+    const payload = await readJson(request, scope === 'finance_bank_statements' ? 2 * 1024 * 1024 : 256 * 1024);
     let item;
     let ownerId = actor.id;
     const timestamp = now();
@@ -8249,6 +8322,13 @@ async function handleRequest(request, response) {
         if (scope === 'asset_disposals' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         if (scope === 'asset_depreciations' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         item = await normalizeCollectionRecord(payload.record, scope, actor);
+        if (scope === 'finance_bank_statements') {
+          const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = ? AND json_extract(payload_json, '$.bankAccountId') = ? AND json_extract(payload_json, '$.fileHash') = ? LIMIT 1")
+            .get(scope, item.record.bankAccountId, item.record.fileHash);
+          if (duplicate) throw new HttpError(409, 'Tệp sao kê này đã được nhập cho tài khoản đã chọn.');
+          const expectedKey = `statement-${item.record.bankAccountId}-${item.record.fileHash}`;
+          if (item.recordKey !== expectedKey) throw new HttpError(422, 'Khóa sao kê không khớp với tài khoản và tệp.');
+        }
         if (scope === 'finance_general_ledger' && (item.record.sourceModule === 'payroll' || String(item.record.sourceReference || '').startsWith('payroll:') || item.recordKey.startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được tạo qua chức năng hạch toán lương.');
         if (scope === 'finance_general_ledger' && (item.record.sourceModule === 'cash_voucher' || String(item.record.sourceReference || '').startsWith('cash-voucher:') || item.recordKey.startsWith('cash-voucher:'))) throw new HttpError(409, 'Bút toán phiếu thu chi phải được tạo qua chức năng ghi sổ phiếu.');
         if (['leave_requests', 'attendance_overtime', 'attendance_leave_summary'].includes(scope)) ownerId = item.record.employeeId;

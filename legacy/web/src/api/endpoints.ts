@@ -652,6 +652,42 @@ export const financeBankAccountsApi = {
   create: (data: CreateFinanceBankAccount) => api.post<{ account: FinanceBankAccount }>('/finance/bank-accounts', data),
 };
 
+export type FinanceBankStatementLine = {
+  key: string;
+  rowNumber: number;
+  transactionDate: string;
+  valueDate: string;
+  direction: 'Thu' | 'Chi';
+  amount: number;
+  balance?: number;
+  description: string;
+  counterparty: string;
+  counterpartyAccount: string;
+  reference: string;
+  transactionId: string;
+  currency: string;
+  duplicate: boolean;
+};
+
+export type FinanceBankStatement = {
+  key: string;
+  bankAccountId: string;
+  fileHash: string;
+  fileName: string;
+  currency: string;
+  openingBalance?: number;
+  closingBalance?: number;
+  lines: FinanceBankStatementLine[];
+  importedAt: string;
+  importedBy: string;
+  status: string;
+};
+
+export const financeBankStatementsApi = {
+  getAll: () => collectionsApi.get<FinanceBankStatement>('finance_bank_statements'),
+  create: (record: FinanceBankStatement) => collectionsApi.create<FinanceBankStatement>('finance_bank_statements', record),
+};
+
 export type FinanceTransferAccount = {
   key: string;
   name: string;

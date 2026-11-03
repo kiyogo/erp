@@ -7,15 +7,32 @@ import {
   DownloadOutlined,
   BankOutlined,
   SwapOutlined,
-  ClockCircleOutlined,
   UploadOutlined,
   CheckOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
-import { Modal, Form, Input, Select, Button, message, Card, Tag, Switch } from '../../custom-ui';
-import { financeBankAccountsApi, FinanceBankAccount, financeCashApi, FinanceCashTransaction, financeTransfersApi } from '../../api/endpoints';
+import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
+import { financeBankAccountsApi, FinanceBankAccount, financeBankStatementsApi, FinanceBankStatement, financeCashApi, FinanceCashTransaction, financeTransfersApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { bankStatementLineFingerprint, ImportedBankStatementLine, parseBankStatementFile } from './bankStatementImport';
+
+const markStatementDuplicates = (
+  lines: ImportedBankStatementLine[],
+  accountId: string,
+  importedStatements: FinanceBankStatement[],
+) => {
+  const existing = new Set(importedStatements
+    .filter((statement) => statement.bankAccountId === accountId)
+    .flatMap((statement) => statement.lines.map(bankStatementLineFingerprint)));
+  const seen = new Set<string>();
+  return lines.map((line) => {
+    const fingerprint = bankStatementLineFingerprint(line);
+    const duplicate = existing.has(fingerprint) || seen.has(fingerprint);
+    seen.add(fingerprint);
+    return { ...line, duplicate };
+  });
+};
 
 export const BankAccountsModule: React.FC = () => {
   const location = useLocation();
@@ -28,11 +45,18 @@ export const BankAccountsModule: React.FC = () => {
 
   const [data, setData] = useState<FinanceBankAccount[]>([]);
   const [transactions, setTransactions] = useState<FinanceCashTransaction[]>([]);
+  const [statementImports, setStatementImports] = useState<FinanceBankStatement[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [statementPickerOpen, setStatementPickerOpen] = useState(false);
+  const [statementPreview, setStatementPreview] = useState<{ fileName: string; fileHash: string; lines: ImportedBankStatementLine[] } | null>(null);
+  const [statementAccountId, setStatementAccountId] = useState('');
+  const [statementCurrency, setStatementCurrency] = useState('VND');
+  const [statementOpeningBalance, setStatementOpeningBalance] = useState('');
+  const [statementClosingBalance, setStatementClosingBalance] = useState('');
+  const [savingStatement, setSavingStatement] = useState(false);
   const [form] = Form.useForm();
   const [transferForm] = Form.useForm();
   const [transferring, setTransferring] = useState(false);
@@ -42,15 +66,18 @@ export const BankAccountsModule: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [accountsResponse, transactionsResponse] = await Promise.all([
+      const [accountsResponse, transactionsResponse, statementsResponse] = await Promise.all([
         financeBankAccountsApi.getAll(),
         financeCashApi.getAll('bank'),
+        financeBankStatementsApi.getAll(),
       ]);
       setData(accountsResponse.data.data);
       setTransactions(transactionsResponse.data.data);
+      setStatementImports(statementsResponse.data.data);
     } catch (error: any) {
       setData([]);
       setTransactions([]);
+      setStatementImports([]);
       message.error(error?.response?.data?.message || 'Không tải được dữ liệu ngân hàng.');
     } finally {
       setLoading(false);
@@ -64,17 +91,11 @@ export const BankAccountsModule: React.FC = () => {
   const completedBankTransactions = transactions.filter((item) => item.status === 'Đã hoàn thành');
   const ledgerBalance = completedBankTransactions.reduce((sum, item) => sum + (item.type === 'Thu' ? item.amount : -item.amount), 0);
   const totalBalance = data.reduce((sum, item) => sum + (item.currentBalance ?? item.balance), 0);
-  const accountSummaries = Array.from(
-    completedBankTransactions.reduce((map, item) => {
-      const current = map.get(item.account) || { key: item.account, account: item.account, income: 0, expense: 0, balance: 0 };
-      if (item.type === 'Thu') current.income += item.amount;
-      else current.expense += item.amount;
-      current.balance = current.income - current.expense;
-      map.set(item.account, current);
-      return map;
-    }, new Map<string, { key: string; account: string; income: number; expense: number; balance: number }>()),
-    ([, value]) => value,
-  );
+  const importedStatementLines = statementImports.reduce((sum, statement) => sum + statement.lines.length, 0);
+
+  useEffect(() => {
+    if (!statementAccountId) setStatementAccountId(data.find((account) => account.status === 'Đang hoạt động')?.key || '');
+  }, [data, statementAccountId]);
 
   const handleCreate = async (values: any) => {
     try {
@@ -127,6 +148,66 @@ export const BankAccountsModule: React.FC = () => {
       setTransferring(false);
     }
   };
+
+  const handleStatementFiles = async (files: File[]) => {
+    const file = files[0];
+    if (!file) return;
+    try {
+      const parsed = await parseBankStatementFile(file);
+      const lines = markStatementDuplicates(parsed.lines, statementAccountId, statementImports);
+      setStatementPreview({ fileName: file.name, fileHash: parsed.fileHash, lines });
+      setStatementCurrency('VND');
+      setStatementOpeningBalance('');
+      setStatementClosingBalance('');
+    } catch (error: any) {
+      message.error(error?.message || 'Không thể đọc tệp sao kê.');
+    }
+  };
+
+  const saveStatement = async () => {
+    if (!statementPreview || !statementAccountId) {
+      message.error('Chọn tài khoản ngân hàng trước khi nhập sao kê.');
+      return;
+    }
+    const openingBalance = statementOpeningBalance.trim() === '' ? undefined : Number(statementOpeningBalance);
+    const closingBalance = statementClosingBalance.trim() === '' ? undefined : Number(statementClosingBalance);
+    if ([openingBalance, closingBalance].some((value) => value !== undefined && (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER / 100 || (statementCurrency === 'VND' && !Number.isSafeInteger(value))))) {
+      message.error('Số dư đầu kỳ hoặc cuối kỳ không hợp lệ.');
+      return;
+    }
+    setSavingStatement(true);
+    const key = `statement-${statementAccountId}-${statementPreview.fileHash}`;
+    try {
+      await financeBankStatementsApi.create({
+        key,
+        bankAccountId: statementAccountId,
+        fileHash: statementPreview.fileHash,
+        fileName: statementPreview.fileName,
+        currency: statementCurrency,
+        openingBalance,
+        closingBalance,
+        lines: statementPreview.lines.map((line) => ({ ...line, currency: statementCurrency })),
+        importedAt: new Date().toISOString(),
+        importedBy: '',
+        status: 'Đã nhập · chưa đối soát',
+      });
+      message.success(`Đã nhập ${statementPreview.lines.length} giao dịch từ sao kê. Chưa tạo bút toán kế toán.`);
+      setStatementPreview(null);
+      await loadData();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể lưu sao kê.');
+    } finally {
+      setSavingStatement(false);
+    }
+  };
+
+  const exportStatement = (statement: FinanceBankStatement) => downloadFile(
+    `sao_ke_${statement.fileName.replace(/[^a-z0-9._-]/gi, '_')}.xlsx`,
+    generateValidXlsxBlob([
+      ['Ngày giao dịch', 'Ngày giá trị', 'Loại', 'Số tiền', 'Tiền tệ', 'Số dư sau giao dịch', 'Nội dung', 'Đối tác', 'Tài khoản đối tác', 'Mã tham chiếu', 'Mã giao dịch', 'Trùng giao dịch'],
+      ...statement.lines.map((line) => [line.transactionDate, line.valueDate, line.direction, line.amount, line.currency, line.balance ?? '', line.description, line.counterparty, line.counterpartyAccount, line.reference, line.transactionId, line.duplicate ? 'Có' : 'Không']),
+    ]),
+  );
 
   const columns = [
     {
@@ -182,7 +263,72 @@ export const BankAccountsModule: React.FC = () => {
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      <FileUploadDialog open={statementPickerOpen} onClose={() => setStatementPickerOpen(false)} onSelect={(files) => message.success(`Đã chọn ${files.length} tệp sao kê để xử lý.`)} title="Chọn sao kê ngân hàng" accept=".xlsx,.xls,.csv,.mt940,.txt" confirmText="Tải lên sao kê" />
+      <FileUploadDialog open={statementPickerOpen} onClose={() => setStatementPickerOpen(false)} onSelect={(files) => { setStatementPickerOpen(false); void handleStatementFiles(files); }} title="Chọn sao kê ngân hàng" accept=".xlsx,.xls,.csv" confirmText="Xem trước sao kê" multiple={false} />
+      <Modal
+        title="Xem trước sao kê ngân hàng"
+        open={Boolean(statementPreview)}
+        onCancel={() => setStatementPreview(null)}
+        footer={null}
+        width={1180}
+        style={{ top: 50, maxWidth: '96vw' }}
+      >
+        {statementPreview && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Alert type="info" showIcon message="Dữ liệu chỉ được lưu để đối chiếu. Nhập sao kê không tạo giao dịch tiền gửi hoặc bút toán kế toán." />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+              <div>
+                <div style={{ marginBottom: 6 }}>Tài khoản ngân hàng</div>
+                <Select
+                  value={statementAccountId || undefined}
+                  onChange={(accountId) => {
+                    setStatementAccountId(accountId);
+                    setStatementPreview((preview) => preview ? { ...preview, lines: markStatementDuplicates(preview.lines, accountId, statementImports) } : preview);
+                  }}
+                  placeholder="Chọn tài khoản"
+                  options={data.filter((account) => account.status === 'Đang hoạt động').map((account) => ({ label: `${account.bankName} · ${account.accountNumber}`, value: account.key }))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6 }}>Tiền tệ</div>
+                <Select value={statementCurrency} onChange={setStatementCurrency} style={{ width: '100%' }} options={['VND', 'USD', 'EUR', 'JPY', 'CNY'].map((currency) => ({ label: currency, value: currency }))} />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6 }}>Số dư đầu kỳ</div>
+                <Input type="number" value={statementOpeningBalance} onChange={(event) => setStatementOpeningBalance(event.target.value)} placeholder="Không bắt buộc" />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6 }}>Số dư cuối kỳ</div>
+                <Input type="number" value={statementClosingBalance} onChange={(event) => setStatementClosingBalance(event.target.value)} placeholder="Không bắt buộc" />
+              </div>
+            </div>
+            <div style={{ color: '#64748B' }}>
+              Tệp: {statementPreview.fileName} · {statementPreview.lines.length.toLocaleString('vi-VN')} giao dịch · {statementPreview.lines.filter((line) => line.duplicate).length.toLocaleString('vi-VN')} dòng trùng
+            </div>
+            <div className="transparent-table-card">
+              <KTable
+                dataSource={statementPreview.lines.map((line, index) => ({ ...line, key: `${index}` }))}
+                pagination={{ pageSize: 10 }}
+                scroll={{ x: 1200 }}
+                columns={[
+                  { title: 'Ngày giao dịch', dataIndex: 'transactionDate', key: 'transactionDate' },
+                  { title: 'Loại', dataIndex: 'direction', key: 'direction', render: (value: string) => value === 'Thu' ? 'Tiền vào' : 'Tiền ra' },
+                  { title: 'Số tiền', dataIndex: 'amount', key: 'amount', render: (value: number) => value.toLocaleString('vi-VN') },
+                  { title: 'Số dư', dataIndex: 'balance', key: 'balance', render: (value?: number) => value == null ? '—' : value.toLocaleString('vi-VN') },
+                  { title: 'Nội dung', dataIndex: 'description', key: 'description' },
+                  { title: 'Đối tác', dataIndex: 'counterparty', key: 'counterparty' },
+                  { title: 'Mã tham chiếu', dataIndex: 'reference', key: 'reference' },
+                  { title: 'Trùng', dataIndex: 'duplicate', key: 'duplicate', render: (value: boolean) => <Tag color={value ? 'warning' : 'default'}>{value ? 'Có' : 'Không'}</Tag> },
+                ]}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Button onClick={() => setStatementPreview(null)}>Hủy</Button>
+              <Button type="primary" loading={savingStatement} onClick={() => void saveStatement()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu sao kê</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
       {/* KPI Total Balance */}
       <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -303,38 +449,39 @@ export const BankAccountsModule: React.FC = () => {
               </div>
             </div>
             <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 12.5, color: '#166534', fontWeight: 600 }}>Sao kê ngân hàng thật</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-                Chưa có
-              </div>
+              <div style={{ fontSize: 12.5, color: '#166534', fontWeight: 600 }}>Sao kê đã nhập</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>{statementImports.length} tệp · {importedStatementLines} giao dịch</div>
             </div>
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 16 }}>
               <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Chênh lệch đối soát</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-                Cần sao kê để đối chiếu
+                Chưa đối chiếu
               </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh sách bản sao kê &amp; Biên bản đối soát số dư</h3>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Sao kê đã nhập</h3>
             <Button icon={<UploadOutlined />} onClick={() => setStatementPickerOpen(true)}>
               Tải lên sao kê ngân hàng
             </Button>
           </div>
 
+          <Alert type="info" showIcon message="Hiện chưa có kết nối API ngân hàng đã xác minh. Có thể nhập sao kê CSV, XLS hoặc XLSX để xem và chuẩn bị đối chiếu. Các dòng nhập chưa được khớp chứng từ kế toán." />
           <div className="transparent-table-card">
             <KTable
-              dataSource={accountSummaries}
+              dataSource={statementImports.map((statement) => ({ ...statement, key: statement.key }))}
               columns={[
-                { title: 'Tài khoản ngân hàng', dataIndex: 'account', key: 'account', render: (value: string) => <strong>{value}</strong> },
-                { title: 'Tổng thu', dataIndex: 'income', key: 'income', render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{value.toLocaleString('vi-VN')} ₫</span> },
-                { title: 'Tổng chi', dataIndex: 'expense', key: 'expense', render: (value: number) => <span style={{ color: '#DC2626', fontWeight: 700 }}>{value.toLocaleString('vi-VN')} ₫</span> },
-                { title: 'Phát sinh ròng', dataIndex: 'balance', key: 'balance', render: (value: number) => <strong>{value.toLocaleString('vi-VN')} ₫</strong> },
-                { title: 'Sao kê ngân hàng', key: 'statement', render: () => <Tag color="default">Chưa tải lên</Tag> },
-                { title: 'Đối soát', key: 'status', render: () => <Tag color="warning">Chưa đối chiếu</Tag> },
+                { title: 'Tài khoản ngân hàng', dataIndex: 'bankAccountId', key: 'bankAccountId', render: (value: string) => { const account = data.find((item) => item.key === value); return account ? `${account.bankName} · ${account.accountNumber}` : 'Tài khoản không còn hoạt động'; } },
+                { title: 'Tệp sao kê', dataIndex: 'fileName', key: 'fileName' },
+                { title: 'Giao dịch', dataIndex: 'lines', key: 'lineCount', render: (lines: FinanceBankStatement['lines']) => lines.length.toLocaleString('vi-VN') },
+                { title: 'Dòng trùng', dataIndex: 'lines', key: 'duplicates', render: (lines: FinanceBankStatement['lines']) => lines.filter((line) => line.duplicate).length.toLocaleString('vi-VN') },
+                { title: 'Tiền tệ', dataIndex: 'currency', key: 'currency' },
+                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color="warning">{status}</Tag> },
+                { title: 'Thao tác', key: 'action', render: (_: unknown, record: FinanceBankStatement) => <Button onClick={() => exportStatement(record)}>Xuất Excel</Button> },
               ]}
-              locale={{ emptyText: 'Chưa có phát sinh ngân hàng để tổng hợp.' }}
+              pagination={{ pageSize: 10 }}
+              locale={{ emptyText: 'Chưa nhập sao kê ngân hàng.' }}
             />
           </div>
         </div>
@@ -343,34 +490,13 @@ export const BankAccountsModule: React.FC = () => {
       {/* VIEW 4: E-BANKING (Tích hợp & Kết nối Ngân hàng điện tử) */}
       {isEBanking && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 880 }}>
-          <Card title="Cổng Kết Nối Open Banking API Doanh Nghiệp" style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {[
-                { bank: 'Vietcombank Corporate API', status: 'Chưa cấu hình', desc: 'Thiếu Client ID, Secret và webhook xác nhận giao dịch.', icon: <ClockCircleOutlined style={{ color: '#94A3B8' }} /> },
-                { bank: 'BIDV iBank Direct Gateway', status: 'Chưa cấu hình', desc: 'Chưa có thông tin sandbox/production được cấp quyền.', icon: <ClockCircleOutlined style={{ color: '#94A3B8' }} /> },
-                { bank: 'Techcombank Business API', status: 'Chưa cấu hình', desc: 'Chưa có webhook biến động số dư thật.', icon: <ClockCircleOutlined style={{ color: '#94A3B8' }} /> },
-                { bank: 'MB Bank Corporate Gateway', status: 'Chưa cấu hình', desc: 'Chưa cấu hình Secret Key OAuth2.', icon: <ClockCircleOutlined style={{ color: '#94A3B8' }} /> },
-              ].map((eb, idx) => (
-                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '14px 16px', borderRadius: 8, border: '1px solid #E2E8F0' }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A' }}>
-                      {eb.icon} {eb.bank}
-                    </div>
-                    <div style={{ fontSize: 12.5, color: '#64748B', marginTop: 4 }}>{eb.desc}</div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <Tag color="default">{eb.status}</Tag>
-                    <Switch defaultChecked={false} />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Button onClick={() => message.warning('Chưa có thông tin kết nối ngân hàng để kiểm tra thật.')}>Kiểm tra kết nối</Button>
-              <Button type="primary" onClick={() => message.warning('Chưa có API lưu cấu hình ngân hàng ở backend.')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-                Lưu cấu hình API
-              </Button>
-            </div>
+          <Card title="Kết nối ngân hàng điện tử">
+            <Alert
+              type="warning"
+              showIcon
+              message="Chưa có tích hợp API ngân hàng được xác minh trong hệ thống."
+              description="Không có kết nối trực tiếp hoặc môi trường sandbox ngân hàng đang hoạt động. Để tránh hiển thị cấu hình giả, trang này chưa cung cấp nút bật kết nối. Bạn có thể nhập sao kê CSV, XLS hoặc XLSX tại mục Sao kê để lưu dữ liệu chờ đối chiếu."
+            />
           </Card>
         </div>
       )}
