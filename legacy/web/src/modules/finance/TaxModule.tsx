@@ -58,10 +58,7 @@ export const TaxModule: React.FC = () => {
       const updated = dataService.getGenericData('finance_tax');
       setData(Array.isArray(updated) ? updated : []);
     });
-    void financePaymentsApi.getAll().then(response => {
-      if (!Array.isArray(response.data?.data)) throw new Error('Dữ liệu đề nghị nộp thuế không hợp lệ.');
-      setPayments(response.data.data.filter(payment => payment.sourceModule === 'finance_tax'));
-    }).catch(() => message.error('Không tải được đề nghị nộp thuế.'));
+    void loadPayments().catch(() => message.error('Không tải được đề nghị nộp thuế.'));
     void financePaymentAccountsApi.getAccounts().then(response => setPaymentAccounts(response.data.accounts)).catch(() => setPaymentAccounts([]));
     return unsub;
   }, []);
