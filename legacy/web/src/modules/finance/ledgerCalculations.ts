@@ -56,7 +56,7 @@ export function summarizeLedgerAccounts(records: LedgerCalculationRecord[]): Acc
   return Array.from(accounts.values());
 }
 
-export function calculateQuarterLedger(records: LedgerCalculationRecord[], period: string, startMonth = 1, startDay = 1) {
+export function calculateQuarterLedger<T extends LedgerCalculationRecord>(records: T[], period: string, startMonth = 1, startDay = 1) {
   const match = /^(\d{4})-Q([1-4])$/.exec(period);
   const dates = getFiscalQuarterDates(period, startMonth, startDay);
   if (!match || !dates) return { year: '', quarter: '', startMonth: 0, startDay: 0, startDate: '', endDate: '', endExclusive: '', records: [], accounts: new Map<string, { debit: number; credit: number }>(), revenue: 0, expenses: 0, netResult: 0, debits: 0, credits: 0 };

@@ -16,7 +16,7 @@ import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '.
 import { financeBankAccountsApi, FinanceBankAccount, financeBankStatementMatchesApi, financeBankStatementsApi, FinanceBankStatement, FinanceBankStatementMatchEvent, financeCashApi, FinanceCashTransaction, financeTransfersApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { bankStatementLineFingerprint, ImportedBankStatementLine, parseBankStatementFile } from './bankStatementImport';
-import { BANK_STATEMENT_CLASSIFICATIONS, BankStatementClassification, BankStatementMatchEvent, getActiveBankStatementMatches, getBankStatementMatchCandidates, getStatementLineClassification, getStatementLineMatch } from './bankStatementReconciliation';
+import { BANK_STATEMENT_CLASSIFICATIONS, BankStatementClassification, BankStatementMatchEvent, getActiveBankStatementMatches, getBankStatementMatchCandidates, summarizeBankStatementReconciliation } from './bankStatementReconciliation';
 
 const markStatementDuplicates = (
   lines: ImportedBankStatementLine[],
@@ -99,6 +99,12 @@ export const BankAccountsModule: React.FC = () => {
   const ledgerBalance = completedBankTransactions.reduce((sum, item) => sum + (item.type === 'Thu' ? item.amount : -item.amount), 0);
   const totalBalance = data.reduce((sum, item) => sum + (item.currentBalance ?? item.balance), 0);
   const importedStatementLines = statementImports.reduce((sum, statement) => sum + statement.lines.length, 0);
+  const activeStatementMatchState = getActiveBankStatementMatches(statementMatchEvents);
+  const statementSummaries = statementImports.map((statement) => summarizeBankStatementReconciliation(statement, transactions, statementMatchEvents, data, activeStatementMatchState));
+  const statementSummaryByKey = new Map(statementImports.map((statement, index) => [statement.key, statementSummaries[index]]));
+  const reconciledStatementCount = statementSummaries.filter((summary) => summary.reconciled).length;
+  const unmatchedStatementLineCount = statementSummaries.reduce((sum, summary) => sum + summary.unmatchedLineCount, 0);
+  const outstandingStatementVoucherCount = statementSummaries.reduce((sum, summary) => sum + summary.outstandingVoucherCount, 0);
 
   useEffect(() => {
     if (!statementAccountId) setStatementAccountId(data.find((account) => account.status === 'Đang hoạt động')?.key || '');
@@ -274,31 +280,18 @@ export const BankAccountsModule: React.FC = () => {
   };
 
   const exportReconciliationReport = (statement: FinanceBankStatement) => {
-    const { activeByLine, activeByTransaction, classifications } = getActiveBankStatementMatches(statementMatchEvents);
+    const { activeByLine, classifications } = activeStatementMatchState;
+    const summary = summarizeBankStatementReconciliation(statement, transactions, statementMatchEvents, data, activeStatementMatchState);
     const lines = statement.lines;
-    const dates = lines.map((line) => line.transactionDate).sort();
-    const firstDate = dates[0] || '';
-    const lastDate = dates[dates.length - 1] || '';
-    const outstandingVouchers = transactions.filter((transaction) => transaction.status === 'Đã hoàn thành'
-      && transaction.source === 'bank'
-      && transaction.sourceAccountId === statement.bankAccountId
-      && transaction.date >= firstDate && transaction.date <= lastDate
-      && !activeByTransaction.has(transaction.key));
-    const matchedLines = lines.filter((line) => activeByLine.has(`${statement.key}|${line.key}`));
+    const firstDate = summary.firstDate;
+    const lastDate = summary.lastDate;
+    const matchedLines = lines.filter((line) => !line.duplicate && activeByLine.has(`${statement.key}|${line.key}`));
     const duplicateLines = lines.filter((line) => line.duplicate);
     const unmatchedLines = lines.filter((line) => !line.duplicate && !activeByLine.has(`${statement.key}|${line.key}`));
-    const statementNet = lines.filter((line) => !line.duplicate).reduce((sum, line) => sum + (line.direction === 'Thu' ? line.amount : -line.amount), 0);
     const matchedAmount = matchedLines.reduce((sum, line) => sum + line.amount, 0);
     const unmatchedIncomingAmount = unmatchedLines.filter((line) => line.direction === 'Thu').reduce((sum, line) => sum + line.amount, 0);
     const unmatchedOutgoingAmount = unmatchedLines.filter((line) => line.direction === 'Chi').reduce((sum, line) => sum + line.amount, 0);
-    const outstandingVoucherAmount = transactions.filter((transaction) => transaction.status === 'Đã hoàn thành'
-      && transaction.source === 'bank'
-      && transaction.sourceAccountId === statement.bankAccountId
-      && transaction.date >= firstDate && transaction.date <= lastDate
-      && !activeByTransaction.has(transaction.key)).reduce((sum, transaction) => sum + transaction.amount, 0);
-    const balanceDifference = statement.openingBalance === undefined || statement.closingBalance === undefined
-      ? ''
-      : statement.openingBalance + statementNet - statement.closingBalance;
+    const balanceDifference = summary.balanceDifference ?? '';
     const account = data.find((item) => item.key === statement.bankAccountId);
     downloadFile(
       `bao_cao_doi_soat_${statement.fileName.replace(/[^a-z0-9._-]/gi, '_')}.xlsx`,
@@ -311,14 +304,15 @@ export const BankAccountsModule: React.FC = () => {
         ['Số dư đầu kỳ', statement.openingBalance ?? ''],
         ['Số dư cuối kỳ', statement.closingBalance ?? ''],
         ['Chênh lệch kiểm tra số dư đầu + phát sinh − cuối kỳ', balanceDifference],
+        ['Trạng thái đối soát', summary.status],
         ['Số dòng đã ghép', matchedLines.length],
         ['Số dòng chưa ghép', unmatchedLines.length],
         ['Số dòng trùng', duplicateLines.length],
-        ['Số phiếu đã ghi sổ chưa tìm thấy trong sao kê theo khoảng ngày', outstandingVouchers.length],
+        ['Số phiếu đã ghi sổ chưa tìm thấy trong sao kê theo khoảng ngày', summary.outstandingVoucherCount],
         ['Tổng giá trị các dòng đã ghép', matchedAmount],
         ['Tiền vào chưa ghép', unmatchedIncomingAmount],
         ['Tiền ra chưa ghép', unmatchedOutgoingAmount],
-        ['Tổng giá trị phiếu đã ghi sổ ngoài sao kê trong khoảng ngày', outstandingVoucherAmount],
+        ['Tổng giá trị phiếu đã ghi sổ ngoài sao kê trong khoảng ngày', summary.outstandingVoucherAmount],
         [],
         ['Ngày giao dịch', 'Ngày giá trị', 'Loại', 'Số tiền', 'Tiền tệ', 'Số dư sau giao dịch', 'Nội dung', 'Mã tham chiếu', 'Phân loại', 'Trạng thái ghép', 'Mã phiếu thu chi', 'Người ghép', 'Ngày ghép'],
         ...lines.map((line) => {
@@ -461,21 +455,8 @@ export const BankAccountsModule: React.FC = () => {
       >
         {reconciliationStatement && (() => {
           const statement = reconciliationStatement;
-          const { activeByLine, activeByTransaction, classifications } = getActiveBankStatementMatches(statementMatchEvents);
-          const matchedCount = statement.lines.filter((line) => activeByLine.has(`${statement.key}|${line.key}`)).length;
-          const duplicateCount = statement.lines.filter((line) => line.duplicate).length;
-          const unmatchedCount = statement.lines.length - matchedCount - duplicateCount;
-          const dates = statement.lines.map((line) => line.transactionDate).sort();
-          const firstDate = dates[0] || '';
-          const lastDate = dates[dates.length - 1] || '';
-          const outstandingVouchers = transactions.filter((transaction) => transaction.status === 'Đã hoàn thành'
-            && transaction.source === 'bank'
-            && transaction.sourceAccountId === statement.bankAccountId
-            && transaction.date >= firstDate && transaction.date <= lastDate
-            && !activeByTransaction.has(transaction.key)).length;
-          const netMovement = statement.lines.filter((line) => !line.duplicate).reduce((sum, line) => sum + (line.direction === 'Thu' ? line.amount : -line.amount), 0);
-          const balanceCheck = statement.openingBalance === undefined || statement.closingBalance === undefined
-            ? null : statement.openingBalance + netMovement - statement.closingBalance;
+          const { classifications } = activeStatementMatchState;
+          const summary = summarizeBankStatementReconciliation(statement, transactions, statementMatchEvents, data, activeStatementMatchState);
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Alert
@@ -486,11 +467,13 @@ export const BankAccountsModule: React.FC = () => {
               />
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, color: '#475569' }}>
                 <span>Tệp: {statement.fileName}</span>
-                <span>Đã ghép: {matchedCount}</span>
-                <span>Chưa ghép: {Math.max(0, unmatchedCount)}</span>
-                <span>Dòng trùng: {duplicateCount}</span>
-                <span>Phiếu đã ghi sổ ngoài sao kê trong khoảng ngày: {outstandingVouchers}</span>
-                {balanceCheck !== null && <span>Kiểm tra số dư đầu + phát sinh − cuối kỳ: {balanceCheck.toLocaleString('vi-VN')} {statement.currency}</span>}
+                <Tag color={summary.reconciled ? 'success' : summary.status.includes('Lệch') ? 'error' : 'warning'}>{summary.status}</Tag>
+                <span>Đã ghép: {summary.matchedLineCount}</span>
+                <span>Chưa ghép: {summary.unmatchedLineCount}</span>
+                {summary.classifiedUnmatchedCount > 0 && <span>Đã phân loại nhưng chưa ghép: {summary.classifiedUnmatchedCount}</span>}
+                <span>Dòng trùng: {summary.duplicateLineCount}</span>
+                <span>Phiếu đã ghi sổ ngoài sao kê trong khoảng ngày: {summary.outstandingVoucherCount}</span>
+                {summary.balanceDifference !== null && <span>Kiểm tra số dư đầu + phát sinh − cuối kỳ: {summary.balanceDifference.toLocaleString('vi-VN')} {statement.currency}</span>}
               </div>
               <div className="transparent-table-card">
                 <KTable
@@ -504,6 +487,7 @@ export const BankAccountsModule: React.FC = () => {
                     { title: 'Nội dung', dataIndex: 'description', key: 'description' },
                     { title: 'Phân loại', key: 'classification', render: (_: unknown, line: FinanceBankStatement['lines'][number]) => (
                       <Select
+                        disabled={line.duplicate}
                         value={classifications.get(`${statement.key}|${line.key}`)}
                         placeholder="Chọn phân loại"
                         options={BANK_STATEMENT_CLASSIFICATIONS.map((item) => ({ label: item, value: item }))}
@@ -512,14 +496,14 @@ export const BankAccountsModule: React.FC = () => {
                       />
                     ) },
                     { title: 'Trạng thái', key: 'matchStatus', render: (_: unknown, line: FinanceBankStatement['lines'][number]) => {
-                      const match = getStatementLineMatch(statement.key, line.key, statementMatchEvents);
+                      const match = activeStatementMatchState.activeByLine.get(`${statement.key}|${line.key}`);
                       return <Tag color={line.duplicate ? 'warning' : match ? 'success' : 'default'}>{line.duplicate ? 'Dòng trùng' : match ? `Đã ghép ${match.cashTransactionCode}` : 'Chưa ghép'}</Tag>;
                     } },
                     { title: 'Ghép phiếu ngân hàng đã ghi sổ', key: 'matchAction', render: (_: unknown, line: FinanceBankStatement['lines'][number]) => {
-                      const match = getStatementLineMatch(statement.key, line.key, statementMatchEvents);
+                      const match = activeStatementMatchState.activeByLine.get(`${statement.key}|${line.key}`);
                       if (line.duplicate) return '—';
                       if (match) return <Button onClick={() => void unmatchStatementLine(statement, line, match)}>Bỏ ghép</Button>;
-                      const candidates = getBankStatementMatchCandidates(line, statement, transactions, statementMatchEvents, data);
+                      const candidates = getBankStatementMatchCandidates(line, statement, transactions, statementMatchEvents, data, activeStatementMatchState);
                       const selectionKey = `${statement.key}|${line.key}`;
                       return (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -670,10 +654,11 @@ export const BankAccountsModule: React.FC = () => {
               <div style={{ fontSize: 20, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>{statementImports.length} tệp · {importedStatementLines} giao dịch</div>
             </div>
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Chênh lệch đối soát</div>
+              <div style={{ fontSize: 12.5, color: '#1E40AF', fontWeight: 600 }}>Tiến độ đối soát</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-                Chưa đối chiếu
+                {statementImports.length ? `${reconciledStatementCount}/${statementImports.length} tệp hoàn tất` : 'Chưa có sao kê'}
               </div>
+              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{unmatchedStatementLineCount} dòng và {outstandingStatementVoucherCount} phiếu chưa ghép</div>
             </div>
           </div>
 
@@ -684,7 +669,7 @@ export const BankAccountsModule: React.FC = () => {
             </Button>
           </div>
 
-          <Alert type="info" showIcon message="Hiện chưa có kết nối API ngân hàng đã xác minh. Có thể nhập sao kê CSV, XLS hoặc XLSX để xem và chuẩn bị đối chiếu. Các dòng nhập chưa được khớp chứng từ kế toán." />
+          <Alert type="info" showIcon message="Chưa có kết nối API ngân hàng đã xác minh. Sao kê CSV, XLS hoặc XLSX được đối chiếu với phiếu ngân hàng đã ghi sổ; ghép sao kê chỉ xác nhận đối chiếu, không tự tạo bút toán." />
           <div className="transparent-table-card">
             <KTable
               dataSource={statementImports.map((statement) => ({ ...statement, key: statement.key }))}
@@ -694,7 +679,10 @@ export const BankAccountsModule: React.FC = () => {
                 { title: 'Giao dịch', dataIndex: 'lines', key: 'lineCount', render: (lines: FinanceBankStatement['lines']) => lines.length.toLocaleString('vi-VN') },
                 { title: 'Dòng trùng', dataIndex: 'lines', key: 'duplicates', render: (lines: FinanceBankStatement['lines']) => lines.filter((line) => line.duplicate).length.toLocaleString('vi-VN') },
                 { title: 'Tiền tệ', dataIndex: 'currency', key: 'currency' },
-                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color="warning">{status}</Tag> },
+                { title: 'Trạng thái', key: 'status', render: (_: unknown, statement: FinanceBankStatement) => {
+                  const summary = statementSummaryByKey.get(statement.key)!;
+                  return <Tag color={summary.reconciled ? 'success' : summary.status.includes('Lệch') ? 'error' : 'warning'}>{summary.status}</Tag>;
+                } },
                 { title: 'Thao tác', key: 'action', render: (_: unknown, record: FinanceBankStatement) => (
                   <div style={{ display: 'flex', gap: 6 }}>
                     <Button onClick={() => setReconciliationStatement(record)}>Đối soát</Button>

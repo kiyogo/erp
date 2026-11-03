@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getActiveBankStatementMatches, getBankStatementMatchCandidates } from '../src/modules/finance/bankStatementReconciliation.ts';
+import { getActiveBankStatementMatches, getBankStatementMatchCandidates, summarizeBankStatementReconciliation } from '../src/modules/finance/bankStatementReconciliation.ts';
 
 const statement = {
   key: 'statement-1', bankAccountId: 'bank-1', fileHash: 'hash', fileName: 'statement.csv', currency: 'VND',
@@ -54,4 +54,55 @@ test('legacy bank vouchers without a stored account id resolve only through an u
   const sameNameAccounts = [account, { ...account, key: 'bank-2', accountNumber: '009999' }];
   assert.equal(getBankStatementMatchCandidates(line, statement, [legacyVoucher], [], sameNameAccounts).length, 1);
   assert.equal(getBankStatementMatchCandidates(line, statement, [ambiguousNameVoucher], [], sameNameAccounts).length, 0);
+});
+
+test('statement is reconciled only when posted vouchers and opening-to-closing balance both agree', () => {
+  const account = { key: 'bank-1', bankName: 'VCB', accountNumber: '001234', accountHolder: 'Company', branch: '', balance: 150, status: 'Đang hoạt động', createdAt: '', updatedAt: '' };
+  const statementLine = { ...line, direction: 'Thu', amount: 50 };
+  const statementRecord = { ...statement, openingBalance: 100, closingBalance: 150, lines: [statementLine] };
+  const transaction = { key: 'cash-1', code: 'PT-1', type: 'Thu', source: 'bank', category: '', amount: 50, date: line.transactionDate, recipientOrPayer: '', account: '001234', status: 'Đã hoàn thành', note: '', createdAt: '', updatedAt: '', sourceAccountId: 'bank-1', currency: 'VND' };
+  const match = { key: 'match-1', eventSequence: 1, action: 'match', statementKey: 'statement-1', bankAccountId: 'bank-1', lineKey: 'line-1', cashTransactionId: 'cash-1', cashTransactionCode: 'PT-1', createdAt: '', createdBy: 'A' };
+
+  const summary = summarizeBankStatementReconciliation(statementRecord, [transaction], [match], [account]);
+  assert.equal(summary.matchedLineCount, 1);
+  assert.equal(summary.unmatchedLineCount, 0);
+  assert.equal(summary.balanceDifference, 0);
+  assert.equal(summary.status, 'Đã đối soát');
+  assert.equal(summary.reconciled, true);
+});
+
+test('classification alone does not complete reconciliation and legacy vouchers are included as outstanding', () => {
+  const account = { key: 'bank-1', bankName: 'VCB', accountNumber: '001234', accountHolder: 'Company', branch: '', balance: 0, status: 'Đang hoạt động', createdAt: '', updatedAt: '' };
+  const statementRecord = { ...statement, lines: [line] };
+  const legacyVoucher = { key: 'legacy', code: 'PC-OLD', type: 'Chi', source: 'bank', category: '', amount: 250000, date: line.transactionDate, recipientOrPayer: '', account: 'VCB (001234)', status: 'Đã hoàn thành', note: '', createdAt: '', updatedAt: '', sourceAccountId: '', currency: 'VND' };
+  const classification = { key: 'class-1', eventSequence: 1, action: 'classify', statementKey: 'statement-1', bankAccountId: 'bank-1', lineKey: 'line-1', classification: 'Thanh toán nhà cung cấp', createdAt: '', createdBy: 'A' };
+
+  const summary = summarizeBankStatementReconciliation(statementRecord, [legacyVoucher], [classification], [account]);
+  assert.equal(summary.classifiedUnmatchedCount, 1);
+  assert.equal(summary.unmatchedLineCount, 1);
+  assert.equal(summary.outstandingVoucherCount, 1);
+  assert.equal(summary.status, 'Còn giao dịch chưa khớp');
+});
+
+test('balance mismatch and missing opening or closing balances are not reported as fully reconciled', () => {
+  const statementRecord = { ...statement, openingBalance: 100, closingBalance: 149, lines: [{ ...line, direction: 'Thu', amount: 50 }] };
+  const transaction = { key: 'cash-1', code: 'PT-1', type: 'Thu', source: 'bank', category: '', amount: 50, date: line.transactionDate, recipientOrPayer: '', account: '001234', status: 'Đã hoàn thành', note: '', createdAt: '', updatedAt: '', sourceAccountId: 'bank-1', currency: 'VND' };
+  const match = { key: 'match-1', eventSequence: 1, action: 'match', statementKey: 'statement-1', bankAccountId: 'bank-1', lineKey: 'line-1', cashTransactionId: 'cash-1', cashTransactionCode: 'PT-1', createdAt: '', createdBy: 'A' };
+  const withMismatch = summarizeBankStatementReconciliation(statementRecord, [transaction], [match]);
+  assert.equal(withMismatch.balanceDifference, 1);
+  assert.equal(withMismatch.status, 'Lệch số dư sao kê');
+
+  const withoutBalances = summarizeBankStatementReconciliation({ ...statementRecord, openingBalance: undefined, closingBalance: undefined }, [transaction], [match]);
+  assert.equal(withoutBalances.balanceDifference, null);
+  assert.equal(withoutBalances.status, 'Đã khớp chứng từ · thiếu số dư');
+  assert.equal(withoutBalances.reconciled, false);
+});
+
+test('a voucher matched to another statement remains outstanding for this statement', () => {
+  const transaction = { key: 'cash-1', code: 'PT-1', type: 'Chi', source: 'bank', category: '', amount: 250000, date: line.transactionDate, recipientOrPayer: '', account: '001234', status: 'Đã hoàn thành', note: '', createdAt: '', updatedAt: '', sourceAccountId: 'bank-1', currency: 'VND' };
+  const otherStatementMatch = { key: 'match-other', eventSequence: 1, action: 'match', statementKey: 'statement-other', bankAccountId: 'bank-1', lineKey: 'line-other', cashTransactionId: 'cash-1', cashTransactionCode: 'PT-1', createdAt: '', createdBy: 'A' };
+  const summary = summarizeBankStatementReconciliation({ ...statement, lines: [line] }, [transaction], [otherStatementMatch]);
+
+  assert.equal(summary.outstandingVoucherCount, 1);
+  assert.equal(summary.status, 'Còn giao dịch chưa khớp');
 });
