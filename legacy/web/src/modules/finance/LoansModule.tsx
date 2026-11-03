@@ -18,6 +18,7 @@ import { hasUniqueLoanContractCode, isValidLoanDateRange, loanAccountsFor, loanD
 
 type InterestRateRow = { rate: string; overdueRate: string; effectiveFrom: string; note: string };
 type LoanAttachment = { id: string; name: string; size: number; mimeType?: string };
+type LoanScheduleRow = { key: string; dueDate: string; principalAmount: string; interestAmount: string; note: string };
 
 export interface EnterpriseLoanItem {
   key: string;
@@ -40,6 +41,7 @@ export interface EnterpriseLoanItem {
   interestDayBase?: string;
   adjustmentMethod?: string;
   rates?: Array<{ rate: number | null; overdueRate: number | null; effectiveFrom: string; note: string }>;
+  loanSchedules?: Array<{ key: string; dueDate: string; principalAmount: number; interestAmount: number; note?: string }>;
   interestRate?: number;
   principalRepayment?: string;
   firstPrincipalDate?: string;
@@ -69,6 +71,7 @@ const todayIso = () => {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 };
 const blankRate = (date = todayIso()): InterestRateRow => ({ rate: '', overdueRate: '', effectiveFrom: date, note: '' });
+const blankLoanSchedule = (date = todayIso()): LoanScheduleRow => ({ key: crypto.randomUUID(), dueDate: date, principalAmount: '', interestAmount: '', note: '' });
 const emptyLoan = (direction: LoanDirection, contractCode = '') => ({
   direction,
   contractCode,
@@ -123,6 +126,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
   const [savedAttachments, setSavedAttachments] = useState<LoanAttachment[]>([]);
   const [removedAttachments, setRemovedAttachments] = useState<LoanAttachment[]>([]);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [scheduleRows, setScheduleRows] = useState<LoanScheduleRow[]>([]);
   const [loanEvents, setLoanEvents] = useState<FinanceLoanEvent[]>([]);
   const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
   const [eventType, setEventType] = useState<FinanceLoanEvent['eventType']>('disbursement');
@@ -185,11 +189,32 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     principalRepaid: balance.principalRepaid + (event.eventType === 'repayment' ? Number(event.principalAmount) || 0 : 0),
   }), { principalDrawn: 0, principalRepaid: 0 });
 
+  const loanScheduleRemaining = (loanKey: string, schedule: NonNullable<EnterpriseLoanItem['loanSchedules']>[number]) => {
+    const payments = loanEvents.filter(event => event.loanKey === loanKey && event.scheduleKey === schedule.key);
+    return {
+      principalAmount: Math.max(0, schedule.principalAmount - payments.reduce((sum, event) => sum + Number(event.principalAmount || 0), 0)),
+      interestAmount: Math.max(0, schedule.interestAmount - payments.reduce((sum, event) => sum + Number(event.interestAmount || 0), 0)),
+    };
+  };
+
   const openLoanEvent = (loan: EnterpriseLoanItem, type: FinanceLoanEvent['eventType']) => {
     setEventLoan(loan);
     setEventType(type);
     eventForm.resetFields();
-    eventForm.setFieldsValue({ eventDate: todayIso(), principalAmount: 0, interestAmount: 0, sourceAccountId: cashAccounts[0]?.key || '' });
+    const firstOpenSchedule = type === 'repayment'
+      ? loan.loanSchedules?.find(schedule => {
+        const remaining = loanScheduleRemaining(loan.key, schedule);
+        return remaining.principalAmount > 0 || remaining.interestAmount > 0;
+      })
+      : undefined;
+    const remaining = firstOpenSchedule ? loanScheduleRemaining(loan.key, firstOpenSchedule) : undefined;
+    eventForm.setFieldsValue({
+      eventDate: todayIso(),
+      scheduleKey: firstOpenSchedule?.key,
+      principalAmount: remaining?.principalAmount || 0,
+      interestAmount: remaining?.interestAmount || 0,
+      sourceAccountId: cashAccounts[0]?.key || '',
+    });
     setEventModalOpen(true);
   };
 
@@ -216,6 +241,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
       const response = await financeLoanEventsApi.create(eventLoan.key, {
         eventType,
         eventDate: String(values.eventDate || ''),
+        scheduleKey: values.scheduleKey ? String(values.scheduleKey) : undefined,
         principalAmount,
         interestAmount,
         reference: String(values.reference || '').trim(),
@@ -227,7 +253,8 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         dataService.refreshGenericData('finance_general_ledger'),
         financePaymentAccountsApi.getAccounts().then(({ data: response }) => setCashAccounts(response.accounts.filter(account => account.status === 'Đang hoạt động'))),
       ]);
-      message.success(`Đã ghi nhận ${eventType === 'disbursement' ? 'giải ngân' : 'thanh toán'} ${response.data.transaction.code} vào phiếu tiền và Sổ Cái.`);
+      const eventLabel = eventType === 'disbursement' ? 'giải ngân' : loanDirectionOf(eventLoan) === 'borrow' ? 'trả nợ' : 'thu nợ';
+      message.success(`Đã ghi nhận ${eventLabel} ${response.data.transaction.code} vào phiếu tiền và Sổ Cái.`);
       closeLoanEvent();
     } catch (error: any) {
       message.error(error?.response?.data?.message || error?.message || 'Không thể ghi nhận giao dịch khoản vay.');
@@ -241,6 +268,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     setEditingLoan(null);
     setPendingFiles([]);
     setRemovedAttachments([]);
+    setScheduleRows([]);
     form.resetFields();
   };
 
@@ -251,6 +279,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     form.setFieldsValue(emptyLoan(direction, `KU${direction === 'borrow' ? 'V' : 'CV'}${String(data.length + 1).padStart(5, '0')}`));
     setEditingLoan(null);
     setRateRows([blankRate()]);
+    setScheduleRows([]);
     setSavedAttachments([]);
     setRemovedAttachments([]);
     setPendingFiles([]);
@@ -267,6 +296,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     setRateRows(oldRateRows.length
       ? oldRateRows.map(row => ({ rate: row.rate == null ? '' : String(row.rate), overdueRate: row.overdueRate == null ? '' : String(row.overdueRate), effectiveFrom: row.effectiveFrom || todayIso(), note: row.note || '' }))
       : [blankRate(), ...(Number.isFinite(Number(loan.interestRate)) && loan.interestRate ? [{ rate: String(loan.interestRate), overdueRate: '', effectiveFrom: loan.disbursedDate || todayIso(), note: '' }] : [])]);
+    setScheduleRows(Array.isArray(loan.loanSchedules) ? loan.loanSchedules.map(row => ({ key: row.key, dueDate: row.dueDate, principalAmount: String(row.principalAmount), interestAmount: String(row.interestAmount), note: row.note || '' })) : []);
     setSavedAttachments(Array.isArray(loan.attachments) ? loan.attachments : []);
     setRemovedAttachments([]);
     setPendingFiles([]);
@@ -299,6 +329,32 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
     }
     if (!isValidLoanDateRange(values.disbursedDate, values.dueDate)) {
       message.error('Ngày đáo hạn phải bằng hoặc sau ngày giải ngân.');
+      return;
+    }
+    const normalizedSchedules: NonNullable<EnterpriseLoanItem['loanSchedules']> = [];
+    let scheduledPrincipal = 0;
+    const scheduleDates = new Set<string>();
+    for (const [index, row] of scheduleRows.entries()) {
+      const principal = row.principalAmount.trim() ? Number(row.principalAmount) : 0;
+      const interest = row.interestAmount.trim() ? Number(row.interestAmount) : 0;
+      if (!isValidLoanDateRange(values.disbursedDate, row.dueDate) || row.dueDate > values.dueDate) {
+        message.error(`Ngày kỳ trả nợ ${index + 1} phải nằm trong thời hạn khế ước.`);
+        return;
+      }
+      if (scheduleDates.has(row.dueDate)) {
+        message.error('Mỗi ngày đến hạn chỉ được có một kỳ trả nợ.');
+        return;
+      }
+      scheduleDates.add(row.dueDate);
+      if (![principal, interest].every(amount => Number.isSafeInteger(amount) && amount >= 0) || principal + interest <= 0) {
+        message.error(`Tiền gốc và lãi kỳ ${index + 1} phải là số nguyên không âm và kỳ phải có số tiền lớn hơn 0.`);
+        return;
+      }
+      scheduledPrincipal += principal;
+      normalizedSchedules.push({ key: row.key, dueDate: row.dueDate, principalAmount: principal, interestAmount: interest, note: row.note.trim() });
+    }
+    if (normalizedSchedules.length && scheduledPrincipal !== principalAmount) {
+      message.error('Tổng tiền gốc các kỳ phải bằng giá trị khoản vay; nhập lịch theo hợp đồng đã ký.');
       return;
     }
     const principalType = direction === 'borrow' ? 'Nợ phải trả' : 'Tài sản';
@@ -346,6 +402,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         termMonths,
         currency: values.currency || 'VND',
         rates: normalizedRates,
+        loanSchedules: normalizedSchedules,
         interestRate: firstRate ?? undefined,
         attachments: [...savedAttachments, ...uploadedAttachments],
         loanType: direction === 'borrow' ? 'Khế ước đi vay' : 'Khế ước cho vay',
@@ -438,28 +495,28 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           {routeDirection === 'all' && <Form.Item name="direction" label="Loại khế ước" rules={[{ required: true }]}><Select disabled={hasPostedLoanEvents} options={[{ label: 'Khế ước đi vay', value: 'borrow' }, { label: 'Khế ước cho vay', value: 'lend' }]} onChange={(value: LoanDirection) => { setDraftDirection(value); form.setFieldsValue({ principalAccount: '', interestAccount: '', disbursementMethod: value === 'borrow' ? 'Chuyển khoản vào tài khoản DN' : 'Chuyển khoản' }); }} /></Form.Item>}
           <strong>Thông tin giải ngân</strong>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
-            <Form.Item name="contractCode" label="Số khế ước" rules={[{ required: true, whitespace: true }]}><Input maxLength={80} /></Form.Item>
-            <Form.Item name="counterpartyName" label={isLend ? 'Đối tượng vay' : 'Đối tượng cho vay'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="contractCode" label="Số khế ước" rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} maxLength={80} /></Form.Item>
+            <Form.Item name="counterpartyName" label={isLend ? 'Đối tượng vay' : 'Đối tượng cho vay'} rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} /></Form.Item>
             <Form.Item name="creditContract" label="Hợp đồng tín dụng"><Input /></Form.Item>
             <Form.Item name="purpose" label="Mục đích vay"><Input /></Form.Item>
             <Form.Item name="principalAccount" label="Tài khoản hạch toán nợ gốc" rules={[{ required: true, whitespace: true }]}><Select disabled={hasPostedLoanEvents} showSearch options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Tài sản' : 'Nợ phải trả').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
             <Form.Item name="interestAccount" label="Tài khoản hạch toán lãi" rules={[{ required: true, whitespace: true }]}><Select disabled={hasPostedLoanEvents} showSearch options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Doanh thu' : 'Chi phí').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>
-            <Form.Item name="currency" label="Loại tiền" rules={[{ required: true }]}><Select options={[{ label: 'VND', value: 'VND' }]} /></Form.Item>
+            <Form.Item name="currency" label="Loại tiền" rules={[{ required: true }]}><Select disabled={hasPostedLoanEvents} options={[{ label: 'VND', value: 'VND' }]} /></Form.Item>
             <Form.Item name="principalAmount" label="Giá trị khoản vay" rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="number" min={1} step={1} /></Form.Item>
-            <Form.Item name="termMonths" label="Thời hạn vay (tháng)" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
+            <Form.Item name="termMonths" label="Thời hạn vay (tháng)" rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="number" min={1} step={1} /></Form.Item>
             <Form.Item name="disbursedDate" label="Ngày giải ngân" rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="date" /></Form.Item>
-            <Form.Item name="dueDate" label="Ngày đáo hạn" rules={[{ required: true }]}><Input type="date" /></Form.Item>
-            <Form.Item name="disbursementMethod" label="Phương thức giải ngân" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
-            <Form.Item name="beneficiaryAccount" label="TK thụ hưởng"><Input /></Form.Item>
-            <Form.Item name="bankName" label="Tên ngân hàng"><Input /></Form.Item>
+            <Form.Item name="dueDate" label="Ngày đáo hạn" rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="date" /></Form.Item>
+            <Form.Item name="disbursementMethod" label="Phương thức giải ngân" rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} /></Form.Item>
+            <Form.Item name="beneficiaryAccount" label="TK thụ hưởng"><Input disabled={hasPostedLoanEvents} /></Form.Item>
+            <Form.Item name="bankName" label="Tên ngân hàng"><Input disabled={hasPostedLoanEvents} /></Form.Item>
           </div>
 
           <Tabs items={[
             { key: 'interest', label: 'Lãi suất', children: <div style={{ display: 'grid', gap: 14 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
-                <Form.Item name="rateType" label="Loại lãi suất" rules={[{ required: true }]}><Select options={['Lãi suất trên dư nợ giảm dần', 'Lãi suất trên dư nợ gốc'].map(value => ({ label: value, value }))} /></Form.Item>
-                <Form.Item name="interestDayBase" label="Cơ sở tính lãi ngày" rules={[{ required: true }]}><Select options={['Lãi năm/365', 'Lãi năm/360'].map(value => ({ label: value, value }))} /></Form.Item>
-                <Form.Item name="adjustmentMethod" label="Phương thức điều chỉnh" rules={[{ required: true }]}><Select options={['Có điều chỉnh', 'Cố định'].map(value => ({ label: value, value }))} /></Form.Item>
+                <Form.Item name="rateType" label="Loại lãi suất" rules={[{ required: true }]}><Select disabled={hasPostedLoanEvents} options={['Lãi suất trên dư nợ giảm dần', 'Lãi suất trên dư nợ gốc'].map(value => ({ label: value, value }))} /></Form.Item>
+                <Form.Item name="interestDayBase" label="Cơ sở tính lãi ngày" rules={[{ required: true }]}><Select disabled={hasPostedLoanEvents} options={['Lãi năm/365', 'Lãi năm/360'].map(value => ({ label: value, value }))} /></Form.Item>
+                <Form.Item name="adjustmentMethod" label="Phương thức điều chỉnh" rules={[{ required: true }]}><Select disabled={hasPostedLoanEvents} options={['Có điều chỉnh', 'Cố định'].map(value => ({ label: value, value }))} /></Form.Item>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', minWidth: 900, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
@@ -467,24 +524,43 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
                   <thead><tr style={{ background: '#C5D9C2', textAlign: 'left' }}>{['#', 'Lãi suất (%)', 'Lãi suất quá hạn (%)', 'Hiệu lực từ', 'Ghi chú', ''].map((label, index) => <th key={index} scope="col" style={{ padding: '9px 8px', borderBottom: '1px solid #AFC9AC', fontWeight: 700 }}>{label}</th>)}</tr></thead>
                   <tbody>{rateRows.map((row, index) => <tr key={index} style={{ background: '#FBF7E8', borderBottom: '1px solid #E7DFC7' }}>
                     <td style={{ padding: 4, textAlign: 'center', borderRight: '1px dotted #D8CFB6' }}>{index + 1}</td>
-                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Lãi suất dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.rate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, rate: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
-                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Lãi suất quá hạn dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.overdueRate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, overdueRate: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
-                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Ngày hiệu lực dòng ${index + 1}`} type="date" value={row.effectiveFrom} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, effectiveFrom: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
-                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input aria-label={`Ghi chú dòng ${index + 1}`} value={row.note} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, note: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
-                    <td style={{ padding: 4, textAlign: 'center' }}><Button aria-label={`Xóa lãi suất dòng ${index + 1}`} disabled={rateRows.length === 1} onClick={() => setRateRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input disabled={hasPostedLoanEvents} aria-label={`Lãi suất dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.rate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, rate: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input disabled={hasPostedLoanEvents} aria-label={`Lãi suất quá hạn dòng ${index + 1}`} type="number" min={0} max={100} step="any" value={row.overdueRate} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, overdueRate: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input disabled={hasPostedLoanEvents} aria-label={`Ngày hiệu lực dòng ${index + 1}`} type="date" value={row.effectiveFrom} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, effectiveFrom: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, borderRight: '1px dotted #D8CFB6' }}><Input disabled={hasPostedLoanEvents} aria-label={`Ghi chú dòng ${index + 1}`} value={row.note} onChange={event => setRateRows(current => current.map((item, rowIndex) => rowIndex === index ? { ...item, note: event.target.value } : item))} style={{ width: '100%', boxSizing: 'border-box' }} /></td>
+                    <td style={{ padding: 4, textAlign: 'center' }}><Button disabled={hasPostedLoanEvents || rateRows.length === 1} aria-label={`Xóa lãi suất dòng ${index + 1}`} onClick={() => setRateRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Xóa</Button></td>
                   </tr>)}</tbody>
                 </table>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setRateRows(current => [...current, blankRate()])}>Thêm dòng</Button><Button onClick={() => setRateRows([blankRate()])}>Xóa hết dòng</Button></div>
+              <div style={{ display: 'flex', gap: 8 }}><Button disabled={hasPostedLoanEvents} icon={<PlusOutlined />} onClick={() => setRateRows(current => [...current, blankRate()])}>Thêm dòng</Button><Button disabled={hasPostedLoanEvents} onClick={() => setRateRows([blankRate()])}>Xóa hết dòng</Button></div>
             </div> },
             { key: 'repayment', label: isLend ? 'Hình thức thu nợ' : 'Hình thức trả nợ', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', alignContent: 'start' }}>
-              <Form.Item name="principalRepayment" label={isLend ? 'Thu gốc' : 'Trả gốc'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
-              <Form.Item name="firstPrincipalDate" label={isLend ? 'Ngày thu gốc đầu tiên' : 'Ngày trả gốc đầu tiên'} rules={[{ required: true }]}><Input type="date" /></Form.Item>
-              <Form.Item name="interestRepayment" label={isLend ? 'Thu lãi' : 'Trả lãi'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
-              <Form.Item name="firstInterestDate" label={isLend ? 'Ngày thu lãi đầu tiên' : 'Ngày trả lãi đầu tiên'} rules={[{ required: true }]}><Input type="date" /></Form.Item>
-              <Form.Item name="repaymentMethod" label={isLend ? 'Phương thức thu nợ' : 'Phương thức trả nợ'} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
-              <Form.Item name="repaymentAccount" label="Chuyển vào tài khoản"><Input /></Form.Item>
-              <Form.Item name="repaymentBankName" label="Tên ngân hàng"><Input /></Form.Item>
+              <Form.Item name="principalRepayment" label={isLend ? 'Thu gốc' : 'Trả gốc'} rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} /></Form.Item>
+              <Form.Item name="firstPrincipalDate" label={isLend ? 'Ngày thu gốc đầu tiên' : 'Ngày trả gốc đầu tiên'} rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="date" /></Form.Item>
+              <Form.Item name="interestRepayment" label={isLend ? 'Thu lãi' : 'Trả lãi'} rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} /></Form.Item>
+              <Form.Item name="firstInterestDate" label={isLend ? 'Ngày thu lãi đầu tiên' : 'Ngày trả lãi đầu tiên'} rules={[{ required: true }]}><Input disabled={hasPostedLoanEvents} type="date" /></Form.Item>
+              <Form.Item name="repaymentMethod" label={isLend ? 'Phương thức thu nợ' : 'Phương thức trả nợ'} rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} /></Form.Item>
+              <Form.Item name="repaymentAccount" label="Chuyển vào tài khoản"><Input disabled={hasPostedLoanEvents} /></Form.Item>
+              <Form.Item name="repaymentBankName" label="Tên ngân hàng"><Input disabled={hasPostedLoanEvents} /></Form.Item>
+              <div style={{ gridColumn: '1 / -1', display: 'grid', gap: 8 }}>
+                <div>Lịch gốc và lãi theo hợp đồng</div>
+                <div style={{ color: '#64748B', fontSize: 13 }}>Nhập ngày đến hạn và số tiền theo lịch đã thỏa thuận. Phần mềm không tự suy diễn hoặc tính lãi.</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', minWidth: 720, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                    <colgroup><col style={{ width: 42 }} /><col style={{ width: 170 }} /><col style={{ width: 170 }} /><col style={{ width: 170 }} /><col /><col style={{ width: 72 }} /></colgroup>
+                    <thead><tr style={{ background: '#C5D9C2', textAlign: 'left' }}>{['#', 'Ngày đến hạn', 'Tiền gốc', 'Tiền lãi', 'Ghi chú theo hợp đồng', ''].map((label, index) => <th key={index} scope="col" style={{ padding: '9px 8px', borderBottom: '1px solid #AFC9AC', fontWeight: 700 }}>{label}</th>)}</tr></thead>
+                    <tbody>{scheduleRows.map((row, index) => <tr key={row.key} style={{ background: '#FBF7E8', borderBottom: '1px solid #E7DFC7' }}>
+                      <td style={{ padding: 4, textAlign: 'center' }}>{index + 1}</td>
+                      <td style={{ padding: 4 }}><Input disabled={hasPostedLoanEvents} aria-label={`Ngày đến hạn kỳ ${index + 1}`} type="date" value={row.dueDate} onChange={event => setScheduleRows(current => current.map(item => item.key === row.key ? { ...item, dueDate: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                      <td style={{ padding: 4 }}><Input disabled={hasPostedLoanEvents} aria-label={`Tiền gốc kỳ ${index + 1}`} type="number" min={0} step={1} value={row.principalAmount} onChange={event => setScheduleRows(current => current.map(item => item.key === row.key ? { ...item, principalAmount: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                      <td style={{ padding: 4 }}><Input disabled={hasPostedLoanEvents} aria-label={`Tiền lãi kỳ ${index + 1}`} type="number" min={0} step={1} value={row.interestAmount} onChange={event => setScheduleRows(current => current.map(item => item.key === row.key ? { ...item, interestAmount: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                      <td style={{ padding: 4 }}><Input disabled={hasPostedLoanEvents} aria-label={`Ghi chú kỳ ${index + 1}`} value={row.note} onChange={event => setScheduleRows(current => current.map(item => item.key === row.key ? { ...item, note: event.target.value } : item))} style={{ width: '100%' }} /></td>
+                      <td style={{ padding: 4, textAlign: 'center' }}><Button disabled={hasPostedLoanEvents} aria-label={`Xóa kỳ trả nợ ${index + 1}`} onClick={() => setScheduleRows(current => current.filter(item => item.key !== row.key))}>Xóa</Button></td>
+                    </tr>)}</tbody>
+                  </table>
+                </div>
+                <Button disabled={hasPostedLoanEvents || scheduleRows.length >= 100} icon={<PlusOutlined />} onClick={() => setScheduleRows(current => [...current, blankLoanSchedule(form.getFieldValue('firstPrincipalDate') || todayIso())])}>Thêm kỳ</Button>
+              </div>
             </div> },
             { key: 'statistics', label: 'Thống kê khác', children: <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', alignContent: 'start' }}>
               <Form.Item name="project" label="Công trình"><Input /></Form.Item>
@@ -525,6 +601,18 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px', marginTop: 14 }}>
             <Form.Item name="eventDate" label="Ngày giao dịch" rules={[{ required: true }]}><Input type="date" /></Form.Item>
             <Form.Item name="reference" label="Số chứng từ" rules={[{ required: true, whitespace: true }]}><Input maxLength={120} /></Form.Item>
+            {eventType === 'repayment' && Boolean(eventLoan.loanSchedules?.length) && <Form.Item name="scheduleKey" label="Kỳ theo hợp đồng" rules={[{ required: true }]}>
+              <Select options={(eventLoan.loanSchedules || []).filter(schedule => {
+                const remaining = loanScheduleRemaining(eventLoan.key, schedule);
+                return remaining.principalAmount > 0 || remaining.interestAmount > 0;
+              }).map(schedule => {
+                const remaining = loanScheduleRemaining(eventLoan.key, schedule);
+                return { value: schedule.key, label: `${schedule.dueDate} · Gốc ${money(remaining.principalAmount)} · Lãi ${money(remaining.interestAmount)}` };
+              })} placeholder="Chọn kỳ trả nợ" onChange={(key: string) => {
+                const schedule = eventLoan.loanSchedules?.find(item => item.key === key);
+                if (schedule) eventForm.setFieldsValue({ ...loanScheduleRemaining(eventLoan.key, schedule) });
+              }} />
+            </Form.Item>}
             <Form.Item name="sourceAccountId" label={eventType === 'disbursement' ? 'Tài khoản nhận tiền' : 'Tài khoản chi hoặc nhận tiền'} rules={[{ required: true }]}>
               <Select options={cashAccounts.map(account => ({ value: account.key, label: `${account.name} · ${account.source === 'bank' ? 'Ngân hàng' : 'Tiền mặt'} · ${money(account.balance)}` }))} placeholder="Chọn tài khoản tiền" />
             </Form.Item>
@@ -546,11 +634,24 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           <div>Ngày giải ngân: {selectedLoan.disbursedDate} · Đáo hạn: {selectedLoan.dueDate}</div>
           <div>Phương thức giải ngân: {selectedLoan.disbursementMethod || '—'}</div>
           <div>TK nợ gốc: {selectedLoan.principalAccount || '—'} · TK lãi: {selectedLoan.interestAccount || '—'}</div>
+          {selectedLoan.loanSchedules?.length ? <div style={{ display: 'grid', gap: 6 }}>
+            <div>Lịch gốc và lãi theo hợp đồng</div>
+            {selectedLoan.loanSchedules.map(schedule => {
+              const remaining = loanScheduleRemaining(selectedLoan.key, schedule);
+              return <div key={schedule.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span>{schedule.dueDate} · {schedule.note || 'Theo lịch hợp đồng'}</span>
+                <span>Còn gốc {money(remaining.principalAmount)} · lãi {money(remaining.interestAmount)}</span>
+              </div>;
+            })}
+          </div> : <div>Lịch trả nợ: Chưa lập</div>}
           <div>Đã giải ngân theo sổ: {loanEvents.some(event => event.loanKey === selectedLoan.key) ? money(loanBalance(selectedLoan.key).principalDrawn) : 'Chưa đối chiếu'}</div>
           <div>Dư nợ gốc đã ghi nhận: {loanEvents.some(event => event.loanKey === selectedLoan.key) ? money(loanBalance(selectedLoan.key).principalDrawn - loanBalance(selectedLoan.key).principalRepaid) : 'Chưa đối chiếu'}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button disabled={Number(selectedLoan.principalAmount) <= loanBalance(selectedLoan.key).principalDrawn || !cashAccounts.length} onClick={() => openLoanEvent(selectedLoan, 'disbursement')}>Ghi nhận giải ngân</Button>
-            <Button disabled={loanBalance(selectedLoan.key).principalDrawn <= 0 || !cashAccounts.length} onClick={() => openLoanEvent(selectedLoan, 'repayment')}>{loanDirectionOf(selectedLoan) === 'borrow' ? 'Ghi nhận trả nợ' : 'Ghi nhận thu nợ'}</Button>
+            <Button disabled={loanBalance(selectedLoan.key).principalDrawn <= 0 || !cashAccounts.length || Boolean(selectedLoan.loanSchedules?.length && selectedLoan.loanSchedules.every(schedule => {
+              const remaining = loanScheduleRemaining(selectedLoan.key, schedule);
+              return remaining.principalAmount <= 0 && remaining.interestAmount <= 0;
+            }))} onClick={() => openLoanEvent(selectedLoan, 'repayment')}>{loanDirectionOf(selectedLoan) === 'borrow' ? 'Ghi nhận trả nợ' : 'Ghi nhận thu nợ'}</Button>
           </div>
           <div style={{ color: '#475569' }}>Giao dịch khoản vay: {loanEvents.filter(event => event.loanKey === selectedLoan.key).length}</div>
           {loanEvents.filter(event => event.loanKey === selectedLoan.key).sort((left, right) => right.eventDate.localeCompare(left.eventDate)).map(event => <div key={event.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>

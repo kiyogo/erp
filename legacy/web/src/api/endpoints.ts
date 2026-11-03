@@ -510,6 +510,7 @@ export type FinanceLoanEvent = {
   direction: 'borrow' | 'lend';
   eventType: 'disbursement' | 'repayment';
   eventDate: string;
+  scheduleKey?: string | null;
   principalAmount: number;
   interestAmount: number;
   reference: string;
@@ -522,7 +523,7 @@ export type FinanceLoanEvent = {
 };
 
 export const financeLoanEventsApi = {
-  create: (loanKey: string, data: { eventType: FinanceLoanEvent['eventType']; eventDate: string; principalAmount: number; interestAmount: number; reference: string; sourceAccountId: string; note?: string }) => api.post<{ event: FinanceLoanEvent; transaction: FinanceCashTransaction; balance: { principalDrawn: number; principalRepaid: number; outstandingPrincipal: number } }>(`/finance/loans/${encodeURIComponent(loanKey)}/events`, data),
+  create: (loanKey: string, data: { eventType: FinanceLoanEvent['eventType']; eventDate: string; scheduleKey?: string; principalAmount: number; interestAmount: number; reference: string; sourceAccountId: string; note?: string }) => api.post<{ event: FinanceLoanEvent; transaction: FinanceCashTransaction; balance: { principalDrawn: number; principalRepaid: number; outstandingPrincipal: number } }>(`/finance/loans/${encodeURIComponent(loanKey)}/events`, data),
 };
 
 export const financeCashApi = {

@@ -312,6 +312,10 @@ test('company profile stores all legal fields, validates dates and settings, rej
     key: 'loan-draft-1', direction: 'borrow', contractCode: 'LOAN-TEST-1', counterpartyName: 'Ngân hàng kiểm thử',
     principalAmount: 100000, termMonths: 12, disbursedDate: '2026-10-01', dueDate: '2027-10-01',
     principalAccount: '3411', interestAccount: '635', accountingRegime: 'Forged',
+    loanSchedules: [
+      { key: 'loan-schedule-1', dueDate: '2027-04-01', principalAmount: 20000, interestAmount: 2000 },
+      { key: 'loan-schedule-2', dueDate: '2027-10-01', principalAmount: 80000, interestAmount: 3000 },
+    ],
     rates: [{ rate: 7.25, overdueRate: 10, effectiveFrom: '2026-10-01', note: 'Theo hợp đồng' }],
   } }, 201)).record;
   assert.equal(loanDraft.accountingRegime, 'TT99');
@@ -319,6 +323,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-duplicate', contractCode: 'loan-test-1' } }, 409);
   await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-group-account', contractCode: 'LOAN-GROUP', principalAccount: '341' } }, 422);
   await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-invalid-rate', contractCode: 'LOAN-RATE', rates: [{ rate: 7.25, overdueRate: null, effectiveFrom: '2026-10-01' }, { rate: 8, overdueRate: null, effectiveFrom: '2026-10-01' }] } }, 422);
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-invalid-schedule', contractCode: 'LOAN-SCHEDULE', loanSchedules: [{ key: 'schedule-only', dueDate: '2027-10-01', principalAmount: 99999, interestAmount: 5000 }] } }, 422);
   const addAccount = (code, accountType, parentCode = '', status = 'Đang sử dụng') => request('/finance/chart-of-accounts', 'POST', { record: {
     code, name: `Tài khoản ${code}`, parentCode, accountType, balanceNature: 'Chưa xác định',
     effectiveDate: '2026-01-01', status, tracksParty: false,
@@ -347,19 +352,25 @@ test('company profile stores all legal fields, validates dates and settings, rej
   }, 422);
   await request('/finance/loans/loan-draft-1/events', 'POST', {
     eventType: 'repayment', eventDate: '2026-10-11', principalAmount: 100001, interestAmount: 0,
-    reference: 'UNC-LOAN-003', sourceAccountId: bank.key,
+    scheduleKey: 'loan-schedule-1', reference: 'UNC-LOAN-003', sourceAccountId: bank.key,
   }, 422);
   const loanRepayment = await request('/finance/loans/loan-draft-1/events', 'POST', {
     eventType: 'repayment', eventDate: '2026-10-11', principalAmount: 15000, interestAmount: 1250,
-    reference: 'UNC-LOAN-004', sourceAccountId: bank.key,
+    scheduleKey: 'loan-schedule-1', reference: 'UNC-LOAN-004', sourceAccountId: bank.key,
   }, 201);
+  assert.equal(loanRepayment.event.scheduleKey, 'loan-schedule-1');
   assert.deepEqual(loanRepayment.balance, { principalDrawn: 100000, principalRepaid: 15000, outstandingPrincipal: 85000 });
   assert.equal(loanRepayment.transaction.amount, 16250);
   assert.deepEqual(loanRepayment.transaction.journalLines.map((line) => [line.debitAccount, line.creditAccount, line.amount]), [['3411', '112', 15000], ['635', '112', 1250]]);
+  await request('/finance/loans/loan-draft-1/events', 'POST', {
+    eventType: 'repayment', eventDate: '2026-10-12', principalAmount: 6000, interestAmount: 0,
+    scheduleKey: 'loan-schedule-1', reference: 'UNC-LOAN-005', sourceAccountId: bank.key,
+  }, 422);
   const loanLedger = (await request('/collections/finance_general_ledger')).data.filter((entry) => [loanDisbursement.event.cashTransactionId, loanRepayment.event.cashTransactionId].some(id => entry.sourceReference === `cash-voucher:${id}`));
   assert.equal(loanLedger.length, 3, 'loan cash vouchers should create balanced, linked ledger lines');
   await request(`/collections/finance_loan_events/${loanDisbursement.event.key}`, 'DELETE', undefined, 409);
   await request('/collections/finance_loans/loan-draft-1', 'PATCH', { patch: { principalAmount: 90000 } }, 409);
+  await request('/collections/finance_loans/loan-draft-1', 'PATCH', { patch: { loanSchedules: [{ ...loanDraft.loanSchedules[0], interestAmount: 2500 }, loanDraft.loanSchedules[1]] } }, 409);
   await request('/collections/finance_loans/loan-draft-1', 'DELETE', undefined, 409);
   await request('/collections/finance_loans', 'PUT', { records: [] }, 405);
   await request('/collections/finance_loan_events', 'POST', { record: { key: 'bypass-loan-event' } }, 409);

@@ -2282,9 +2282,14 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     const profile = await requireAccountingProfile();
     if (current) {
       const postedEvents = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(current.key);
-      const protectedFields = ['direction', 'principalAmount', 'principalAccount', 'interestAccount', 'disbursedDate'];
-      if (postedEvents && protectedFields.some(field => String(record[field] ?? '') !== String(current[field] ?? ''))) {
-        throw new HttpError(409, 'Không thể đổi loại khế ước, số tiền gốc, tài khoản hạch toán hoặc ngày bắt đầu sau khi đã ghi giao dịch.');
+      const protectedFields = [
+        'contractCode', 'direction', 'counterpartyName', 'currency', 'principalAmount', 'termMonths', 'principalAccount', 'interestAccount',
+        'disbursedDate', 'dueDate', 'disbursementMethod', 'beneficiaryAccount', 'bankName', 'rates', 'interestRate', 'rateType', 'interestDayBase', 'adjustmentMethod',
+        'principalRepayment', 'firstPrincipalDate', 'interestRepayment', 'firstInterestDate', 'repaymentMethod',
+        'repaymentAccount', 'repaymentBankName', 'loanSchedules',
+      ];
+      if (postedEvents && protectedFields.some(field => JSON.stringify(record[field] ?? null) !== JSON.stringify(current[field] ?? null))) {
+        throw new HttpError(409, 'Không thể sửa điều khoản khế ước sau khi đã ghi giao dịch; cần quy trình điều chỉnh lịch có lưu vết.');
       }
     }
     record.direction = oneOf(record.direction || (record.loanType === 'Khế ước cho vay' ? 'lend' : 'borrow'), 'Loại khế ước', ['borrow', 'lend']);
@@ -2298,6 +2303,35 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.disbursedDate = requiredIsoDate(record.disbursedDate, 'Ngày giải ngân');
     record.dueDate = requiredIsoDate(record.dueDate, 'Ngày đáo hạn');
     if (record.dueDate < record.disbursedDate) throw new HttpError(422, 'Ngày đáo hạn phải bằng hoặc sau ngày giải ngân.');
+    const rawSchedules = record.loanSchedules === undefined ? [] : record.loanSchedules;
+    if (!Array.isArray(rawSchedules) || rawSchedules.length > 100) throw new HttpError(422, 'Lịch gốc và lãi phải có tối đa 100 kỳ.');
+    const scheduleKeys = new Set();
+    const scheduleDates = new Set();
+    let scheduledPrincipal = 0;
+    record.loanSchedules = rawSchedules.map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new HttpError(422, `Kỳ trả nợ ${index + 1} không hợp lệ.`);
+      const key = requiredText(row.key, `Mã kỳ trả nợ ${index + 1}`, 120);
+      if (scheduleKeys.has(key)) throw new HttpError(422, 'Mã kỳ trả nợ không được trùng.');
+      scheduleKeys.add(key);
+      const dueDate = requiredIsoDate(row.dueDate, `Ngày đến hạn kỳ ${index + 1}`);
+      if (dueDate < record.disbursedDate || dueDate > record.dueDate) throw new HttpError(422, `Ngày đến hạn kỳ ${index + 1} phải nằm trong thời hạn khế ước.`);
+      if (scheduleDates.has(dueDate)) throw new HttpError(422, 'Mỗi ngày đến hạn chỉ được có một kỳ trả nợ.');
+      scheduleDates.add(dueDate);
+      const amount = (value, label) => {
+        const parsed = value === undefined || value === null || value === '' ? 0 : Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed < 0) throw new HttpError(422, `${label} phải là số nguyên không âm.`);
+        return parsed;
+      };
+      const principalAmount = amount(row.principalAmount, `Tiền gốc kỳ ${index + 1}`);
+      const interestAmount = amount(row.interestAmount, `Tiền lãi kỳ ${index + 1}`);
+      if (principalAmount + interestAmount <= 0) throw new HttpError(422, `Kỳ trả nợ ${index + 1} phải có tiền gốc hoặc tiền lãi.`);
+      scheduledPrincipal += principalAmount;
+      if (!Number.isSafeInteger(scheduledPrincipal) || scheduledPrincipal > record.principalAmount) throw new HttpError(422, 'Tổng gốc theo lịch không được vượt giá trị khế ước.');
+      return { key, dueDate, principalAmount, interestAmount, note: optionalText(row.note, `Ghi chú kỳ ${index + 1}`, 500) };
+    }).sort((left, right) => left.dueDate.localeCompare(right.dueDate));
+    if (record.loanSchedules.length && scheduledPrincipal !== record.principalAmount) {
+      throw new HttpError(422, 'Tổng tiền gốc các kỳ phải bằng giá trị khoản vay; nhập theo lịch ghi trong hợp đồng.');
+    }
     const accountRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
     const chart = accountRows.map(row => parseJsonObject(row.payload_json)).filter(account => account.accountingRegime === profile.accountingRegime);
     const accountType = record.direction === 'borrow' ? 'Nợ phải trả' : 'Tài sản';
@@ -9629,6 +9663,10 @@ async function handleRequest(request, response) {
     const eventDate = requiredIsoDate(input.eventDate, 'Ngày giao dịch');
     if (eventDate < loan.disbursedDate) throw new HttpError(422, 'Ngày giao dịch không được trước ngày bắt đầu khế ước.');
     if (eventType === 'disbursement' && eventDate > loan.dueDate) throw new HttpError(422, 'Không thể ghi giải ngân sau ngày đáo hạn khế ước.');
+    const scheduleKey = eventType === 'repayment' ? optionalText(input.scheduleKey, 'Kỳ trả nợ', 120) : '';
+    const loanSchedules = Array.isArray(loan.loanSchedules) ? loan.loanSchedules : [];
+    if (eventType === 'repayment' && loanSchedules.length && !scheduleKey) throw new HttpError(422, 'Chọn kỳ trả nợ theo lịch hợp đồng.');
+    if (scheduleKey && !loanSchedules.some(row => row.key === scheduleKey)) throw new HttpError(422, 'Kỳ trả nợ không thuộc khế ước này.');
     const reference = requiredText(input.reference, 'Số chứng từ', 120);
     const sourceAccountId = requiredText(input.sourceAccountId, 'Tài khoản tiền', 160);
     const sourceAccount = (await internalTransferAccounts()).find(item => item.key === sourceAccountId);
@@ -9696,8 +9734,13 @@ async function handleRequest(request, response) {
       const currentLoanRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_loans' AND record_key = ?").get(loanKey);
       if (!currentLoanRow) throw new HttpError(409, 'Khế ước đã bị xóa hoặc thay đổi; hãy tải lại trước khi ghi giao dịch.');
       const currentLoan = publicCollectionRecord(currentLoanRow);
-      const protectedFields = ['direction', 'principalAmount', 'principalAccount', 'interestAccount', 'disbursedDate', 'dueDate'];
-      if (protectedFields.some(field => String(currentLoan[field] ?? '') !== String(loan[field] ?? ''))) {
+      const protectedFields = [
+        'contractCode', 'direction', 'counterpartyName', 'currency', 'principalAmount', 'termMonths', 'principalAccount', 'interestAccount',
+        'disbursedDate', 'dueDate', 'disbursementMethod', 'beneficiaryAccount', 'bankName', 'rates', 'interestRate', 'rateType', 'interestDayBase', 'adjustmentMethod',
+        'principalRepayment', 'firstPrincipalDate', 'interestRepayment', 'firstInterestDate', 'repaymentMethod',
+        'repaymentAccount', 'repaymentBankName', 'loanSchedules',
+      ];
+      if (protectedFields.some(field => JSON.stringify(currentLoan[field] ?? null) !== JSON.stringify(loan[field] ?? null))) {
         throw new HttpError(409, 'Thông tin tài chính của khế ước vừa thay đổi; hãy tải lại trước khi ghi giao dịch.');
       }
       const duplicate = await db.prepare(`SELECT record_key FROM collection_records
@@ -9708,11 +9751,21 @@ async function handleRequest(request, response) {
       const priorEvents = priorRows.map(row => parseJsonObject(row.payload_json));
       const principalDrawn = priorEvents.filter(item => item.eventType === 'disbursement').reduce((sum, item) => sum + Number(item.principalAmount || 0), 0);
       const principalRepaid = priorEvents.filter(item => item.eventType === 'repayment').reduce((sum, item) => sum + Number(item.principalAmount || 0), 0);
+      if (eventType === 'repayment' && principalDrawn <= 0) throw new HttpError(422, 'Chưa có khoản gốc được giải ngân để thanh toán.');
       if (eventType === 'disbursement' && principalDrawn + principalAmount > Number(loan.principalAmount)) {
         throw new HttpError(422, 'Tổng giải ngân vượt giá trị gốc của khế ước.');
       }
       if (eventType === 'repayment' && principalRepaid + principalAmount > principalDrawn) {
         throw new HttpError(422, 'Tiền gốc trả hoặc thu vượt số dư gốc đã giải ngân.');
+      }
+      if (scheduleKey) {
+        const schedule = loanSchedules.find(row => row.key === scheduleKey);
+        const scheduledPayments = priorEvents.filter(item => item.eventType === 'repayment' && item.scheduleKey === scheduleKey);
+        const principalPaid = scheduledPayments.reduce((sum, item) => sum + Number(item.principalAmount || 0), 0);
+        const interestPaid = scheduledPayments.reduce((sum, item) => sum + Number(item.interestAmount || 0), 0);
+        if (principalPaid + principalAmount > Number(schedule.principalAmount) || interestPaid + interestAmount > Number(schedule.interestAmount)) {
+          throw new HttpError(422, 'Tiền trả vượt số gốc hoặc lãi còn lại của kỳ theo hợp đồng.');
+        }
       }
       await db.prepare(`INSERT INTO finance_cash_transactions (
         id, code, transaction_type, source, category, amount, transaction_date, counterparty,
@@ -9732,6 +9785,7 @@ async function handleRequest(request, response) {
         direction: loan.direction,
         eventType,
         eventDate,
+        scheduleKey: scheduleKey || null,
         principalAmount,
         interestAmount,
         reference,
