@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
+import { crmContactsApi, type CrmContact } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
 import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
@@ -38,7 +39,13 @@ interface EInvoice {
   templateCode: string;
   symbol: string;
   buyerName: string;
+  buyerType?: 'organization' | 'person' | 'other';
+  buyerEntityName?: string;
+  buyerCustomerKey?: string;
   buyerTaxCode: string;
+  buyerAddress?: string;
+  buyerEmail?: string;
+  buyerPhone?: string;
   issueDate: string;
   totalAmount: number;
   vatRate?: number | string | null;
@@ -162,6 +169,7 @@ export const EInvoiceModule: React.FC = () => {
 
   const [data, setData] = useState<EInvoice[]>(INITIAL_INVOICES);
   const [products, setProducts] = useState<EInvoiceProduct[]>([]);
+  const [customers, setCustomers] = useState<CrmContact[]>([]);
   const [invoiceLines, setInvoiceLines] = useState<EInvoiceLineDraft[]>(() => [blankInvoiceLine()]);
 
   useEffect(() => {
@@ -177,6 +185,16 @@ export const EInvoiceModule: React.FC = () => {
     return unsub;
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void crmContactsApi.getAll('customer').then(response => {
+      if (active) setCustomers(Array.isArray(response.data.data) ? response.data.data : []);
+    }).catch(() => {
+      if (active) setCustomers([]);
+    });
+    return () => { active = false; };
+  }, []);
+
   const [searchText, setSearchText] = useState('');
   const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -187,6 +205,23 @@ export const EInvoiceModule: React.FC = () => {
 
   const updateInvoiceLine = (key: string, patch: Partial<EInvoiceLineDraft>) => {
     setInvoiceLines(current => current.map(line => line.key === key ? { ...line, ...patch } : line));
+  };
+
+  const applyBuyerContact = (targetForm: any, customerKey?: string) => {
+    if (!customerKey) return;
+    const customer = customers.find(item => item.key === customerKey);
+    if (!customer) return;
+    const entityKind = customer.details?.entityKind === 'person' ? 'person' : 'organization';
+    targetForm.setFieldsValue({
+      buyerCustomerKey: customer.key,
+      buyerType: entityKind,
+      buyerName: entityKind === 'person' ? (customer.details?.personalName || customer.name) : customer.name,
+      buyerEntityName: entityKind === 'organization' ? customer.name : '',
+      buyerTaxCode: customer.taxCode || '',
+      buyerAddress: customer.address || '',
+      buyerEmail: customer.details?.invoiceRecipientEmails || customer.email || '',
+      buyerPhone: customer.details?.invoiceRecipientPhone || customer.phone || '',
+    });
   };
 
   const prepareInvoiceItems = () => {
@@ -236,7 +271,13 @@ export const EInvoiceModule: React.FC = () => {
           key: editingRecord.key,
           invoiceNumber: String(values.invoiceNumber || '').trim(),
           buyerName: String(values.buyerName || '').trim(),
+          buyerType: values.buyerType || 'other',
+          buyerEntityName: String(values.buyerEntityName || '').trim(),
+          buyerCustomerKey: values.buyerCustomerKey || '',
           buyerTaxCode: String(values.buyerTaxCode || '').trim(),
+          buyerAddress: String(values.buyerAddress || '').trim(),
+          buyerEmail: String(values.buyerEmail || '').trim(),
+          buyerPhone: String(values.buyerPhone || '').trim(),
           items,
         });
         message.success(`Đã cập nhật bản nháp ${values.invoiceNumber}.`);
@@ -294,8 +335,14 @@ export const EInvoiceModule: React.FC = () => {
       : [{ ...blankInvoiceLine(), quantity: '1', unitPrice: String(record.totalAmount || ''), vatRate: String(record.vatRate ?? '') }]);
     form.setFieldsValue({
       invoiceNumber: record.invoiceNumber,
+      buyerType: record.buyerType || 'other',
+      buyerCustomerKey: record.buyerCustomerKey || '',
       buyerName: record.buyerName,
+      buyerEntityName: record.buyerEntityName || '',
       buyerTaxCode: record.buyerTaxCode,
+      buyerAddress: record.buyerAddress || '',
+      buyerEmail: record.buyerEmail || '',
+      buyerPhone: record.buyerPhone || '',
     });
     setModalOpen(true);
   };
@@ -322,7 +369,7 @@ export const EInvoiceModule: React.FC = () => {
   const exportInvoicePdf = (invoice: EInvoice) => downloadFile(`ban_nhap_hoa_don_${invoice.invoiceNumber.replace(/[^a-z0-9_-]/gi, '_')}.pdf`, generateValidPdfBlob(
     `BẢN NHÁP HÓA ĐƠN ${invoice.invoiceNumber}`,
     'Dữ liệu nội bộ · chưa ký số · chưa gửi cơ quan thuế',
-    [`Người mua: ${invoice.buyerName}`, `Mã số thuế: ${invoice.buyerTaxCode || 'Chưa khai báo'}`, `Ngày lập nháp: ${invoice.issueDate}`, `Tiền trước thuế: ${Number(invoice.totalAmount).toLocaleString('vi-VN')} VND`, `Thuế GTGT: ${Number(invoice.vatAmount).toLocaleString('vi-VN')} VND`, `Tổng thanh toán: ${Number(invoice.finalAmount).toLocaleString('vi-VN')} VND`],
+    [`Người mua: ${invoice.buyerName}`, `Đơn vị: ${invoice.buyerEntityName || ''}`, `Mã số thuế hoặc mã định danh: ${invoice.buyerTaxCode || 'Chưa khai báo'}`, `Địa chỉ: ${invoice.buyerAddress || ''}`, `Email: ${invoice.buyerEmail || ''}`, `Điện thoại: ${invoice.buyerPhone || ''}`, `Ngày lập nháp: ${invoice.issueDate}`, `Tiền trước thuế: ${Number(invoice.totalAmount).toLocaleString('vi-VN')} VND`, `Thuế GTGT: ${Number(invoice.vatAmount).toLocaleString('vi-VN')} VND`, `Tổng thanh toán: ${Number(invoice.finalAmount).toLocaleString('vi-VN')} VND`],
   ));
   const visibleProviders = providerCatalog.filter((provider) =>
     `${provider.name} ${provider.taxId} ${provider.website}`.toLowerCase().includes(providerSearchText.toLowerCase().trim())
@@ -427,16 +474,33 @@ export const EInvoiceModule: React.FC = () => {
                 <Input placeholder="Chỉ điền sau khi có mẫu đã đăng ký" />
               </Form.Item>
             </div>
+            <Form.Item name="buyerCustomerKey" label="Khách hàng trong danh bạ">
+              <Select allowClear showSearch placeholder="Chọn khách hàng để điền thông tin" options={customers.filter(item => !item.status.toLocaleLowerCase().includes('tạm')).map(item => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={value => applyBuyerContact(createForm, value)} />
+            </Form.Item>
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 14 }}>
-              <Form.Item name="buyerName" label="Tên đơn vị mua hàng" rules={[{ required: true, message: 'Nhập tên đơn vị mua' }]}>
-                <Input placeholder="Ví dụ: Tập Đoàn Viễn Thông Quân Đội" />
+              <Form.Item name="buyerType" label="Loại khách hàng" initialValue="organization" rules={[{ required: true }]}>
+                <Select options={[{ value: 'organization', label: 'Doanh nghiệp' }, { value: 'person', label: 'Cá nhân' }, { value: 'other', label: 'Khác' }]} />
               </Form.Item>
-              <Form.Item name="buyerTaxCode" label="Mã số thuế" rules={[{ required: true, message: 'Nhập MST' }]}>
-                <Input placeholder="0100109106" />
+              <Form.Item name="buyerName" label="Tên người mua" rules={[{ required: true, message: 'Nhập tên người mua' }]}>
+                <Input placeholder="Tên người mua theo thông tin hóa đơn" />
               </Form.Item>
             </div>
-              <Form.Item name="buyerAddress" label="Địa chỉ trụ sở khách hàng">
+            <Form.Item name="buyerEntityName" label="Tên đơn vị">
+              <Input placeholder="Tên doanh nghiệp nếu có" />
+            </Form.Item>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Form.Item name="buyerTaxCode" label="Mã số thuế hoặc mã định danh">
+                <Input />
+              </Form.Item>
+              <Form.Item name="buyerPhone" label="Số điện thoại">
+                <Input />
+              </Form.Item>
+            </div>
+            <Form.Item name="buyerAddress" label="Địa chỉ người mua">
               <Input />
+            </Form.Item>
+            <Form.Item name="buyerEmail" label="Email nhận hóa đơn">
+              <Input type="email" />
             </Form.Item>
             <EInvoiceItemsEditor lines={invoiceLines} products={products} onChange={updateInvoiceLine}
               onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
@@ -651,12 +715,24 @@ export const EInvoiceModule: React.FC = () => {
           <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${String(data.length + 1).padStart(5, '0')}`} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
+          <Form.Item name="buyerCustomerKey" label="Khách hàng trong danh bạ">
+            <Select allowClear showSearch placeholder="Chọn khách hàng để điền thông tin" options={customers.filter(item => !item.status.toLocaleLowerCase().includes('tạm')).map(item => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={value => applyBuyerContact(form, value)} />
+          </Form.Item>
+          <Form.Item name="buyerType" label="Loại khách hàng" initialValue="organization" rules={[{ required: true }]}>
+            <Select options={[{ value: 'organization', label: 'Doanh nghiệp' }, { value: 'person', label: 'Cá nhân' }, { value: 'other', label: 'Khác' }]} />
+          </Form.Item>
           <Form.Item name="buyerName" label="Tên người mua / Doanh nghiệp" rules={[{ required: true, message: 'Nhập tên khách hàng' }]}>
             <Input placeholder="Ví dụ: Công Ty TNHH Dịch Vụ Mạng" />
           </Form.Item>
-          <Form.Item name="buyerTaxCode" label="Mã số thuế người mua" rules={[{ required: true }]}>
+          <Form.Item name="buyerEntityName" label="Tên đơn vị">
             <Input />
           </Form.Item>
+          <Form.Item name="buyerTaxCode" label="Mã số thuế hoặc mã định danh">
+            <Input />
+          </Form.Item>
+          <Form.Item name="buyerAddress" label="Địa chỉ người mua"><Input /></Form.Item>
+          <Form.Item name="buyerEmail" label="Email nhận hóa đơn"><Input type="email" /></Form.Item>
+          <Form.Item name="buyerPhone" label="Số điện thoại"><Input /></Form.Item>
           <EInvoiceItemsEditor lines={invoiceLines} products={products} onChange={updateInvoiceLine}
             onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
             onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
@@ -670,13 +746,18 @@ export const EInvoiceModule: React.FC = () => {
       </Modal>
       <Modal title={`Xem bản ghi hóa đơn ${previewRecord?.invoiceNumber || ''}`} open={Boolean(previewRecord)} onCancel={() => setPreviewRecord(null)} footer={null} width={520}>
         {previewRecord && <div style={{ display: 'grid', gap: 8 }}>
-          <div><strong>Trạng thái:</strong> {previewRecord.externalStatus || 'Chưa xác minh với CQT'}</div>
-          <div><strong>Người mua:</strong> {previewRecord.buyerName}</div>
-          <div><strong>Mã số thuế:</strong> {previewRecord.buyerTaxCode || 'Chưa khai báo'}</div>
-          <div><strong>Ngày lập nháp:</strong> {previewRecord.issueDate}</div>
-          <div><strong>Tiền trước thuế:</strong> {Number(previewRecord.totalAmount).toLocaleString('vi-VN')} ₫</div>
-          <div><strong>Thuế GTGT:</strong> {Number(previewRecord.vatAmount).toLocaleString('vi-VN')} ₫</div>
-          <div><strong>Tổng thanh toán:</strong> {Number(previewRecord.finalAmount).toLocaleString('vi-VN')} ₫</div>
+          <div><span style={{ color: '#64748B' }}>Trạng thái:</span> {previewRecord.externalStatus || 'Chưa xác minh với CQT'}</div>
+          <div><span style={{ color: '#64748B' }}>Người mua:</span> {previewRecord.buyerName}</div>
+          <div><span style={{ color: '#64748B' }}>Loại khách hàng:</span> {previewRecord.buyerType === 'organization' ? 'Doanh nghiệp' : previewRecord.buyerType === 'person' ? 'Cá nhân' : 'Khác'}</div>
+          <div><span style={{ color: '#64748B' }}>Tên đơn vị:</span> {previewRecord.buyerEntityName || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Mã số thuế hoặc mã định danh:</span> {previewRecord.buyerTaxCode || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Địa chỉ:</span> {previewRecord.buyerAddress || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Email:</span> {previewRecord.buyerEmail || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Điện thoại:</span> {previewRecord.buyerPhone || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Ngày lập nháp:</span> {previewRecord.issueDate}</div>
+          <div><span style={{ color: '#64748B' }}>Tiền trước thuế:</span> {Number(previewRecord.totalAmount).toLocaleString('vi-VN')} ₫</div>
+          <div><span style={{ color: '#64748B' }}>Thuế GTGT:</span> {Number(previewRecord.vatAmount).toLocaleString('vi-VN')} ₫</div>
+          <div><span style={{ color: '#64748B' }}>Tổng thanh toán:</span> {Number(previewRecord.finalAmount).toLocaleString('vi-VN')} ₫</div>
         </div>}
       </Modal>
     </div>

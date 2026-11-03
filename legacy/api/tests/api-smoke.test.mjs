@@ -84,13 +84,19 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
   await request('/collections/finance_inventory', 'POST', { record: {
     key: productKey, sku: `INV-${Date.now()}`, name: 'Thiết bị kiểm thử', unit: 'Cái',
   } }, 201);
+  const customer = (await request('/crm/contacts', 'POST', {
+    type: 'customer', name: 'Khách hàng hóa đơn thử', taxCode: '0101234567', address: 'Hà Nội', email: 'hoa-don@example.vn', status: 'Đang hoạt động',
+  }, 201)).contact;
   const first = (await request('/collections/finance_einvoices', 'POST', { record: {
     key: `einvoice-edit-${Date.now()}`, invoiceNumber: firstNumber, buyerName: 'Khách hàng thử', buyerTaxCode: '0101234567',
+    buyerType: 'organization', buyerCustomerKey: customer.key, buyerEntityName: customer.name, buyerAddress: customer.address, buyerEmail: customer.email,
     issueDate: '2026-11-04', totalAmount: 1, vatRate: '100%', status: 'Đã phát hành', externalStatus: 'CQT đã cấp mã',
     items: [{ key: 'line-1', productKey, sku: 'MA-GIA', name: 'Tên giả', unit: 'Sai', quantity: 2, unitPrice: 50000, discountAmount: 0, vatRate: 8 }],
   } }, 201)).record;
   assert.equal(first.status, 'Hóa đơn nháp');
   assert.equal(first.externalStatus, 'Chưa gửi nhà cung cấp');
+  assert.equal(first.buyerCustomerKey, customer.key);
+  assert.equal(first.buyerEmail, 'hoa-don@example.vn');
   assert.equal(first.totalAmount, 100000);
   assert.equal(first.vatAmount, 8000);
   assert.equal(first.items[0].sku.startsWith('INV-'), true);
@@ -99,10 +105,13 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
 
   const updated = (await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: {
     key: first.key, invoiceNumber: `${firstNumber}-SUA`, buyerName: 'Khách hàng đã cập nhật', buyerTaxCode: '0101234567',
+    buyerType: 'person', buyerEntityName: '', buyerCustomerKey: customer.key, buyerPhone: '0900000000',
     items: [{ key: 'line-1', productKey, quantity: 5, unitPrice: 50000, discountAmount: 0, vatRate: 0 }],
   } })).record;
   assert.equal(updated.invoiceNumber, `${firstNumber}-SUA`);
   assert.equal(updated.buyerName, 'Khách hàng đã cập nhật');
+  assert.equal(updated.buyerType, 'person');
+  assert.equal(updated.buyerPhone, '0900000000');
   assert.equal(updated.vatRate, 0);
   assert.equal(updated.vatAmount, 0);
   assert.equal(updated.finalAmount, 250000);
@@ -113,6 +122,9 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
   await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: {
     items: [{ key: 'line-1', productKey, quantity: -1, unitPrice: 50000, vatRate: 0 }],
   } }, 422);
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { buyerCustomerKey: 'missing-einvoice-customer' } }, 422);
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { buyerEmail: 'khong-phai-email' } }, 422);
+  await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: { buyerType: 'loai-khac' } }, 422);
   const second = (await request('/collections/finance_einvoices', 'POST', { record: {
     key: `einvoice-edit-duplicate-${Date.now()}`, invoiceNumber: `DRAFT-OTHER-${Date.now()}`, buyerName: 'Khách hàng khác',
     issueDate: '2026-11-04', totalAmount: 100000, vatRate: '0%',

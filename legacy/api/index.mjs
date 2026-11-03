@@ -2506,7 +2506,18 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       .get(record.invoiceNumber, String(current?.key || ''));
     if (duplicate) throw new HttpError(409, 'Mã bản nháp hóa đơn đã tồn tại.');
     record.buyerName = requiredText(record.buyerName, 'Tên người mua', 300);
+    record.buyerType = record.buyerType === undefined ? 'other' : String(record.buyerType);
+    if (!['organization', 'person', 'other'].includes(record.buyerType)) throw new HttpError(422, 'Loại khách hàng không hợp lệ.');
+    record.buyerCustomerKey = optionalText(record.buyerCustomerKey, 'Mã khách hàng', 160);
+    if (record.buyerCustomerKey && !await db.prepare("SELECT id FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(record.buyerCustomerKey)) {
+      throw new HttpError(422, 'Khách hàng đã chọn không tồn tại trong danh bạ khách hàng.');
+    }
+    record.buyerEntityName = optionalText(record.buyerEntityName, 'Tên đơn vị mua', 300);
     record.buyerTaxCode = optionalText(record.buyerTaxCode, 'Mã số thuế người mua', 32);
+    record.buyerAddress = optionalText(record.buyerAddress, 'Địa chỉ người mua', 1000);
+    record.buyerEmail = optionalText(record.buyerEmail, 'Email nhận hóa đơn', 254).toLowerCase();
+    if (record.buyerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(record.buyerEmail)) throw new HttpError(422, 'Email nhận hóa đơn không hợp lệ.');
+    record.buyerPhone = optionalText(record.buyerPhone, 'Số điện thoại người mua', 40);
     record.issueDate = requiredIsoDate(record.issueDate, 'Ngày lập bản nháp');
     if (record.items !== undefined) {
       if (!Array.isArray(record.items) || record.items.length < 1 || record.items.length > 200) {
@@ -8771,7 +8782,7 @@ async function handleRequest(request, response) {
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
       if (scope === 'finance_einvoices') {
-        const editableFields = new Set(['key', 'invoiceNumber', 'buyerName', 'buyerTaxCode', 'totalAmount', 'vatRate', 'items']);
+        const editableFields = new Set(['key', 'invoiceNumber', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'totalAmount', 'vatRate', 'items']);
         if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
           throw new HttpError(422, 'Bản nháp chỉ cho phép sửa mã bản nháp, thông tin người mua, tiền hàng và thuế suất.');
         }
