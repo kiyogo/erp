@@ -11,6 +11,7 @@ import {
   BankOutlined,
   ClockCircleOutlined,
   PaperClipOutlined,
+  CheckOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
@@ -341,6 +342,10 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   };
 
   const handleDelete = (trx: EnterpriseCashTransaction) => {
+    if (trx.status !== 'Chờ duyệt') {
+      message.error('Phiếu đã ghi sổ không thể hủy trực tiếp.');
+      return;
+    }
     Modal.confirm({
       title: `Xác nhận hủy phiếu ${trx.type}?`,
       content: `Chứng từ ${trx.code} sẽ được chuyển sang trạng thái Đã hủy để giữ vết sổ kế toán.`,
@@ -355,6 +360,29 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           await loadData();
         } catch (error: any) {
           message.error(error?.response?.data?.message || 'Không thể hủy chứng từ thu chi.');
+        }
+      },
+    });
+  };
+
+  const handleApprove = (trx: EnterpriseCashTransaction) => {
+    Modal.confirm({
+      title: `Ghi sổ phiếu ${trx.code}?`,
+      content: `Thao tác sẽ ghi ${trx.amount.toLocaleString('vi-VN')} ₫ vào số dư ${trx.source === 'petty' ? 'quỹ tiền mặt' : 'tài khoản ngân hàng'} và tạo bút toán trong Sổ Cái.`,
+      okText: 'Ghi sổ', cancelText: 'Hủy',
+      onOk: async () => {
+        try {
+          const response = await financeCashApi.approve(trx.key);
+          setSelectedTransaction(response.data.transaction);
+          await Promise.all([
+            loadData(),
+            financePaymentAccountsApi.getAccounts().then(result => setCashAccounts(result.data.accounts)),
+            dataService.refreshGenericData('finance_general_ledger').catch(() => {}),
+          ]);
+          message.success(`Đã ghi sổ phiếu ${response.data.transaction.code}.`);
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không thể ghi sổ phiếu thu chi.');
+          throw error;
         }
       },
     });
@@ -802,6 +830,11 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             </div>
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {selectedTransaction.status === 'Chờ duyệt' && !selectedTransaction.code.startsWith('AUTO-') && !selectedTransaction.code.startsWith('TRF-') && (
+                <Button type="primary" icon={<CheckOutlined />} onClick={() => handleApprove(selectedTransaction)}>
+                  Ghi sổ
+                </Button>
+              )}
               {selectedTransaction.status === 'Chờ duyệt' && !selectedTransaction.code.startsWith('AUTO-') && !selectedTransaction.code.startsWith('TRF-') && (
                 <Button icon={<EditOutlined />} onClick={() => openEditForm(selectedTransaction)}>
                   Sửa phiếu

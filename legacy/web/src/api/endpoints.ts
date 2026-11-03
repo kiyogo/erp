@@ -507,6 +507,7 @@ export const financeCashApi = {
   getCategories: (type: FinanceCashTransaction['type']) => api.get<{ data: string[] }>('/finance/cash-categories', { params: { type } }),
   addCategory: (type: FinanceCashTransaction['type'], name: string) => api.post<{ category: { key: string; type: FinanceCashTransaction['type']; name: string; createdAt: string } }>('/finance/cash-categories', { type, name }),
   create: (data: CreateFinanceCashTransaction) => api.post<{ transaction: FinanceCashTransaction }>('/finance/cash-transactions', data),
+  approve: (id: string) => api.post<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${encodeURIComponent(id)}/approve`, {}),
   update: (id: string, data: UpdateFinanceCashTransaction) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${encodeURIComponent(id)}`, data),
   cancel: (id: string) => api.patch<{ transaction: FinanceCashTransaction }>(`/finance/cash-transactions/${id}`, { status: 'Đã hủy' }),
 };

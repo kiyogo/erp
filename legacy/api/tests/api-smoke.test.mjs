@@ -906,10 +906,30 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   const accountsBefore = (await request('/finance/payment-accounts')).accounts;
   const accountBefore = accountsBefore.find(item => item.key === account.key);
   const completed = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', category: 'Thu đã ghi nhận' }, 201)).transaction;
+  assert.equal(completed.status, 'Đã hoàn thành');
   assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, accountBefore.balance + 1200);
+  const postedLines = (await request('/collections/finance_general_ledger')).data.filter(item => item.sourceReference === `cash-voucher:${completed.key}`);
+  assert.equal(postedLines.length, 1);
+  assert.equal(postedLines[0].sourceModule, 'cash_voucher');
+  await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', journalLines: [] }, 422);
+  await request('/finance/cash-transactions', 'POST', {
+    ...baseVoucher, type: 'Chi', status: 'Đã hoàn thành', amount: 100000, reference: 'CASH-OVER-BALANCE',
+    counterpartyType: 'other', counterpartyContactId: '',
+    journalLines: [{ description: 'Chi vượt số dư', debitAccount: '331', creditAccount: '1121', amount: 100000 }],
+  }, 422);
   await request(`/finance/cash-transactions/${completed.key}`, 'PATCH', { ...baseVoucher, category: 'Sửa phiếu đã ghi sổ' }, 409);
-  await request(`/finance/cash-transactions/${completed.key}`, 'PATCH', { status: 'Đã hủy' });
-  assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, accountBefore.balance);
+  await request(`/finance/cash-transactions/${completed.key}`, 'PATCH', { status: 'Đã hủy' }, 409);
+  await request(`/collections/finance_general_ledger/${encodeURIComponent(postedLines[0].key)}`, 'PATCH', { patch: { description: 'Sửa bút toán đã ghi sổ' } }, 409);
+
+  const pendingBefore = (await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance;
+  const pending = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, reference: 'HD-PENDING-02', category: 'Thu chờ duyệt' }, 201)).transaction;
+  assert.equal(pending.status, 'Chờ duyệt');
+  assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, pendingBefore);
+  const approved = (await request(`/finance/cash-transactions/${pending.key}/approve`, 'POST', {})).transaction;
+  assert.equal(approved.status, 'Đã hoàn thành');
+  assert.equal((await request('/finance/payment-accounts')).accounts.find(item => item.key === account.key).balance, pendingBefore + 1200);
+  await request(`/finance/cash-transactions/${pending.key}/approve`, 'POST', {}, 409);
+  await request(`/finance/cash-transactions/${pending.key}`, 'PATCH', { status: 'Đã hủy' }, 409);
 });
 
 test('legacy attendance mirrors migrate without removing source records', async () => {

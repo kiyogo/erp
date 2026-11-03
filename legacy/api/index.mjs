@@ -4926,6 +4926,63 @@ function validateCashTransaction(input) {
   };
 }
 
+async function postCashTransactionToLedger(transaction, id, actor, profile) {
+  if (!Array.isArray(transaction.journalLines) || transaction.journalLines.length === 0) {
+    throw new HttpError(422, 'Phiếu phải có ít nhất một dòng hạch toán trước khi ghi sổ.');
+  }
+  if (transaction.journalLines.reduce((sum, line) => sum + line.amount, 0) !== Number(transaction.amount)) {
+    throw new HttpError(422, 'Tổng tiền các dòng hạch toán phải bằng số tiền phiếu.');
+  }
+  const cashPrefix = transaction.source === 'petty' ? '111' : '112';
+  const cashAccount = line => String(transaction.type === 'Thu' ? line.debitAccount : line.creditAccount).replace(/^TK\s*/i, '').replace(/\s+/g, '');
+  if (transaction.journalLines.some(line => !cashAccount(line).startsWith(cashPrefix))) {
+    throw new HttpError(422, `Phiếu ${transaction.type.toLowerCase()} phải hạch toán ${transaction.type === 'Thu' ? 'Nợ' : 'Có'} vào tài khoản ${cashPrefix}.`);
+  }
+  const accounts = await internalTransferAccounts();
+  const source = accounts.find(account => account.key === transaction.sourceAccountId);
+  if (!source || source.status !== 'Đang hoạt động' || source.source !== transaction.source) {
+    throw new HttpError(422, 'Tài khoản nguồn không tồn tại hoặc đã ngừng hoạt động.');
+  }
+  if (transaction.type === 'Chi' && (!Number.isSafeInteger(source.balance) || source.balance < Number(transaction.amount))) {
+    throw new HttpError(422, 'Số dư tài khoản nguồn không đủ.');
+  }
+  await requireOpenLedgerPeriod(transaction.date, profile);
+  const sourceReference = `cash-voucher:${id}`;
+  const existing = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceReference') = ? LIMIT 1").get(sourceReference);
+  if (existing) throw new HttpError(409, 'Phiếu đã có bút toán trong Sổ Cái. Hãy đối chiếu trước khi thao tác lại.');
+
+  const timestamp = now();
+  const insertLedger = db.prepare(`INSERT INTO collection_records
+    (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+    VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`);
+  for (const [index, line] of transaction.journalLines.entries()) {
+    const ledgerKey = `${sourceReference}:${index + 1}`;
+    const entry = {
+      key: ledgerKey,
+      voucherCode: transaction.code,
+      entryDate: transaction.date,
+      description: line.description,
+      business: line.business || '',
+      debitAccount: line.debitAccount,
+      creditAccount: line.creditAccount,
+      amount: line.amount,
+      author: actor.name,
+      authorId: actor.id,
+      status: 'Đã ghi sổ cái',
+      sourceModule: 'cash_voucher',
+      sourceReference,
+      accountingRegime: profile.accountingRegime,
+      createdAt: timestamp,
+    };
+    await insertLedger.run(randomUUID(), ledgerKey, actor.id, JSON.stringify(entry), timestamp, timestamp);
+  }
+  const updated = await db.prepare("UPDATE finance_cash_transactions SET status = 'Đã hoàn thành', updated_at = ? WHERE id = ? AND status = 'Chờ duyệt'").run(timestamp, id);
+  if (!updated.changes) throw new HttpError(409, 'Phiếu đã được xử lý ở nơi khác. Hãy tải lại danh sách.');
+  await recordAuditEvent(actor.id, 'post_cash_transaction', 'finance_general_ledger', sourceReference, {
+    voucherCode: transaction.code, amount: Number(transaction.amount), sourceAccountId: source.key, journalLineCount: transaction.journalLines.length,
+  });
+}
+
 async function resolveCashAttachments(ids, actor) {
   const attachments = [];
   let totalBytes = 0;
@@ -7817,6 +7874,8 @@ async function handleRequest(request, response) {
       if (scope === 'finance_general_ledger') {
         const existingPayroll = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceModule') = 'payroll' LIMIT 1").get();
         if (existingPayroll || records.some((item) => item.record.sourceModule === 'payroll' || String(item.record.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Không thể ghi đè bút toán lương.');
+        const existingCashVoucher = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceModule') = 'cash_voucher' LIMIT 1").get();
+        if (existingCashVoucher || records.some(item => item.record.sourceModule === 'cash_voucher' || String(item.record.sourceReference || '').startsWith('cash-voucher:'))) throw new HttpError(409, 'Không thể ghi đè bút toán thu chi đã ghi sổ.');
       }
       if (actor.role === 'ADMIN') {
         await db.prepare('DELETE FROM collection_records WHERE scope = ?').run(scope);
@@ -7852,6 +7911,7 @@ async function handleRequest(request, response) {
         if (scope === 'asset_depreciations' && db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('asset_items'))");
         item = await normalizeCollectionRecord(payload.record, scope, actor);
         if (scope === 'finance_general_ledger' && (item.record.sourceModule === 'payroll' || String(item.record.sourceReference || '').startsWith('payroll:') || item.recordKey.startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được tạo qua chức năng hạch toán lương.');
+        if (scope === 'finance_general_ledger' && (item.record.sourceModule === 'cash_voucher' || String(item.record.sourceReference || '').startsWith('cash-voucher:') || item.recordKey.startsWith('cash-voucher:'))) throw new HttpError(409, 'Bút toán phiếu thu chi phải được tạo qua chức năng ghi sổ phiếu.');
         if (['leave_requests', 'attendance_overtime', 'attendance_leave_summary'].includes(scope)) ownerId = item.record.employeeId;
         await db.prepare(`INSERT INTO collection_records
           (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
@@ -8085,6 +8145,7 @@ async function handleRequest(request, response) {
         }
         if (scope === 'attendance_explanations' && current.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý bởi một yêu cầu khác.');
         if (scope === 'finance_general_ledger' && (current.sourceModule === 'payroll' || String(current.sourceReference || '').startsWith('payroll:') || patch.sourceModule === 'payroll' || String(patch.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
+        if (scope === 'finance_general_ledger' && (current.sourceModule === 'cash_voucher' || String(current.sourceReference || '').startsWith('cash-voucher:') || patch.sourceModule === 'cash_voucher' || String(patch.sourceReference || '').startsWith('cash-voucher:'))) throw new HttpError(409, 'Bút toán thu chi đã ghi sổ phải được giữ để đối chiếu.');
         if (scope === 'room_bookings' && current.status !== 'Đã xác nhận') throw new HttpError(409, 'Lịch họp đã được hủy hoặc thay đổi bởi yêu cầu khác.');
         if (scope === 'crm_promotions') {
           const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -8193,6 +8254,7 @@ async function handleRequest(request, response) {
           }
         }
         if (scope === 'finance_general_ledger' && (publicCollectionRecord(fresh)?.sourceModule === 'payroll' || String(publicCollectionRecord(fresh)?.sourceReference || '').startsWith('payroll:'))) throw new HttpError(409, 'Bút toán lương phải được giữ để đối chiếu.');
+        if (scope === 'finance_general_ledger' && (publicCollectionRecord(fresh)?.sourceModule === 'cash_voucher' || String(publicCollectionRecord(fresh)?.sourceReference || '').startsWith('cash-voucher:'))) throw new HttpError(409, 'Bút toán thu chi đã ghi sổ phải được giữ để đối chiếu.');
         if (scope === 'attendance_explanations' && publicCollectionRecord(fresh)?.status !== 'Chờ duyệt') throw new HttpError(409, 'Giải trình đã được xử lý và không thể xóa.');
         if (scope === 'hr_recruitment_candidates' && publicCollectionRecord(fresh)?.status !== 'rejected') {
           throw new HttpError(409, 'Chỉ có thể xóa hồ sơ ứng viên đã chuyển sang trạng thái Không tiếp tục.');
@@ -9192,28 +9254,58 @@ async function handleRequest(request, response) {
 
   if (request.method === 'POST' && resource === '/finance/cash-transactions') {
     const actor = await requireAdmin(request);
-    await requireAccountingProfile();
+    const profile = await requireAccountingProfile();
     const transaction = await resolveCashTransactionLinks(validateCashTransaction(await readJson(request)));
     transaction.attachments = await resolveCashAttachments(transaction.attachments, actor);
+    if (transaction.status === 'Đã hủy') throw new HttpError(422, 'Không thể lập phiếu mới ở trạng thái đã hủy.');
+    if (transaction.status === 'Đã hoàn thành') await requireSecurityPin(request, actor);
     transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
     const id = randomUUID();
     const timestamp = now();
-    await db.prepare(`INSERT INTO finance_cash_transactions (
-      id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-      account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
-      counterparty_contact_id, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(
-        id, transaction.code, transaction.type, transaction.source, transaction.category,
-        transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
-        transaction.status, transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.staffEmployeeCode, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, transaction.department || null, transaction.employeeCode || null,
-        transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
-        actor.id, timestamp, timestamp,
-      );
-    await recordAuditEvent(actor.id, 'create_cash_transaction', 'finance_cash_transactions', id, {
-      code: transaction.code, type: transaction.type, amount: transaction.amount, source: transaction.source,
+    await db.transaction(async () => {
+      if (transaction.status === 'Đã hoàn thành') {
+        await lockTransferLedger();
+        if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      }
+      await db.prepare(`INSERT INTO finance_cash_transactions (
+        id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+        account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
+        counterparty_contact_id, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          id, transaction.code, transaction.type, transaction.source, transaction.category,
+          transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
+          transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.staffEmployeeCode, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, transaction.department || null, transaction.employeeCode || null,
+          transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
+          actor.id, timestamp, timestamp,
+        );
+      if (transaction.status === 'Đã hoàn thành') await postCashTransactionToLedger(transaction, id, actor, profile);
+      await recordAuditEvent(actor.id, 'create_cash_transaction', 'finance_cash_transactions', id, {
+        code: transaction.code, type: transaction.type, amount: transaction.amount, source: transaction.source,
+      });
     });
     sendJson(response, 201, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
+  const cashApprovalMatch = /^\/finance\/cash-transactions\/([^/]+)\/approve$/.exec(resource);
+  if (request.method === 'POST' && cashApprovalMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    await requireSecurityPin(request, actor);
+    const id = decodeURIComponent(cashApprovalMatch[1]);
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      const current = await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id);
+      if (!current) throw new HttpError(404, 'Không tìm thấy chứng từ thu chi.');
+      if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Chỉ có thể ghi sổ phiếu đang chờ duyệt.');
+      if (current.code.startsWith('AUTO-') || /^TRF-/i.test(current.code)) throw new HttpError(409, 'Phiếu được tạo từ một nghiệp vụ khác và không thể duyệt riêng.');
+      const linkedPayment = await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.financeTransactionId') = ? LIMIT 1").get(id);
+      if (linkedPayment) throw new HttpError(409, 'Phiếu đã liên kết với đề nghị thanh toán; hãy xử lý từ chứng từ nguồn.');
+      await postCashTransactionToLedger(publicCashTransaction(current), id, actor, profile);
+    });
+    sendJson(response, 200, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
     return;
   }
 
@@ -9229,6 +9321,7 @@ async function handleRequest(request, response) {
     const payload = await readJson(request);
     const timestamp = now();
     if (payload.status === 'Đã hủy') {
+      if (current.status !== 'Chờ duyệt') throw new HttpError(409, 'Phiếu đã ghi sổ không thể hủy trực tiếp. Hãy lập chứng từ đảo hoặc xử lý điều chỉnh có đối chiếu.');
       const linkedPayment = await db.prepare("SELECT id FROM collection_records WHERE scope = 'finance_payments' AND json_extract(payload_json, '$.financeTransactionId') = ?").get(id);
       if (current.code.startsWith('AUTO-') || linkedPayment) throw new HttpError(409, 'Phiếu được sinh từ chứng từ khác. Hãy hủy hoặc điều chỉnh chứng từ nguồn để giữ đúng liên kết sổ sách.');
       await db.prepare("UPDATE finance_cash_transactions SET status = 'Đã hủy', updated_at = ? WHERE id = ? AND status <> 'Đã hủy'").run(timestamp, id);
