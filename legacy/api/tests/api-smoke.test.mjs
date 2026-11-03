@@ -1047,6 +1047,19 @@ test('cash counts require a real petty cash account and recompute book balance a
   assert.equal(forgedApproval.approvedBy, '');
   await request('/collections/finance_cash_counts/cash-count-server-check', 'DELETE', undefined, 409);
   await request('/collections/finance_cash_counts', 'PUT', { records: [] }, 405);
+  const approver = (await request('/users', 'POST', {
+    email: 'cash-count-approver@example.test', name: 'Kế toán trưởng kiểm thử', password: 'Cash-Count-Approver-26!Secure', employeeCode: 'CASH-COUNT-APPROVER', role: 'ADMIN',
+  }, 201)).user;
+  const approverLogin = await request('/auth/login', 'POST', { email: approver.email, password: 'Cash-Count-Approver-26!Secure' });
+  const approverHeaders = { ...headers, Authorization: `Bearer ${approverLogin.access_token || approverLogin.token}` };
+  const approved = (await request('/finance/cash-counts/cash-count-server-check/approve', 'POST', {}, 200, approverHeaders)).record;
+  assert.equal(approved.status, 'Đã phê duyệt');
+  assert.equal(approved.approvedById, approver.id);
+  assert.equal(approved.approvedBy, approver.name);
+  assert.ok(approved.approvedAt);
+  await request('/finance/cash-counts/cash-count-server-check/approve', 'POST', {}, 409, approverHeaders);
+  await request('/collections/finance_cash_counts/cash-count-server-check', 'PATCH', { patch: { conclusion: 'Sửa sau duyệt' } }, 409, approverHeaders);
+  await request('/collections/finance_cash_counts/cash-count-server-check', 'DELETE', undefined, 409, approverHeaders);
   await request('/collections/finance_cash_counts', 'POST', { record: {
     key: 'cash-count-invalid-account', code: 'KKQ-SERVER-002', purpose: 'Kiểm kê quỹ tiền mặt', countDate: '2026-10-30', date: '2026-10-30', time: '16:30',
     cashAccountId: 'missing', counterName: 'Người kiểm kê', lines: [],
