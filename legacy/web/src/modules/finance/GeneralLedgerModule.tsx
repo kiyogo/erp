@@ -257,11 +257,11 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
     const credits = lines.reduce((sum, line) => sum + (Number(line.credit) || 0), 0);
     return lines.length > 0 && lines.every(line => line.account && Number(line.debit) >= 0 && Number(line.credit) >= 0 && ((Number(line.debit) > 0) !== (Number(line.credit) > 0))) && Math.abs(debits - credits) < 0.005;
   }) && Math.abs(totalDebits - totalCredits) < 0.005;
-  const accountSummary = summarizeLedgerAccounts(postedData);
   const quarterSummary = calculateQuarterLedger(data, selectedQuarter, fiscalYearStart.month, fiscalYearStart.day);
   const { year: yearText, quarter: quarterText, records: quarterLedgerData, revenue, expenses, netResult } = quarterSummary;
   const quarterDebits = quarterSummary.debits;
   const quarterCredits = quarterSummary.credits;
+  const accountSummary = summarizeLedgerAccounts(quarterLedgerData);
   const quarterClosed = data.some((item) => item.sourceReference === `period-close:${selectedQuarter}`);
 
   const currentFiscalPeriod = getFiscalQuarterPeriod(new Date(), fiscalYearStart.month, fiscalYearStart.day);
@@ -329,33 +329,34 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
 
   const exportStatement = () => {
     const rows = [
+      ['Kỳ tài chính', `${quarterSummary.startDate} - ${quarterSummary.endDate}`],
       ['Tài khoản', 'Phát sinh Nợ', 'Phát sinh Có', 'Chênh lệch Nợ - Có'],
       ...accountSummary.map((item) => [item.account, item.debit, item.credit, item.debit - item.credit]),
     ];
-    downloadFile('bao_cao_phat_sinh_so_cai.xlsx', generateValidXlsxBlob(rows));
-    message.success(`Đã xuất tổng hợp phát sinh từ ${postedData.length} bút toán đã ghi sổ.`);
+    downloadFile(`bao_cao_phat_sinh_so_cai_${selectedQuarter}.xlsx`, generateValidXlsxBlob(rows));
+    message.success(`Đã xuất tổng hợp quý ${quarterText}/${yearText} từ ${quarterLedgerData.length} bút toán đã ghi sổ.`);
   };
 
   const exportAccountReport = (account: string) => {
-    const entries = postedData.filter((item) => getLines(item).some(line => line.account === account));
+    const entries = quarterLedgerData.filter((item) => getLines(item).some(line => line.account === account));
     const lines = entries.flatMap((item) => getLines(item).filter(line => line.account === account).map(line => `${item.entryDate} | ${item.voucherCode} | ${item.description} | No ${Number(line.debit).toLocaleString('vi-VN')} | Co ${Number(line.credit).toLocaleString('vi-VN')} VND`));
-    downloadFile(`bao_cao_${account.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(`BAO CAO ${account}`, 'Phat sinh tu cac but toan da luu trong So Cai', lines));
+    downloadFile(`so_tai_khoan_${account.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(`PHAT SINH TAI KHOAN ${account}`, `Quy ${quarterText}/${yearText} · ${quarterSummary.startDate} - ${quarterSummary.endDate}`, lines.length ? lines : ['Khong co but toan phat sinh tai khoan trong ky.']));
   };
 
   const exportFinancialReport = (code: string) => {
     const cashMovements = accountSummary.filter((item) => /(?:TK\s*)?11[12]/i.test(item.account));
     const reportLines = code === 'account-movements'
-      ? [`Tổng tài khoản có phát sinh: ${accountSummary.length}`, `Tổng phát sinh Nợ: ${totalDebits.toLocaleString('vi-VN')} VND`, `Tổng phát sinh Có: ${totalCredits.toLocaleString('vi-VN')} VND`, ...accountSummary.map((item) => `${item.account}: No ${item.debit.toLocaleString('vi-VN')} VND / Co ${item.credit.toLocaleString('vi-VN')} VND`)]
+      ? [`Kỳ: ${quarterSummary.startDate} - ${quarterSummary.endDate}`, `Tổng tài khoản có phát sinh: ${accountSummary.length}`, `Tổng phát sinh Nợ: ${quarterDebits.toLocaleString('vi-VN')} VND`, `Tổng phát sinh Có: ${quarterCredits.toLocaleString('vi-VN')} VND`, ...accountSummary.map((item) => `${item.account}: No ${item.debit.toLocaleString('vi-VN')} VND / Co ${item.credit.toLocaleString('vi-VN')} VND`)]
       : code === 'quarter-result'
       ? [`Kỳ: Quý ${quarterText}/${yearText}`, `Doanh thu tài khoản đầu 5, 7: ${revenue.toLocaleString('vi-VN')} VND`, `Chi phí tài khoản đầu 6, 8: ${expenses.toLocaleString('vi-VN')} VND`, `Kết quả sơ bộ: ${netResult.toLocaleString('vi-VN')} VND`, `Số bút toán: ${quarterLedgerData.length}`]
       : code === 'cash-accounts'
       ? cashMovements.map((item) => `${item.account}: No ${item.debit.toLocaleString('vi-VN')} VND / Co ${item.credit.toLocaleString('vi-VN')} VND`)
-      : postedData.flatMap((item) => getLines(item).map(line => `${item.entryDate} | ${item.voucherCode} | ${item.description} | ${line.account} | No ${Number(line.debit).toLocaleString('vi-VN')} | Co ${Number(line.credit).toLocaleString('vi-VN')} VND`));
+      : quarterLedgerData.flatMap((item) => getLines(item).map(line => `${item.entryDate} | ${item.voucherCode} | ${item.description} | ${line.account} | No ${Number(line.debit).toLocaleString('vi-VN')} | Co ${Number(line.credit).toLocaleString('vi-VN')} VND`));
     const titles: Record<string, string> = {
-      'account-movements': 'Bảng tổng hợp phát sinh theo tài khoản',
+      'account-movements': `Bảng tổng hợp phát sinh theo tài khoản · Quý ${quarterText}/${yearText}`,
       'quarter-result': `Kết quả sơ bộ quý ${quarterText}/${yearText}`,
-      'cash-accounts': 'Phát sinh các tài khoản tiền',
-      'general-journal': 'Nhật ký chung từ bút toán đã ghi sổ',
+      'cash-accounts': `Phát sinh các tài khoản tiền · Quý ${quarterText}/${yearText}`,
+      'general-journal': `Nhật ký chung · Quý ${quarterText}/${yearText}`,
     };
     const title = titles[code] || 'Báo cáo Sổ Cái';
     downloadFile(`bao_cao_${code.replace(/[^a-z0-9]+/gi, '_')}.pdf`, generateValidPdfBlob(title, 'Báo cáo nội bộ từ các bút toán đã ghi Sổ Cái; chưa thay thế biểu mẫu pháp định hoặc xác nhận số dư đầu kỳ.', reportLines.length ? reportLines : ['Chưa có bút toán đã ghi sổ trong phạm vi báo cáo.']));
@@ -436,17 +437,22 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
             </Button>
           </div>
           <div style={{ fontSize: 12, color: '#64748B' }}>Các file chỉ tổng hợp bút toán đã ghi Sổ Cái trong hệ thống. Chúng không thay thế biểu mẫu báo cáo tài chính theo chế độ kế toán; số dư đầu kỳ, công nợ, tồn kho và phân loại dòng tiền cần được đối chiếu riêng.</div>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <span>Kỳ tài chính:</span>
+            <Select value={selectedQuarter} onChange={setSelectedQuarter} options={quarterOptions} style={{ width: 230 }} />
+            <span style={{ color: '#64748B' }}>{quarterSummary.startDate} – {quarterSummary.endDate}</span>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             {[
-              { code: 'account-movements', name: 'Bảng tổng hợp phát sinh theo tài khoản', value: `${accountSummary.length} tài khoản · Nợ ${totalDebits.toLocaleString('vi-VN')} ₫ · Có ${totalCredits.toLocaleString('vi-VN')} ₫`, status: postedData.length ? 'Bút toán đã ghi sổ' : 'Chưa có dữ liệu' },
+              { code: 'account-movements', name: 'Bảng tổng hợp phát sinh theo tài khoản', value: `${accountSummary.length} tài khoản · Nợ ${quarterDebits.toLocaleString('vi-VN')} ₫ · Có ${quarterCredits.toLocaleString('vi-VN')} ₫`, status: quarterLedgerData.length ? 'Bút toán đã ghi sổ' : 'Chưa có dữ liệu kỳ này' },
               { code: 'quarter-result', name: 'Kết quả sơ bộ theo quý', value: `Quý ${quarterText}/${yearText} · ${netResult.toLocaleString('vi-VN')} ₫`, status: quarterLedgerData.length ? 'Bút toán đã ghi sổ' : 'Chưa có dữ liệu kỳ này' },
-              { code: 'cash-accounts', name: 'Phát sinh các tài khoản tiền', value: `${accountSummary.filter((item) => /(?:TK\s*)?11[12]/i.test(item.account)).length} tài khoản 111/112 có phát sinh`, status: postedData.length ? 'Chưa phân loại dòng tiền' : 'Chưa có dữ liệu' },
-              { code: 'general-journal', name: 'Nhật ký chung', value: `${postedData.length} bút toán đã ghi sổ · ${accountSummary.length} tài khoản`, status: postedData.length ? 'Dữ liệu Sổ Cái' : 'Chưa có dữ liệu' },
+              { code: 'cash-accounts', name: 'Phát sinh các tài khoản tiền', value: `${accountSummary.filter((item) => /(?:TK\s*)?11[12]/i.test(item.account)).length} tài khoản 111/112 có phát sinh`, status: quarterLedgerData.length ? 'Chưa phân loại dòng tiền' : 'Chưa có dữ liệu kỳ này' },
+              { code: 'general-journal', name: 'Nhật ký chung', value: `${quarterLedgerData.length} bút toán đã ghi sổ · ${accountSummary.length} tài khoản`, status: quarterLedgerData.length ? 'Dữ liệu Sổ Cái' : 'Chưa có dữ liệu kỳ này' },
             ].map((st) => (
               <Card key={st.code} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                   <span style={{ color: '#009688', fontSize: 14 }}>{st.name}</span>
-                  <Tag color={postedData.length ? 'processing' : 'warning'}>{st.status}</Tag>
+                  <Tag color={st.status.includes('Chưa có') ? 'warning' : 'processing'}>{st.status}</Tag>
                 </div>
                 <div style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>{st.value}</div>
                 <Button icon={<FilePdfOutlined />} onClick={() => exportFinancialReport(st.code)}>Tải PDF báo cáo</Button>
@@ -459,7 +465,7 @@ export const GeneralLedgerModule: React.FC<{ subType?: string }> = () => {
               { title: 'Phát sinh Nợ', dataIndex: 'debit', key: 'debit', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
               { title: 'Phát sinh Có', dataIndex: 'credit', key: 'credit', render: (value: number) => `${value.toLocaleString('vi-VN')} ₫` },
               { title: 'Chênh lệch Nợ - Có', key: 'balance', render: (_: any, record: { debit: number; credit: number }) => `${(record.debit - record.credit).toLocaleString('vi-VN')} ₫` },
-              { title: 'Thao tác', key: 'action', render: (_: any, record: { account: string }) => <Button size="small" onClick={() => exportAccountReport(record.account)}>Tải sổ tài khoản</Button> },
+              { title: 'Thao tác', key: 'action', render: (_: any, record: { account: string }) => <Button onClick={() => exportAccountReport(record.account)}>Tải sổ tài khoản</Button> },
             ]} />
           </div>
         </div>
