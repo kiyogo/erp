@@ -146,6 +146,28 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
   } }, 409);
 });
 
+test('e-invoice template records remain internal drafts and enforce uniqueness and field permissions', async () => {
+  const stamp = Date.now();
+  const key = `einvoice-template-${stamp}`;
+  const record = {
+    key, templateName: 'Mẫu thử nội bộ', templateType: 'Hóa đơn giá trị gia tăng', templateCode: '1', symbol: 'C26TAA', version: '1.0',
+    providerTaxId: '0101243150', providerName: 'Nhà cung cấp thử', providerWebsite: 'https://example.vn',
+    effectiveFrom: '2026-01-01', effectiveTo: '2026-12-31', internalNote: 'Chưa đối chiếu',
+    status: 'Đã đăng ký', externalStatus: 'CQT đã chấp thuận',
+  };
+  const created = (await request('/collections/finance_einvoice_templates', 'POST', { record }, 201)).record;
+  assert.equal(created.status, 'Nháp nội bộ · chưa xác minh');
+  assert.equal(created.externalStatus, 'Chưa gửi nhà cung cấp');
+  assert.equal((await request('/collections/finance_einvoice_templates')).data.some(item => item.key === key), true);
+  await request('/collections/finance_einvoice_templates', 'POST', { record: { ...record, key: `${key}-duplicate` } }, 409);
+  await request(`/collections/finance_einvoice_templates/${key}`, 'PATCH', { patch: { status: 'Đã xác minh' } }, 422);
+  const updated = (await request(`/collections/finance_einvoice_templates/${key}`, 'PATCH', { patch: { version: '1.1' } })).record;
+  assert.equal(updated.version, '1.1');
+  assert.equal(updated.status, 'Nháp nội bộ · chưa xác minh');
+  await request(`/collections/finance_einvoice_templates/${key}`, 'DELETE', {}, 200);
+  assert.equal((await request('/collections/finance_einvoice_templates')).data.some(item => item.key === key), false);
+});
+
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
   await request('/collections/business_org_units', 'POST', {

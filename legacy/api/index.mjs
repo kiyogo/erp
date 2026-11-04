@@ -2187,6 +2187,12 @@ const accountingOperationScopes = new Set([
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'finance_einvoice_templates' && request.method !== 'GET' && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được quản lý hồ sơ mẫu hóa đơn nội bộ.');
+  }
+  if (scope === 'finance_einvoice_templates' && request.method === 'PUT') {
+    throw new HttpError(405, 'Không thể thay thế hàng loạt hồ sơ mẫu hóa đơn.');
+  }
   if (scope === 'finance_cash_counts' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được lập và quản lý biên bản kiểm kê quỹ.');
   if (scope === 'finance_cash_counts' && request.method === 'PUT') throw new HttpError(405, 'Không thể thay thế hàng loạt biên bản kiểm kê quỹ.');
   if (scope === 'finance_cash_counts' && request.method === 'DELETE') throw new HttpError(409, 'Biên bản kiểm kê quỹ được lưu để bảo toàn lịch sử kiểm kê và phê duyệt.');
@@ -2591,6 +2597,27 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.externalStatus = 'Chưa gửi nhà cung cấp';
     delete record.cqtCode;
     delete record.signature;
+  }
+  if (scope === 'finance_einvoice_templates') {
+    record.templateName = requiredText(record.templateName, 'Tên hồ sơ mẫu', 200);
+    record.templateType = requiredText(record.templateType, 'Loại mẫu', 120);
+    record.templateCode = requiredText(record.templateCode, 'Mẫu số', 40).toUpperCase();
+    record.symbol = requiredText(record.symbol, 'Ký hiệu', 40).toUpperCase();
+    record.version = requiredText(record.version, 'Phiên bản', 40);
+    record.providerTaxId = requiredText(record.providerTaxId, 'Mã số thuế nhà cung cấp', 20);
+    if (!/^\d{10}(?:\d{3})?$/.test(record.providerTaxId)) throw new HttpError(422, 'Mã số thuế nhà cung cấp không hợp lệ.');
+    record.providerName = requiredText(record.providerName, 'Nhà cung cấp', 255);
+    record.providerWebsite = optionalText(record.providerWebsite, 'Website nhà cung cấp', 500);
+    if (record.providerWebsite && !/^https?:\/\//i.test(record.providerWebsite)) throw new HttpError(422, 'Website nhà cung cấp phải bắt đầu bằng http:// hoặc https://.');
+    record.effectiveFrom = record.effectiveFrom ? requiredIsoDate(record.effectiveFrom, 'Ngày áp dụng từ') : '';
+    record.effectiveTo = record.effectiveTo ? requiredIsoDate(record.effectiveTo, 'Ngày áp dụng đến') : '';
+    if (record.effectiveFrom && record.effectiveTo && record.effectiveTo < record.effectiveFrom) throw new HttpError(422, 'Ngày áp dụng đến không được trước ngày áp dụng từ.');
+    record.internalNote = optionalText(record.internalNote, 'Ghi chú nội bộ', 1000);
+    record.status = 'Nháp nội bộ · chưa xác minh';
+    record.externalStatus = 'Chưa gửi nhà cung cấp';
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_einvoice_templates' AND json_extract(payload_json, '$.providerTaxId') = ? AND LOWER(json_extract(payload_json, '$.templateCode')) = LOWER(?) AND LOWER(json_extract(payload_json, '$.symbol')) = LOWER(?) AND record_key <> ? LIMIT 1")
+      .get(record.providerTaxId, record.templateCode, record.symbol, String(current?.key || ''));
+    if (duplicate) throw new HttpError(409, 'Nhà cung cấp đã có hồ sơ mẫu trùng mẫu số và ký hiệu.');
   }
   if (scope === 'finance_bank_statements') {
     record.bankAccountId = requiredText(record.bankAccountId, 'Tài khoản ngân hàng', 160);
@@ -8595,6 +8622,7 @@ async function handleRequest(request, response) {
       'job_titles',
       'work_statuses',
       'finance_chart_of_accounts',
+      'finance_einvoice_templates',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -8760,6 +8788,7 @@ async function handleRequest(request, response) {
       'job_titles',
       'work_statuses',
       'finance_chart_of_accounts',
+      'finance_einvoice_templates',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -8817,6 +8846,15 @@ async function handleRequest(request, response) {
         }
         if (publicCollectionRecord(existing)?.status !== 'Hóa đơn nháp') {
           throw new HttpError(409, 'Chỉ được sửa hóa đơn còn ở trạng thái nháp.');
+        }
+      }
+      if (scope === 'finance_einvoice_templates') {
+        const editableFields = new Set(['key', 'templateName', 'templateType', 'templateCode', 'symbol', 'version', 'providerTaxId', 'providerName', 'providerWebsite', 'effectiveFrom', 'effectiveTo', 'internalNote']);
+        if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
+          throw new HttpError(422, 'Chỉ được sửa thông tin hồ sơ mẫu nội bộ; trạng thái xác minh được hệ thống quản lý.');
+        }
+        if (publicCollectionRecord(existing)?.status !== 'Nháp nội bộ · chưa xác minh') {
+          throw new HttpError(409, 'Chỉ được sửa hồ sơ mẫu nội bộ chưa xác minh.');
         }
       }
       if (scope === 'payroll' && Object.hasOwn(patch, 'status')) {
@@ -9080,6 +9118,9 @@ async function handleRequest(request, response) {
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
         if (scope === 'finance_einvoices' && publicCollectionRecord(fresh)?.status !== 'Hóa đơn nháp') {
           throw new HttpError(409, 'Chỉ được xóa hóa đơn còn ở trạng thái nháp.');
+        }
+        if (scope === 'finance_einvoice_templates' && publicCollectionRecord(fresh)?.status !== 'Nháp nội bộ · chưa xác minh') {
+          throw new HttpError(409, 'Chỉ được xóa hồ sơ mẫu nội bộ chưa xác minh.');
         }
         if (scope === 'finance_loans' && (await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(fresh.record_key)
           || parseJsonObject(fresh.payload_json).loanScheduleAdjustments?.length)) {

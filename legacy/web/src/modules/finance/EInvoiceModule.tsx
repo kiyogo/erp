@@ -20,7 +20,7 @@ import {
   CopyOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert, DatePicker } from '../../custom-ui';
 import { collectionsApi, crmContactsApi, type CrmContact } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -56,6 +56,23 @@ interface EInvoice {
   status: 'Đã phát hành & Ký số' | 'Hóa đơn nháp' | 'Đã hủy';
   externalStatus?: string;
   items?: EInvoiceItem[];
+}
+
+interface EInvoiceTemplate {
+  key: string;
+  templateName: string;
+  templateType: string;
+  templateCode: string;
+  symbol: string;
+  version: string;
+  providerTaxId: string;
+  providerName: string;
+  providerWebsite?: string;
+  effectiveFrom?: string;
+  effectiveTo?: string;
+  internalNote?: string;
+  status: string;
+  externalStatus: string;
 }
 
 interface EInvoiceItem {
@@ -173,6 +190,7 @@ export const EInvoiceModule: React.FC = () => {
   const [data, setData] = useState<EInvoice[]>(INITIAL_INVOICES);
   const [products, setProducts] = useState<EInvoiceProduct[]>([]);
   const [customers, setCustomers] = useState<CrmContact[]>([]);
+  const [templates, setTemplates] = useState<EInvoiceTemplate[]>([]);
   const [invoiceLines, setInvoiceLines] = useState<EInvoiceLineDraft[]>(() => [blankInvoiceLine()]);
 
   useEffect(() => {
@@ -181,10 +199,13 @@ export const EInvoiceModule: React.FC = () => {
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('finance_einvoices');
       setData(Array.isArray(updated) ? updated : []);
+      const templateRows = dataService.getGenericData('finance_einvoice_templates');
+      setTemplates(Array.isArray(templateRows) ? templateRows as EInvoiceTemplate[] : []);
       const inventory = dataService.getGenericData('finance_inventory');
       setProducts(Array.isArray(inventory) ? inventory as EInvoiceProduct[] : []);
     });
     void dataService.refreshGenericData('finance_inventory').then(rows => setProducts(Array.isArray(rows) ? rows as EInvoiceProduct[] : []));
+    void dataService.refreshGenericData('finance_einvoice_templates').then(rows => setTemplates(Array.isArray(rows) ? rows as EInvoiceTemplate[] : []));
     return unsub;
   }, []);
 
@@ -206,9 +227,14 @@ export const EInvoiceModule: React.FC = () => {
   const [quickCustomerSaving, setQuickCustomerSaving] = useState(false);
   const [editingRecord, setEditingRecord] = useState<EInvoice | null>(null);
   const [previewRecord, setPreviewRecord] = useState<EInvoice | null>(null);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<EInvoiceTemplate | null>(null);
+  const [previewTemplate, setPreviewTemplate] = useState<EInvoiceTemplate | null>(null);
+  const [templateSaving, setTemplateSaving] = useState(false);
   const [form] = Form.useForm();
   const [createForm] = Form.useForm();
   const [quickCustomerForm] = Form.useForm();
+  const [templateForm] = Form.useForm();
 
   const updateInvoiceLine = (key: string, patch: Partial<EInvoiceLineDraft>) => {
     setInvoiceLines(current => current.map(line => line.key === key ? { ...line, ...patch } : line));
@@ -499,6 +525,62 @@ export const EInvoiceModule: React.FC = () => {
     `${provider.name} ${provider.taxId} ${provider.website}`.toLowerCase().includes(providerSearchText.toLowerCase().trim())
   );
 
+  const openTemplateForm = (template?: EInvoiceTemplate) => {
+    setEditingTemplate(template || null);
+    templateForm.resetFields();
+    if (template) templateForm.setFieldsValue(template);
+    else templateForm.setFieldsValue({ templateType: 'Hóa đơn giá trị gia tăng' });
+    setTemplateModalOpen(true);
+  };
+
+  const saveTemplate = async (values: any) => {
+    const provider = providerCatalog.find(item => item.taxId === String(values.providerTaxId));
+    if (!provider) {
+      message.error('Chọn nhà cung cấp trong danh sách đã tổng hợp.');
+      return;
+    }
+    setTemplateSaving(true);
+    try {
+      const record: EInvoiceTemplate = {
+        key: editingTemplate?.key || crypto.randomUUID(),
+        templateName: String(values.templateName || '').trim(),
+        templateType: String(values.templateType || '').trim(),
+        templateCode: String(values.templateCode || '').trim(),
+        symbol: String(values.symbol || '').trim(),
+        version: String(values.version || '').trim(),
+        providerTaxId: provider.taxId,
+        providerName: provider.name,
+        providerWebsite: provider.website,
+        effectiveFrom: values.effectiveFrom || '',
+        effectiveTo: values.effectiveTo || '',
+        internalNote: String(values.internalNote || '').trim(),
+        status: 'Nháp nội bộ · chưa xác minh',
+        externalStatus: 'Chưa gửi nhà cung cấp',
+      };
+      if (editingTemplate) await dataService.updateGenericRecord('finance_einvoice_templates', record);
+      else await dataService.createGenericRecord('finance_einvoice_templates', record);
+      setTemplates(dataService.getGenericData('finance_einvoice_templates') as EInvoiceTemplate[]);
+      setTemplateModalOpen(false);
+      setEditingTemplate(null);
+      templateForm.resetFields();
+      message.success(editingTemplate ? 'Đã cập nhật hồ sơ mẫu nội bộ.' : 'Đã lưu hồ sơ mẫu nội bộ.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || error?.message || 'Không thể lưu hồ sơ mẫu.');
+    } finally {
+      setTemplateSaving(false);
+    }
+  };
+
+  const deleteTemplate = async (template: EInvoiceTemplate) => {
+    try {
+      await dataService.deleteGenericRecord('finance_einvoice_templates', template.key);
+      setTemplates(dataService.getGenericData('finance_einvoice_templates') as EInvoiceTemplate[]);
+      message.success('Đã xóa hồ sơ mẫu nội bộ.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || error?.message || 'Không thể xóa hồ sơ mẫu.');
+    }
+  };
+
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       {/* KPI Cards */}
@@ -681,12 +763,21 @@ export const EInvoiceModule: React.FC = () => {
       {isTemplates && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Quản Lý Mẫu Hóa Đơn Điện Tử &amp; Ký Hiệu Đã Đăng Ký CQT</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => message.warning('Thiết kế và đăng ký mẫu cần cấu hình nhà cung cấp hóa đơn điện tử.')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Đăng ký mẫu hóa đơn mới
-            </Button>
+            <h3 style={{ margin: 0, fontSize: 16 }}>Hồ sơ mẫu hóa đơn</h3>
+            {user?.role === 'ADMIN' && <Button type="primary" icon={<PlusOutlined />} onClick={() => openTemplateForm()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thêm hồ sơ mẫu nội bộ</Button>}
           </div>
-          <Alert message="Chưa có mẫu hóa đơn đã xác minh" description="Mẫu số, ký hiệu và trạng thái đăng ký cần đến từ nhà cung cấp hóa đơn hoặc phản hồi của cơ quan thuế." type="warning" showIcon />
+          <Alert message="Hồ sơ nội bộ, chưa xác minh" description="Thông tin lưu tại đây chỉ để theo dõi nội bộ. Chưa được nhà cung cấp hoặc cơ quan thuế xác nhận và không dùng để phát hành hóa đơn." type="warning" showIcon />
+          <div className="transparent-table-card">
+            <KTable dataSource={templates} rowKey="key" columns={[
+              { title: 'Tên hồ sơ', dataIndex: 'templateName', key: 'templateName' },
+              { title: 'Nhà cung cấp', dataIndex: 'providerName', key: 'providerName', render: (_: string, row: EInvoiceTemplate) => <div>{row.providerName}<div style={{ color: '#64748B', fontSize: 12 }}>MST: {row.providerTaxId}</div></div> },
+              { title: 'Loại và phiên bản', key: 'type', render: (_: any, row: EInvoiceTemplate) => `${row.templateType} · ${row.version}` },
+              { title: 'Mẫu số / Ký hiệu', key: 'code', render: (_: any, row: EInvoiceTemplate) => `${row.templateCode} / ${row.symbol}` },
+              { title: 'Thời hạn ghi nhận', key: 'dates', render: (_: any, row: EInvoiceTemplate) => `${row.effectiveFrom || 'Chưa ghi nhận'} – ${row.effectiveTo || 'Chưa ghi nhận'}` },
+              { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: () => <Tag color="warning">Nháp nội bộ · chưa xác minh</Tag> },
+              { title: 'Thao tác', key: 'actions', render: (_: any, row: EInvoiceTemplate) => <div style={{ display: 'flex', gap: 6 }}><Button icon={<EyeOutlined />} onClick={() => setPreviewTemplate(row)}>Xem</Button>{user?.role === 'ADMIN' && <><Button icon={<EditOutlined />} onClick={() => openTemplateForm(row)}>Sửa</Button><Button danger icon={<DeleteOutlined />} onClick={() => void deleteTemplate(row)} /></>}</div> },
+            ]} pagination={{ pageSize: 10 }} />
+          </div>
         </div>
       )}
 
@@ -923,6 +1014,37 @@ export const EInvoiceModule: React.FC = () => {
             <Button type="primary" htmlType="submit" loading={quickCustomerSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu khách hàng</Button>
           </div>
         </Form>
+      </Modal>
+      <Modal title={editingTemplate ? 'Sửa hồ sơ mẫu nội bộ' : 'Thêm hồ sơ mẫu nội bộ'} open={templateModalOpen} onCancel={() => { setTemplateModalOpen(false); setEditingTemplate(null); templateForm.resetFields(); }} footer={null} width={780}>
+        <Alert message="Hồ sơ chỉ để theo dõi nội bộ; chưa được nhà cung cấp hoặc cơ quan thuế xác minh." type="warning" showIcon />
+        <Form form={templateForm} layout="vertical" onFinish={saveTemplate} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 14, rowGap: 3 }}>
+            <Form.Item name="templateName" label="Tên hồ sơ mẫu" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="providerTaxId" label="Nhà cung cấp hóa đơn điện tử" rules={[{ required: true, message: 'Chọn nhà cung cấp.' }]}>
+              <Select showSearch placeholder="Tìm theo tên hoặc mã số thuế" options={[...new Map(providerCatalog.map(provider => [provider.taxId, provider])).values()].map(provider => ({ value: provider.taxId, label: `${provider.name} · ${provider.taxId}` }))} />
+            </Form.Item>
+            <Form.Item name="templateType" label="Loại mẫu" rules={[{ required: true, whitespace: true }]}><Input placeholder="Ghi theo thông tin nhà cung cấp" /></Form.Item>
+            <Form.Item name="version" label="Phiên bản" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="templateCode" label="Mẫu số" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="symbol" label="Ký hiệu" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="effectiveFrom" label="Ngày áp dụng từ"><DatePicker allowClear placeholder="Chọn ngày" style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="effectiveTo" label="Ngày áp dụng đến"><DatePicker allowClear placeholder="Chọn ngày" style={{ width: '100%' }} /></Form.Item>
+          </div>
+          <Form.Item name="internalNote" label="Ghi chú nội bộ"><Input.TextArea rows={3} maxLength={1000} /></Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}><Button onClick={() => { setTemplateModalOpen(false); setEditingTemplate(null); templateForm.resetFields(); }}>Hủy</Button><Button type="primary" htmlType="submit" loading={templateSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu hồ sơ</Button></div>
+        </Form>
+      </Modal>
+      <Modal title="Chi tiết hồ sơ mẫu nội bộ" open={Boolean(previewTemplate)} onCancel={() => setPreviewTemplate(null)} footer={null} width={600}>
+        {previewTemplate && <div style={{ display: 'grid', gap: 8, marginTop: 14 }}>
+          <div><span style={{ color: '#64748B' }}>Tên hồ sơ:</span> {previewTemplate.templateName}</div>
+          <div><span style={{ color: '#64748B' }}>Nhà cung cấp:</span> {previewTemplate.providerName} · MST {previewTemplate.providerTaxId}</div>
+          <div><span style={{ color: '#64748B' }}>Loại mẫu:</span> {previewTemplate.templateType}</div>
+          <div><span style={{ color: '#64748B' }}>Mẫu số, ký hiệu, phiên bản:</span> {previewTemplate.templateCode} · {previewTemplate.symbol} · {previewTemplate.version}</div>
+          <div><span style={{ color: '#64748B' }}>Thời hạn ghi nhận:</span> {previewTemplate.effectiveFrom || 'Chưa ghi nhận'} – {previewTemplate.effectiveTo || 'Chưa ghi nhận'}</div>
+          <div><span style={{ color: '#64748B' }}>Ghi chú:</span> {previewTemplate.internalNote || 'Không có'}</div>
+          <Tag color="warning">Nháp nội bộ · chưa xác minh</Tag>
+          <div style={{ color: '#64748B' }}>Không dùng hồ sơ này để phát hành hóa đơn.</div>
+        </div>}
       </Modal>
     </div>
   );
