@@ -1179,6 +1179,10 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   const accountBefore = accountsBefore.find(item => item.key === account.key);
   const completed = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', category: 'Thu tiền theo hóa đơn' }, 201)).transaction;
   assert.equal(completed.status, 'Đã hoàn thành');
+  await request('/finance/cash-transactions', 'POST', {
+    ...baseVoucher, status: 'Đã hoàn thành', reference: 'CASH-INVALID-ACCOUNT',
+    journalLines: [{ ...baseVoucher.journalLines[0], debitAccount: '999999' }],
+  }, 422);
   const firstCashPage = await request('/finance/cash-transactions?page=1&limit=1&type=Thu&q=Thu%20ti%E1%BB%81n%20theo%20h%C3%B3a%20%C4%91%C6%A1n');
   const secondCashPage = await request('/finance/cash-transactions?page=2&limit=1&type=Thu&q=Thu%20ti%E1%BB%81n%20theo%20h%C3%B3a%20%C4%91%C6%A1n');
   assert.equal(firstCashPage.pagination.total, 2);

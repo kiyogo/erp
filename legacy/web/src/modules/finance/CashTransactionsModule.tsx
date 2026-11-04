@@ -28,6 +28,7 @@ import {
   filesApi,
   CrmContact,
   EnterpriseEmployee,
+  systemApi,
 } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { EmployeeQuickCreateDialog } from '../hr/EmployeeQuickCreateDialog';
@@ -45,6 +46,14 @@ type FinanceReferenceRow = {
   debitAccount: string;
   creditAccount: string;
   amount: number;
+};
+type FinanceChartAccount = {
+  key: string;
+  code: string;
+  name: string;
+  parentCode?: string;
+  accountingRegime: string;
+  status: string;
 };
 
 export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi' | 'all' }> = ({
@@ -75,6 +84,8 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [partyRefValue, setPartyRefValue] = useState('other');
   const [sourceFilter, setSourceFilter] = useState<'bank' | 'petty'>('bank');
   const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [chartAccounts, setChartAccounts] = useState<FinanceChartAccount[]>([]);
+  const [accountingRegime, setAccountingRegime] = useState('');
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
   const [employeeCreateOpen, setEmployeeCreateOpen] = useState(false);
@@ -166,6 +177,16 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
       setPositionOptions(positions.filter(item => item.isActive !== false).map(item => ({ label: item.name, value: item.name })));
       setWorkStatusOptions(statuses.filter(item => item.isActive !== false).map(item => ({ label: item.name, value: item.name })));
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const syncChart = () => setChartAccounts(dataService.getGenericData('finance_chart_of_accounts'));
+    syncChart();
+    const unsubscribe = dataService.subscribe(syncChart);
+    void systemApi.getCompanyProfile().then(({ data: response }) => {
+      setAccountingRegime(String(response.profile.accountingRegime || ''));
+    }).catch(() => setAccountingRegime(''));
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -461,12 +482,17 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const filteredData = data;
 
   const activeVoucherType: 'Thu' | 'Chi' = form.getFieldValue('type') === 'Chi' ? 'Chi' : 'Thu';
-  const accountCodes = Array.from(new Set(data.flatMap(item => (item.journalLines || []).flatMap(line => [line.debitAccount, line.creditAccount])).filter(Boolean))).sort();
+  const activePostingAccounts = chartAccounts.filter(account =>
+    account.accountingRegime === accountingRegime
+    && account.status === 'Đang sử dụng'
+    && !chartAccounts.some(child => child.accountingRegime === accountingRegime && child.parentCode === account.code),
+  );
+  const postingAccountOptions = activePostingAccounts.map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }));
   const journalColumns = [
     { title: '#', key: 'lineNumber', width: 44, render: (_: any, record: any) => record.lineIndex + 1 },
     { title: 'Diễn giải', key: 'description', render: (_: any, record: any) => <Input aria-label={`Diễn giải hạch toán dòng ${record.lineIndex + 1}`} value={record.description} onChange={event => updateJournalLine(record.lineIndex, 'description', event.target.value)} maxLength={500} /> },
-    { title: 'TK Nợ', key: 'debitAccount', width: 150, render: (_: any, record: any) => <Input aria-label={`Tài khoản Nợ dòng ${record.lineIndex + 1}`} list="cash-account-codes" value={record.debitAccount} onChange={event => updateJournalLine(record.lineIndex, 'debitAccount', event.target.value)} placeholder="Ví dụ: 1111" maxLength={24} /> },
-    { title: 'TK Có', key: 'creditAccount', width: 150, render: (_: any, record: any) => <Input aria-label={`Tài khoản Có dòng ${record.lineIndex + 1}`} list="cash-account-codes" value={record.creditAccount} onChange={event => updateJournalLine(record.lineIndex, 'creditAccount', event.target.value)} placeholder="Nhập mã TK" maxLength={24} /> },
+    { title: 'TK Nợ', key: 'debitAccount', width: 230, render: (_: any, record: any) => <Select aria-label={`Tài khoản Nợ dòng ${record.lineIndex + 1}`} showSearch optionFilterProp="label" value={record.debitAccount || undefined} onChange={value => updateJournalLine(record.lineIndex, 'debitAccount', String(value))} placeholder="Chọn tài khoản" options={postingAccountOptions} /> },
+    { title: 'TK Có', key: 'creditAccount', width: 230, render: (_: any, record: any) => <Select aria-label={`Tài khoản Có dòng ${record.lineIndex + 1}`} showSearch optionFilterProp="label" value={record.creditAccount || undefined} onChange={value => updateJournalLine(record.lineIndex, 'creditAccount', String(value))} placeholder="Chọn tài khoản" options={postingAccountOptions} /> },
     { title: 'Số tiền', key: 'amount', width: 170, render: (_: any, record: any) => <Input aria-label={`Số tiền hạch toán dòng ${record.lineIndex + 1}`} type="number" min={0} step={1} value={record.amount} onChange={event => updateJournalLine(record.lineIndex, 'amount', Number(event.target.value) || 0)} /> },
     { title: 'Nghiệp vụ', key: 'business', render: (_: any, record: any) => <Input aria-label={`Nghiệp vụ dòng ${record.lineIndex + 1}`} value={record.business || ''} maxLength={500} onChange={event => updateJournalLine(record.lineIndex, 'business', event.target.value)} /> },
     { title: '', key: 'actions', width: 48, render: (_: any, record: any) => <Button aria-label={`Xóa dòng hạch toán ${record.lineIndex + 1}`} icon={<DeleteOutlined />} disabled={journalLines.length <= 1} onClick={() => { const next = journalLines.filter((_, lineIndex) => lineIndex !== record.lineIndex); setJournalLines(next); form.setFieldsValue({ amount: next.reduce((sum, row) => sum + (Number(row.amount) || 0), 0) }); }} /> },
@@ -754,9 +780,9 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             <Form.Item name="note" label={activeVoucherType === 'Chi' ? 'Lý do chi' : 'Lý do nộp'} style={{ marginBottom: 6, gridArea: 'reason' }}><Input.TextArea rows={1} placeholder="Ghi chú" /></Form.Item>
           </div>
 
-          <datalist id="cash-account-codes">{accountCodes.map(code => <option key={code} value={code} />)}</datalist>
           <div style={{ margin: '4px 0 14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}><strong>Hạch toán</strong><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Loại tiền<Form.Item name="currency" style={{ marginBottom: 0 }} rules={[{ required: true }]}><Select style={{ width: 110 }} options={[{ label: 'VND', value: 'VND' }]} /></Form.Item></div></div>
+            {!activePostingAccounts.length && <div role="alert" style={{ color: '#92400E', marginBottom: 8 }}>Chưa có tài khoản chi tiết đang sử dụng cho chế độ {accountingRegime || 'kế toán hiện tại'}. Có thể lưu bản nháp; ghi sổ cần danh mục tài khoản hợp lệ.</div>}
             <div style={{ overflowX: 'auto' }}><KTable dataSource={journalLines.map((line, lineIndex) => ({ ...line, lineIndex, key: String(lineIndex) }))} columns={journalColumns} pagination={{ pageSize: 20 }} disableCache /></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}><Button icon={<PlusOutlined />} onClick={() => setJournalLines(current => [...current, { description: '', debitAccount: '', creditAccount: '', amount: 0 }])}>Thêm dòng</Button><Button onClick={() => { setJournalLines([]); form.setFieldsValue({ amount: 0 }); }}>Xóa hết dòng</Button></div>
