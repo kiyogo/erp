@@ -22,6 +22,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
 import { collectionsApi, crmContactsApi, type CrmContact } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
 import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
@@ -158,6 +159,7 @@ function EInvoiceItemsEditor({
 const INITIAL_INVOICES: EInvoice[] = [];
 
 export const EInvoiceModule: React.FC = () => {
+  const { user } = useAuth();
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
@@ -199,20 +201,25 @@ export const EInvoiceModule: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
+  const [quickCustomerTargetForm, setQuickCustomerTargetForm] = useState<any>(null);
+  const [quickCustomerSaving, setQuickCustomerSaving] = useState(false);
   const [editingRecord, setEditingRecord] = useState<EInvoice | null>(null);
   const [previewRecord, setPreviewRecord] = useState<EInvoice | null>(null);
   const [form] = Form.useForm();
   const [createForm] = Form.useForm();
+  const [quickCustomerForm] = Form.useForm();
 
   const updateInvoiceLine = (key: string, patch: Partial<EInvoiceLineDraft>) => {
     setInvoiceLines(current => current.map(line => line.key === key ? { ...line, ...patch } : line));
   };
 
-  const applyBuyerContact = (targetForm: any, customerKey?: string) => {
+  const applyBuyerContact = (targetForm: any, customerKey?: string, knownCustomer?: CrmContact) => {
     if (!customerKey) return;
-    const customer = customers.find(item => item.key === customerKey);
+    const customer = knownCustomer?.key === customerKey ? knownCustomer : customers.find(item => item.key === customerKey);
     if (!customer) return;
     const entityKind = customer.details?.entityKind === 'person' ? 'person' : 'organization';
+    const invoiceEmail = (customer.details?.invoiceRecipientEmails || '').split(/[;,]/).map(value => value.trim()).find(Boolean) || customer.email || '';
     targetForm.setFieldsValue({
       buyerCustomerKey: customer.key,
       buyerType: entityKind,
@@ -220,10 +227,69 @@ export const EInvoiceModule: React.FC = () => {
       buyerEntityName: entityKind === 'organization' ? customer.name : '',
       buyerTaxCode: customer.taxCode || '',
       buyerAddress: customer.address || '',
-      buyerEmail: customer.details?.invoiceRecipientEmails || customer.email || '',
+      buyerEmail: invoiceEmail,
       buyerPhone: customer.details?.invoiceRecipientPhone || customer.phone || '',
     });
   };
+
+  const createQuickCustomer = async (values: any) => {
+    const name = String(values.name || '').trim();
+    const taxCode = String(values.taxCode || '').trim();
+    const duplicate = customers.find(customer => {
+      const sameKind = (customer.details?.entityKind || 'organization') === (values.entityKind || 'organization');
+      return sameKind && ((taxCode && customer.taxCode.trim().toLocaleLowerCase() === taxCode.toLocaleLowerCase())
+        || customer.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+    });
+    if (duplicate) {
+      if (quickCustomerTargetForm) applyBuyerContact(quickCustomerTargetForm, duplicate.key, duplicate);
+      quickCustomerForm.resetFields();
+      setQuickCustomerOpen(false);
+      setQuickCustomerTargetForm(null);
+      message.info('Khách hàng đã có trong danh bạ và đã được chọn cho hóa đơn.');
+      return;
+    }
+    setQuickCustomerSaving(true);
+    try {
+      const response = await crmContactsApi.create({
+        type: 'customer',
+        name,
+        taxCode,
+        contactPerson: String(values.contactPerson || '').trim(),
+        phone: String(values.phone || '').trim(),
+        email: String(values.email || '').trim(),
+        address: String(values.address || '').trim(),
+        status: 'Đang hoạt động',
+        details: {
+          entityKind: values.entityKind || 'organization',
+          personalName: String(values.personalName || '').trim(),
+          invoiceRecipientEmails: String(values.invoiceRecipientEmails || '').trim(),
+          invoiceRecipientPhone: String(values.invoiceRecipientPhone || '').trim(),
+        },
+      });
+      const customer = response.data.contact;
+      setCustomers(current => [...current.filter(item => item.key !== customer.key), customer]);
+      if (quickCustomerTargetForm) applyBuyerContact(quickCustomerTargetForm, customer.key, customer);
+      quickCustomerForm.resetFields();
+      setQuickCustomerOpen(false);
+      setQuickCustomerTargetForm(null);
+      message.success(`Đã tạo khách hàng ${customer.code} và điền vào hóa đơn.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể tạo khách hàng trong danh bạ.');
+    } finally {
+      setQuickCustomerSaving(false);
+    }
+  };
+
+  const renderBuyerCustomerField = (targetForm: any) => (
+    <Form.Item label="Khách hàng trong danh bạ">
+      <div style={{ display: 'flex', gap: 4 }}>
+        <Form.Item name="buyerCustomerKey" style={{ flex: 1, marginBottom: 0 }}>
+          <Select allowClear showSearch placeholder="Chọn khách hàng để điền thông tin" options={customers.filter(item => !item.status.toLocaleLowerCase().includes('tạm')).map(item => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={value => applyBuyerContact(targetForm, value)} />
+        </Form.Item>
+        {user?.role === 'ADMIN' && <Button aria-label="Tạo nhanh khách hàng" title="Tạo nhanh khách hàng" icon={<PlusOutlined />} onClick={() => { quickCustomerForm.resetFields(); setQuickCustomerTargetForm(targetForm); setQuickCustomerOpen(true); }} />}
+      </div>
+    </Form.Item>
+  );
 
   const prepareInvoiceItems = () => {
     if (!invoiceLines.length) {
@@ -532,9 +598,7 @@ export const EInvoiceModule: React.FC = () => {
                 <Input placeholder="Chỉ điền sau khi có mẫu đã đăng ký" />
               </Form.Item>
             </div>
-            <Form.Item name="buyerCustomerKey" label="Khách hàng trong danh bạ">
-              <Select allowClear showSearch placeholder="Chọn khách hàng để điền thông tin" options={customers.filter(item => !item.status.toLocaleLowerCase().includes('tạm')).map(item => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={value => applyBuyerContact(createForm, value)} />
-            </Form.Item>
+            {renderBuyerCustomerField(createForm)}
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 14 }}>
               <Form.Item name="buyerType" label="Loại khách hàng" initialValue="organization" rules={[{ required: true }]}>
                 <Select options={[{ value: 'organization', label: 'Doanh nghiệp' }, { value: 'person', label: 'Cá nhân' }, { value: 'other', label: 'Khác' }]} />
@@ -776,9 +840,7 @@ export const EInvoiceModule: React.FC = () => {
           <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${String(data.length + 1).padStart(5, '0')}`} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="buyerCustomerKey" label="Khách hàng trong danh bạ">
-            <Select allowClear showSearch placeholder="Chọn khách hàng để điền thông tin" options={customers.filter(item => !item.status.toLocaleLowerCase().includes('tạm')).map(item => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={value => applyBuyerContact(form, value)} />
-          </Form.Item>
+          {renderBuyerCustomerField(form)}
           <Form.Item name="buyerType" label="Loại khách hàng" initialValue="organization" rules={[{ required: true }]}>
             <Select options={[{ value: 'organization', label: 'Doanh nghiệp' }, { value: 'person', label: 'Cá nhân' }, { value: 'other', label: 'Khác' }]} />
           </Form.Item>
@@ -821,6 +883,46 @@ export const EInvoiceModule: React.FC = () => {
           <div><span style={{ color: '#64748B' }}>Thuế GTGT:</span> {Number(previewRecord.vatAmount).toLocaleString('vi-VN')} ₫</div>
           <div><span style={{ color: '#64748B' }}>Tổng thanh toán:</span> {Number(previewRecord.finalAmount).toLocaleString('vi-VN')} ₫</div>
         </div>}
+      </Modal>
+      <Modal title="Tạo nhanh khách hàng" open={quickCustomerOpen} onCancel={() => { setQuickCustomerOpen(false); setQuickCustomerTargetForm(null); }} footer={null} width={680}>
+        <Form form={quickCustomerForm} layout="vertical" onFinish={createQuickCustomer} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="entityKind" label="Loại khách hàng" initialValue="organization" rules={[{ required: true }]}>
+              <Select options={[{ value: 'organization', label: 'Doanh nghiệp' }, { value: 'person', label: 'Cá nhân' }]} />
+            </Form.Item>
+            <Form.Item name="name" label="Tên hồ sơ khách hàng" rules={[{ required: true, whitespace: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="personalName" label="Họ và tên người mua">
+              <Input />
+            </Form.Item>
+            <Form.Item name="taxCode" label="Mã số thuế hoặc mã định danh">
+              <Input />
+            </Form.Item>
+            <Form.Item name="contactPerson" label="Người liên hệ">
+              <Input />
+            </Form.Item>
+            <Form.Item name="phone" label="Số điện thoại">
+              <Input />
+            </Form.Item>
+            <Form.Item name="email" label="Email liên hệ" rules={[{ type: 'email', message: 'Email không đúng định dạng.' }]}>
+              <Input type="email" />
+            </Form.Item>
+            <Form.Item name="invoiceRecipientPhone" label="Điện thoại nhận hóa đơn">
+              <Input />
+            </Form.Item>
+          </div>
+          <Form.Item name="address" label="Địa chỉ">
+            <Input />
+          </Form.Item>
+          <Form.Item name="invoiceRecipientEmails" label="Email nhận hóa đơn">
+            <Input placeholder="Có thể nhập nhiều email, phân cách bằng dấu ;" />
+          </Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => { setQuickCustomerOpen(false); setQuickCustomerTargetForm(null); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={quickCustomerSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu khách hàng</Button>
+          </div>
+        </Form>
       </Modal>
     </div>
   );
