@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.mjs src/modules/attendance/attendanceRules.test.mts src/modules/admin/usageRules.test.mts src/modules/finance/cashForecastRules.test.mts src/modules/finance/financeAnalysisRules.test.mts src/modules/finance/taxWorkflowRules.test.mts src/modules/finance/tt58AccountingBooks.test.mts",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs src/modules/attendance/attendanceRules.test.mts src/modules/admin/usageRules.test.mts src/modules/finance/cashForecastRules.test.mts src/modules/finance/eInvoiceReportRules.test.mts src/modules/finance/financeAnalysisRules.test.mts src/modules/finance/taxWorkflowRules.test.mts src/modules/finance/tt58AccountingBooks.test.mts",
     "typecheck": "tsc --noEmit",
     "dev": "vite",
     "build": "vite build",

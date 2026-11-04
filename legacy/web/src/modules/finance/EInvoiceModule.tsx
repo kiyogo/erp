@@ -23,6 +23,7 @@ import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert, DatePick
 import { collectionsApi, crmContactsApi, type CrmContact } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { filterEInvoiceReport } from './eInvoiceReportRules';
 import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
 import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
 
@@ -220,6 +221,9 @@ export const EInvoiceModule: React.FC = () => {
 
   const [searchText, setSearchText] = useState('');
   const [reportPeriod, setReportPeriod] = useState('all');
+  const [reportStatus, setReportStatus] = useState('all');
+  const [reportExternalStatus, setReportExternalStatus] = useState('all');
+  const [reportBuyerSearch, setReportBuyerSearch] = useState('');
   const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
@@ -517,7 +521,9 @@ export const EInvoiceModule: React.FC = () => {
     ...filteredData.map(inv => [inv.invoiceNumber, inv.buyerName, inv.buyerTaxCode, inv.issueDate, inv.totalAmount, inv.vatAmount, inv.finalAmount, inv.status, inv.externalStatus || 'Chưa xác minh']),
   ]));
   const reportPeriods = Array.from(new Set(data.map(invoice => /^\d{4}-\d{2}/.exec(invoice.issueDate || '')?.[0]).filter((period): period is string => Boolean(period)))).sort((a, b) => b.localeCompare(a));
-  const invoiceReportData = data.filter(invoice => reportPeriod === 'all' || invoice.issueDate?.startsWith(reportPeriod));
+  const reportStatuses = Array.from(new Set(data.map(invoice => invoice.status).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'vi'));
+  const reportExternalStatuses = Array.from(new Set(data.map(invoice => invoice.externalStatus || 'Chưa xác minh').filter(Boolean))).sort((a, b) => a.localeCompare(b, 'vi'));
+  const invoiceReportData = filterEInvoiceReport(data, { period: reportPeriod, status: reportStatus, externalStatus: reportExternalStatus, buyerSearch: reportBuyerSearch });
   const exportInvoiceReport = () => downloadFile('bao_cao_hoa_don_noi_bo.xlsx', generateValidXlsxBlob([
     ['Kỳ theo ngày lập', 'Mã bản ghi', 'Người mua', 'Mã số thuế người mua', 'Mẫu số', 'Ký hiệu', 'Ngày lập', 'Tiền hàng bản nháp', 'Thuế GTGT bản nháp', 'Tổng thanh toán bản nháp', 'Trạng thái nội bộ', 'Trạng thái bên ngoài'],
     ...invoiceReportData.map(invoice => [invoice.issueDate?.slice(0, 7) || 'Chưa xác định', invoice.invoiceNumber, invoice.buyerName, invoice.buyerTaxCode, invoice.templateCode, invoice.symbol, invoice.issueDate, invoice.totalAmount, invoice.vatAmount, invoice.finalAmount, invoice.status, invoice.externalStatus || 'Chưa xác minh']),
@@ -811,8 +817,11 @@ export const EInvoiceModule: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16 }}>Báo cáo hóa đơn nội bộ</h3>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               <Select value={reportPeriod} onChange={setReportPeriod} style={{ minWidth: 180 }} options={[{ value: 'all', label: 'Tất cả các kỳ' }, ...reportPeriods.map(period => ({ value: period, label: period }))]} />
+              <Select aria-label="Lọc trạng thái nội bộ" value={reportStatus} onChange={setReportStatus} style={{ minWidth: 180 }} options={[{ value: 'all', label: 'Mọi trạng thái nội bộ' }, ...reportStatuses.map(status => ({ value: status, label: status }))]} />
+              <Select aria-label="Lọc trạng thái bên ngoài" value={reportExternalStatus} onChange={setReportExternalStatus} style={{ minWidth: 190 }} options={[{ value: 'all', label: 'Mọi trạng thái bên ngoài' }, ...reportExternalStatuses.map(status => ({ value: status, label: status }))]} />
+              <Input aria-label="Lọc theo người mua" placeholder="Tìm người mua hoặc mã số thuế" value={reportBuyerSearch} onChange={event => setReportBuyerSearch(event.target.value)} allowClear style={{ width: 240 }} />
               <Button icon={<DownloadOutlined />} disabled={!invoiceReportData.length} onClick={exportInvoiceReport}>
                 Xuất Excel nội bộ
             </Button>
