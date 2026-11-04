@@ -2187,6 +2187,12 @@ const accountingOperationScopes = new Set([
 
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (scope === 'finance_tax_types' && request.method !== 'GET' && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được quản lý danh mục sắc thuế nội bộ.');
+  }
+  if (scope === 'finance_tax_types' && request.method === 'PUT') {
+    throw new HttpError(405, 'Không thể thay thế hàng loạt danh mục sắc thuế.');
+  }
   if (scope === 'finance_einvoice_templates' && request.method !== 'GET' && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý hồ sơ mẫu hóa đơn nội bộ.');
   }
@@ -2402,7 +2408,12 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) LIMIT 1").get(record.code);
       if (duplicate) throw new HttpError(409, 'Mã hồ sơ thuế đã tồn tại.');
     }
-    record.taxType = oneOf(record.taxType, 'Loại thuế', ['Thuế GTGT', 'Thuế TNDN tạm tính', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài']);
+    record.taxType = requiredText(record.taxType, 'Loại thuế', 160);
+    const standardTaxTypes = ['Thuế GTGT', 'Thuế TNDN tạm tính', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài'];
+    if (!standardTaxTypes.includes(record.taxType)) {
+      const configuredType = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax_types' AND json_extract(payload_json, '$.taxName') = ? AND json_extract(payload_json, '$.status') = 'Đang theo dõi' LIMIT 1").get(record.taxType);
+      if (!configuredType) throw new HttpError(422, 'Sắc thuế không có trong danh mục chuẩn hoặc hồ sơ nội bộ đang tạm ngưng.');
+    }
     record.period = requiredText(record.period, 'Kỳ kê khai', 120);
     record.taxAuthority = optionalText(record.taxAuthority, 'Cơ quan thuế quản lý', 300);
     record.deadline = requiredIsoDate(record.deadline, 'Hạn nộp');
@@ -2413,6 +2424,33 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.status = 'Chờ nộp thuế';
     record.externalStatus = 'Chưa xác minh với cơ quan thuế';
     record.paymentEvidence = [];
+  }
+  if (scope === 'finance_tax_types') {
+    record.taxCode = requiredText(record.taxCode, 'Mã sắc thuế', 40).toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9._-]*$/.test(record.taxCode)) throw new HttpError(422, 'Mã sắc thuế chỉ được gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang.');
+    record.taxName = requiredText(record.taxName, 'Tên sắc thuế', 160);
+    if (['Thuế GTGT', 'Thuế TNDN tạm tính', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài'].includes(record.taxName)) {
+      throw new HttpError(409, 'Tên sắc thuế này đã thuộc danh mục chuẩn tích hợp sẵn.');
+    }
+    record.taxGroup = oneOf(record.taxGroup, 'Nhóm thuế', ['GTGT', 'TNDN', 'TNCN', 'Thuế nhà thầu', 'Tiêu thụ đặc biệt', 'Xuất nhập khẩu', 'Tài nguyên', 'Nghĩa vụ khác']);
+    record.calculationMethod = requiredText(record.calculationMethod, 'Phương pháp tính', 500);
+    record.taxpayerScope = requiredText(record.taxpayerScope, 'Đối tượng áp dụng', 500);
+    record.taxRateReference = optionalText(record.taxRateReference, 'Tham chiếu thuế suất', 200);
+    record.effectiveFrom = requiredIsoDate(record.effectiveFrom, 'Ngày hiệu lực');
+    record.effectiveTo = record.effectiveTo ? requiredIsoDate(record.effectiveTo, 'Ngày hết hiệu lực') : '';
+    if (record.effectiveTo && record.effectiveTo < record.effectiveFrom) throw new HttpError(422, 'Ngày hết hiệu lực không được trước ngày hiệu lực.');
+    record.legalBasis = requiredText(record.legalBasis, 'Văn bản áp dụng', 500);
+    record.conditions = optionalText(record.conditions, 'Điều kiện áp dụng', 1000);
+    record.exceptions = optionalText(record.exceptions, 'Ngoại lệ', 1000);
+    record.debitAccount = optionalText(record.debitAccount, 'Tài khoản Nợ tham chiếu', 24);
+    record.creditAccount = optionalText(record.creditAccount, 'Tài khoản Có tham chiếu', 24);
+    record.status = oneOf(record.status || 'Đang theo dõi', 'Trạng thái theo dõi nội bộ', ['Đang theo dõi', 'Tạm ngưng']);
+    record.verificationStatus = 'Chưa xác minh';
+    record.rateUsedForCalculation = false;
+    record.registeredBy = current?.registeredBy || actor.name;
+    const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax_types' AND record_key <> ? AND (LOWER(json_extract(payload_json, '$.taxCode')) = LOWER(?) OR LOWER(json_extract(payload_json, '$.taxName')) = LOWER(?)) LIMIT 1")
+      .get(String(current?.key || ''), record.taxCode, record.taxName);
+    if (duplicate) throw new HttpError(409, 'Mã hoặc tên sắc thuế đã tồn tại trong danh mục.');
   }
   if (scope === 'finance_loans') {
     const profile = await requireAccountingProfile();
@@ -8623,6 +8661,7 @@ async function handleRequest(request, response) {
       'work_statuses',
       'finance_chart_of_accounts',
       'finance_einvoice_templates',
+      'finance_tax_types',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -8789,6 +8828,7 @@ async function handleRequest(request, response) {
       'work_statuses',
       'finance_chart_of_accounts',
       'finance_einvoice_templates',
+      'finance_tax_types',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -8855,6 +8895,16 @@ async function handleRequest(request, response) {
         }
         if (publicCollectionRecord(existing)?.status !== 'Nháp nội bộ · chưa xác minh') {
           throw new HttpError(409, 'Chỉ được sửa hồ sơ mẫu nội bộ chưa xác minh.');
+        }
+      }
+      if (scope === 'finance_tax_types') {
+        const editableFields = new Set(['key', 'taxCode', 'taxName', 'taxGroup', 'calculationMethod', 'taxpayerScope', 'taxRateReference', 'effectiveFrom', 'effectiveTo', 'legalBasis', 'conditions', 'exceptions', 'debitAccount', 'creditAccount', 'status']);
+        if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
+          throw new HttpError(422, 'Cập nhật danh mục chỉ cho phép các trường hồ sơ sắc thuế nội bộ.');
+        }
+        if (Object.hasOwn(patch, 'taxName') && patch.taxName !== publicCollectionRecord(existing)?.taxName
+          && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax' AND json_extract(payload_json, '$.taxType') = ? LIMIT 1").get(publicCollectionRecord(existing)?.taxName)) {
+          throw new HttpError(409, 'Tên sắc thuế đã được dùng trong kỳ kê khai và không thể đổi để giữ liên kết lịch sử.');
         }
       }
       if (scope === 'payroll' && Object.hasOwn(patch, 'status')) {
@@ -9121,6 +9171,9 @@ async function handleRequest(request, response) {
         }
         if (scope === 'finance_einvoice_templates' && publicCollectionRecord(fresh)?.status !== 'Nháp nội bộ · chưa xác minh') {
           throw new HttpError(409, 'Chỉ được xóa hồ sơ mẫu nội bộ chưa xác minh.');
+        }
+        if (scope === 'finance_tax_types' && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax' AND json_extract(payload_json, '$.taxType') = ? LIMIT 1").get(publicCollectionRecord(fresh)?.taxName)) {
+          throw new HttpError(409, 'Sắc thuế đã được dùng trong kỳ kê khai; hãy chuyển sang trạng thái tạm ngưng để giữ lịch sử.');
         }
         if (scope === 'finance_loans' && (await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_loan_events' AND json_extract(payload_json, '$.loanKey') = ? LIMIT 1").get(fresh.record_key)
           || parseJsonObject(fresh.payload_json).loanScheduleAdjustments?.length)) {

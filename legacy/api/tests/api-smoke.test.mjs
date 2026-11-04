@@ -168,6 +168,40 @@ test('e-invoice template records remain internal drafts and enforce uniqueness a
   assert.equal((await request('/collections/finance_einvoice_templates')).data.some(item => item.key === key), false);
 });
 
+test('tax type profiles are internal references and only active saved profiles can create tax filings', async () => {
+  const stamp = Date.now();
+  const key = `tax-type-${stamp}`;
+  const profile = {
+    key, taxCode: `TEST-${stamp}`, taxName: `Sắc thuế kiểm thử ${stamp}`, taxGroup: 'Nghĩa vụ khác',
+    calculationMethod: 'Theo căn cứ được doanh nghiệp đối chiếu', taxpayerScope: 'Đối tượng được xác định trong hồ sơ doanh nghiệp',
+    taxRateReference: 'Chỉ tham chiếu; không tính tự động', effectiveFrom: '2026-01-01', effectiveTo: '',
+    legalBasis: 'Văn bản do người dùng khai báo, chưa được xác minh', conditions: '', exceptions: '',
+    debitAccount: '3338', creditAccount: '1121', status: 'Đang theo dõi', verificationStatus: 'Đã xác minh', rateUsedForCalculation: true,
+  };
+  const created = (await request('/collections/finance_tax_types', 'POST', { record: profile }, 201)).record;
+  assert.equal(created.verificationStatus, 'Chưa xác minh');
+  assert.equal(created.rateUsedForCalculation, false);
+  await request('/collections/finance_tax_types', 'POST', { record: { ...profile, key: `${key}-duplicate` } }, 409);
+  const filingKey = `tax-custom-filing-${stamp}`;
+  const filing = (await request('/collections/finance_tax', 'POST', { record: {
+    key: filingKey, code: filingKey.toUpperCase(), taxType: created.taxName, period: 'Kỳ thử nghiệm',
+    deadline: '2026-12-31', amountPayable: 0,
+  } }, 201)).record;
+  assert.equal(filing.taxType, created.taxName);
+  await request(`/collections/finance_tax_types/${key}`, 'PATCH', { patch: { taxName: `${created.taxName} đổi tên` } }, 409);
+  await request('/collections/finance_tax', 'POST', { record: {
+    key: `${filingKey}-unknown`, code: `${filingKey}-unknown`, taxType: 'Sắc thuế chưa được khai báo',
+    period: 'Kỳ thử nghiệm', deadline: '2026-12-31', amountPayable: 0,
+  } }, 422);
+  const paused = (await request(`/collections/finance_tax_types/${key}`, 'PATCH', { patch: { status: 'Tạm ngưng' } })).record;
+  assert.equal(paused.status, 'Tạm ngưng');
+  await request('/collections/finance_tax', 'POST', { record: {
+    key: `${filingKey}-paused`, code: `${filingKey}-paused`, taxType: created.taxName,
+    period: 'Kỳ thử nghiệm', deadline: '2026-12-31', amountPayable: 0,
+  } }, 422);
+  await request(`/collections/finance_tax_types/${key}`, 'DELETE', {}, 409);
+});
+
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
   await request('/collections/business_org_units', 'POST', {

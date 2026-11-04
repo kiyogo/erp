@@ -16,16 +16,18 @@ import {
   FilePdfOutlined,
   SendOutlined,
   CheckOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert, DatePicker } from '../../custom-ui';
 import { FinancePaymentAccount, FinancePaymentRequest, financePaymentAccountsApi, financePaymentsApi } from '../../api/endpoints';
 import { hasOpenTaxPayment, isValidTaxPaymentAmount, validateTaxFiling } from './taxWorkflowRules';
+import { useAuth } from '../../context/AuthContext';
 
 interface TaxFiling {
   key: string;
   code: string;
-  taxType: 'Thuế GTGT' | 'Thuế TNDN tạm tính' | 'Thuế TNCN khấu trừ' | 'Lệ phí Môn bài';
+  taxType: string;
   period: string;
   taxAuthority: string;
   amountPayable: number;
@@ -35,9 +37,29 @@ interface TaxFiling {
   externalStatus?: string;
 }
 
+interface TaxTypeProfile {
+  key: string;
+  taxCode: string;
+  taxName: string;
+  taxGroup: string;
+  calculationMethod: string;
+  taxpayerScope: string;
+  taxRateReference?: string;
+  effectiveFrom: string;
+  effectiveTo?: string;
+  legalBasis: string;
+  conditions?: string;
+  exceptions?: string;
+  debitAccount?: string;
+  creditAccount?: string;
+  status: 'Đang theo dõi' | 'Tạm ngưng';
+  verificationStatus: 'Chưa xác minh';
+}
+
 const INITIAL_TAX_DATA: TaxFiling[] = [];
 
 export const TaxModule: React.FC = () => {
+  const { user } = useAuth();
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
@@ -52,6 +74,7 @@ export const TaxModule: React.FC = () => {
   const [payments, setPayments] = useState<FinancePaymentRequest[]>([]);
   const [paymentsLoaded, setPaymentsLoaded] = useState(false);
   const [paymentAccounts, setPaymentAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [taxTypes, setTaxTypes] = useState<TaxTypeProfile[]>([]);
 
   useEffect(() => {
     const list = dataService.getGenericData('finance_tax');
@@ -59,7 +82,10 @@ export const TaxModule: React.FC = () => {
     const unsub = dataService.subscribe(() => {
       const updated = dataService.getGenericData('finance_tax');
       setData(Array.isArray(updated) ? updated : []);
+      const updatedTypes = dataService.getGenericData('finance_tax_types');
+      setTaxTypes(Array.isArray(updatedTypes) ? updatedTypes as TaxTypeProfile[] : []);
     });
+    void dataService.refreshGenericData('finance_tax_types').then(rows => setTaxTypes(Array.isArray(rows) ? rows as TaxTypeProfile[] : []));
     void loadPayments().catch(() => message.error('Không tải được đề nghị nộp thuế.'));
     void financePaymentAccountsApi.getAccounts().then(response => setPaymentAccounts(response.data.accounts)).catch(() => setPaymentAccounts([]));
     return unsub;
@@ -67,7 +93,11 @@ export const TaxModule: React.FC = () => {
 
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [taxTypeModalOpen, setTaxTypeModalOpen] = useState(false);
+  const [editingTaxType, setEditingTaxType] = useState<TaxTypeProfile | null>(null);
+  const [taxTypeSaving, setTaxTypeSaving] = useState(false);
   const [form] = Form.useForm();
+  const [taxTypeForm] = Form.useForm();
   const [paymentForm] = Form.useForm();
   const [settlementForm] = Form.useForm();
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -76,6 +106,49 @@ export const TaxModule: React.FC = () => {
   const [selectedPayment, setSelectedPayment] = useState<FinancePaymentRequest | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const paymentSubmitLock = useRef(false);
+
+  const openTaxTypeForm = (profile?: TaxTypeProfile) => {
+    setEditingTaxType(profile || null);
+    taxTypeForm.resetFields();
+    if (profile) taxTypeForm.setFieldsValue(profile);
+    else taxTypeForm.setFieldsValue({ status: 'Đang theo dõi' });
+    setTaxTypeModalOpen(true);
+  };
+
+  const saveTaxType = async (values: any) => {
+    setTaxTypeSaving(true);
+    try {
+      const profile: TaxTypeProfile = {
+        key: editingTaxType?.key || crypto.randomUUID(),
+        taxCode: String(values.taxCode || '').trim(),
+        taxName: String(values.taxName || '').trim(),
+        taxGroup: String(values.taxGroup || ''),
+        calculationMethod: String(values.calculationMethod || '').trim(),
+        taxpayerScope: String(values.taxpayerScope || '').trim(),
+        taxRateReference: String(values.taxRateReference || '').trim(),
+        effectiveFrom: String(values.effectiveFrom || ''),
+        effectiveTo: String(values.effectiveTo || ''),
+        legalBasis: String(values.legalBasis || '').trim(),
+        conditions: String(values.conditions || '').trim(),
+        exceptions: String(values.exceptions || '').trim(),
+        debitAccount: String(values.debitAccount || '').trim(),
+        creditAccount: String(values.creditAccount || '').trim(),
+        status: values.status || 'Đang theo dõi',
+        verificationStatus: 'Chưa xác minh',
+      };
+      if (editingTaxType) await dataService.updateGenericRecord('finance_tax_types', profile);
+      else await dataService.createGenericRecord('finance_tax_types', profile);
+      setTaxTypes(dataService.getGenericData('finance_tax_types') as TaxTypeProfile[]);
+      setTaxTypeModalOpen(false);
+      setEditingTaxType(null);
+      taxTypeForm.resetFields();
+      message.success(editingTaxType ? 'Đã cập nhật hồ sơ sắc thuế nội bộ.' : 'Đã lưu hồ sơ sắc thuế nội bộ.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Không thể lưu hồ sơ sắc thuế.');
+    } finally {
+      setTaxTypeSaving(false);
+    }
+  };
 
   const loadPayments = async () => {
     setPaymentsLoaded(false);
@@ -91,6 +164,13 @@ export const TaxModule: React.FC = () => {
   const totalPaid = data.reduce((sum, item) => sum + item.amountPaid, 0);
   const totalPending = Math.max(0, totalPayable - totalPaid);
   const declaredTaxTypes = Array.from(new Set(data.map(item => item.taxType).filter(Boolean)));
+  const filingTaxTypeOptions = [
+    { label: 'Thuế GTGT', value: 'Thuế GTGT' },
+    { label: 'Thuế TNDN tạm tính', value: 'Thuế TNDN tạm tính' },
+    { label: 'Thuế TNCN khấu trừ', value: 'Thuế TNCN khấu trừ' },
+    { label: 'Lệ phí Môn bài', value: 'Lệ phí Môn bài' },
+    ...taxTypes.filter(item => item.status === 'Đang theo dõi').map(item => ({ label: `${item.taxName} · ${item.taxCode}`, value: item.taxName })),
+  ];
   const deadlineRows = data.filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.deadline || '')).sort((a, b) => a.deadline.localeCompare(b.deadline));
 
   const handleCreate = async (values: any) => {
@@ -255,23 +335,33 @@ export const TaxModule: React.FC = () => {
       {isTypes && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Mục Các Sắc Thuế Doanh Nghiệp Áp Dụng</h3>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => message.warning('Chức năng đăng ký sắc thuế cần kết nối cơ quan thuế; chưa có xác nhận trực tuyến.')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Thêm sắc thuế
-            </Button>
+            <h3 style={{ margin: 0, fontSize: 16 }}>Danh mục sắc thuế</h3>
+            {user?.role === 'ADMIN' && <Button type="primary" icon={<PlusOutlined />} onClick={() => openTaxTypeForm()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thêm hồ sơ sắc thuế nội bộ</Button>}
           </div>
+          <Alert message="Thông tin nội bộ, chưa xác minh" description="Tham chiếu thuế suất và tài khoản chỉ để lưu hồ sơ, không được dùng để tự tính thuế hoặc hạch toán. Hãy đối chiếu văn bản đang có hiệu lực và hồ sơ doanh nghiệp trước khi áp dụng." type="warning" showIcon />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
             {declaredTaxTypes.map((taxType) => (
               <Card key={taxType} style={{ borderRadius: 8, border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <strong style={{ color: '#009688', fontSize: 14 }}>Theo hồ sơ đã nhập</strong>
+                  <span style={{ color: '#009688', fontSize: 14 }}>Theo kỳ khai nội bộ</span>
                   <Tag color="warning">Chưa xác minh</Tag>
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A', marginBottom: 4 }}>{taxType}</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>Mức thuế và kỳ kê khai cần xác nhận theo hồ sơ doanh nghiệp và quy định áp dụng.</div>
+                <div style={{ fontSize: 14, color: '#0F172A', marginBottom: 4 }}>{taxType}</div>
+                <div style={{ fontSize: 12, color: '#64748B' }}>Kỳ khai nội bộ; không phải xác nhận đăng ký hoặc nghĩa vụ chính thức.</div>
               </Card>
             ))}
             {!declaredTaxTypes.length && <div style={{ color: '#64748B', padding: 16 }}>Chưa có sắc thuế nào được khai báo trong hồ sơ nội bộ.</div>}
+          </div>
+          <div className="transparent-table-card">
+            <KTable dataSource={taxTypes} columns={[
+              { title: 'Mã sắc thuế', dataIndex: 'taxCode', key: 'taxCode' },
+              { title: 'Tên sắc thuế', dataIndex: 'taxName', key: 'taxName' },
+              { title: 'Nhóm', dataIndex: 'taxGroup', key: 'taxGroup' },
+              { title: 'Phương pháp và tham chiếu thuế suất', key: 'method', render: (_: unknown, row: TaxTypeProfile) => <div>{row.calculationMethod}<div style={{ color: '#64748B', fontSize: 12 }}>{row.taxRateReference || 'Chưa ghi nội dung tham chiếu'}</div></div> },
+              { title: 'Hiệu lực và căn cứ', key: 'basis', render: (_: unknown, row: TaxTypeProfile) => <div>{row.effectiveFrom}{row.effectiveTo ? ` – ${row.effectiveTo}` : ' – Chưa xác định ngày kết thúc'}<div style={{ color: '#64748B', fontSize: 12 }}>{row.legalBasis}</div></div> },
+              { title: 'Theo dõi nội bộ', key: 'status', render: (_: unknown, row: TaxTypeProfile) => <div><Tag color={row.status === 'Đang theo dõi' ? 'processing' : 'default'}>{row.status}</Tag><Tag color="warning">Chưa xác minh</Tag></div> },
+              { title: 'Thao tác', key: 'actions', render: (_: unknown, row: TaxTypeProfile) => user?.role === 'ADMIN' ? <Button icon={<EditOutlined />} onClick={() => openTaxTypeForm(row)}>Sửa</Button> : <span>Chỉ xem</span> },
+            ]} pagination={{ pageSize: 10 }} />
           </div>
         </div>
       )}
@@ -507,14 +597,7 @@ export const TaxModule: React.FC = () => {
               <Input />
             </Form.Item>
             <Form.Item name="taxType" label="Loại thuế" rules={[{ required: true, message: 'Chọn loại thuế' }]}>
-              <Select
-                options={[
-                  { label: 'Thuế GTGT', value: 'Thuế GTGT' },
-                  { label: 'Thuế TNDN tạm tính', value: 'Thuế TNDN tạm tính' },
-                  { label: 'Thuế TNCN khấu trừ', value: 'Thuế TNCN khấu trừ' },
-                  { label: 'Lệ phí Môn bài', value: 'Lệ phí Môn bài' },
-                ]}
-              />
+              <Select showSearch options={filingTaxTypeOptions} />
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -536,6 +619,35 @@ export const TaxModule: React.FC = () => {
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu tờ khai
             </Button>
+          </div>
+        </Form>
+      </Modal>
+      <Modal title={editingTaxType ? 'Sửa hồ sơ sắc thuế nội bộ' : 'Thêm hồ sơ sắc thuế nội bộ'} open={taxTypeModalOpen} onCancel={() => { setTaxTypeModalOpen(false); setEditingTaxType(null); taxTypeForm.resetFields(); }} footer={null} width={780}>
+        <Alert message="Hồ sơ tham chiếu nội bộ, chưa xác minh" description="Nội dung thuế suất và tài khoản chỉ được lưu để đối chiếu, không dùng cho tính thuế hay tự động hạch toán. Không nhập thông tin như một kết luận pháp lý nếu chưa kiểm tra văn bản gốc." type="warning" showIcon />
+        <Form form={taxTypeForm} layout="vertical" onFinish={saveTaxType} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 14, rowGap: 3 }}>
+            <Form.Item name="taxCode" label="Mã sắc thuế" rules={[{ required: true, whitespace: true }]}><Input maxLength={40} /></Form.Item>
+            <Form.Item name="taxName" label="Tên sắc thuế" rules={[{ required: true, whitespace: true }]}><Input maxLength={160} /></Form.Item>
+            <Form.Item name="taxGroup" label="Nhóm thuế" rules={[{ required: true }]}><Select options={[
+              { value: 'GTGT', label: 'GTGT' }, { value: 'TNDN', label: 'TNDN' }, { value: 'TNCN', label: 'TNCN' },
+              { value: 'Thuế nhà thầu', label: 'Thuế nhà thầu' }, { value: 'Tiêu thụ đặc biệt', label: 'Tiêu thụ đặc biệt' },
+              { value: 'Xuất nhập khẩu', label: 'Xuất nhập khẩu' }, { value: 'Tài nguyên', label: 'Tài nguyên' }, { value: 'Nghĩa vụ khác', label: 'Nghĩa vụ khác' },
+            ]} /></Form.Item>
+            <Form.Item name="status" label="Trạng thái theo dõi nội bộ" rules={[{ required: true }]}><Select options={[{ value: 'Đang theo dõi', label: 'Đang theo dõi' }, { value: 'Tạm ngưng', label: 'Tạm ngưng' }]} /></Form.Item>
+            <Form.Item name="calculationMethod" label="Phương pháp tính" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="taxpayerScope" label="Đối tượng áp dụng" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="taxRateReference" label="Tham chiếu thuế suất"><Input placeholder="Ghi văn bản/điều khoản; chỉ lưu tham chiếu, không tính toán" /></Form.Item>
+            <Form.Item name="legalBasis" label="Văn bản áp dụng" rules={[{ required: true, whitespace: true }]}><Input placeholder="Số hiệu văn bản và điều khoản cần đối chiếu" /></Form.Item>
+            <Form.Item name="effectiveFrom" label="Ngày hiệu lực" rules={[{ required: true, message: 'Chọn ngày hiệu lực.' }]}><DatePicker style={{ width: '100%' }} placeholder="Chọn ngày" /></Form.Item>
+            <Form.Item name="effectiveTo" label="Ngày hết hiệu lực"><DatePicker allowClear style={{ width: '100%' }} placeholder="Chọn ngày nếu đã xác định" /></Form.Item>
+            <Form.Item name="debitAccount" label="Tài khoản Nợ tham chiếu"><Input placeholder="Mã tài khoản theo chế độ áp dụng" /></Form.Item>
+            <Form.Item name="creditAccount" label="Tài khoản Có tham chiếu"><Input placeholder="Mã tài khoản theo chế độ áp dụng" /></Form.Item>
+          </div>
+          <Form.Item name="conditions" label="Điều kiện áp dụng"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>
+          <Form.Item name="exceptions" label="Ngoại lệ"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => { setTaxTypeModalOpen(false); setEditingTaxType(null); taxTypeForm.resetFields(); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={taxTypeSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu hồ sơ</Button>
           </div>
         </Form>
       </Modal>
