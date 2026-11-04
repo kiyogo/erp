@@ -16,7 +16,6 @@ import {
   ClockCircleOutlined,
   DeleteOutlined,
   FileTextOutlined,
-  CheckOutlined,
   CopyOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
@@ -220,6 +219,7 @@ export const EInvoiceModule: React.FC = () => {
   }, []);
 
   const [searchText, setSearchText] = useState('');
+  const [reportPeriod, setReportPeriod] = useState('all');
   const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
@@ -516,6 +516,12 @@ export const EInvoiceModule: React.FC = () => {
     ['Mã bản ghi', 'Người mua', 'Mã số thuế người mua', 'Ngày lập', 'Tiền trước thuế', 'Thuế GTGT', 'Tổng thanh toán', 'Trạng thái nội bộ', 'Trạng thái bên ngoài'],
     ...filteredData.map(inv => [inv.invoiceNumber, inv.buyerName, inv.buyerTaxCode, inv.issueDate, inv.totalAmount, inv.vatAmount, inv.finalAmount, inv.status, inv.externalStatus || 'Chưa xác minh']),
   ]));
+  const reportPeriods = Array.from(new Set(data.map(invoice => /^\d{4}-\d{2}/.exec(invoice.issueDate || '')?.[0]).filter((period): period is string => Boolean(period)))).sort((a, b) => b.localeCompare(a));
+  const invoiceReportData = data.filter(invoice => reportPeriod === 'all' || invoice.issueDate?.startsWith(reportPeriod));
+  const exportInvoiceReport = () => downloadFile('bao_cao_hoa_don_noi_bo.xlsx', generateValidXlsxBlob([
+    ['Kỳ theo ngày lập', 'Mã bản ghi', 'Người mua', 'Mã số thuế người mua', 'Mẫu số', 'Ký hiệu', 'Ngày lập', 'Tiền hàng bản nháp', 'Thuế GTGT bản nháp', 'Tổng thanh toán bản nháp', 'Trạng thái nội bộ', 'Trạng thái bên ngoài'],
+    ...invoiceReportData.map(invoice => [invoice.issueDate?.slice(0, 7) || 'Chưa xác định', invoice.invoiceNumber, invoice.buyerName, invoice.buyerTaxCode, invoice.templateCode, invoice.symbol, invoice.issueDate, invoice.totalAmount, invoice.vatAmount, invoice.finalAmount, invoice.status, invoice.externalStatus || 'Chưa xác minh']),
+  ]));
   const exportInvoicePdf = (invoice: EInvoice) => downloadFile(`ban_nhap_hoa_don_${invoice.invoiceNumber.replace(/[^a-z0-9_-]/gi, '_')}.pdf`, generateValidPdfBlob(
     `BẢN NHÁP HÓA ĐƠN ${invoice.invoiceNumber}`,
     'Dữ liệu nội bộ · chưa ký số · chưa gửi cơ quan thuế',
@@ -804,23 +810,32 @@ export const EInvoiceModule: React.FC = () => {
       {isReports && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Báo Cáo Tình Hình Sử Dụng Hóa Đơn</h3>
-            <Button icon={<DownloadOutlined />} disabled title="Chưa có dữ liệu hóa đơn được CQT xác nhận">
-              Chưa thể xuất báo cáo CQT
+            <h3 style={{ margin: 0, fontSize: 16 }}>Báo cáo hóa đơn nội bộ</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Select value={reportPeriod} onChange={setReportPeriod} style={{ minWidth: 180 }} options={[{ value: 'all', label: 'Tất cả các kỳ' }, ...reportPeriods.map(period => ({ value: period, label: period }))]} />
+              <Button icon={<DownloadOutlined />} disabled={!invoiceReportData.length} onClick={exportInvoiceReport}>
+                Xuất Excel nội bộ
             </Button>
+            </div>
           </div>
+          <Alert message="Báo cáo từ bản ghi hóa đơn nội bộ" description="Bảng và tệp xuất phản ánh dữ liệu đã lưu trong ERP, gồm cả bản nháp. Đây không phải báo cáo theo mẫu CQT và không xác nhận hóa đơn đã phát hành." type="warning" showIcon />
+          <div style={{ color: '#64748B', fontSize: 13 }}>{invoiceReportData.length} bản ghi · Tổng thanh toán bản nháp {invoiceReportData.reduce((sum, invoice) => sum + Number(invoice.finalAmount || 0), 0).toLocaleString('vi-VN')} ₫ · Thuế GTGT ghi trên bản nháp {invoiceReportData.reduce((sum, invoice) => sum + Number(invoice.vatAmount || 0), 0).toLocaleString('vi-VN')} ₫</div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[]}
+              dataSource={invoiceReportData}
               columns={[
-                { title: 'Kỳ báo cáo', dataIndex: 'period', key: 'period', render: (p: string) => <strong>{p}</strong> },
-                { title: 'Ký hiệu & Mẫu số', dataIndex: 'form', key: 'form' },
-                { title: 'Tổng số phát hành', dataIndex: 'totalIssued', key: 'totalIssued' },
-                { title: 'Đã sử dụng', dataIndex: 'used', key: 'used', render: (u: number) => <strong style={{ color: '#16A34A' }}>{u}</strong> },
-                { title: 'Đã xóa bỏ / Hủy', dataIndex: 'cancelled', key: 'cancelled', render: (c: number) => <span style={{ color: '#DC2626' }}>{c}</span> },
-                { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (s: string) => <Tag icon={<CheckOutlined />} color="success">{s}</Tag> },
-                { title: 'Thao tác', key: 'act', render: () => <Button size="small">Xem chi tiết</Button> },
+                { title: 'Kỳ theo ngày lập', dataIndex: 'issueDate', key: 'period', render: (date: string) => date?.slice(0, 7) || 'Chưa xác định' },
+                { title: 'Mã bản ghi', dataIndex: 'invoiceNumber', key: 'invoiceNumber' },
+                { title: 'Người mua', dataIndex: 'buyerName', key: 'buyerName', render: (name: string, invoice: EInvoice) => <div>{name}<div style={{ color: '#64748B', fontSize: 12 }}>MST: {invoice.buyerTaxCode || 'Chưa khai báo'}</div></div> },
+                { title: 'Mẫu số / Ký hiệu', key: 'template', render: (_: unknown, invoice: EInvoice) => `${invoice.templateCode} / ${invoice.symbol}` },
+                { title: 'Ngày lập', dataIndex: 'issueDate', key: 'issueDate' },
+                { title: 'Tiền hàng bản nháp', dataIndex: 'totalAmount', key: 'totalAmount', render: (amount: number) => `${Number(amount || 0).toLocaleString('vi-VN')} ₫` },
+                { title: 'Thuế GTGT bản nháp', dataIndex: 'vatAmount', key: 'vatAmount', render: (amount: number) => `${Number(amount || 0).toLocaleString('vi-VN')} ₫` },
+                { title: 'Tổng bản nháp', dataIndex: 'finalAmount', key: 'finalAmount', render: (amount: number) => `${Number(amount || 0).toLocaleString('vi-VN')} ₫` },
+                { title: 'Trạng thái nội bộ', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color="warning">{status}</Tag> },
+                { title: 'Trạng thái bên ngoài', dataIndex: 'externalStatus', key: 'externalStatus', render: (status: string) => status || 'Chưa xác minh' },
               ]}
+              pagination={{ pageSize: 10 }}
             />
           </div>
         </div>
