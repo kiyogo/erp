@@ -38,6 +38,10 @@ interface EInvoice {
   invoiceNumber: string;
   templateCode: string;
   symbol: string;
+  templateKey?: string;
+  templateType?: string;
+  providerTaxId?: string;
+  providerName?: string;
   buyerName: string;
   buyerType?: 'organization' | 'person' | 'other';
   buyerEntityName?: string;
@@ -221,6 +225,7 @@ export const EInvoiceModule: React.FC = () => {
   const [reportPeriod, setReportPeriod] = useState('all');
   const [reportStatus, setReportStatus] = useState('all');
   const [reportExternalStatus, setReportExternalStatus] = useState('all');
+  const [reportInvoiceType, setReportInvoiceType] = useState('all');
   const [reportBuyerSearch, setReportBuyerSearch] = useState('');
   const [providerSearchText, setProviderSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -365,6 +370,7 @@ export const EInvoiceModule: React.FC = () => {
         await dataService.updateGenericRecord('finance_einvoices', {
           key: editingRecord.key,
           invoiceNumber: String(values.invoiceNumber || '').trim(),
+          templateKey: values.templateKey || '',
           buyerName: String(values.buyerName || '').trim(),
           buyerType: values.buyerType || 'other',
           buyerEntityName: String(values.buyerEntityName || '').trim(),
@@ -388,6 +394,7 @@ export const EInvoiceModule: React.FC = () => {
     const newInv: EInvoice = {
       ...values,
       key: crypto.randomUUID(),
+      templateKey: values.templateKey || '',
       templateCode: '',
       symbol: values.symbol || '',
       issueDate: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
@@ -425,6 +432,7 @@ export const EInvoiceModule: React.FC = () => {
       const response = await collectionsApi.validate<Record<string, any>>('finance_einvoices', {
         key: current?.key || crypto.randomUUID(),
         invoiceNumber: String(values.invoiceNumber || '').trim(),
+        templateKey: values.templateKey || '',
         templateCode: current?.templateCode || '',
         symbol: values.symbol || current?.symbol || '',
         buyerName: String(values.buyerName || '').trim(),
@@ -464,6 +472,7 @@ export const EInvoiceModule: React.FC = () => {
       : [{ ...blankInvoiceLine(), quantity: '1', unitPrice: String(record.totalAmount || ''), vatRate: String(record.vatRate ?? '') }]);
     form.setFieldsValue({
       invoiceNumber: record.invoiceNumber,
+      templateKey: record.templateKey || '',
       buyerType: record.buyerType || 'other',
       buyerCustomerKey: record.buyerCustomerKey || '',
       buyerName: record.buyerName,
@@ -487,6 +496,7 @@ export const EInvoiceModule: React.FC = () => {
     form.resetFields();
     form.setFieldsValue({
       invoiceNumber: `DRAFT-${crypto.randomUUID().toUpperCase()}`,
+      templateKey: record.templateKey || '',
       buyerType: record.buyerType || 'other',
       buyerCustomerKey: record.buyerCustomerKey || '',
       buyerName: record.buyerName,
@@ -521,10 +531,11 @@ export const EInvoiceModule: React.FC = () => {
   const reportPeriods = Array.from(new Set(data.map(invoice => /^\d{4}-\d{2}/.exec(invoice.issueDate || '')?.[0]).filter((period): period is string => Boolean(period)))).sort((a, b) => b.localeCompare(a));
   const reportStatuses = Array.from(new Set(data.map(invoice => invoice.status).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'vi'));
   const reportExternalStatuses = Array.from(new Set(data.map(invoice => invoice.externalStatus || 'Chưa xác minh').filter(Boolean))).sort((a, b) => a.localeCompare(b, 'vi'));
-  const invoiceReportData = filterEInvoiceReport(data, { period: reportPeriod, status: reportStatus, externalStatus: reportExternalStatus, buyerSearch: reportBuyerSearch });
+  const reportInvoiceTypes = Array.from(new Set(data.map(invoice => invoice.templateType).filter((type): type is string => Boolean(type)))).sort((a, b) => a.localeCompare(b, 'vi'));
+  const invoiceReportData = filterEInvoiceReport(data, { period: reportPeriod, status: reportStatus, externalStatus: reportExternalStatus, invoiceType: reportInvoiceType, buyerSearch: reportBuyerSearch });
   const exportInvoiceReport = () => downloadFile('bao_cao_hoa_don_noi_bo.xlsx', generateValidXlsxBlob([
-    ['Kỳ theo ngày lập', 'Mã bản ghi', 'Người mua', 'Mã số thuế người mua', 'Mẫu số', 'Ký hiệu', 'Ngày lập', 'Tiền hàng bản nháp', 'Thuế GTGT bản nháp', 'Tổng thanh toán bản nháp', 'Trạng thái nội bộ', 'Trạng thái bên ngoài'],
-    ...invoiceReportData.map(invoice => [invoice.issueDate?.slice(0, 7) || 'Chưa xác định', invoice.invoiceNumber, invoice.buyerName, invoice.buyerTaxCode, invoice.templateCode, invoice.symbol, invoice.issueDate, invoice.totalAmount, invoice.vatAmount, invoice.finalAmount, invoice.status, invoice.externalStatus || 'Chưa xác minh']),
+    ['Kỳ theo ngày lập', 'Loại mẫu tham chiếu nội bộ', 'Mã bản ghi', 'Người mua', 'Mã số thuế người mua', 'Mẫu số', 'Ký hiệu', 'Nhà cung cấp mẫu', 'Ngày lập', 'Tiền hàng bản nháp', 'Thuế GTGT bản nháp', 'Tổng thanh toán bản nháp', 'Trạng thái nội bộ', 'Trạng thái bên ngoài'],
+    ...invoiceReportData.map(invoice => [invoice.issueDate?.slice(0, 7) || 'Chưa xác định', invoice.templateType || 'Chưa gắn mẫu nội bộ', invoice.invoiceNumber, invoice.buyerName, invoice.buyerTaxCode, invoice.templateCode, invoice.symbol, invoice.providerName || '', invoice.issueDate, invoice.totalAmount, invoice.vatAmount, invoice.finalAmount, invoice.status, invoice.externalStatus || 'Chưa xác minh']),
   ]));
   const exportInvoicePdf = (invoice: EInvoice) => downloadFile(`ban_nhap_hoa_don_${invoice.invoiceNumber.replace(/[^a-z0-9_-]/gi, '_')}.pdf`, generateValidPdfBlob(
     `BẢN NHÁP HÓA ĐƠN ${invoice.invoiceNumber}`,
@@ -694,6 +705,9 @@ export const EInvoiceModule: React.FC = () => {
               <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${crypto.randomUUID()}`} rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
+              <Form.Item name="templateKey" label="Mẫu tham chiếu nội bộ">
+                <Select allowClear placeholder="Chọn mẫu đã lưu" options={templates.map(template => ({ value: template.key, label: `${template.templateName} · ${template.templateType}` }))} />
+              </Form.Item>
               <Form.Item name="symbol" label="Ký hiệu / mẫu số đã đăng ký">
                 <Input placeholder="Chỉ điền sau khi có mẫu đã đăng ký" />
               </Form.Item>
@@ -821,6 +835,7 @@ export const EInvoiceModule: React.FC = () => {
             <h3 style={{ margin: 0, fontSize: 16 }}>Báo cáo hóa đơn nội bộ</h3>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               <Select value={reportPeriod} onChange={setReportPeriod} style={{ minWidth: 180 }} options={[{ value: 'all', label: 'Tất cả các kỳ' }, ...reportPeriods.map(period => ({ value: period, label: period }))]} />
+              <Select aria-label="Lọc loại mẫu tham chiếu" value={reportInvoiceType} onChange={setReportInvoiceType} style={{ minWidth: 210 }} options={[{ value: 'all', label: 'Mọi loại mẫu' }, ...reportInvoiceTypes.map(type => ({ value: type, label: type })), { value: '__no_internal_template__', label: 'Chưa gắn mẫu nội bộ' }]} />
               <Select aria-label="Lọc trạng thái nội bộ" value={reportStatus} onChange={setReportStatus} style={{ minWidth: 180 }} options={[{ value: 'all', label: 'Mọi trạng thái nội bộ' }, ...reportStatuses.map(status => ({ value: status, label: status }))]} />
               <Select aria-label="Lọc trạng thái bên ngoài" value={reportExternalStatus} onChange={setReportExternalStatus} style={{ minWidth: 190 }} options={[{ value: 'all', label: 'Mọi trạng thái bên ngoài' }, ...reportExternalStatuses.map(status => ({ value: status, label: status }))]} />
               <Input aria-label="Lọc theo người mua" placeholder="Tìm người mua hoặc mã số thuế" value={reportBuyerSearch} onChange={event => setReportBuyerSearch(event.target.value)} allowClear style={{ width: 240 }} />
@@ -836,6 +851,7 @@ export const EInvoiceModule: React.FC = () => {
               dataSource={invoiceReportData}
               columns={[
                 { title: 'Kỳ theo ngày lập', dataIndex: 'issueDate', key: 'period', render: (date: string) => date?.slice(0, 7) || 'Chưa xác định' },
+                { title: 'Loại mẫu tham chiếu nội bộ', dataIndex: 'templateType', key: 'templateType', render: (type: string) => type || 'Chưa gắn mẫu nội bộ' },
                 { title: 'Mã bản ghi', dataIndex: 'invoiceNumber', key: 'invoiceNumber' },
                 { title: 'Người mua', dataIndex: 'buyerName', key: 'buyerName', render: (name: string, invoice: EInvoice) => <div>{name}<div style={{ color: '#64748B', fontSize: 12 }}>MST: {invoice.buyerTaxCode || 'Chưa khai báo'}</div></div> },
                 { title: 'Mẫu số / Ký hiệu', key: 'template', render: (_: unknown, invoice: EInvoice) => `${invoice.templateCode} / ${invoice.symbol}` },
@@ -961,6 +977,10 @@ export const EInvoiceModule: React.FC = () => {
           <Form.Item name="invoiceNumber" label="Mã bản nháp nội bộ" initialValue={`DRAFT-${String(data.length + 1).padStart(5, '0')}`} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
+          <Form.Item name="templateKey" label="Mẫu tham chiếu nội bộ">
+            <Select allowClear placeholder="Chọn hồ sơ mẫu đã lưu" options={templates.map(template => ({ value: template.key, label: `${template.templateName} · ${template.templateType} · ${template.providerName}` }))} />
+          </Form.Item>
+          <div style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>Mẫu được chọn chỉ dùng làm tham chiếu nội bộ; chưa xác nhận đăng ký với nhà cung cấp hoặc cơ quan thuế.</div>
           {renderBuyerCustomerField(form)}
           <Form.Item name="buyerType" label="Loại khách hàng" initialValue="organization" rules={[{ required: true }]}>
             <Select options={[{ value: 'organization', label: 'Doanh nghiệp' }, { value: 'person', label: 'Cá nhân' }, { value: 'other', label: 'Khác' }]} />

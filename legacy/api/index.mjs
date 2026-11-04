@@ -2627,6 +2627,28 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (record.buyerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(record.buyerEmail)) throw new HttpError(422, 'Email nhận hóa đơn không hợp lệ.');
     record.buyerPhone = optionalText(record.buyerPhone, 'Số điện thoại người mua', 40);
     record.issueDate = requiredIsoDate(record.issueDate, 'Ngày lập bản nháp');
+    record.templateKey = optionalText(record.templateKey, 'Mã mẫu hóa đơn tham chiếu', 160);
+    if (record.templateKey) {
+      const templateRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_einvoice_templates' AND record_key = ?").get(record.templateKey);
+      const template = templateRow ? parseJsonObject(templateRow.payload_json) : null;
+      if (!template || template.status !== 'Nháp nội bộ · chưa xác minh') throw new HttpError(422, 'Chọn hồ sơ mẫu nội bộ còn tồn tại và chưa xác minh.');
+      record.templateType = requiredText(template.templateType, 'Loại mẫu tham chiếu', 120);
+      record.templateCode = template.templateCode;
+      record.symbol = template.symbol;
+      record.providerTaxId = template.providerTaxId;
+      record.providerName = template.providerName;
+    } else {
+      record.templateType = '';
+      record.providerTaxId = '';
+      record.providerName = '';
+      if (current?.templateKey) {
+        record.templateCode = '';
+        record.symbol = '';
+      } else if (!current) {
+        record.templateCode = optionalText(record.templateCode, 'Mẫu số', 40);
+        record.symbol = optionalText(record.symbol, 'Ký hiệu', 40);
+      }
+    }
     if (record.items !== undefined) {
       if (!Array.isArray(record.items) || record.items.length < 1 || record.items.length > 200) {
         throw new HttpError(422, 'Hóa đơn cần từ 1 đến 200 dòng hàng hóa hoặc dịch vụ.');
@@ -8946,7 +8968,7 @@ async function handleRequest(request, response) {
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
       if (scope === 'finance_einvoices') {
-        const editableFields = new Set(['key', 'invoiceNumber', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'totalAmount', 'vatRate', 'items']);
+        const editableFields = new Set(['key', 'invoiceNumber', 'templateKey', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'totalAmount', 'vatRate', 'items']);
         if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
           throw new HttpError(422, 'Bản nháp chỉ cho phép sửa mã bản nháp, thông tin người mua, tiền hàng và thuế suất.');
         }
@@ -9243,6 +9265,9 @@ async function handleRequest(request, response) {
         }
         if (scope === 'finance_einvoice_templates' && publicCollectionRecord(fresh)?.status !== 'Nháp nội bộ · chưa xác minh') {
           throw new HttpError(409, 'Chỉ được xóa hồ sơ mẫu nội bộ chưa xác minh.');
+        }
+        if (scope === 'finance_einvoice_templates' && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_einvoices' AND json_extract(payload_json, '$.templateKey') = ? LIMIT 1").get(fresh.record_key)) {
+          throw new HttpError(409, 'Mẫu đã được gắn với bản nháp hóa đơn; hãy gỡ liên kết khỏi bản nháp trước khi xóa mẫu.');
         }
         if (scope === 'finance_tax_types' && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax' AND json_extract(payload_json, '$.taxType') = ? LIMIT 1").get(publicCollectionRecord(fresh)?.taxName)) {
           throw new HttpError(409, 'Sắc thuế đã được dùng trong kỳ kê khai; hãy chuyển sang trạng thái tạm ngưng để giữ lịch sử.');

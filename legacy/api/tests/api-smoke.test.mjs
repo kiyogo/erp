@@ -164,7 +164,21 @@ test('e-invoice template records remain internal drafts and enforce uniqueness a
   const updated = (await request(`/collections/finance_einvoice_templates/${key}`, 'PATCH', { patch: { version: '1.1' } })).record;
   assert.equal(updated.version, '1.1');
   assert.equal(updated.status, 'Nháp nội bộ · chưa xác minh');
+  const invoiceKey = `einvoice-template-reference-${stamp}`;
+  const invoice = (await request('/collections/finance_einvoices', 'POST', { record: {
+    key: invoiceKey, invoiceNumber: invoiceKey, templateKey: key, buyerName: 'Người mua thử', issueDate: '2026-11-04', totalAmount: 10000, vatRate: 0,
+  } }, 201)).record;
+  assert.equal(invoice.templateType, 'Hóa đơn giá trị gia tăng');
+  assert.equal(invoice.templateCode, '1');
+  assert.equal(invoice.symbol, 'C26TAA');
+  assert.equal(invoice.providerTaxId, '0101243150');
+  await request(`/collections/finance_einvoice_templates/${key}`, 'DELETE', {}, 409);
+  const unlinked = (await request(`/collections/finance_einvoices/${invoiceKey}`, 'PATCH', { patch: { templateKey: '' } })).record;
+  assert.equal(unlinked.templateType, '');
+  assert.equal(unlinked.templateCode, '');
+  assert.equal(unlinked.symbol, '');
   await request(`/collections/finance_einvoice_templates/${key}`, 'DELETE', {}, 200);
+  await request(`/collections/finance_einvoices/${invoiceKey}`, 'DELETE', {}, 200);
   assert.equal((await request('/collections/finance_einvoice_templates')).data.some(item => item.key === key), false);
 });
 
