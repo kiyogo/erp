@@ -16,7 +16,7 @@ const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const todayInVietnam = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
 const emptySummary: FinanceOverviewSummary = {
-  cash: { income: 0, expense: 0, pending: 0, categories: [], monthly: [] },
+  cash: { income: 0, expense: 0, pending: 0, categories: [], monthly: [], flows: [], accounts: [] },
   documents: { receivable: 0, overdueReceivable: 0, payable: 0, overduePayable: 0, sales: 0, purchases: 0 },
 };
 

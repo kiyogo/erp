@@ -636,6 +636,8 @@ export type FinanceOverviewSummary = {
     pending: number;
     categories: Array<{ type: 'Thu' | 'Chi'; name: string; amount: number }>;
     monthly: Array<{ month: string; income: number; expense: number }>;
+    flows: Array<{ source: 'bank' | 'petty'; accountId: string; accountName: string; category: string; income: number; expense: number; voucherCount: number }>;
+    accounts: Array<{ key: string; name: string; source: 'bank' | 'petty'; status: string; openingBalance: number; income: number; expense: number; closingBalance: number }>;
   };
   documents: {
     receivable: number;
@@ -648,7 +650,7 @@ export type FinanceOverviewSummary = {
 };
 
 export const financeOverviewApi = {
-  getSummary: (params: { dateFrom?: string; dateTo?: string }) => api.get<FinanceOverviewSummary>('/finance/overview', { params }),
+  getSummary: (params: { dateFrom?: string; dateTo?: string; source?: 'all' | 'bank' | 'petty'; type?: 'all' | 'Thu' | 'Chi'; currency?: 'VND'; accountId?: string; counterpartyId?: string }) => api.get<FinanceOverviewSummary>('/finance/overview', { params }),
 };
 
 export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions'> & {

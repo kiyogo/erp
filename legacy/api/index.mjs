@@ -10613,10 +10613,47 @@ async function handleRequest(request, response) {
     const dateFrom = dateFromRaw ? requiredIsoDate(dateFromRaw, 'Từ ngày') : '';
     const dateTo = dateToRaw ? requiredIsoDate(dateToRaw, 'Đến ngày') : '';
     if (dateFrom && dateTo && dateFrom > dateTo) throw new HttpError(422, 'Từ ngày phải bằng hoặc trước đến ngày.');
+    const sourceFilter = url.searchParams.get('source') || 'all';
+    const typeFilter = url.searchParams.get('type') || 'all';
+    const currencyFilter = url.searchParams.get('currency') || 'VND';
+    const accountId = String(url.searchParams.get('accountId') || '').trim().slice(0, 160);
+    const counterpartyId = String(url.searchParams.get('counterpartyId') || '').trim().slice(0, 160);
+    if (!['all', 'bank', 'petty'].includes(sourceFilter)) throw new HttpError(422, 'Nguồn tiền không hợp lệ.');
+    if (!['all', 'Thu', 'Chi'].includes(typeFilter)) throw new HttpError(422, 'Loại giao dịch không hợp lệ.');
+    if (currencyFilter !== 'VND') throw new HttpError(422, 'Hệ thống hiện chỉ hỗ trợ tổng hợp dòng tiền bằng VND.');
+    if (counterpartyId && !await db.prepare('SELECT id FROM crm_contacts WHERE id = ?').get(counterpartyId)) throw new HttpError(422, 'Đối tượng giao dịch không tồn tại.');
+    const cashAccounts = (await internalTransferAccounts()).filter(account =>
+      (sourceFilter === 'all' || account.source === sourceFilter) && (!accountId || account.key === accountId),
+    );
+    if (accountId && !cashAccounts.some(account => account.key === accountId)) throw new HttpError(422, 'Tài khoản quỹ hoặc ngân hàng không tồn tại.');
+    const bankRows = (await db.prepare('SELECT * FROM finance_bank_accounts').all()).map(row => publicBankAccount(row));
+    const bankNameCounts = new Map();
+    for (const bank of bankRows) bankNameCounts.set(bank.bankName, (bankNameCounts.get(bank.bankName) || 0) + 1);
+    const aliasesByAccount = new Map(cashAccounts.map(account => {
+      const aliases = new Set([account.name]);
+      if (account.source === 'bank') {
+        const bank = bankRows.find(row => row.key === account.key);
+        if (bank) {
+          aliases.add(bank.key);
+          aliases.add(bank.accountNumber);
+          aliases.add(`${bank.bankName} - ${bank.accountNumber} (VND)`);
+          if (bankNameCounts.get(bank.bankName) === 1) aliases.add(bank.bankName);
+        }
+      }
+      return [account.key, [...aliases]];
+    }));
     const cashWhere = [];
     const cashParams = [];
     if (dateFrom) { cashWhere.push('transaction_date >= ?'); cashParams.push(dateFrom); }
     if (dateTo) { cashWhere.push('transaction_date <= ?'); cashParams.push(dateTo); }
+    if (sourceFilter !== 'all') { cashWhere.push('source = ?'); cashParams.push(sourceFilter); }
+    if (typeFilter !== 'all') { cashWhere.push('transaction_type = ?'); cashParams.push(typeFilter); }
+    if (accountId) {
+      const aliases = aliasesByAccount.get(accountId) || [];
+      cashWhere.push(`source = ? AND (source_account_id = ? OR (source_account_id IS NULL AND account_name IN (${aliases.map(() => '?').join(', ')})))`);
+      cashParams.push(cashAccounts.find(account => account.key === accountId)?.source, accountId, ...aliases);
+    }
+    if (counterpartyId) { cashWhere.push('counterparty_contact_id = ?'); cashParams.push(counterpartyId); }
     const cashClause = cashWhere.length ? `WHERE ${cashWhere.join(' AND ')}` : '';
     const cashTotals = await db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN status = 'Đã hoàn thành' AND transaction_type = 'Thu' THEN amount ELSE 0 END), 0) AS income,
@@ -10627,12 +10664,36 @@ async function handleRequest(request, response) {
     const completedClause = `WHERE ${completedWhere.join(' AND ')}`;
     const cashCategories = await db.prepare(`SELECT transaction_type AS type, category, COALESCE(SUM(amount), 0) AS amount
       FROM finance_cash_transactions ${completedClause} GROUP BY transaction_type, category`).all(...cashParams);
+    const accountFlows = await db.prepare(`SELECT source, source_account_id AS accountId, account_name AS accountName, category,
+      COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE 0 END), 0) AS income,
+      COALESCE(SUM(CASE WHEN transaction_type = 'Chi' THEN amount ELSE 0 END), 0) AS expense,
+      COUNT(*) AS voucherCount
+      FROM finance_cash_transactions ${completedClause} GROUP BY source, source_account_id, account_name, category`).all(...cashParams);
     const monthlyCash = await db.prepare(`SELECT substr(transaction_date, 1, 7) AS month,
       COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE 0 END), 0) AS income,
       COALESCE(SUM(CASE WHEN transaction_type = 'Chi' THEN amount ELSE 0 END), 0) AS expense
       FROM finance_cash_transactions ${completedClause} GROUP BY substr(transaction_date, 1, 7) ORDER BY month`).all(...cashParams);
+    const accountBalances = [];
+    for (const account of cashAccounts) {
+      const aliases = aliasesByAccount.get(account.key) || [];
+      const accountClause = `(source_account_id = ? OR (source_account_id IS NULL AND account_name IN (${aliases.map(() => '?').join(', ')})))`;
+      const sums = await db.prepare(`SELECT
+        COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END), 0) AS allNet,
+        COALESCE(SUM(CASE WHEN ? <> '' AND transaction_date < ? THEN CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END ELSE 0 END), 0) AS beforeNet,
+        COALESCE(SUM(CASE WHEN ? = '' OR transaction_date <= ? THEN CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END ELSE 0 END), 0) AS closingNet,
+        COALESCE(SUM(CASE WHEN (? = '' OR transaction_date >= ?) AND (? = '' OR transaction_date <= ?) AND transaction_type = 'Thu' THEN amount ELSE 0 END), 0) AS periodIncome,
+        COALESCE(SUM(CASE WHEN (? = '' OR transaction_date >= ?) AND (? = '' OR transaction_date <= ?) AND transaction_type = 'Chi' THEN amount ELSE 0 END), 0) AS periodExpense
+        FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = ? AND ${accountClause}`)
+        .get(dateFrom, dateFrom, dateTo, dateTo, dateFrom, dateFrom, dateTo, dateTo, dateFrom, dateFrom, dateTo, dateTo, account.source, account.key, ...aliases);
+      const openingBalance = (Number(account.balance) || 0) - (Number(sums?.allNet) || 0) + (Number(sums?.beforeNet) || 0);
+      const closingBalance = (Number(account.balance) || 0) - (Number(sums?.allNet) || 0) + (Number(sums?.closingNet) || 0);
+      accountBalances.push({
+        key: account.key, name: account.name, source: account.source, status: account.status,
+        openingBalance, income: Number(sums?.periodIncome) || 0, expense: Number(sums?.periodExpense) || 0, closingBalance,
+      });
+    }
     const today = now().slice(0, 10);
-    const balances = await db.prepare(`SELECT
+    const documentBalances = await db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND amount > paid_amount THEN amount - paid_amount ELSE 0 END), 0) AS receivable,
       COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND amount > paid_amount AND due_date IS NOT NULL AND due_date <> '' AND due_date < ? THEN amount - paid_amount ELSE 0 END), 0) AS overdueReceivable,
       COALESCE(SUM(CASE WHEN (document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%') AND amount > paid_amount THEN amount - paid_amount ELSE 0 END), 0) AS payable,
@@ -10652,13 +10713,15 @@ async function handleRequest(request, response) {
         expense: Number(cashTotals?.expense) || 0,
         pending: Number(cashTotals?.pending) || 0,
         categories: cashCategories.map(row => ({ type: row.type, name: row.category, amount: Number(row.amount) || 0 })),
+        flows: accountFlows.map(row => ({ source: row.source, accountId: row.accountId || '', accountName: row.accountName, category: row.category, income: Number(row.income) || 0, expense: Number(row.expense) || 0, voucherCount: Number(row.voucherCount) || 0 })),
         monthly: monthlyCash.map(row => ({ month: row.month, income: Number(row.income) || 0, expense: Number(row.expense) || 0 })),
+        accounts: accountBalances,
       },
       documents: {
-        receivable: Number(balances?.receivable) || 0,
-        overdueReceivable: Number(balances?.overdueReceivable) || 0,
-        payable: Number(balances?.payable) || 0,
-        overduePayable: Number(balances?.overduePayable) || 0,
+        receivable: Number(documentBalances?.receivable) || 0,
+        overdueReceivable: Number(documentBalances?.overdueReceivable) || 0,
+        payable: Number(documentBalances?.payable) || 0,
+        overduePayable: Number(documentBalances?.overduePayable) || 0,
         sales: Number(documentTotals?.sales) || 0,
         purchases: Number(documentTotals?.purchases) || 0,
       },

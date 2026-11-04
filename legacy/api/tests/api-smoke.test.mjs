@@ -1191,6 +1191,12 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.ok(overview.cash.income >= completed.amount);
   assert.ok(overview.cash.categories.some(item => item.type === 'Thu' && item.name === 'Thu tiền theo hóa đơn' && item.amount >= completed.amount));
   assert.ok(overview.cash.monthly.some(item => item.month === '2026-10' && item.income >= completed.amount));
+  const cashFlow = await request(`/finance/overview?dateFrom=2026-10-29&dateTo=2026-10-29&source=bank&type=Thu&currency=VND&accountId=${encodeURIComponent(account.key)}&counterpartyId=${encodeURIComponent(contact.key)}`);
+  const flowAccount = cashFlow.cash.accounts.find(item => item.key === account.key);
+  assert.equal(flowAccount.openingBalance, account.balance);
+  assert.equal(flowAccount.income, completed.amount);
+  assert.equal(flowAccount.closingBalance, account.balance + completed.amount);
+  assert.equal(cashFlow.cash.flows.find(item => item.category === 'Thu tiền theo hóa đơn')?.income, completed.amount);
   assert.ok(overview.documents.sales >= 5000);
   assert.ok(overview.documents.purchases >= 9000);
   assert.ok(overview.documents.receivable >= 3500);
