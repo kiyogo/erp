@@ -1179,6 +1179,24 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   const accountBefore = accountsBefore.find(item => item.key === account.key);
   const completed = (await request('/finance/cash-transactions', 'POST', { ...baseVoucher, status: 'Đã hoàn thành', category: 'Thu tiền theo hóa đơn' }, 201)).transaction;
   assert.equal(completed.status, 'Đã hoàn thành');
+  await request('/finance/documents', 'POST', {
+    documentType: 'sale', subtype: 'Bán hàng tổng quan', partnerName: `Khách hàng tổng quan ${suffix}`,
+    description: 'Chứng từ tổng quan phải thu', amount: 5000, paidAmount: 1500, documentDate: '2026-10-29', dueDate: '2026-10-29', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0,
+  }, 201);
+  await request('/finance/documents', 'POST', {
+    documentType: 'purchase', subtype: 'Mua hàng tổng quan', partnerName: `Nhà cung cấp tổng quan ${suffix}`,
+    description: 'Chứng từ tổng quan phải trả', amount: 9000, paidAmount: 2000, documentDate: '2026-10-29', dueDate: '2026-10-29', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0,
+  }, 201);
+  const overview = await request('/finance/overview?dateFrom=2026-10-29&dateTo=2026-10-29');
+  assert.ok(overview.cash.income >= completed.amount);
+  assert.ok(overview.cash.categories.some(item => item.type === 'Thu' && item.name === 'Thu tiền theo hóa đơn' && item.amount >= completed.amount));
+  assert.ok(overview.cash.monthly.some(item => item.month === '2026-10' && item.income >= completed.amount));
+  assert.ok(overview.documents.sales >= 5000);
+  assert.ok(overview.documents.purchases >= 9000);
+  assert.ok(overview.documents.receivable >= 3500);
+  assert.ok(overview.documents.payable >= 7000);
+  await request('/finance/overview?dateFrom=2026-02-30', 'GET', undefined, 422);
+  await request('/finance/overview?dateFrom=2026-11-01&dateTo=2026-10-01', 'GET', undefined, 422);
   await request('/finance/cash-transactions', 'POST', {
     ...baseVoucher, status: 'Đã hoàn thành', reference: 'CASH-INVALID-ACCOUNT',
     journalLines: [{ ...baseVoucher.journalLines[0], debitAccount: '999999' }],

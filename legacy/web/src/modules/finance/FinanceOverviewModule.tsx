@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { Button, Progress, message } from '../../custom-ui';
-import { financeCashApi, FinanceCashTransaction, financeDocumentsApi, FinanceDocument, financePaymentAccountsApi, FinancePaymentAccount } from '../../api/endpoints';
+import { Button, Input, Progress, Select, message } from '../../custom-ui';
+import { financeOverviewApi, FinanceOverviewSummary, financePaymentAccountsApi, FinancePaymentAccount } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { FinanceOverviewPeriod, getFinanceOverviewDateRange } from './financeOverviewRules';
 
 interface CategoryTotal {
   name: string;
@@ -12,35 +13,33 @@ interface CategoryTotal {
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 
-const toCategoryTotals = (transactions: FinanceCashTransaction[], type: 'Thu' | 'Chi'): CategoryTotal[] => {
-  const totals = new Map<string, number>();
-  transactions
-    .filter((transaction) => transaction.type === type)
-    .forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + transaction.amount));
-  return Array.from(totals, ([name, amount]) => ({ name, amount })).sort((left, right) => right.amount - left.amount);
+const todayInVietnam = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+const emptySummary: FinanceOverviewSummary = {
+  cash: { income: 0, expense: 0, pending: 0, categories: [], monthly: [] },
+  documents: { receivable: 0, overdueReceivable: 0, payable: 0, overduePayable: 0, sales: 0, purchases: 0 },
 };
 
 export const FinanceOverviewModule: React.FC = () => {
   const navigate = useNavigate();
-  const [transactions, setTransactions] = useState<FinanceCashTransaction[]>([]);
-  const [documents, setDocuments] = useState<FinanceDocument[]>([]);
+  const [summary, setSummary] = useState<FinanceOverviewSummary>(emptySummary);
   const [paymentAccounts, setPaymentAccounts] = useState<FinancePaymentAccount[]>([]);
   const [inventory, setInventory] = useState<Array<{ key: string; name: string; stockQty: number; unitPrice: number }>>([]);
   const [loading, setLoading] = useState(false);
+  const [period, setPeriod] = useState<FinanceOverviewPeriod>('month');
+  const [dateRange, setDateRange] = useState(() => getFinanceOverviewDateRange('month', todayInVietnam()));
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [cashResponse, documentResponse, accountResponse] = await Promise.all([
-        financeCashApi.getAll(),
-        financeDocumentsApi.getAll(),
+      const [summaryResponse, accountResponse] = await Promise.all([
+        financeOverviewApi.getSummary({ dateFrom: dateRange.dateFrom || undefined, dateTo: dateRange.dateTo || undefined }),
         financePaymentAccountsApi.getAccounts(),
       ]);
-      if (!Array.isArray(cashResponse.data?.data) || !Array.isArray(documentResponse.data?.data) || !Array.isArray(accountResponse.data?.accounts)) {
+      if (!Array.isArray(summaryResponse.data?.cash?.categories) || !Array.isArray(summaryResponse.data?.cash?.monthly) || !Array.isArray(accountResponse.data?.accounts)) {
         throw new Error('Dữ liệu tổng quan tài chính không hợp lệ.');
       }
-      setTransactions(cashResponse.data.data);
-      setDocuments(documentResponse.data.data);
+      setSummary(summaryResponse.data);
       setPaymentAccounts(accountResponse.data.accounts);
       try {
         await dataService.refreshGenericData('finance_inventory');
@@ -49,8 +48,7 @@ export const FinanceOverviewModule: React.FC = () => {
         setInventory(dataService.getGenericData('finance_inventory') as Array<{ key: string; name: string; stockQty: number; unitPrice: number }>);
       }
     } catch (error: any) {
-      setTransactions([]);
-      setDocuments([]);
+      setSummary(emptySummary);
       setPaymentAccounts([]);
       setInventory([]);
       message.error(error?.response?.data?.message || 'Không tải được tổng quan tài chính. Vui lòng thử lại.');
@@ -61,68 +59,32 @@ export const FinanceOverviewModule: React.FC = () => {
 
   useEffect(() => {
     void loadData();
-  }, []);
+  }, [dateRange.dateFrom, dateRange.dateTo]);
 
-  const completedTransactions = useMemo(
-    () => transactions.filter((transaction) => transaction.status === 'Đã hoàn thành'),
-    [transactions],
-  );
-  const income = useMemo(
-    () => completedTransactions.filter((transaction) => transaction.type === 'Thu').reduce((sum, transaction) => sum + transaction.amount, 0),
-    [completedTransactions],
-  );
-  const expense = useMemo(
-    () => completedTransactions.filter((transaction) => transaction.type === 'Chi').reduce((sum, transaction) => sum + transaction.amount, 0),
-    [completedTransactions],
-  );
-  const pending = useMemo(() => transactions.filter((transaction) => transaction.status === 'Chờ duyệt').length, [transactions]);
-  const revenueBreakdown = useMemo(() => toCategoryTotals(completedTransactions, 'Thu'), [completedTransactions]);
-  const expenseBreakdown = useMemo(() => toCategoryTotals(completedTransactions, 'Chi'), [completedTransactions]);
-  const validDocuments = useMemo(() => documents.filter((document) => document.status !== 'Đã hủy'), [documents]);
-  const receivableDocuments = useMemo(
-    () => validDocuments.filter((document) => document.documentType === 'sale' || document.subtype.includes('Đầu ra')),
-    [validDocuments],
-  );
-  const payableDocuments = useMemo(
-    () => validDocuments.filter((document) => document.documentType === 'purchase' || document.subtype.includes('Đầu vào')),
-    [validDocuments],
-  );
-  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
-  const outstandingReceivable = receivableDocuments.reduce((sum, document) => sum + Math.max(0, Number(document.remainingAmount) || 0), 0);
-  const overdueReceivable = receivableDocuments
-    .filter((document) => /^\d{4}-\d{2}-\d{2}$/.test(document.dueDate) && document.dueDate < today)
-    .reduce((sum, document) => sum + Math.max(0, Number(document.remainingAmount) || 0), 0);
-  const outstandingPayable = payableDocuments.reduce((sum, document) => sum + Math.max(0, Number(document.remainingAmount) || 0), 0);
-  const overduePayable = payableDocuments
-    .filter((document) => /^\d{4}-\d{2}-\d{2}$/.test(document.dueDate) && document.dueDate < today)
-    .reduce((sum, document) => sum + Math.max(0, Number(document.remainingAmount) || 0), 0);
+  const income = Number(summary.cash.income) || 0;
+  const expense = Number(summary.cash.expense) || 0;
+  const pending = Number(summary.cash.pending) || 0;
+  const revenueBreakdown = useMemo(() => summary.cash.categories.filter(item => item.type === 'Thu').map(({ name, amount }) => ({ name, amount })).sort((a, b) => b.amount - a.amount), [summary.cash.categories]);
+  const expenseBreakdown = useMemo(() => summary.cash.categories.filter(item => item.type === 'Chi').map(({ name, amount }) => ({ name, amount })).sort((a, b) => b.amount - a.amount), [summary.cash.categories]);
+  const outstandingReceivable = Number(summary.documents.receivable) || 0;
+  const overdueReceivable = Number(summary.documents.overdueReceivable) || 0;
+  const outstandingPayable = Number(summary.documents.payable) || 0;
+  const overduePayable = Number(summary.documents.overduePayable) || 0;
   const cashBalance = paymentAccounts.filter((account) => account.source === 'petty').reduce((sum, account) => sum + (Number(account.balance) || 0), 0);
   const bankBalance = paymentAccounts.filter((account) => account.source === 'bank').reduce((sum, account) => sum + (Number(account.balance) || 0), 0);
-  const salesTotal = useMemo(
-    () => validDocuments.filter((document) => document.documentType === 'sale' || document.subtype.includes('Đầu ra')).reduce((sum, document) => sum + document.amount, 0),
-    [validDocuments],
-  );
-  const purchaseTotal = useMemo(
-    () => validDocuments.filter((document) => document.documentType === 'purchase' || document.subtype.includes('Đầu vào')).reduce((sum, document) => sum + document.amount, 0),
-    [validDocuments],
-  );
-  const monthlyCash = useMemo(() => {
-    const now = new Date();
-    return Array.from({ length: 12 }, (_, index) => {
-      const month = new Date(now.getFullYear(), now.getMonth() - 11 + index, 1);
-      const prefix = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
-      const rows = completedTransactions.filter(item => item.date.startsWith(prefix));
-      return {
-        label: `Th ${month.getMonth() + 1}`,
-        income: rows.filter(item => item.type === 'Thu').reduce((sum, item) => sum + item.amount, 0),
-        expense: rows.filter(item => item.type === 'Chi').reduce((sum, item) => sum + item.amount, 0),
-      };
-    });
-  }, [completedTransactions]);
+  const salesTotal = Number(summary.documents.sales) || 0;
+  const purchaseTotal = Number(summary.documents.purchases) || 0;
+  const monthlyCash = summary.cash.monthly.slice(-12).map(item => ({ ...item, label: item.month }));
   const inventoryRows = useMemo(() => inventory.filter(item => Number(item.stockQty) > 0)
     .map(item => ({ ...item, value: Number(item.stockQty) * Number(item.unitPrice) }))
     .sort((a, b) => b.value - a.value), [inventory]);
   const inventoryValue = inventoryRows.reduce((sum, item) => sum + item.value, 0);
+
+  const changePeriod = (value: string) => {
+    const nextPeriod = value as FinanceOverviewPeriod;
+    setPeriod(nextPeriod);
+    if (nextPeriod !== 'custom') setDateRange(getFinanceOverviewDateRange(nextPeriod, todayInVietnam()));
+  };
 
   const renderBreakdown = (items: CategoryTotal[], total: number, color: string, emptyText: string) => (
     items.length ? (
@@ -150,20 +112,29 @@ export const FinanceOverviewModule: React.FC = () => {
           <h1 style={{ margin: 0, color: '#0F172A', fontSize: 20 }}>Tổng quan tài chính</h1>
           <div style={{ marginTop: 4, color: '#64748B', fontSize: 13 }}>Số liệu được tính từ các giao dịch tài chính đã hoàn thành.</div>
         </div>
-        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadData()}>Làm mới</Button>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <Select aria-label="Khoảng thời gian tổng quan" value={period} onChange={changePeriod} style={{ minWidth: 160 }} options={[
+            { value: 'all', label: 'Toàn thời gian' }, { value: 'day', label: 'Hôm nay' }, { value: 'week', label: 'Tuần này' },
+            { value: 'month', label: 'Tháng này' }, { value: 'quarter', label: 'Quý này' }, { value: 'year', label: 'Năm nay' }, { value: 'custom', label: 'Tùy chọn' },
+          ]} />
+          <Input aria-label="Từ ngày tổng quan" type="date" disabled={period !== 'custom'} value={dateRange.dateFrom} onChange={event => { setPeriod('custom'); setDateRange(current => ({ ...current, dateFrom: event.target.value })); }} style={{ width: 160 }} />
+          <Input aria-label="Đến ngày tổng quan" type="date" disabled={period !== 'custom'} value={dateRange.dateTo} onChange={event => { setPeriod('custom'); setDateRange(current => ({ ...current, dateTo: event.target.value })); }} style={{ width: 160 }} />
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadData()}>Làm mới</Button>
+        </div>
       </div>
+      <div style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>Phiếu thu, chi đã hoàn thành theo ngày hạch toán; giá trị bán, mua là tổng chứng từ chưa hủy theo ngày chứng từ. Công nợ là số dư còn lại hiện tại.</div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 18 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Tổng thực thu</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Thực thu trong khoảng chọn</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>+{formatMoney(income)}</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Tổng thực chi</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Thực chi trong khoảng chọn</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>-{formatMoney(expense)}</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Dòng tiền thuần phát sinh</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Dòng tiền thuần trong khoảng chọn</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: income - expense >= 0 ? '#009688' : '#DC2626', marginTop: 4 }}>{income - expense >= 0 ? '+' : ''}{formatMoney(income - expense)}</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
@@ -188,24 +159,24 @@ export const FinanceOverviewModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B' }}>Phải thu còn lại</div>
           <div style={{ fontSize: 21, color: '#0F172A', marginTop: 4 }}>{formatMoney(outstandingReceivable)}</div>
-          <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Quá hạn: {formatMoney(overdueReceivable)}</div>
+          <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Quá hạn hiện tại: {formatMoney(overdueReceivable)}</div>
           <Button type="link" onClick={() => navigate('/admin/finance/invoices')} style={{ paddingLeft: 0, marginTop: 4 }}>Mở chứng từ phải thu</Button>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B' }}>Phải trả còn lại</div>
           <div style={{ fontSize: 21, color: '#0F172A', marginTop: 4 }}>{formatMoney(outstandingPayable)}</div>
-          <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Quá hạn: {formatMoney(overduePayable)}</div>
+          <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Quá hạn hiện tại: {formatMoney(overduePayable)}</div>
           <Button type="link" onClick={() => navigate('/admin/finance/invoices')} style={{ paddingLeft: 0, marginTop: 4 }}>Mở chứng từ phải trả</Button>
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 18 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Doanh số theo chứng từ</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Giá trị chứng từ bán hàng</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>{formatMoney(salesTotal)}</div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '16px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B' }}>Chi phí mua hàng theo chứng từ</div>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Giá trị chứng từ mua hàng</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>{formatMoney(purchaseTotal)}</div>
         </div>
       </div>
@@ -223,8 +194,8 @@ export const FinanceOverviewModule: React.FC = () => {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginBottom: 18 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
-          <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 14 }}>Dòng tiền theo tháng · 12 tháng gần nhất</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, minmax(20px, 1fr))', alignItems: 'end', gap: 8, height: 180, borderBottom: '1px solid #CBD5E1', paddingTop: 12 }}>
+          <div style={{ color: '#0F172A', fontWeight: 700, marginBottom: 14 }}>Dòng tiền theo tháng trong khoảng chọn</div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, monthlyCash.length)}, minmax(20px, 1fr))`, alignItems: 'end', gap: 8, height: 180, borderBottom: '1px solid #CBD5E1', paddingTop: 12 }}>
             {monthlyCash.map(month => {
               const ceiling = Math.max(1, ...monthlyCash.flatMap(item => [item.income, item.expense]));
               return <div key={month.label} title={`${month.label}: Thu ${formatMoney(month.income)} · Chi ${formatMoney(month.expense)}`} style={{ height: '100%', display: 'flex', alignItems: 'end', justifyContent: 'center', gap: 3 }}>
@@ -233,7 +204,7 @@ export const FinanceOverviewModule: React.FC = () => {
               </div>;
             })}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, minmax(20px, 1fr))', gap: 8, marginTop: 6, fontSize: 10, color: '#64748B', textAlign: 'center' }}>{monthlyCash.map(month => <span key={month.label}>{month.label}</span>)}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, monthlyCash.length)}, minmax(20px, 1fr))`, gap: 8, marginTop: 6, fontSize: 10, color: '#64748B', textAlign: 'center' }}>{monthlyCash.map(month => <span key={month.label}>{month.label}</span>)}</div>
           <div style={{ display: 'flex', gap: 16, fontSize: 12, marginTop: 12 }}><span style={{ color: '#059669' }}>● Thu hoàn thành</span><span style={{ color: '#F97316' }}>● Chi hoàn thành</span></div>
         </div>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>

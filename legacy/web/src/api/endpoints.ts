@@ -629,6 +629,28 @@ export type FinanceDocument = {
   appliedPromotions?: SalePromotionApplication[];
 };
 
+export type FinanceOverviewSummary = {
+  cash: {
+    income: number;
+    expense: number;
+    pending: number;
+    categories: Array<{ type: 'Thu' | 'Chi'; name: string; amount: number }>;
+    monthly: Array<{ month: string; income: number; expense: number }>;
+  };
+  documents: {
+    receivable: number;
+    overdueReceivable: number;
+    payable: number;
+    overduePayable: number;
+    sales: number;
+    purchases: number;
+  };
+};
+
+export const financeOverviewApi = {
+  getSummary: (params: { dateFrom?: string; dateTo?: string }) => api.get<FinanceOverviewSummary>('/finance/overview', { params }),
+};
+
 export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions'> & {
   promotionKeys?: string[];
   promotionFingerprint?: string;

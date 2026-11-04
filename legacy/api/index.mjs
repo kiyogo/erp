@@ -10606,6 +10606,66 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/finance/overview') {
+    await requireAdmin(request);
+    const dateFromRaw = url.searchParams.get('dateFrom');
+    const dateToRaw = url.searchParams.get('dateTo');
+    const dateFrom = dateFromRaw ? requiredIsoDate(dateFromRaw, 'Từ ngày') : '';
+    const dateTo = dateToRaw ? requiredIsoDate(dateToRaw, 'Đến ngày') : '';
+    if (dateFrom && dateTo && dateFrom > dateTo) throw new HttpError(422, 'Từ ngày phải bằng hoặc trước đến ngày.');
+    const cashWhere = [];
+    const cashParams = [];
+    if (dateFrom) { cashWhere.push('transaction_date >= ?'); cashParams.push(dateFrom); }
+    if (dateTo) { cashWhere.push('transaction_date <= ?'); cashParams.push(dateTo); }
+    const cashClause = cashWhere.length ? `WHERE ${cashWhere.join(' AND ')}` : '';
+    const cashTotals = await db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN status = 'Đã hoàn thành' AND transaction_type = 'Thu' THEN amount ELSE 0 END), 0) AS income,
+      COALESCE(SUM(CASE WHEN status = 'Đã hoàn thành' AND transaction_type = 'Chi' THEN amount ELSE 0 END), 0) AS expense,
+      COALESCE(SUM(CASE WHEN status = 'Chờ duyệt' THEN 1 ELSE 0 END), 0) AS pending
+      FROM finance_cash_transactions ${cashClause}`).get(...cashParams);
+    const completedWhere = [...cashWhere, "status = 'Đã hoàn thành'"];
+    const completedClause = `WHERE ${completedWhere.join(' AND ')}`;
+    const cashCategories = await db.prepare(`SELECT transaction_type AS type, category, COALESCE(SUM(amount), 0) AS amount
+      FROM finance_cash_transactions ${completedClause} GROUP BY transaction_type, category`).all(...cashParams);
+    const monthlyCash = await db.prepare(`SELECT substr(transaction_date, 1, 7) AS month,
+      COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE 0 END), 0) AS income,
+      COALESCE(SUM(CASE WHEN transaction_type = 'Chi' THEN amount ELSE 0 END), 0) AS expense
+      FROM finance_cash_transactions ${completedClause} GROUP BY substr(transaction_date, 1, 7) ORDER BY month`).all(...cashParams);
+    const today = now().slice(0, 10);
+    const balances = await db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND amount > paid_amount THEN amount - paid_amount ELSE 0 END), 0) AS receivable,
+      COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND amount > paid_amount AND due_date IS NOT NULL AND due_date <> '' AND due_date < ? THEN amount - paid_amount ELSE 0 END), 0) AS overdueReceivable,
+      COALESCE(SUM(CASE WHEN (document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%') AND amount > paid_amount THEN amount - paid_amount ELSE 0 END), 0) AS payable,
+      COALESCE(SUM(CASE WHEN (document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%') AND amount > paid_amount AND due_date IS NOT NULL AND due_date <> '' AND due_date < ? THEN amount - paid_amount ELSE 0 END), 0) AS overduePayable
+      FROM finance_documents WHERE status <> 'Đã hủy'`).get(today, today);
+    const documentWhere = ["status <> 'Đã hủy'"];
+    const documentParams = [];
+    if (dateFrom) { documentWhere.push('document_date >= ?'); documentParams.push(dateFrom); }
+    if (dateTo) { documentWhere.push('document_date <= ?'); documentParams.push(dateTo); }
+    const documentTotals = await db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%' THEN amount ELSE 0 END), 0) AS sales,
+      COALESCE(SUM(CASE WHEN document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%' THEN amount ELSE 0 END), 0) AS purchases
+      FROM finance_documents WHERE ${documentWhere.join(' AND ')}`).get(...documentParams);
+    sendJson(response, 200, {
+      cash: {
+        income: Number(cashTotals?.income) || 0,
+        expense: Number(cashTotals?.expense) || 0,
+        pending: Number(cashTotals?.pending) || 0,
+        categories: cashCategories.map(row => ({ type: row.type, name: row.category, amount: Number(row.amount) || 0 })),
+        monthly: monthlyCash.map(row => ({ month: row.month, income: Number(row.income) || 0, expense: Number(row.expense) || 0 })),
+      },
+      documents: {
+        receivable: Number(balances?.receivable) || 0,
+        overdueReceivable: Number(balances?.overdueReceivable) || 0,
+        payable: Number(balances?.payable) || 0,
+        overduePayable: Number(balances?.overduePayable) || 0,
+        sales: Number(documentTotals?.sales) || 0,
+        purchases: Number(documentTotals?.purchases) || 0,
+      },
+    });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/finance/cash-transactions') {
     await requireAdmin(request);
     const source = url.searchParams.get('source');
