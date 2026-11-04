@@ -21,7 +21,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
-import { crmContactsApi, type CrmContact } from '../../api/endpoints';
+import { collectionsApi, crmContactsApi, type CrmContact } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
 import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
@@ -317,6 +317,40 @@ export const EInvoiceModule: React.FC = () => {
     }
   };
 
+  const validateDraft = async (targetForm: any, current?: EInvoice | null) => {
+    let values: any;
+    try {
+      values = await targetForm.validateFields();
+    } catch {
+      message.error('Hoàn tất các trường bắt buộc trước khi kiểm tra bản nháp.');
+      return;
+    }
+    const items = prepareInvoiceItems();
+    if (!items) return;
+    try {
+      const response = await collectionsApi.validate<Record<string, any>>('finance_einvoices', {
+        key: current?.key || crypto.randomUUID(),
+        invoiceNumber: String(values.invoiceNumber || '').trim(),
+        templateCode: current?.templateCode || '',
+        symbol: values.symbol || current?.symbol || '',
+        buyerName: String(values.buyerName || '').trim(),
+        buyerType: values.buyerType || 'other',
+        buyerEntityName: String(values.buyerEntityName || '').trim(),
+        buyerCustomerKey: values.buyerCustomerKey || '',
+        buyerTaxCode: String(values.buyerTaxCode || '').trim(),
+        buyerAddress: String(values.buyerAddress || '').trim(),
+        buyerEmail: String(values.buyerEmail || '').trim(),
+        buyerPhone: String(values.buyerPhone || '').trim(),
+        issueDate: current?.issueDate || new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
+        items,
+      }, current?.key);
+      const normalized = response.data.record;
+      message.success(`Dữ liệu hợp lệ theo kiểm tra hệ thống. Tổng thanh toán ${Number(normalized.finalAmount || 0).toLocaleString('vi-VN')} ₫. Bản nháp chưa được phát hành.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không thể kiểm tra bản nháp.');
+    }
+  };
+
   const deleteDraft = async (record: EInvoice) => {
     try {
       await dataService.deleteGenericRecord('finance_einvoices', record.key);
@@ -531,6 +565,7 @@ export const EInvoiceModule: React.FC = () => {
               onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
               <Button onClick={() => { createForm.resetFields(); setInvoiceLines([blankInvoiceLine()]); }}>Làm mới form</Button>
+              <Button onClick={() => void validateDraft(createForm)}>Kiểm tra hợp lệ</Button>
               <Button type="primary" htmlType="submit" icon={<SafetyCertificateOutlined />} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                 Lưu bản nháp
               </Button>
@@ -764,6 +799,7 @@ export const EInvoiceModule: React.FC = () => {
             onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={closeDraftEditor}>Hủy</Button>
+            <Button onClick={() => void validateDraft(form, editingRecord)}>Kiểm tra hợp lệ</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               {editingRecord ? 'Lưu thay đổi' : 'Lưu bản nháp'}
             </Button>

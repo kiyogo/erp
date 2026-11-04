@@ -2530,7 +2530,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       const rates = new Set();
       record.items = record.items.map((line, index) => {
         if (!line || typeof line !== 'object' || Array.isArray(line)) throw new HttpError(422, `Dòng hàng hóa ${index + 1} không hợp lệ.`);
-        const allowedLineFields = new Set(['key', 'productKey', 'sku', 'name', 'unit', 'quantity', 'unitPrice', 'discountAmount', 'vatRate']);
+        const allowedLineFields = new Set(['key', 'productKey', 'sku', 'name', 'unit', 'quantity', 'unitPrice', 'discountAmount', 'vatRate', 'amount', 'vatAmount', 'finalAmount']);
         if (Object.keys(line).some(field => !allowedLineFields.has(field))) throw new HttpError(422, `Dòng hàng hóa ${index + 1} có trường không hỗ trợ.`);
         const productKey = optionalText(line.productKey, `Mặt hàng dòng ${index + 1}`, 160);
         const product = productKey ? productByKey.get(productKey) : null;
@@ -8716,6 +8716,35 @@ async function handleRequest(request, response) {
     const row = await db.prepare('SELECT * FROM collection_records WHERE scope = ? AND record_key = ? AND owner_id = ?')
       .get(scope, item.recordKey, ownerId);
     sendJson(response, 201, { record: publicCollectionRecord(row) });
+    return;
+  }
+
+  if (collectionRecordMatch && request.method === 'POST'
+    && normalizeCollectionScope(decodeURIComponent(collectionRecordMatch[1])) === 'finance_einvoices'
+    && decodeURIComponent(collectionRecordMatch[2]) === 'validate') {
+    const scope = 'finance_einvoices';
+    const actor = await requireCollectionActor(request, scope);
+    const payload = await readJson(request, 256 * 1024);
+    const allowedFields = new Set(['key', 'invoiceNumber', 'templateCode', 'symbol', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'issueDate', 'totalAmount', 'vatRate', 'items']);
+    if (!payload.record || typeof payload.record !== 'object' || Array.isArray(payload.record)
+      || Object.keys(payload.record).some(field => !allowedFields.has(field))) {
+      throw new HttpError(422, 'Thông tin kiểm tra bản nháp không hợp lệ.');
+    }
+    const currentKey = optionalText(payload.currentKey, 'Mã bản nháp hiện tại', 160);
+    let current = null;
+    if (currentKey) {
+      const row = await db.prepare('SELECT * FROM collection_records WHERE scope = ? AND record_key = ?').get(scope, currentKey);
+      if (!row || (actor.role !== 'ADMIN' && row.owner_id !== actor.id)) throw new HttpError(404, 'Không tìm thấy bản nháp cần kiểm tra.');
+      current = publicCollectionRecord(row);
+      if (current.status !== 'Hóa đơn nháp') throw new HttpError(409, 'Chỉ kiểm tra được hóa đơn đang ở trạng thái nháp.');
+    }
+    const candidate = {
+      ...(current || {}),
+      ...payload.record,
+      key: current?.key || payload.record.key || randomUUID(),
+    };
+    const normalized = await normalizeCollectionRecord(candidate, scope, actor, current);
+    sendJson(response, 200, { valid: true, record: normalized.record });
     return;
   }
 

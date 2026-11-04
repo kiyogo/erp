@@ -1169,6 +1169,8 @@ export const collectionsApi = {
     api.put<{ data: T[] }>(`/collections/${encodeURIComponent(scope)}`, { records }),
   create: <T = any>(scope: string, record: T, _recordKey?: string) =>
     api.post<{ record: T }>(`/collections/${encodeURIComponent(scope)}`, { record }),
+  validate: <T = any>(scope: string, record: T, currentKey?: string) =>
+    api.post<{ valid: boolean; record: T }>(`/collections/${encodeURIComponent(scope)}/validate`, { record, currentKey }),
   patch: <T = any>(scope: string, recordKey: string, patch: Partial<T>) =>
     api.patch<{ record: T }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`, { patch }),
   update: <T = any>(scope: string, recordKey: string, patch: Partial<T>) =>
