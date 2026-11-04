@@ -17,6 +17,7 @@ import {
   DeleteOutlined,
   FileTextOutlined,
   CheckOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
@@ -347,6 +348,29 @@ export const EInvoiceModule: React.FC = () => {
     setModalOpen(true);
   };
 
+  const copyDraft = (record: EInvoice) => {
+    setEditingRecord(null);
+    setInvoiceLines(Array.isArray(record.items) && record.items.length
+      ? record.items.map(line => ({
+        key: crypto.randomUUID(), productKey: line.productKey || '', sku: line.sku || '', name: line.name || '', unit: line.unit || '',
+        quantity: String(line.quantity ?? ''), unitPrice: String(line.unitPrice ?? ''), discountAmount: String(line.discountAmount ?? 0), vatRate: String(line.vatRate ?? ''),
+      }))
+      : [{ ...blankInvoiceLine(), quantity: '1', unitPrice: String(record.totalAmount || ''), vatRate: String(record.vatRate ?? '') }]);
+    form.resetFields();
+    form.setFieldsValue({
+      invoiceNumber: `DRAFT-${crypto.randomUUID().toUpperCase()}`,
+      buyerType: record.buyerType || 'other',
+      buyerCustomerKey: record.buyerCustomerKey || '',
+      buyerName: record.buyerName,
+      buyerEntityName: record.buyerEntityName || '',
+      buyerTaxCode: record.buyerTaxCode,
+      buyerAddress: record.buyerAddress || '',
+      buyerEmail: record.buyerEmail || '',
+      buyerPhone: record.buyerPhone || '',
+    });
+    setModalOpen(true);
+  };
+
   const closeDraftEditor = () => {
     setModalOpen(false);
     setEditingRecord(null);
@@ -540,6 +564,7 @@ export const EInvoiceModule: React.FC = () => {
                   render: (_: any, r: any) => (
                     <div style={{ display: 'flex', gap: 6 }}>
                       <Button icon={<EditOutlined />} onClick={() => openDraftEditor(r)}>Sửa nháp</Button>
+                      <Button icon={<CopyOutlined />} onClick={() => copyDraft(r)}>Sao chép nháp</Button>
                       <Button size="small" type="primary" disabled title="Chưa kết nối nhà cung cấp hóa đơn điện tử" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
                         Chưa kết nối
                       </Button>
@@ -691,6 +716,7 @@ export const EInvoiceModule: React.FC = () => {
                   render: (_: unknown, record: EInvoice) => (
                     <div style={{ display: 'flex', gap: 6 }}>
                       {record.status === 'Hóa đơn nháp' && <Button icon={<EditOutlined />} onClick={() => openDraftEditor(record)}>Sửa nháp</Button>}
+                      {record.status === 'Hóa đơn nháp' && <Button icon={<CopyOutlined />} onClick={() => copyDraft(record)}>Sao chép nháp</Button>}
                       <Button size="small" icon={<EyeOutlined />} onClick={() => setPreviewRecord(record)}>Xem</Button>
                       <Button size="small" icon={<FilePdfOutlined />} onClick={() => exportInvoicePdf(record)}>Bản PDF nội bộ</Button>
                     </div>
