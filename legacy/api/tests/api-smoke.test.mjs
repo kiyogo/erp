@@ -185,9 +185,20 @@ test('tax type profiles are internal references and only active saved profiles c
   const filingKey = `tax-custom-filing-${stamp}`;
   const filing = (await request('/collections/finance_tax', 'POST', { record: {
     key: filingKey, code: filingKey.toUpperCase(), taxType: created.taxName, period: 'Kỳ thử nghiệm',
-    deadline: '2026-12-31', amountPayable: 0,
+    filingMethod: 'Quý', taxYear: 2026, periodStart: '2026-07-01', periodEnd: '2026-09-30',
+    filingDeadline: '2026-10-31', deadline: '2026-11-10', businessUnit: 'Chi nhánh thử nghiệm',
+    assignee: 'Kế toán thử nghiệm', notes: 'Kỳ nhập thủ công để kiểm thử', amountPayable: 0,
   } }, 201)).record;
   assert.equal(filing.taxType, created.taxName);
+  assert.equal(filing.filingMethod, 'Quý');
+  assert.equal(filing.periodStart, '2026-07-01');
+  assert.equal(filing.filingDeadline, '2026-10-31');
+  assert.equal(filing.assignee, 'Kế toán thử nghiệm');
+  await request('/collections/finance_tax', 'POST', { record: {
+    key: `${filingKey}-invalid-range`, code: `${filingKey}-invalid-range`, taxType: created.taxName,
+    period: 'Kỳ thử nghiệm', filingMethod: 'Quý', taxYear: 2026, periodStart: '2026-10-01', periodEnd: '2026-09-30',
+    deadline: '2026-12-31', amountPayable: 0,
+  } }, 422);
   await request(`/collections/finance_tax_types/${key}`, 'PATCH', { patch: { taxName: `${created.taxName} đổi tên` } }, 409);
   await request('/collections/finance_tax', 'POST', { record: {
     key: `${filingKey}-unknown`, code: `${filingKey}-unknown`, taxType: 'Sắc thuế chưa được khai báo',

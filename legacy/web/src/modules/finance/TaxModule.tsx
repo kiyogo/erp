@@ -35,6 +35,14 @@ interface TaxFiling {
   amountPayable: number;
   amountPaid: number;
   deadline: string;
+  filingMethod?: string;
+  taxYear?: number;
+  periodStart?: string;
+  periodEnd?: string;
+  filingDeadline?: string;
+  businessUnit?: string;
+  assignee?: string;
+  notes?: string;
   status: 'Đã nộp đủ' | 'Chờ nộp thuế' | 'Quá hạn nộp' | 'Đã ghi nhận đủ theo chứng từ nội bộ' | 'Đã ghi nhận một phần theo chứng từ nội bộ';
   externalStatus?: string;
 }
@@ -313,6 +321,11 @@ export const TaxModule: React.FC = () => {
       period: String(values.period || ''),
       deadline: String(values.deadline || ''),
       amountPayable: payable,
+      filingMethod: String(values.filingMethod || ''),
+      taxYear: values.taxYear === '' || values.taxYear === undefined ? undefined : Number(values.taxYear),
+      periodStart: String(values.periodStart || ''),
+      periodEnd: String(values.periodEnd || ''),
+      filingDeadline: String(values.filingDeadline || ''),
     }, data.map(item => item.code));
     if (validationError) {
       message.error(validationError);
@@ -660,9 +673,15 @@ export const TaxModule: React.FC = () => {
                   render: (t: string) => <strong>{t}</strong>,
                 },
                 {
-                  title: 'Kỳ tính thuế',
+                  title: 'Kỳ kê khai',
                   dataIndex: 'period',
                   key: 'period',
+                  render: (period: string, record: TaxFiling) => <div>{period}<div style={{ color: '#64748B', fontSize: 12 }}>{[record.filingMethod, record.taxYear, record.periodStart && record.periodEnd ? `${record.periodStart} – ${record.periodEnd}` : ''].filter(Boolean).join(' · ')}</div></div>,
+                },
+                {
+                  title: 'Đơn vị và người phụ trách',
+                  key: 'assignment',
+                  render: (_: unknown, record: TaxFiling) => <div>{record.businessUnit || 'Chưa khai báo'}<div style={{ color: '#64748B', fontSize: 12 }}>{record.assignee || 'Chưa phân công'}</div></div>,
                 },
                 {
                   title: 'Cơ quan thuế quản lý',
@@ -686,10 +705,16 @@ export const TaxModule: React.FC = () => {
                   render: (_: unknown, record: TaxFiling) => `${Math.max(0, record.amountPayable - record.amountPaid).toLocaleString('vi-VN')} ₫`,
                 },
                 {
-                  title: 'Hạn nộp',
+                  title: 'Hạn nộp tiền',
                   dataIndex: 'deadline',
                   key: 'deadline',
                   render: (d: string) => <span style={{ color: '#DC2626', fontWeight: 500 }}>{d}</span>,
+                },
+                {
+                  title: 'Hạn nộp hồ sơ',
+                  dataIndex: 'filingDeadline',
+                  key: 'filingDeadline',
+                  render: (d: string) => d || 'Chưa khai báo',
                 },
                 {
                   title: 'Trạng thái',
@@ -728,8 +753,9 @@ export const TaxModule: React.FC = () => {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
-        width={500}
+        width={780}
       >
+        <Alert message="Kỳ và hạn nộp do doanh nghiệp khai báo" description="Hệ thống lưu riêng hạn nộp hồ sơ và hạn nộp tiền. Các mốc này không được tự suy diễn theo luật và không gửi tờ khai tới cơ quan thuế." type="info" showIcon />
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="code" label="Mã hồ sơ thuế" rules={[{ required: true }]}>
@@ -740,19 +766,45 @@ export const TaxModule: React.FC = () => {
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="period" label="Kỳ kê khai" rules={[{ required: true }]}>
+            <Form.Item name="period" label="Tên kỳ kê khai" rules={[{ required: true }]}>
               <Input />
+            </Form.Item>
+            <Form.Item name="filingMethod" label="Chu kỳ kê khai" rules={[{ required: true, message: 'Chọn chu kỳ kê khai.' }]}>
+              <Select options={['Tháng', 'Quý', 'Năm', 'Khác'].map(value => ({ value, label: value }))} />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="taxYear" label="Năm tính thuế" rules={[{ required: true, message: 'Nhập năm tính thuế.' }]}>
+              <Input type="number" min={1900} max={2200} step={1} />
             </Form.Item>
             <Form.Item name="amountPayable" label="Số tiền phải nộp (VNĐ)" rules={[{ required: true }]}>
               <Input type="number" min={0} step={1000000} />
             </Form.Item>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="periodStart" label="Kỳ kê khai từ" rules={[{ required: true, message: 'Chọn ngày bắt đầu kỳ.' }]}>
+              <DatePicker style={{ width: '100%' }} placeholder="Chọn ngày" />
+            </Form.Item>
+            <Form.Item name="periodEnd" label="Kỳ kê khai đến" rules={[{ required: true, message: 'Chọn ngày kết thúc kỳ.' }]}>
+              <DatePicker style={{ width: '100%' }} placeholder="Chọn ngày" />
+            </Form.Item>
+          </div>
           <Form.Item name="taxAuthority" label="Cơ quan thuế quản lý">
             <Input />
           </Form.Item>
-          <Form.Item name="deadline" label="Hạn chót nộp" rules={[{ required: true }]}>
-            <Input type="date" />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="filingDeadline" label="Hạn nộp hồ sơ">
+              <DatePicker style={{ width: '100%' }} placeholder="Chọn ngày nếu đã xác định" />
+            </Form.Item>
+            <Form.Item name="deadline" label="Hạn nộp tiền" rules={[{ required: true, message: 'Chọn hạn nộp tiền.' }]}>
+              <DatePicker style={{ width: '100%' }} placeholder="Chọn ngày" />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="businessUnit" label="Đơn vị hoặc chi nhánh"><Input maxLength={180} /></Form.Item>
+            <Form.Item name="assignee" label="Người phụ trách"><Input maxLength={180} /></Form.Item>
+          </div>
+          <Form.Item name="notes" label="Ghi chú nội bộ"><Input maxLength={1000} /></Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>

@@ -2430,8 +2430,25 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (!configuredType) throw new HttpError(422, 'Sắc thuế không có trong danh mục chuẩn hoặc hồ sơ nội bộ đang tạm ngưng.');
     }
     record.period = requiredText(record.period, 'Kỳ kê khai', 120);
+    if (record.filingMethod !== undefined && record.filingMethod !== '') {
+      record.filingMethod = oneOf(record.filingMethod, 'Chu kỳ kê khai', ['Tháng', 'Quý', 'Năm', 'Khác']);
+    }
+    if (record.taxYear !== undefined && record.taxYear !== '') {
+      record.taxYear = Number(record.taxYear);
+      if (!Number.isInteger(record.taxYear) || record.taxYear < 1900 || record.taxYear > 2200) throw new HttpError(422, 'Năm tính thuế không hợp lệ.');
+    }
+    const hasPeriodStart = Boolean(record.periodStart);
+    const hasPeriodEnd = Boolean(record.periodEnd);
+    if (hasPeriodStart !== hasPeriodEnd) throw new HttpError(422, 'Cần chọn đầy đủ ngày bắt đầu và ngày kết thúc kỳ.');
+    record.periodStart = hasPeriodStart ? requiredIsoDate(record.periodStart, 'Ngày bắt đầu kỳ') : '';
+    record.periodEnd = hasPeriodEnd ? requiredIsoDate(record.periodEnd, 'Ngày kết thúc kỳ') : '';
+    if (record.periodStart && record.periodStart > record.periodEnd) throw new HttpError(422, 'Ngày bắt đầu kỳ không được sau ngày kết thúc kỳ.');
+    record.filingDeadline = record.filingDeadline ? requiredIsoDate(record.filingDeadline, 'Hạn nộp hồ sơ') : '';
     record.taxAuthority = optionalText(record.taxAuthority, 'Cơ quan thuế quản lý', 300);
     record.deadline = requiredIsoDate(record.deadline, 'Hạn nộp');
+    record.businessUnit = optionalText(record.businessUnit, 'Đơn vị hoặc chi nhánh', 180);
+    record.assignee = optionalText(record.assignee, 'Người phụ trách', 180);
+    record.notes = optionalText(record.notes, 'Ghi chú nội bộ', 1000);
     if (record.amountPayable === '' || record.amountPayable === null || record.amountPayable === undefined) throw new HttpError(422, 'Nhập số tiền thuế phải nộp.');
     record.amountPayable = Number(record.amountPayable);
     if (!Number.isFinite(record.amountPayable) || record.amountPayable < 0 || record.amountPayable > 1_000_000_000_000_000) throw new HttpError(422, 'Số tiền thuế phải nộp không hợp lệ.');

@@ -10,7 +10,19 @@ export interface TaxFilingInput {
   period: string;
   deadline: string;
   amountPayable: number;
+  filingMethod?: string;
+  taxYear?: number;
+  periodStart?: string;
+  periodEnd?: string;
+  filingDeadline?: string;
 }
+
+const isIsoDate = (value: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+};
 
 export const hasOpenTaxPayment = (payments: TaxPaymentRecord[], taxKey: string): boolean =>
   payments.some(payment =>
@@ -30,12 +42,15 @@ export const validateTaxFiling = (filing: TaxFilingInput, existingCodes: string[
   }
   if (!filing.taxType.trim()) return 'Chọn loại thuế.';
   if (!filing.period.trim()) return 'Nhập kỳ kê khai.';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(filing.deadline)) return 'Chọn hạn nộp hợp lệ.';
-  const [year, month, day] = filing.deadline.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
-    return 'Hạn nộp không phải ngày hợp lệ.';
+  if (!isIsoDate(filing.deadline)) return 'Hạn nộp không phải ngày hợp lệ.';
+  if (filing.filingMethod && !['Tháng', 'Quý', 'Năm', 'Khác'].includes(filing.filingMethod)) return 'Chọn phương pháp kê khai hợp lệ.';
+  if (filing.taxYear !== undefined && (!Number.isInteger(filing.taxYear) || filing.taxYear < 1900 || filing.taxYear > 2200)) return 'Năm tính thuế không hợp lệ.';
+  if (Boolean(filing.periodStart) !== Boolean(filing.periodEnd)) return 'Cần chọn đầy đủ ngày bắt đầu và ngày kết thúc kỳ.';
+  if (filing.periodStart && filing.periodEnd) {
+    if (!isIsoDate(filing.periodStart) || !isIsoDate(filing.periodEnd)) return 'Khoảng ngày của kỳ kê khai không hợp lệ.';
+    if (filing.periodStart > filing.periodEnd) return 'Ngày bắt đầu kỳ không được sau ngày kết thúc kỳ.';
   }
+  if (filing.filingDeadline && !isIsoDate(filing.filingDeadline)) return 'Hạn nộp hồ sơ không phải ngày hợp lệ.';
   if (!Number.isSafeInteger(filing.amountPayable) || filing.amountPayable < 0) return 'Số tiền phải nộp phải là số nguyên không âm.';
   return null;
 };
