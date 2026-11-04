@@ -17,12 +17,14 @@ import {
   SendOutlined,
   CheckOutlined,
   EditOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert, DatePicker } from '../../custom-ui';
-import { FinancePaymentAccount, FinancePaymentRequest, financePaymentAccountsApi, financePaymentsApi } from '../../api/endpoints';
+import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert, DatePicker, FileUploadDialog } from '../../custom-ui';
+import { CrmContact, FinancePaymentAccount, FinancePaymentRequest, crmContactsApi, filesApi, financePaymentAccountsApi, financePaymentsApi } from '../../api/endpoints';
 import { hasOpenTaxPayment, isValidTaxPaymentAmount, validateTaxFiling } from './taxWorkflowRules';
 import { useAuth } from '../../context/AuthContext';
+import { downloadFile } from '../../utils/fileExporter';
 
 interface TaxFiling {
   key: string;
@@ -56,6 +58,28 @@ interface TaxTypeProfile {
   verificationStatus: 'Chưa xác minh';
 }
 
+interface TaxSupplierReview {
+  key: string;
+  supplierKey: string;
+  supplierName: string;
+  taxCode: string;
+  sourceCode: string;
+  sourceName: string;
+  sourceReference: string;
+  verifiedAt: string;
+  verificationStatus: 'Chưa rà soát' | 'Đã rà soát nguồn' | 'Nguồn không xác minh được';
+  riskIndicators?: string;
+  invoiceReference?: string;
+  internalSeverity: 'Thông tin' | 'Thấp' | 'Trung bình' | 'Cao';
+  assignee?: string;
+  reviewOutcome?: string;
+  notes?: string;
+  evidenceFileId?: string;
+  evidenceFileName?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
 const INITIAL_TAX_DATA: TaxFiling[] = [];
 
 export const TaxModule: React.FC = () => {
@@ -75,6 +99,8 @@ export const TaxModule: React.FC = () => {
   const [paymentsLoaded, setPaymentsLoaded] = useState(false);
   const [paymentAccounts, setPaymentAccounts] = useState<FinancePaymentAccount[]>([]);
   const [taxTypes, setTaxTypes] = useState<TaxTypeProfile[]>([]);
+  const [taxSupplierReviews, setTaxSupplierReviews] = useState<TaxSupplierReview[]>([]);
+  const [suppliers, setSuppliers] = useState<CrmContact[]>([]);
 
   useEffect(() => {
     const list = dataService.getGenericData('finance_tax');
@@ -84,8 +110,12 @@ export const TaxModule: React.FC = () => {
       setData(Array.isArray(updated) ? updated : []);
       const updatedTypes = dataService.getGenericData('finance_tax_types');
       setTaxTypes(Array.isArray(updatedTypes) ? updatedTypes as TaxTypeProfile[] : []);
+      const updatedReviews = dataService.getGenericData('finance_tax_supplier_reviews');
+      setTaxSupplierReviews(Array.isArray(updatedReviews) ? updatedReviews as TaxSupplierReview[] : []);
     });
     void dataService.refreshGenericData('finance_tax_types').then(rows => setTaxTypes(Array.isArray(rows) ? rows as TaxTypeProfile[] : []));
+    void dataService.refreshGenericData('finance_tax_supplier_reviews').then(rows => setTaxSupplierReviews(Array.isArray(rows) ? rows as TaxSupplierReview[] : []));
+    void crmContactsApi.getAll('supplier').then(response => setSuppliers(Array.isArray(response.data.data) ? response.data.data : [])).catch(() => setSuppliers([]));
     void loadPayments().catch(() => message.error('Không tải được đề nghị nộp thuế.'));
     void financePaymentAccountsApi.getAccounts().then(response => setPaymentAccounts(response.data.accounts)).catch(() => setPaymentAccounts([]));
     return unsub;
@@ -96,8 +126,15 @@ export const TaxModule: React.FC = () => {
   const [taxTypeModalOpen, setTaxTypeModalOpen] = useState(false);
   const [editingTaxType, setEditingTaxType] = useState<TaxTypeProfile | null>(null);
   const [taxTypeSaving, setTaxTypeSaving] = useState(false);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [editingReview, setEditingReview] = useState<TaxSupplierReview | null>(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewEvidencePickerOpen, setReviewEvidencePickerOpen] = useState(false);
+  const [selectedEvidenceFile, setSelectedEvidenceFile] = useState<File | null>(null);
+  const [reviewSearch, setReviewSearch] = useState('');
   const [form] = Form.useForm();
   const [taxTypeForm] = Form.useForm();
+  const [reviewForm] = Form.useForm();
   const [paymentForm] = Form.useForm();
   const [settlementForm] = Form.useForm();
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -136,7 +173,13 @@ export const TaxModule: React.FC = () => {
         status: values.status || 'Đang theo dõi',
         verificationStatus: 'Chưa xác minh',
       };
-      if (editingTaxType) await dataService.updateGenericRecord('finance_tax_types', profile);
+      if (editingTaxType) await dataService.updateGenericRecord('finance_tax_types', {
+        key: profile.key, taxCode: profile.taxCode, taxName: profile.taxName, taxGroup: profile.taxGroup,
+        calculationMethod: profile.calculationMethod, taxpayerScope: profile.taxpayerScope, taxRateReference: profile.taxRateReference,
+        effectiveFrom: profile.effectiveFrom, effectiveTo: profile.effectiveTo, legalBasis: profile.legalBasis,
+        conditions: profile.conditions, exceptions: profile.exceptions, debitAccount: profile.debitAccount,
+        creditAccount: profile.creditAccount, status: profile.status,
+      });
       else await dataService.createGenericRecord('finance_tax_types', profile);
       setTaxTypes(dataService.getGenericData('finance_tax_types') as TaxTypeProfile[]);
       setTaxTypeModalOpen(false);
@@ -147,6 +190,93 @@ export const TaxModule: React.FC = () => {
       message.error(error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Không thể lưu hồ sơ sắc thuế.');
     } finally {
       setTaxTypeSaving(false);
+    }
+  };
+
+  const openReviewForm = (review?: TaxSupplierReview) => {
+    setEditingReview(review || null);
+    setSelectedEvidenceFile(null);
+    setReviewEvidencePickerOpen(false);
+    reviewForm.resetFields();
+    if (review) reviewForm.setFieldsValue(review);
+    else reviewForm.setFieldsValue({
+      verificationStatus: 'Chưa rà soát',
+      internalSeverity: 'Thông tin',
+      verifiedAt: new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10),
+    });
+    setReviewModalOpen(true);
+  };
+
+  const saveSupplierReview = async (values: any) => {
+    const supplier = suppliers.find(item => item.key === String(values.supplierKey || editingReview?.supplierKey || ''));
+    if (!supplier) {
+      message.error('Chọn nhà cung cấp đang có trong danh bạ CRM.');
+      return;
+    }
+    setReviewSaving(true);
+    let uploadedFileId = '';
+    try {
+      let evidenceFileId = editingReview?.evidenceFileId || '';
+      let evidenceFileName = editingReview?.evidenceFileName || '';
+      if (selectedEvidenceFile) {
+        const rootResponse = await filesApi.list(undefined, false, true);
+        const rootId = rootResponse.data.context.parentId || undefined;
+        const workspace = await filesApi.list(rootId);
+        const directory = workspace.data.data.find(entry => entry.type === 'dir' && entry.name === 'Rà soát nhà cung cấp thuế');
+        const folderId = directory?.id || directory?.key || (await filesApi.createFolder('Rà soát nhà cung cấp thuế', rootId, 'finance_tax')).data.file.id;
+        const uploaded = (await filesApi.upload(selectedEvidenceFile, selectedEvidenceFile.name, folderId, 'finance_tax')).data.file;
+        uploadedFileId = uploaded.id || uploaded.key;
+        evidenceFileId = uploadedFileId;
+        evidenceFileName = uploaded.name;
+      }
+      const record: TaxSupplierReview = {
+        key: editingReview?.key || crypto.randomUUID(),
+        supplierKey: supplier.key,
+        supplierName: supplier.name,
+        taxCode: supplier.taxCode || '',
+        sourceCode: String(values.sourceCode || '').trim(),
+        sourceName: String(values.sourceName || '').trim(),
+        sourceReference: String(values.sourceReference || '').trim(),
+        verifiedAt: String(values.verifiedAt || ''),
+        verificationStatus: values.verificationStatus,
+        riskIndicators: String(values.riskIndicators || '').trim(),
+        invoiceReference: String(values.invoiceReference || '').trim(),
+        internalSeverity: values.internalSeverity || 'Thông tin',
+        assignee: String(values.assignee || '').trim(),
+        reviewOutcome: String(values.reviewOutcome || '').trim(),
+        notes: String(values.notes || '').trim(),
+        evidenceFileId,
+        evidenceFileName,
+      };
+      if (editingReview) await dataService.updateGenericRecord('finance_tax_supplier_reviews', {
+        key: record.key, sourceCode: record.sourceCode, sourceName: record.sourceName, sourceReference: record.sourceReference,
+        verifiedAt: record.verifiedAt, verificationStatus: record.verificationStatus, riskIndicators: record.riskIndicators,
+        invoiceReference: record.invoiceReference, internalSeverity: record.internalSeverity, assignee: record.assignee,
+        reviewOutcome: record.reviewOutcome, notes: record.notes, evidenceFileId: record.evidenceFileId, evidenceFileName: record.evidenceFileName,
+      });
+      else await dataService.createGenericRecord('finance_tax_supplier_reviews', record);
+      setTaxSupplierReviews(dataService.getGenericData('finance_tax_supplier_reviews') as TaxSupplierReview[]);
+      setReviewModalOpen(false);
+      setEditingReview(null);
+      setSelectedEvidenceFile(null);
+      setReviewEvidencePickerOpen(false);
+      reviewForm.resetFields();
+      message.success(editingReview ? 'Đã cập nhật hồ sơ rà soát nội bộ.' : 'Đã lưu hồ sơ rà soát nội bộ.');
+    } catch (error: any) {
+      if (uploadedFileId) await filesApi.remove(uploadedFileId).catch(() => {});
+      message.error(error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Không thể lưu hồ sơ rà soát.');
+    } finally {
+      setReviewSaving(false);
+    }
+  };
+
+  const downloadReviewEvidence = async (review: TaxSupplierReview) => {
+    if (!review.evidenceFileId) return;
+    try {
+      const response = await filesApi.download(review.evidenceFileId);
+      downloadFile(review.evidenceFileName || 'tai_lieu_ra_soat_thue', response.data);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được tài liệu chứng minh.');
     }
   };
 
@@ -450,28 +580,37 @@ export const TaxModule: React.FC = () => {
       {isRisky && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Alert
-            message="Cảnh báo an toàn thuế đầu vào"
-            description="Web chưa kết nối danh sách cảnh báo hoặc API tra cứu mã số thuế của cơ quan thuế; không thể xác nhận trạng thái thuế hay tự động chặn hóa đơn."
+            message="Sổ rà soát nội bộ, không phải danh sách kết luận vi phạm"
+            description="Mỗi hồ sơ phải ghi rõ nguồn và ngày rà soát. Trạng thái, mức độ và dấu hiệu chỉ phản ánh việc theo dõi nội bộ; hệ thống không kết nối dữ liệu cơ quan thuế và không tự khẳng định nhà cung cấp vi phạm."
             type="warning"
             showIcon
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Danh Sách Doanh Nghiệp Có Cảnh Báo Rủi Ro Thuế</h3>
-            <Input prefix={<SearchOutlined style={{ color: '#bbb' }} />} placeholder="Chưa kết nối nguồn tra cứu thuế" style={{ width: 340, borderRadius: 6 }} allowClear disabled />
+            <h3 style={{ margin: 0, fontSize: 16 }}>Rà soát nhà cung cấp thuế</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Input prefix={<SearchOutlined style={{ color: '#bbb' }} />} placeholder="Tìm nhà cung cấp, MST, nguồn, hóa đơn" style={{ width: 340, borderRadius: 6 }} allowClear value={reviewSearch} onChange={event => setReviewSearch(event.target.value)} />
+              {user?.role === 'ADMIN' && <Button type="primary" icon={<PlusOutlined />} onClick={() => openReviewForm()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Thêm hồ sơ rà soát</Button>}
+            </div>
           </div>
           <div className="transparent-table-card">
             <KTable
-              dataSource={[]}
+              dataSource={taxSupplierReviews.filter(review => !reviewSearch || `${review.supplierName} ${review.taxCode} ${review.sourceName} ${review.sourceCode} ${review.invoiceReference || ''}`.toLocaleLowerCase('vi-VN').includes(reviewSearch.trim().toLocaleLowerCase('vi-VN')))}
               columns={[
-                { title: 'Mã số thuế', dataIndex: 'taxCode', key: 'taxCode', render: (t: string) => <code style={{ color: '#DC2626', fontWeight: 700 }}>{t}</code> },
-                { title: 'Tên doanh nghiệp vi phạm', dataIndex: 'name', key: 'name', render: (n: string) => <strong>{n}</strong> },
-                { title: 'Lý do cảnh báo của CQT', dataIndex: 'reason', key: 'reason' },
-                { title: 'Ngày CQT công bố', dataIndex: 'date', key: 'date' },
-                { title: 'Mức độ', dataIndex: 'risk', key: 'risk', render: (r: string) => <Tag color="error">{r}</Tag> },
-                { title: 'Hành động hệ thống', dataIndex: 'action', key: 'action', render: (a: string) => <span style={{ color: '#DC2626', fontWeight: 600 }}>{a}</span> },
+                { title: 'Nhà cung cấp và MST', key: 'supplier', render: (_: unknown, review: TaxSupplierReview) => <div>{review.supplierName}<div style={{ color: '#64748B', fontSize: 12 }}>MST: {review.taxCode}</div></div> },
+                { title: 'Nguồn thông tin', key: 'source', render: (_: unknown, review: TaxSupplierReview) => <div>{review.sourceName}<div style={{ color: '#64748B', fontSize: 12 }}>{review.sourceCode} · {review.sourceReference}</div></div> },
+                { title: 'Ngày rà soát', dataIndex: 'verifiedAt', key: 'verifiedAt' },
+                { title: 'Trạng thái rà soát', dataIndex: 'verificationStatus', key: 'verificationStatus', render: (status: string) => <Tag color={status === 'Đã rà soát nguồn' ? 'processing' : 'warning'}>{status}</Tag> },
+                { title: 'Dấu hiệu và hóa đơn', key: 'indicators', render: (_: unknown, review: TaxSupplierReview) => <div>{review.riskIndicators || 'Chưa ghi nhận'}<div style={{ color: '#64748B', fontSize: 12 }}>Hóa đơn: {review.invoiceReference || 'Chưa liên kết'}</div></div> },
+                { title: 'Mức độ nội bộ', dataIndex: 'internalSeverity', key: 'internalSeverity', render: (severity: string) => <Tag color={severity === 'Cao' ? 'error' : severity === 'Trung bình' ? 'warning' : 'default'}>{severity}</Tag> },
+                { title: 'Người xử lý', dataIndex: 'assignee', key: 'assignee', render: (name: string) => name || 'Chưa phân công' },
+                { title: 'Kết quả', dataIndex: 'reviewOutcome', key: 'reviewOutcome', render: (result: string) => result || 'Chưa ghi nhận' },
+                { title: 'Tài liệu', key: 'evidence', render: (_: unknown, review: TaxSupplierReview) => review.evidenceFileId ? <Button icon={<DownloadOutlined />} onClick={() => void downloadReviewEvidence(review)}>Tải minh chứng</Button> : <span>Chưa đính kèm</span> },
+                { title: 'Thao tác', key: 'actions', render: (_: unknown, review: TaxSupplierReview) => user?.role === 'ADMIN' ? <Button icon={<EditOutlined />} onClick={() => openReviewForm(review)}>Sửa</Button> : <span>Chỉ xem</span> },
               ]}
+              pagination={{ pageSize: 10 }}
             />
           </div>
+          {!taxSupplierReviews.length && <div style={{ color: '#64748B', padding: 8 }}>Chưa có hồ sơ rà soát. Danh sách bắt đầu trống và chỉ hiển thị nhà cung cấp khi người dùng tạo hồ sơ kèm nguồn.</div>}
         </div>
       )}
 
@@ -650,6 +789,40 @@ export const TaxModule: React.FC = () => {
             <Button type="primary" htmlType="submit" loading={taxTypeSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu hồ sơ</Button>
           </div>
         </Form>
+      </Modal>
+      <Modal title={editingReview ? 'Sửa hồ sơ rà soát nhà cung cấp' : 'Thêm hồ sơ rà soát nhà cung cấp'} open={reviewModalOpen} onCancel={() => { setReviewModalOpen(false); setEditingReview(null); setSelectedEvidenceFile(null); setReviewEvidencePickerOpen(false); reviewForm.resetFields(); }} footer={null} width={820}>
+        <Alert message="Đánh giá nội bộ có nguồn dẫn" description="Chỉ ghi nhận việc rà soát theo nguồn đã nêu. Không dùng hồ sơ này để kết luận nhà cung cấp vi phạm hoặc tự động chặn hóa đơn." type="warning" showIcon />
+        <Form form={reviewForm} layout="vertical" onFinish={saveSupplierReview} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 14, rowGap: 3 }}>
+            <Form.Item name="supplierKey" label="Nhà cung cấp trong danh bạ CRM" rules={[{ required: true, message: 'Chọn nhà cung cấp.' }]}>
+              <Select showSearch disabled={Boolean(editingReview)} placeholder="Tìm nhà cung cấp theo tên hoặc mã" options={suppliers.map(supplier => ({ value: supplier.key, label: `${supplier.name} · MST ${supplier.taxCode || 'chưa khai báo'}` }))} />
+            </Form.Item>
+            <Form.Item name="sourceCode" label="Mã nguồn thông tin" rules={[{ required: true, whitespace: true }]}><Input maxLength={120} placeholder="Mã thông báo, hồ sơ hoặc tham chiếu nguồn" /></Form.Item>
+            <Form.Item name="sourceName" label="Nguồn dữ liệu" rules={[{ required: true, whitespace: true }]}><Input maxLength={300} placeholder="Tên cơ quan hoặc nguồn cung cấp thông tin" /></Form.Item>
+            <Form.Item name="sourceReference" label="Tham chiếu nguồn" rules={[{ required: true, whitespace: true }]}><Input maxLength={1000} placeholder="Đường dẫn hoặc mã văn bản có thể tra cứu" /></Form.Item>
+            <Form.Item name="verifiedAt" label="Ngày rà soát nguồn" rules={[{ required: true, message: 'Chọn ngày rà soát.' }]}><DatePicker style={{ width: '100%' }} placeholder="Chọn ngày" /></Form.Item>
+            <Form.Item name="verificationStatus" label="Trạng thái rà soát nội bộ" rules={[{ required: true }]}><Select options={[
+              { value: 'Chưa rà soát', label: 'Chưa rà soát' }, { value: 'Đã rà soát nguồn', label: 'Đã rà soát nguồn' }, { value: 'Nguồn không xác minh được', label: 'Nguồn không xác minh được' },
+            ]} /></Form.Item>
+            <Form.Item name="internalSeverity" label="Mức độ cảnh báo nội bộ" rules={[{ required: true }]}><Select options={[
+              { value: 'Thông tin', label: 'Thông tin' }, { value: 'Thấp', label: 'Thấp' }, { value: 'Trung bình', label: 'Trung bình' }, { value: 'Cao', label: 'Cao' },
+            ]} /></Form.Item>
+            <Form.Item name="invoiceReference" label="Mã hóa đơn liên quan"><Input maxLength={160} placeholder="Mã hóa đơn nếu có" /></Form.Item>
+            <Form.Item name="assignee" label="Người xử lý"><Input maxLength={180} /></Form.Item>
+          </div>
+          <Form.Item name="riskIndicators" label="Dấu hiệu cần rà soát"><Input.TextArea rows={2} maxLength={1000} placeholder="Ghi nội dung quan sát được từ nguồn, không ghi kết luận suy đoán" /></Form.Item>
+          <Form.Item name="reviewOutcome" label="Kết quả rà soát"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>
+          <Form.Item name="notes" label="Ghi chú nội bộ"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <Button icon={<UploadOutlined />} onClick={() => setReviewEvidencePickerOpen(true)}>Chọn tài liệu chứng minh</Button>
+            <span style={{ color: '#64748B', fontSize: 12 }}>{selectedEvidenceFile?.name || editingReview?.evidenceFileName || 'Chưa đính kèm tài liệu'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <Button onClick={() => { setReviewModalOpen(false); setEditingReview(null); setSelectedEvidenceFile(null); setReviewEvidencePickerOpen(false); reviewForm.resetFields(); }}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={reviewSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu hồ sơ</Button>
+          </div>
+        </Form>
+        <FileUploadDialog open={reviewEvidencePickerOpen} onClose={() => setReviewEvidencePickerOpen(false)} onSelect={files => { setSelectedEvidenceFile(files[0] || null); setReviewEvidencePickerOpen(false); }} accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.doc,.docx" multiple={false} title="Chọn tài liệu chứng minh" confirmText="Chọn tệp" />
       </Modal>
       <Modal
         title={`Lập đề nghị nộp ${selectedTax?.taxType || 'thuế'}${selectedTax ? ` kỳ ${selectedTax.period}` : ''}`}

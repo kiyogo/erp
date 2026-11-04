@@ -2166,6 +2166,15 @@ async function findTaskReportAttachment(fileId) {
   return null;
 }
 
+async function findTaxSupplierReviewEvidence(fileId) {
+  return await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax_supplier_reviews' AND json_extract(payload_json, '$.evidenceFileId') = ? LIMIT 1").get(fileId);
+}
+
+async function canReadTaxSupplierReviewEvidence(actor, fileId) {
+  if (actor.role === 'ADMIN') return true;
+  return Boolean(await findTaxSupplierReviewEvidence(fileId));
+}
+
 async function canReadTaskReportAttachment(actor, fileId) {
   if (actor.role === 'ADMIN') return true;
   const report = await findTaskReportAttachment(fileId);
@@ -2192,6 +2201,12 @@ async function requireCollectionActor(request, scope) {
   }
   if (scope === 'finance_tax_types' && request.method === 'PUT') {
     throw new HttpError(405, 'Không thể thay thế hàng loạt danh mục sắc thuế.');
+  }
+  if (scope === 'finance_tax_supplier_reviews' && request.method !== 'GET' && actor.role !== 'ADMIN') {
+    throw new HttpError(403, 'Chỉ quản trị viên được lập và cập nhật hồ sơ rà soát nhà cung cấp thuế.');
+  }
+  if (scope === 'finance_tax_supplier_reviews' && !['GET', 'HEAD', 'POST', 'PATCH'].includes(request.method)) {
+    throw new HttpError(405, 'Hồ sơ rà soát được lưu để bảo toàn dấu vết; chỉ có thể bổ sung hoặc cập nhật.');
   }
   if (scope === 'finance_einvoice_templates' && request.method !== 'GET' && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý hồ sơ mẫu hóa đơn nội bộ.');
@@ -2451,6 +2466,38 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax_types' AND record_key <> ? AND (LOWER(json_extract(payload_json, '$.taxCode')) = LOWER(?) OR LOWER(json_extract(payload_json, '$.taxName')) = LOWER(?)) LIMIT 1")
       .get(String(current?.key || ''), record.taxCode, record.taxName);
     if (duplicate) throw new HttpError(409, 'Mã hoặc tên sắc thuế đã tồn tại trong danh mục.');
+  }
+  if (scope === 'finance_tax_supplier_reviews') {
+    record.supplierKey = requiredText(current?.supplierKey ?? record.supplierKey, 'Nhà cung cấp', 160);
+    const supplier = await db.prepare("SELECT id, name, tax_code FROM crm_contacts WHERE id = ? AND contact_type = 'supplier'").get(record.supplierKey);
+    if (!supplier) throw new HttpError(422, 'Chọn nhà cung cấp có thật trong danh bạ CRM.');
+    record.supplierName = current?.supplierName || supplier.name;
+    record.taxCode = current?.taxCode || requiredText(supplier.tax_code, 'Mã số thuế nhà cung cấp trong CRM', 32);
+    record.sourceCode = requiredText(record.sourceCode, 'Mã nguồn thông tin', 120);
+    record.sourceName = requiredText(record.sourceName, 'Nguồn dữ liệu', 300);
+    record.sourceReference = requiredText(record.sourceReference, 'Tham chiếu nguồn', 1000);
+    record.verifiedAt = requiredIsoDate(record.verifiedAt, 'Ngày rà soát nguồn');
+    record.verificationStatus = oneOf(record.verificationStatus, 'Trạng thái rà soát nội bộ', ['Chưa rà soát', 'Đã rà soát nguồn', 'Nguồn không xác minh được']);
+    record.riskIndicators = optionalText(record.riskIndicators, 'Dấu hiệu cần rà soát', 1000);
+    record.invoiceReference = optionalText(record.invoiceReference, 'Mã hóa đơn liên quan', 160);
+    record.internalSeverity = oneOf(record.internalSeverity || 'Thông tin', 'Mức độ cảnh báo nội bộ', ['Thông tin', 'Thấp', 'Trung bình', 'Cao']);
+    record.assignee = optionalText(record.assignee, 'Người xử lý', 180);
+    record.reviewOutcome = optionalText(record.reviewOutcome, 'Kết quả rà soát', 1000);
+    record.notes = optionalText(record.notes, 'Ghi chú', 1000);
+    record.evidenceFileId = optionalText(record.evidenceFileId, 'Tệp chứng minh', 160);
+    record.evidenceFileName = optionalText(record.evidenceFileName, 'Tên tệp chứng minh', 255);
+    if (record.evidenceFileId) {
+      const evidence = await db.prepare("SELECT id, name FROM file_nodes WHERE id = ? AND node_type = 'file' AND deleted_at IS NULL").get(record.evidenceFileId);
+      if (!evidence) throw new HttpError(422, 'Tệp chứng minh không tồn tại hoặc đã bị xóa.');
+      record.evidenceFileName = evidence.name;
+    } else record.evidenceFileName = '';
+    if (record.verificationStatus === 'Đã rà soát nguồn' && (!record.riskIndicators || !record.evidenceFileId)) {
+      throw new HttpError(422, 'Để ghi nhận đã rà soát nguồn, cần nêu kết quả đối chiếu và đính kèm chứng từ nguồn.');
+    }
+    record.status = 'Theo dõi nội bộ';
+    record.createdBy = current?.createdBy || actor.name;
+    record.reviewedBy = actor.name;
+    record.reviewedAt = now();
   }
   if (scope === 'finance_loans') {
     const profile = await requireAccountingProfile();
@@ -8662,6 +8709,7 @@ async function handleRequest(request, response) {
       'finance_chart_of_accounts',
       'finance_einvoice_templates',
       'finance_tax_types',
+      'finance_tax_supplier_reviews',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -8829,6 +8877,7 @@ async function handleRequest(request, response) {
       'finance_chart_of_accounts',
       'finance_einvoice_templates',
       'finance_tax_types',
+      'finance_tax_supplier_reviews',
       'admin_drop_menus',
       'drop_menus',
       'system_broadcasts',
@@ -8905,6 +8954,12 @@ async function handleRequest(request, response) {
         if (Object.hasOwn(patch, 'taxName') && patch.taxName !== publicCollectionRecord(existing)?.taxName
           && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax' AND json_extract(payload_json, '$.taxType') = ? LIMIT 1").get(publicCollectionRecord(existing)?.taxName)) {
           throw new HttpError(409, 'Tên sắc thuế đã được dùng trong kỳ kê khai và không thể đổi để giữ liên kết lịch sử.');
+        }
+      }
+      if (scope === 'finance_tax_supplier_reviews') {
+        const editableFields = new Set(['key', 'supplierKey', 'sourceCode', 'sourceName', 'sourceReference', 'verifiedAt', 'verificationStatus', 'riskIndicators', 'invoiceReference', 'internalSeverity', 'assignee', 'reviewOutcome', 'notes', 'evidenceFileId', 'evidenceFileName']);
+        if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
+          throw new HttpError(422, 'Hồ sơ rà soát chỉ cho phép cập nhật thông tin nguồn và kết quả nội bộ.');
         }
       }
       if (scope === 'payroll' && Object.hasOwn(patch, 'status')) {
@@ -9318,7 +9373,8 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     const node = await fileNodeById(decodeURIComponent(fileDownloadMatch[1]));
     if (!node || node.deleted_at || (!canAccessFileNode(actor, node) &&
-        !await canReadWorkflowAttachment(actor, node.id) && !await canReadTaskReportAttachment(actor, node.id))) {
+        !await canReadWorkflowAttachment(actor, node.id) && !await canReadTaskReportAttachment(actor, node.id)
+        && !await canReadTaxSupplierReviewEvidence(actor, node.id))) {
       throw new HttpError(404, 'Tệp này không tồn tại.');
     }
     if (node.node_type !== 'file') throw new HttpError(422, 'Chỉ có thể tải xuống tệp.');
@@ -9349,6 +9405,7 @@ async function handleRequest(request, response) {
     if (node.node_type !== 'file') throw new HttpError(422, 'Chỉ có thể cập nhật nội dung tệp.');
     if (node.is_protected) throw new HttpError(403, 'Không thể sửa tệp hệ thống được bảo vệ.');
     if (await findTaskReportAttachment(node.id)) throw new HttpError(409, 'Không thể sửa tệp đã đính kèm vào báo cáo nhiệm vụ.');
+    if (await findTaxSupplierReviewEvidence(node.id)) throw new HttpError(409, 'Không thể sửa tài liệu đã đính kèm vào hồ sơ rà soát thuế.');
     const content = await readBinary(request);
     const storageKey = node.storage_key || `${node.id}.bin`;
     await writeFile(fileStoragePath(storageKey), content);
@@ -9483,6 +9540,7 @@ async function handleRequest(request, response) {
     const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileNodeMatch[1])));
     if (node.is_protected) throw new HttpError(403, 'Không thể đổi tên thư mục hoặc tệp hệ thống được bảo vệ.');
     if (await findTaskReportAttachment(node.id)) throw new HttpError(409, 'Không thể đổi tên tệp đã đính kèm vào báo cáo nhiệm vụ.');
+    if (await findTaxSupplierReviewEvidence(node.id)) throw new HttpError(409, 'Không thể đổi tên tài liệu đã đính kèm vào hồ sơ rà soát thuế.');
     const payload = await readJson(request);
     const name = normalizeFileName(payload.name, 'Tên mới');
     if (await db.prepare('SELECT 1 FROM file_nodes WHERE parent_id = ? AND name = ? AND id != ? AND deleted_at IS NULL').get(node.parent_id, name, node.id)) {
@@ -9498,6 +9556,7 @@ async function handleRequest(request, response) {
     const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileNodeMatch[1])));
     if (node.is_protected) throw new HttpError(403, 'Không thể xóa thư mục hoặc tệp hệ thống được bảo vệ.');
     if (await findTaskReportAttachment(node.id)) throw new HttpError(409, 'Không thể xóa tệp đã đính kèm vào báo cáo nhiệm vụ.');
+    if (await findTaxSupplierReviewEvidence(node.id)) throw new HttpError(409, 'Không thể xóa tài liệu đã đính kèm vào hồ sơ rà soát thuế.');
     const child = await db.prepare('SELECT id FROM file_nodes WHERE parent_id = ? AND deleted_at IS NULL LIMIT 1').get(node.id);
     if (child) throw new HttpError(422, 'Chỉ có thể xóa thư mục trống.');
     await db.prepare('UPDATE file_nodes SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), node.id);

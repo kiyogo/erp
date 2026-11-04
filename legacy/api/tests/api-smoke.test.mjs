@@ -202,6 +202,43 @@ test('tax type profiles are internal references and only active saved profiles c
   await request(`/collections/finance_tax_types/${key}`, 'DELETE', {}, 409);
 });
 
+test('supplier tax reviews require a real CRM supplier and evidence before recording a reviewed source', async () => {
+  const stamp = Date.now();
+  const supplier = (await request('/crm/contacts', 'POST', {
+    type: 'supplier', name: `Nhà cung cấp rà soát ${stamp}`, taxCode: '0109876543', status: 'Đang hoạt động',
+  }, 201)).contact;
+  const workspace = await request('/files?scope=employee');
+  const evidenceFolder = (await request('/files/folders', 'POST', {
+    name: `tax-review-${stamp}`, parentId: workspace.context.parentId, originModule: 'finance_tax',
+  }, 201)).file;
+  const upload = await fetch(`${base}/files/upload`, {
+    method: 'POST',
+    headers: { Authorization: headers.Authorization, 'Content-Type': 'application/pdf', 'X-File-Name': `tax-review-${stamp}.pdf`, 'X-Origin-Module': 'finance_tax', 'X-Parent-Id': evidenceFolder.id },
+    body: Buffer.from('isolated test evidence'),
+  });
+  assert.equal(upload.status, 201);
+  const evidence = (await upload.json()).file;
+  const key = `tax-supplier-review-${stamp}`;
+  const record = {
+    key, supplierKey: supplier.key, supplierName: 'Giá trị giả', taxCode: '0000000000', sourceCode: 'SRC-TEST',
+    sourceName: 'Nguồn kiểm thử nội bộ', sourceReference: 'Mã tham chiếu nguồn SRC-TEST', verifiedAt: '2026-11-04',
+    verificationStatus: 'Đã rà soát nguồn', riskIndicators: 'Ghi nhận nội dung cần đối chiếu theo nguồn',
+    invoiceReference: 'INV-TEST-01', internalSeverity: 'Trung bình', assignee: 'Người xử lý kiểm thử',
+    reviewOutcome: 'Đang rà soát nội bộ', notes: 'Không kết luận vi phạm.', evidenceFileId: evidence.id, evidenceFileName: evidence.name,
+  };
+  const saved = (await request('/collections/finance_tax_supplier_reviews', 'POST', { record }, 201)).record;
+  assert.equal(saved.supplierName, supplier.name);
+  assert.equal(saved.taxCode, supplier.taxCode);
+  assert.equal(saved.status, 'Theo dõi nội bộ');
+  assert.equal(typeof saved.reviewedBy, 'string');
+  assert.ok(saved.reviewedAt);
+  await request('/collections/finance_tax_supplier_reviews', 'POST', { record: { ...record, key: `${key}-missing-evidence`, evidenceFileId: '' } }, 422);
+  await request(`/collections/finance_tax_supplier_reviews/${key}`, 'PATCH', { patch: { reviewOutcome: 'Đã cập nhật ghi chú' } }, 200);
+  await request(`/files/${evidence.id}`, 'PATCH', { name: 'evidence-renamed.pdf' }, 409);
+  await request(`/files/${evidence.id}`, 'DELETE', {}, 409);
+  await request(`/collections/finance_tax_supplier_reviews/${key}`, 'DELETE', {}, 405);
+});
+
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
   await request('/collections/business_org_units', 'POST', {

@@ -557,7 +557,11 @@ export const EInvoiceModule: React.FC = () => {
         status: 'Nháp nội bộ · chưa xác minh',
         externalStatus: 'Chưa gửi nhà cung cấp',
       };
-      if (editingTemplate) await dataService.updateGenericRecord('finance_einvoice_templates', record);
+      if (editingTemplate) await dataService.updateGenericRecord('finance_einvoice_templates', {
+        key: record.key, templateName: record.templateName, templateType: record.templateType, templateCode: record.templateCode,
+        symbol: record.symbol, version: record.version, providerTaxId: record.providerTaxId, providerName: record.providerName,
+        providerWebsite: record.providerWebsite, effectiveFrom: record.effectiveFrom, effectiveTo: record.effectiveTo, internalNote: record.internalNote,
+      });
       else await dataService.createGenericRecord('finance_einvoice_templates', record);
       setTemplates(dataService.getGenericData('finance_einvoice_templates') as EInvoiceTemplate[]);
       setTemplateModalOpen(false);
