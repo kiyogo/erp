@@ -1137,6 +1137,13 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   const searchedCash = await request(`/finance/cash-transactions?page=1&limit=1&type=Thu&q=${encodeURIComponent(created.code)}`);
   assert.equal(searchedCash.pagination.total, 1);
   assert.equal(searchedCash.data[0].key, created.key);
+  const searchedParty = await request(`/finance/cash-transactions?page=1&limit=10&searchBy=party&q=${encodeURIComponent(contact.name)}`);
+  assert.equal(searchedParty.pagination.total, 1);
+  assert.equal(searchedParty.data[0].key, created.key);
+  const searchedDescription = await request('/finance/cash-transactions?page=1&limit=10&searchBy=description&q=HD-01');
+  assert.equal(searchedDescription.pagination.total, 1);
+  assert.equal(searchedDescription.data[0].key, created.key);
+  await request('/finance/cash-transactions?page=1&limit=10&searchBy=invalid', 'GET', undefined, 422);
   assert.deepEqual(Object.keys(searchedCash.summary).sort(), ['pendingCount', 'totalExpense', 'totalIncome']);
   const referenceCash = await request(`/finance/document-references?page=1&limit=1&type=cash&q=${encodeURIComponent(created.code)}`);
   assert.equal(referenceCash.pagination.total, 1);
@@ -1273,6 +1280,18 @@ test('cash counts require a real petty cash account and recompute book balance a
   assert.equal(record.approvedBy, '');
   assert.equal(record.approvedById, '');
   assert.ok(record.createdById);
+  const bookBalance = await request(`/finance/cash-count-book-balance?accountId=${encodeURIComponent(record.cashAccountId)}&date=${record.countDate}&time=${record.time}`);
+  assert.equal(bookBalance.balance, record.bookBalance);
+  await request(`/finance/cash-count-book-balance?accountId=${encodeURIComponent(record.cashAccountId)}&date=2026-02-30&time=${record.time}`, 'GET', undefined, 422);
+  await request(`/finance/cash-count-book-balance?accountId=${encodeURIComponent(record.cashAccountId)}&date=${record.countDate}&time=25:00`, 'GET', undefined, 422);
+  await request('/finance/cash-transactions', 'POST', {
+    type: 'Thu', source: 'petty', category: '6. Thu khác', amount: 1000, date: record.countDate,
+    voucherDate: record.countDate, currency: 'VND', reference: 'CASH-COUNT-AFTER-CUTOFF',
+    recipientOrPayer: 'Khoản thu sau giờ kiểm kê', account: record.cashAccountName, sourceAccountId: record.cashAccountId,
+    counterpartyType: 'other', note: 'Giao dịch được ghi sổ sau thời điểm chốt kiểm kê', status: 'Đã hoàn thành',
+    journalLines: [{ description: 'Thu khác', debitAccount: '1111', creditAccount: '711', amount: 1000 }],
+  }, 201);
+  assert.equal((await request(`/finance/cash-count-book-balance?accountId=${encodeURIComponent(record.cashAccountId)}&date=${record.countDate}&time=${record.time}`)).balance, record.bookBalance);
   await request('/finance/cash-counts/cash-count-server-check/approve', 'POST', {}, 409);
   const forgedApproval = (await request('/collections/finance_cash_counts/cash-count-server-check', 'PATCH', { patch: { status: 'Đã phê duyệt', approvedBy: 'Người giả mạo' } })).record;
   assert.equal(forgedApproval.status, 'Chờ phê duyệt');

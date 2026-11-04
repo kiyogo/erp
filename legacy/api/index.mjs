@@ -105,6 +105,12 @@ function now() {
   return new Date().toISOString();
 }
 
+function financeVietnamCutoffIso(date, time) {
+  const value = new Date(`${date}T${time}:00+07:00`);
+  if (!Number.isFinite(value.getTime())) throw new HttpError(422, 'Thời điểm kiểm kê không hợp lệ.');
+  return value.toISOString();
+}
+
 function base64url(value) {
   return Buffer.from(value).toString('base64url');
 }
@@ -4777,6 +4783,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.date = requiredIsoDate(record.date, 'Ngày lập');
     record.time = requiredText(record.time, 'Thời điểm chốt', 5);
     if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(record.time)) throw new HttpError(422, 'Thời điểm chốt phải có định dạng giờ và phút hợp lệ.');
+    const cutoffAt = financeVietnamCutoffIso(record.countDate, record.time);
     record.cashAccountId = requiredText(record.cashAccountId, 'Quỹ tiền mặt', 160);
     const cashAccount = (await internalTransferAccounts()).find(account => account.key === record.cashAccountId && account.source === 'petty' && account.status === 'Đang hoạt động');
     if (!cashAccount) throw new HttpError(422, 'Quỹ tiền mặt không tồn tại hoặc đã ngừng hoạt động.');
@@ -4804,9 +4811,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       return { key: requiredText(line.key || `denomination-${index + 1}`, `Mã dòng ${index + 1}`, 160), denomination, quantity, note: optionalText(line.note, `Diễn giải dòng ${index + 1}`, 240) };
     });
     const balanceRow = await db.prepare(`SELECT COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END), 0) AS balance
-      FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty' AND transaction_date <= ?
+      FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty'
+      AND (transaction_date < ? OR (transaction_date = ? AND updated_at <= ?))
       AND (source_account_id = ? OR (source_account_id IS NULL AND account_name = ?))`)
-      .get(record.countDate, cashAccount.key, cashAccount.name);
+      .get(record.countDate, record.countDate, cutoffAt, cashAccount.key, cashAccount.name);
     const bookBalance = Number(balanceRow?.balance || 0);
     if (!Number.isSafeInteger(bookBalance)) throw new HttpError(422, 'Số dư sổ quỹ vượt giới hạn số nguyên an toàn.');
     record.bookBalance = bookBalance;
@@ -10735,10 +10743,11 @@ async function handleRequest(request, response) {
     if (source && source !== 'bank' && source !== 'petty') throw new HttpError(422, 'Nguồn tiền không hợp lệ.');
     const pageParam = url.searchParams.get('page');
     const limitParam = url.searchParams.get('limit');
-    if (pageParam !== null || limitParam !== null || ['q', 'type', 'status', 'accountId', 'counterpartyId', 'employeeCode', 'department', 'dateFrom', 'dateTo'].some(key => url.searchParams.has(key))) {
+    if (pageParam !== null || limitParam !== null || ['q', 'searchBy', 'type', 'status', 'accountId', 'counterpartyId', 'employeeCode', 'department', 'dateFrom', 'dateTo'].some(key => url.searchParams.has(key))) {
       const page = pageParam === null ? 1 : Number(pageParam);
       const limit = limitParam === null ? 20 : Number(limitParam);
       const query = String(url.searchParams.get('q') || '').trim().slice(0, 120);
+      const searchBy = url.searchParams.get('searchBy') || 'all';
       const type = url.searchParams.get('type') || 'all';
       const status = url.searchParams.get('status') || 'all';
       const accountId = String(url.searchParams.get('accountId') || '').trim().slice(0, 120);
@@ -10751,6 +10760,7 @@ async function handleRequest(request, response) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(422, 'Số dòng mỗi trang phải từ 1 đến 100.');
       if (!['all', 'Thu', 'Chi'].includes(type)) throw new HttpError(422, 'Loại chứng từ không hợp lệ.');
       if (!['all', 'Chờ duyệt', 'Đã hoàn thành', 'Đã hủy'].includes(status)) throw new HttpError(422, 'Trạng thái chứng từ không hợp lệ.');
+      if (!['all', 'code', 'description', 'party'].includes(searchBy)) throw new HttpError(422, 'Trường tìm kiếm chứng từ không hợp lệ.');
       const dateFrom = dateFromRaw ? requiredIsoDate(dateFromRaw, 'Từ ngày') : '';
       const dateTo = dateToRaw ? requiredIsoDate(dateToRaw, 'Đến ngày') : '';
       if (dateFrom && dateTo && dateFrom > dateTo) throw new HttpError(422, 'Từ ngày phải bằng hoặc trước đến ngày.');
@@ -10766,9 +10776,20 @@ async function handleRequest(request, response) {
       if (dateFrom) { where.push('transaction_date >= ?'); params.push(dateFrom); }
       if (dateTo) { where.push('transaction_date <= ?'); params.push(dateTo); }
       if (query) {
-        where.push("(LOWER(code) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(counterparty) LIKE LOWER(?) OR LOWER(account_name) LIKE LOWER(?))");
         const pattern = `%${query}%`;
-        params.push(pattern, pattern, pattern, pattern);
+        const searchFields = {
+          code: 'code',
+          description: "COALESCE(NULLIF(note, ''), category)",
+          party: 'counterparty',
+          all: 'code',
+        };
+        if (searchBy === 'all') {
+          where.push("(LOWER(code) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(counterparty) LIKE LOWER(?) OR LOWER(account_name) LIKE LOWER(?))");
+          params.push(pattern, pattern, pattern, pattern);
+        } else {
+          where.push(`LOWER(${searchFields[searchBy]}) LIKE LOWER(?)`);
+          params.push(pattern);
+        }
       }
       const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const total = Number((await db.prepare(`SELECT COUNT(*) AS total FROM finance_cash_transactions ${clause}`).get(...params)).total) || 0;
@@ -10858,6 +10879,26 @@ async function handleRequest(request, response) {
   }
 
   const cashCountApprovalMatch = /^\/finance\/cash-counts\/([^/]+)\/approve$/.exec(resource);
+  if (request.method === 'GET' && resource === '/finance/cash-count-book-balance') {
+    await requireCollectionActor(request, 'finance_cash_counts');
+    const accountId = requiredText(url.searchParams.get('accountId'), 'Quỹ tiền mặt', 160);
+    const date = requiredIsoDate(url.searchParams.get('date'), 'Ngày kiểm kê');
+    const time = requiredText(url.searchParams.get('time'), 'Thời điểm chốt', 5);
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new HttpError(422, 'Thời điểm chốt phải có định dạng giờ và phút hợp lệ.');
+    const cutoffAt = financeVietnamCutoffIso(date, time);
+    const account = (await internalTransferAccounts()).find(item => item.key === accountId && item.source === 'petty' && item.status === 'Đang hoạt động');
+    if (!account) throw new HttpError(422, 'Quỹ tiền mặt không tồn tại hoặc đã ngừng hoạt động.');
+    const row = await db.prepare(`SELECT COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END), 0) AS balance
+      FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty'
+      AND (transaction_date < ? OR (transaction_date = ? AND updated_at <= ?))
+      AND (source_account_id = ? OR (source_account_id IS NULL AND account_name = ?))`)
+      .get(date, date, cutoffAt, account.key, account.name);
+    const balance = Number(row?.balance) || 0;
+    if (!Number.isSafeInteger(balance)) throw new HttpError(422, 'Số dư sổ quỹ vượt giới hạn số nguyên an toàn.');
+    sendJson(response, 200, { accountId: account.key, date, balance });
+    return;
+  }
+
   if (request.method === 'POST' && cashCountApprovalMatch) {
     const actor = await requireCollectionActor(request, 'finance_cash_counts');
     const recordKey = requiredText(decodeURIComponent(cashCountApprovalMatch[1]), 'Mã kiểm kê', 160);
@@ -10872,10 +10913,12 @@ async function handleRequest(request, response) {
       if (Number(record.difference) !== 0 && (!String(record.reason || '').trim() || !String(record.handlingDirection || '').trim())) {
         throw new HttpError(422, 'Biên bản có chênh lệch phải ghi rõ nguyên nhân và hướng xử lý trước khi phê duyệt.');
       }
+      const cutoffAt = financeVietnamCutoffIso(record.countDate, record.time);
       const currentBalance = await db.prepare(`SELECT COALESCE(SUM(CASE WHEN transaction_type = 'Thu' THEN amount ELSE -amount END), 0) AS balance
-        FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty' AND transaction_date <= ?
+        FROM finance_cash_transactions WHERE status = 'Đã hoàn thành' AND source = 'petty'
+        AND (transaction_date < ? OR (transaction_date = ? AND updated_at <= ?))
         AND (source_account_id = ? OR (source_account_id IS NULL AND account_name = ?))`)
-        .get(record.countDate, record.cashAccountId, record.cashAccountName);
+        .get(record.countDate, record.countDate, cutoffAt, record.cashAccountId, record.cashAccountName);
       if (Number(currentBalance?.balance || 0) !== Number(record.bookBalance)) {
         throw new HttpError(409, 'Số dư sổ quỹ đã thay đổi sau khi lập biên bản. Hãy cập nhật lại số dư và đối chiếu trước khi phê duyệt.');
       }

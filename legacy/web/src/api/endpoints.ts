@@ -541,7 +541,7 @@ export const financeLoanEventsApi = {
 
 export const financeCashApi = {
   getAll: (source?: FinanceCashTransaction['source']) => api.get<{ data: FinanceCashTransaction[] }>('/finance/cash-transactions', { params: source ? { source } : undefined }),
-  getPage: (params: { page: number; limit: number; q?: string; type?: FinanceCashTransaction['type']; status?: FinanceCashTransaction['status']; source?: FinanceCashTransaction['source']; accountId?: string; counterpartyId?: string; employeeCode?: string; department?: string; dateFrom?: string; dateTo?: string }) => api.get<{
+  getPage: (params: { page: number; limit: number; q?: string; searchBy?: 'all' | 'code' | 'description' | 'party'; type?: FinanceCashTransaction['type']; status?: FinanceCashTransaction['status']; source?: FinanceCashTransaction['source']; accountId?: string; counterpartyId?: string; employeeCode?: string; department?: string; dateFrom?: string; dateTo?: string }) => api.get<{
     data: FinanceCashTransaction[];
     pagination: { page: number; limit: number; total: number; totalPages: number };
     summary: { totalIncome: number; totalExpense: number; pendingCount: number };
@@ -555,6 +555,7 @@ export const financeCashApi = {
 };
 
 export const financeCashCountsApi = {
+  getBookBalance: (params: { accountId: string; date: string; time: string }) => api.get<{ accountId: string; date: string; balance: number }>('/finance/cash-count-book-balance', { params }),
   approve: (key: string) => api.post<{ record: Record<string, unknown> & { key: string; status: string; approvedBy: string; approvedAt: string } }>(`/finance/cash-counts/${encodeURIComponent(key)}/approve`, {}),
 };
 
