@@ -26,12 +26,10 @@ import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../..
 import { filterEInvoiceReport } from './eInvoiceReportRules';
 import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
 import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
+import providerIntegrationCatalog from '../../data/einvoiceProviderIntegrationCatalog.json';
 
 const providerCatalog = [...archivedProviderCatalog, ...publishedProviderCatalog];
 
-const MISA_API_DOCS = 'https://doc.meinvoice.vn/itg/Doc/GetToken.html';
-const MISA_SANDBOX_URL = 'https://testapi.meinvoice.vn/api/integration/auth/token';
-const VIETTEL_API_DOCS = 'https://www.sinvoice.com.vn/p/tai-ve.html';
 const PROVIDER_LIST_SOURCE = 'https://aba.angiang.vn/tin-noi-bat/danh-sach-to-chuc-cung-cap-giai-phap-hoa-don-dien-tu-dap-ung-day-du-cac-tieu-chi-quy-dinh-tai-kh-220697';
 const PROVIDER_NOTICE_759 = 'https://cdn.thuvienphapluat.vn/uploads/mst/images/MyDuyen/Thang-8/260825/TB-759-TB-CT.pdf';
 
@@ -672,11 +670,15 @@ export const EInvoiceModule: React.FC = () => {
                 },
                 {
                   title: 'Tài liệu API và môi trường thử nghiệm', key: 'integration',
-                  render: (_: unknown, provider: (typeof providerCatalog)[number]) => provider.number === 13
-                    ? <div style={{ display: 'grid', gap: 4 }}><a href={MISA_API_DOCS} target="_blank" rel="noreferrer">Tài liệu API MISA MeInvoice</a><a href={MISA_SANDBOX_URL} target="_blank" rel="noreferrer">URL xác thực sandbox</a><span>Sandbox công khai; cần AppID và tài khoản test do MISA cấp.</span></div>
-                    : provider.number === 20
-                      ? <div style={{ display: 'grid', gap: 4 }}><a href={VIETTEL_API_DOCS} target="_blank" rel="noreferrer">Tài liệu tích hợp Viettel S-Invoice</a><span>Viettel công bố hỗ trợ API; cần liên hệ để xác nhận và cấp tài khoản test.</span></div>
-                      : <span>Chưa xác minh được tài liệu API hoặc sandbox công khai.</span>,
+                  render: (_: unknown, provider: (typeof providerCatalog)[number]) => {
+                    const integration = providerIntegrationCatalog[provider.taxId as keyof typeof providerIntegrationCatalog];
+                    return integration ? <div style={{ display: 'grid', gap: 4 }}>
+                      <a href={integration.evidenceUrl} target="_blank" rel="noreferrer">{integration.evidenceLabel}</a>
+                      {integration.apiDocsUrl && <a href={integration.apiDocsUrl} target="_blank" rel="noreferrer">Tài liệu API kỹ thuật</a>}
+                      {integration.sandboxUrl && <a href={integration.sandboxUrl} target="_blank" rel="noreferrer">Môi trường thử nghiệm</a>}
+                      <span>{integration.note}</span>
+                    </div> : <span>Chưa có tài liệu tích hợp được xác minh trong ERP.</span>;
+                  },
                 },
               ]}
             />

@@ -1,0 +1,34 @@
+{
+  "0101243150": {
+    "evidenceUrl": "https://doc.meinvoice.vn/about/",
+    "evidenceLabel": "Tài liệu mô tả tích hợp MISA meInvoice",
+    "apiDocsUrl": "https://doc.meinvoice.vn/itg/Doc/GetToken.html",
+    "sandboxUrl": "https://testapi.meinvoice.vn/api/integration/auth/token",
+    "note": "Tài liệu và endpoint sandbox công khai; cần AppID, tài khoản thử nghiệm và cấu hình ký do MISA cấp."
+  },
+  "0100109106": {
+    "evidenceUrl": "https://www.sinvoice.com.vn/p/tai-ve.html",
+    "evidenceLabel": "Trang tài liệu tích hợp Viettel S-Invoice",
+    "note": "Viettel công bố tài liệu tích hợp; chưa xác minh endpoint sandbox công khai. Yêu cầu Viettel cấp tài liệu kỹ thuật và tài khoản thử nghiệm."
+  },
+  "0104128565": {
+    "evidenceUrl": "https://einvoice.fpt.com.vn/3-bai-toan-mo-rong-erp-fpt-einvoice/",
+    "evidenceLabel": "Thông tin tích hợp FPT.eInvoice với ERP",
+    "note": "Nguồn xác nhận giải pháp tích hợp ERP; tài liệu API kỹ thuật và sandbox chưa công khai tại nguồn này, cần làm việc với FPT."
+  },
+  "0105987432": {
+    "evidenceUrl": "https://easyinvoice.vn/thong-bao-ve-viec-thay-doi-duong-dan-trang-hoa-don-va-trang-tra-cuu-cua-he-thong-hoa-don-dien-tu-easyinvoice-tu-ngay-01-01-2026/",
+    "evidenceLabel": "Thông báo EasyInvoice về tài liệu kỹ thuật tích hợp",
+    "note": "Nhà cung cấp nêu domain API riêng theo mã số thuế và tài liệu kỹ thuật chi tiết; cần xin thông tin theo hợp đồng. Sandbox công khai chưa xác minh."
+  },
+  "0106026495": {
+    "evidenceUrl": "https://minvoice.vn/huong-dan-quy-trinh-xuat-hoa-don-dien-tu-tren-phan-mem-m-invoice/",
+    "evidenceLabel": "Hướng dẫn tích hợp API/WebService M-Invoice",
+    "note": "Nguồn nhà cung cấp mô tả tích hợp API/WebService; cần xác nhận phiên bản tài liệu và xin endpoint sandbox, thông tin xác thực."
+  },
+  "0101360697": {
+    "evidenceUrl": "https://www.bkav.com.vn/web/bkav.com.vn/tieu-diem/-/view-content/138775/bkav-trien-khai-ehoadon-cho-hang-loat-khach-hang-tren-toan-quoc",
+    "evidenceLabel": "Thông tin Bkav eHoadon về API WebService",
+    "note": "Nguồn Bkav xác nhận khả năng đẩy dữ liệu qua API WebService; cần xác nhận phiên bản, tài liệu kỹ thuật và sandbox hiện hành với Bkav."
+  }
+}
