@@ -16,6 +16,7 @@ import { createDocxFromText } from './document-files.mjs';
 import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
+import { REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters } from './payrollRules.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -12021,6 +12022,49 @@ async function handleRequest(request, response) {
       result = { link: await insertSaleCustomerLink(sale.id, sale.code, customer, actor, now()), replayed: false };
     });
     sendJson(response, 200, result);
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/finance/payroll/calculate') {
+    const actor = await requireAdmin(request);
+    await requireSecurityPin(request, actor);
+    const input = await readJson(request);
+    let period;
+    try { period = normalizePeriod(input.period); payrollParameters(period, input.region); } catch (error) { throw new HttpError(422, error.message); }
+    const region = String(input.region);
+    if (!REGIONS.includes(region)) throw new HttpError(422, 'Chọn vùng lương tối thiểu I, II, III hoặc IV.');
+    const wanted = Array.isArray(input.employeeCodes) ? new Set(input.employeeCodes.map(code => String(code).toLocaleLowerCase('vi-VN'))) : null;
+    const overrides = new Map((Array.isArray(input.items) ? input.items : []).map(item => [String(item?.employeeCode || '').toLocaleLowerCase('vi-VN'), item]));
+    const employeeRows = await db.prepare(`SELECT u.*, p.phone, p.department, p.position, p.employment_status, p.join_date,
+      p.salary_base, p.avatar_url, p.details_json, p.created_at AS profile_created_at, p.updated_at AS profile_updated_at
+      FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+      WHERE u.role != 'ADMIN' AND u.is_active = 1 ORDER BY u.employee_code`).all();
+    const rows = [];
+    const skipped = [];
+    for (const row of employeeRows) {
+      const employee = serializeEmployeeDetail(row, row, { role: 'ADMIN' });
+      const code = String(employee.employeeCode || '');
+      if (wanted && !wanted.has(code.toLocaleLowerCase('vi-VN'))) continue;
+      const extra = overrides.get(code.toLocaleLowerCase('vi-VN')) || {};
+      const baseSalary = Number(employee.salaryBase) || 0;
+      if (baseSalary <= 0) { skipped.push({ employeeCode: code, employeeName: employee.name, reason: 'Hồ sơ chưa có lương cơ bản.' }); continue; }
+      try {
+        const slip = calculatePayslip({
+          period, region, baseSalary, allowance: extra.allowance, bonus: extra.bonus, exemptIncome: extra.exemptIncome,
+          insuranceSalary: extra.insuranceSalary,
+          dependents: countActiveDependents(employee.details?.familyMembers, period),
+        });
+        rows.push({ employeeCode: code, employeeName: employee.name, department: employee.department || '', ...slip });
+      } catch (error) {
+        skipped.push({ employeeCode: code, employeeName: employee.name, reason: error.message });
+      }
+    }
+    const parameters = payrollParameters(period, region);
+    sendJson(response, 200, {
+      period, region,
+      parameters: { socialHealthCap: parameters.socialHealthCap, unemploymentCap: parameters.unemploymentCap, regionalMinimumWage: parameters.regionalMinimumWage, personalDeduction: parameters.pit.personalDeduction, dependentDeduction: parameters.pit.dependentDeduction, legalBasis: parameters.legalBasis },
+      rows, skipped,
+    });
     return;
   }
 

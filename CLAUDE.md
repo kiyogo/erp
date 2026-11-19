@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Nút hoặc tính năng chưa rõ mục đích thì hỏi người dùng, không suy đoán.
 - Không dùng dữ liệu giả thay dữ liệu thật: bảng rỗng hiện trạng thái rỗng, không chèn nhân viên hay bản ghi mẫu. Yêu cầu này của người dùng thay thế quy tắc "dữ liệu mẫu dự phòng" cũ trong `AGENTS.md`.
 - Ô chọn nhân viên dùng `legacy/web/src/modules/hr/EmployeeSelect.tsx` (dữ liệu thật, nút "+" cho quản trị viên tạo nhân viên ngay tại chỗ, hỗ trợ `multiple` và `filter` theo quyền). Không viết lại `Select` nhân viên riêng ở từng module. Trong `Form.Item`, `Form.Item` của `custom-ui` chỉ chuyển tiếp một đối số cho `onChange`, nên việc tự điền các trường liên quan phải dùng `onSelectEmployee`, không dùng đối số thứ hai của `onChange`.
+- Tính lương, thuế TNCN và bảo hiểm bắt buộc nằm ở `legacy/api/payrollRules.mjs`, mỗi bộ tham số ghi căn cứ pháp lý và kỳ bắt đầu áp dụng. Khi luật đổi chỉ thêm bộ tham số mới, không sửa bộ cũ. Các số liệu hiện có được xác minh qua tìm kiếm trên nguồn thứ cấp (Luật 109/2025/QH15, Nghị quyết 110/2025/UBTVQH15, NĐ 161/2026/NĐ-CP, NĐ 293/2025/NĐ-CP): cần đối chiếu văn bản gốc trước khi dùng cho quyết toán thật.
 - File trong working tree có CRLF lẫn LF: dùng `git diff --ignore-cr-at-eol` để xem thay đổi thật, và chuyển file sang LF (`sed -i 's/\r$//'`) trước khi `git add` để commit không bị nhiễu.
 
 ## Skill luôn dùng

@@ -1212,6 +1212,24 @@ export const collectionsApi = {
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
 };
 
+export type PayrollCalculationRow = {
+  employeeCode: string; employeeName: string; department: string; period: string;
+  gross: number; baseSalary: number; allowance: number; bonus: number; dependents: number; taxableIncome: number;
+  insuranceDeduction: number; taxDeduction: number; netSalary: number;
+  employerInsurance: { social: number; health: number; unemployment: number; total: number };
+  warnings: string[];
+};
+export type PayrollCalculationResult = {
+  period: string; region: string;
+  parameters: { socialHealthCap: number; unemploymentCap: number; regionalMinimumWage: number; personalDeduction: number; dependentDeduction: number; legalBasis: string[] };
+  rows: PayrollCalculationRow[];
+  skipped: Array<{ employeeCode: string; employeeName: string; reason: string }>;
+};
+export const payrollCalculationApi = {
+  calculate: (payload: { period: string; region: string; employeeCodes?: string[]; items?: Array<{ employeeCode: string; allowance?: number; bonus?: number; exemptIncome?: number; insuranceSalary?: number }> }) =>
+    api.post<PayrollCalculationResult>('/finance/payroll/calculate', payload),
+};
+
 export const generalLedgerApi = {
   createEntry: (record: { key?: string; voucherCode: string; entryDate: string; description: string; debitAccount?: string; creditAccount?: string; amount?: number; lines?: Array<{ account: string; debit: number; credit: number }> }) =>
     api.post<{ record: Record<string, any> }>('/finance/general-ledger/entries', record),

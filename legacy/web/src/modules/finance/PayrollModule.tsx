@@ -8,7 +8,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Select, Button, Input, message, Card, Tag } from '../../custom-ui';
 import { dataService, PayrollRecord } from '../../services/dataService';
-import { financeCashApi, financePaymentAccountsApi, FinancePaymentAccount, payrollLedgerApi, systemApi } from '../../api/endpoints';
+import { financeCashApi, financePaymentAccountsApi, FinancePaymentAccount, payrollCalculationApi, PayrollCalculationResult, payrollLedgerApi, systemApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { filterPayrollForMonth, normalizePayrollMonth, payrollBankRows, payrollReportRows } from './payrollExports';
 
@@ -56,6 +56,11 @@ export const PayrollModule: React.FC = () => {
   const [insurancePaymentReference, setInsurancePaymentReference] = useState('');
   const [submittingInsurance, setSubmittingInsurance] = useState(false);
   const [accountingSheetKey, setAccountingSheetKey] = useState('');
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [calcRegion, setCalcRegion] = useState('I');
+  const [calcLoading, setCalcLoading] = useState(false);
+  const [calcSaving, setCalcSaving] = useState(false);
+  const [calcResult, setCalcResult] = useState<PayrollCalculationResult | null>(null);
 
   const loadData = () => {
     setData(dataService.getPayroll());
@@ -146,6 +151,45 @@ export const PayrollModule: React.FC = () => {
   }, [isDisburse, isInsurance]);
 
   const periodData = filterPayrollForMonth(data, selectedMonth);
+  const calcPeriod = `${selectedMonth.slice(3)}-${selectedMonth.slice(0, 2)}`;
+  const existingCodes = new Set(periodData.map((record) => String(record.employeeCode).toLowerCase()));
+  const calcNewRows = (calcResult?.rows || []).filter((row) => !existingCodes.has(row.employeeCode.toLowerCase()));
+  const runCalculation = async () => {
+    setCalcLoading(true);
+    try {
+      const response = await payrollCalculationApi.calculate({ period: calcPeriod, region: calcRegion });
+      setCalcResult(response.data);
+    } catch (error: any) {
+      setCalcResult(null);
+      message.error(error?.response?.data?.message || 'Không tính được lương cho kỳ đã chọn.');
+    } finally {
+      setCalcLoading(false);
+    }
+  };
+  const saveCalculation = async () => {
+    if (!calcNewRows.length) return;
+    setCalcSaving(true);
+    let created = 0;
+    try {
+      for (const row of calcNewRows) {
+        await dataService.createGenericRecord('payroll', {
+          key: `payroll-${calcPeriod}-${row.employeeCode.toLowerCase()}`,
+          employeeCode: row.employeeCode, employeeName: row.employeeName, department: row.department,
+          month: calcPeriod, status: 'Chưa chi trả', workDays: 0,
+          baseSalary: row.baseSalary, allowance: row.allowance, bonus: row.bonus,
+          insuranceDeduction: row.insuranceDeduction, taxDeduction: row.taxDeduction, netSalary: row.netSalary,
+        });
+        created += 1;
+      }
+      message.success(`Đã tạo ${created} phiếu lương kỳ ${selectedMonth}.`);
+      setCalcOpen(false);
+      setCalcResult(null);
+    } catch (error: any) {
+      message.error(`${error?.response?.data?.message || 'Không tạo được phiếu lương.'} Đã tạo ${created} trên ${calcNewRows.length} phiếu.`);
+    } finally {
+      setCalcSaving(false);
+    }
+  };
   const orgUnits = dataService.getOrgUnits();
   const payrollSheets = dataService.getGenericData('finance_payroll_sheets');
   const totalPayroll = periodData.reduce((sum, item) => sum + item.netSalary, 0);
@@ -385,8 +429,9 @@ export const PayrollModule: React.FC = () => {
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {!isAttendance && !isInsurance && !isDisburse && !isAccounting && <Button onClick={() => setSheetDialog(true)}>Thêm bảng lương</Button>}
+        {!isAttendance && !isInsurance && !isDisburse && !isAccounting && <Button type="primary" onClick={() => { setCalcResult(null); setCalcOpen(true); }}>Tính lương tự động</Button>}
         <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>Kỳ lương:</span>
-        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); setInsuranceBreakdown({ employerSocial: '', employerHealth: '', employerUnemployment: '', employeeSocial: '', employeeHealth: '', employeeUnemployment: '' }); setInsuranceLoaded(false); setInsuranceAllocations({ '3383': '', '3384': '', '3386': '' }); setInsurancePaymentReference(''); }} options={availableMonths} style={{ width: 160 }} />
+        <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); setInsuranceBreakdown({ employerSocial: '', employerHealth: '', employerUnemployment: '', employeeSocial: '', employeeHealth: '', employeeUnemployment: '' }); setInsuranceLoaded(false); setInsuranceAllocations({ '3383': '', '3384': '', '3385': '', '3386': '' }); setInsurancePaymentReference(''); }} options={availableMonths} style={{ width: 160 }} />
       </div>
       <Modal title="Thêm bảng lương" open={sheetDialog} onCancel={() => setSheetDialog(false)} onOk={() => {
         if (!sheetName.trim() || selectedUnits.length === 0) { message.error('Nhập tên bảng lương và chọn ít nhất một đơn vị.'); return; }
@@ -406,6 +451,41 @@ export const PayrollModule: React.FC = () => {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', margin: '14px 0 6px' }}><span>Đơn vị áp dụng</span><Button size="small" onClick={() => setSelectedUnits(orgUnits.map((unit) => unit.key))}>Chọn tất cả</Button></div>
         <div style={{ maxHeight: 210, overflow: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr><th></th><th>Mã đơn vị</th><th>Tên đơn vị</th><th>Cấp tổ chức</th></tr></thead><tbody>{orgUnits.map((unit) => <tr key={unit.key}><td><input type="checkbox" checked={selectedUnits.includes(unit.key)} onChange={(e) => setSelectedUnits((values) => e.target.checked ? [...values, unit.key] : values.filter((value) => value !== unit.key))} /></td><td>{unit.code}</td><td>{unit.name}</td><td>{unit.manager ? 'Phòng ban' : 'Tổng công ty/Công ty'}</td></tr>)}</tbody></table><div>Tổng số: {orgUnits.length} bản ghi</div></div>
+      </Modal>
+      <Modal title="Tính lương tự động" open={calcOpen} onCancel={() => !calcSaving && setCalcOpen(false)} onOk={saveCalculation} okText="Tạo phiếu lương" cancelText="Hủy" confirmLoading={calcSaving} okButtonProps={{ disabled: calcNewRows.length === 0 }} width="min(1100px, 95vw)">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
+          <span>Kỳ lương {selectedMonth}</span>
+          <span>Vùng lương tối thiểu</span>
+          <Select value={calcRegion} onChange={setCalcRegion} style={{ width: 140 }} options={['I', 'II', 'III', 'IV'].map((region) => ({ value: region, label: `Vùng ${region}` }))} />
+          <Button type="primary" loading={calcLoading} onClick={runCalculation}>Tính lương</Button>
+        </div>
+        {calcResult && <>
+          <div style={{ color: '#64748B', fontSize: 13, marginBottom: 14 }}>
+            Giảm trừ bản thân {calcResult.parameters.personalDeduction.toLocaleString('vi-VN')} ₫, mỗi người phụ thuộc {calcResult.parameters.dependentDeduction.toLocaleString('vi-VN')} ₫. Trần đóng BHXH và BHYT {calcResult.parameters.socialHealthCap.toLocaleString('vi-VN')} ₫, trần đóng BHTN {calcResult.parameters.unemploymentCap.toLocaleString('vi-VN')} ₫. Doanh nghiệp đóng bảo hiểm {calcResult.rows.reduce((sum, row) => sum + row.employerInsurance.total, 0).toLocaleString('vi-VN')} ₫.
+          </div>
+          <KTable
+            dataSource={calcResult.rows.map((row) => ({ ...row, key: row.employeeCode }))}
+            pagination={false}
+            columns={[
+              { title: 'Mã', dataIndex: 'employeeCode', key: 'employeeCode' },
+              { title: 'Họ tên', dataIndex: 'employeeName', key: 'employeeName' },
+              { title: 'Đơn vị', dataIndex: 'department', key: 'department' },
+              { title: 'Tổng thu nhập', dataIndex: 'gross', key: 'gross', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+              { title: 'Phụ thuộc', dataIndex: 'dependents', key: 'dependents' },
+              { title: 'Bảo hiểm', dataIndex: 'insuranceDeduction', key: 'insuranceDeduction', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+              { title: 'Thuế TNCN', dataIndex: 'taxDeduction', key: 'taxDeduction', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+              { title: 'Thực lĩnh', dataIndex: 'netSalary', key: 'netSalary', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+              { title: 'Trạng thái', key: 'state', render: (_: unknown, row: any) => existingCodes.has(row.employeeCode.toLowerCase()) ? <Tag>Đã có phiếu</Tag> : <Tag color="success">Sẽ tạo mới</Tag> },
+            ]}
+          />
+          {calcResult.rows.some((row) => row.warnings.length > 0) && <div style={{ color: '#B45309', fontSize: 13, marginTop: 14 }}>
+            {calcResult.rows.filter((row) => row.warnings.length > 0).map((row) => <div key={row.employeeCode}>{row.employeeCode}: {row.warnings.join(' ')}</div>)}
+          </div>}
+          {calcResult.skipped.length > 0 && <div style={{ color: '#64748B', fontSize: 13, marginTop: 14 }}>
+            Bỏ qua {calcResult.skipped.length} nhân viên: {calcResult.skipped.map((item) => `${item.employeeCode} (${item.reason})`).join('; ')}
+          </div>}
+          <div style={{ color: '#64748B', fontSize: 12.5, marginTop: 14 }}>Căn cứ: {calcResult.parameters.legalBasis.join('; ')}. Lương tính theo lương cơ bản trong hồ sơ nhân sự, chưa nhân theo ngày công.</div>
+        </>}
       </Modal>
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
@@ -444,7 +524,7 @@ export const PayrollModule: React.FC = () => {
               columns={[
                 { title: 'Mã NV', dataIndex: 'employeeCode', key: 'employeeCode', render: (c: string) => <strong>{c}</strong> },
                 { title: 'Họ và tên', dataIndex: 'employeeName', key: 'employeeName', render: (n: string, r: any) => <div><strong>{n}</strong><div style={{ fontSize: 11.5, color: '#64748B' }}>{r.department}</div></div> },
-                { title: 'Công làm thực tế', dataIndex: 'workDays', key: 'workDays', render: (d: number) => <Tag color="success">{d} ngày</Tag> },
+                { title: 'Công làm thực tế', dataIndex: 'workDays', key: 'workDays', render: (d: number) => (d > 0 ? <Tag color="success">{d} ngày</Tag> : <Tag>Chưa liên kết chấm công</Tag>) },
               ]}
             />
           </div>
