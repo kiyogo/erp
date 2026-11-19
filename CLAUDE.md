@@ -6,11 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AGENTS.md` (gốc) và `legacy/AGENTS.md` là nguồn quy tắc chính thức, đọc trước khi sửa giao diện. Các điểm hay bị vi phạm:
 
-- Mỗi lần thay đổi mã nguồn, tài liệu hoặc cấu hình phải commit (Conventional Commits, không emoji) và `git push origin main` ngay trong cùng lượt làm việc. Remote: `https://github.com/kiyogo/erp.git`.
+- Code xong là đẩy lên GitHub ngay: mỗi prompt có thay đổi mã nguồn, tài liệu hoặc cấu hình đều phải kết thúc bằng commit (Conventional Commits, không emoji) và `git push origin main`, không để sang prompt sau. Chỉ `git add` đúng các file mình đã sửa, vì working tree có nhiều thay đổi cũ chưa commit của người dùng. Remote: `https://github.com/kiyogo/erp.git`.
 - Trước khi push: `npm test` trong `legacy/web`, và `npm run build` nếu đụng giao diện.
-- Với chức năng chưa quen, phải khảo sát dự án mã nguồn mở tương tự trước, không tự viết từ đầu.
+- Với chức năng chưa quen thuộc, không viết từ con số 0. Trước khi bắt tay làm, tìm các dự án mã nguồn mở tương tự trên GitHub, so sánh ý tưởng, mô hình dữ liệu và kiến trúc của chúng, chọn hướng phù hợp nhất rồi mới tùy biến theo kiến trúc sẵn có của dự án.
 - Giao diện: tiếng Việt, mọi ô nhập và nút cao 32px (không dùng `size="small"`), không chữ đậm, không `&` trong tiêu đề, không viền divider thừa trong dialog, dùng `Modal` chung với `title` (không tự thêm nút X). Chi tiết ở `docs/WEB_UI_GUIDELINES.md`.
 - Nút hoặc tính năng chưa rõ mục đích thì hỏi người dùng, không suy đoán.
+
+## Skill luôn dùng
+
+Người dùng yêu cầu luôn bật hai skill đã cài ở `~/.claude/skills/` (nguồn: `github.com/JuliusBrussee/caveman` và `github.com/DietrichGebert/ponytail`): áp dụng ở mọi phiên và mọi tác vụ, không cần người dùng gõ lệnh, trừ khi họ nói "stop caveman", "normal mode" hoặc "stop ponytail".
+
+- `caveman`: trả lời ngắn, đưa kết quả trước, bỏ lời chào và câu thừa, giữ nguyên lệnh, đường dẫn, số liệu và lỗi. Chỉ áp dụng cho lời nói trong chat. Nội dung ghi vào file, commit, tài liệu và giao diện vẫn viết văn phong bình thường.
+- `ponytail`: chọn thay đổi nhỏ nhất mà vẫn giải quyết trọn vẹn yêu cầu, ưu tiên dùng lại thành phần có sẵn trong repo, thêm test nhỏ cho logic mới. Cuối câu trả lời ghi một hai dòng về việc đã bỏ qua hoặc chưa kiểm tra.
+- Vẫn trả lời bằng tiếng Việt. Khi mâu thuẫn với quy tắc ở trên thì quy tắc của dự án thắng, ví dụ sau khi thêm tính năng vẫn phải giải thích đầy đủ vị trí, cách dùng, trường bắt buộc và ảnh hưởng liên kết.
 
 ## Hai codebase song song
 
