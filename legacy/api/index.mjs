@@ -5195,6 +5195,20 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     const hours = ((end - start + 1440) % 1440) / 60;
     if (!hours || Math.abs(Number(record.totalHours) - hours) > 0.01) throw new HttpError(422, 'Số giờ làm thêm phải khớp khung giờ đăng ký.');
     record.totalHours = hours;
+    // Điều 107 Bộ luật Lao động 2019: ngày làm việc bình thường làm thêm không quá 50% giờ bình thường (4 giờ với ngày 8 giờ), tổng không quá 12 giờ một ngày,
+    // không quá 40 giờ một tháng và 200 giờ một năm (một số ngành được tới 300 giờ, cần được cấu hình riêng khi doanh nghiệp thuộc các ngành đó).
+    const dayOfWeek = new Date(`${record.otDate}T00:00:00Z`).getUTCDay();
+    if (hours > 12) throw new HttpError(422, 'Tổng số giờ làm thêm một ngày không quá 12 giờ theo Điều 107 Bộ luật Lao động 2019.');
+    if (dayOfWeek >= 1 && dayOfWeek <= 5 && hours > 4) throw new HttpError(422, 'Ngày làm việc bình thường chỉ được làm thêm tối đa 4 giờ (50% số giờ làm việc bình thường) theo Điều 107 Bộ luật Lao động 2019.');
+    const overtimeOwner = String(record.employeeCode || record.empCode || '').toLocaleLowerCase('vi-VN');
+    if (overtimeOwner) {
+      const others = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_overtime'").all())
+        .map((row) => parseJsonObject(row.payload_json))
+        .filter((item) => item.key !== recordKey && item.status !== 'Từ chối' && String(item.employeeCode || item.empCode || '').toLocaleLowerCase('vi-VN') === overtimeOwner);
+      const sumHours = (prefix) => others.filter((item) => String(item.otDate || '').startsWith(prefix)).reduce((sum, item) => sum + (Number(item.totalHours) || 0), 0);
+      if (sumHours(record.otDate.slice(0, 7)) + hours > 40 + 0.001) throw new HttpError(422, 'Tổng số giờ làm thêm của nhân viên trong tháng không quá 40 giờ theo Điều 107 Bộ luật Lao động 2019.');
+      if (sumHours(record.otDate.slice(0, 4)) + hours > 200 + 0.001) throw new HttpError(422, 'Tổng số giờ làm thêm của nhân viên trong năm không quá 200 giờ theo Điều 107 Bộ luật Lao động 2019.');
+    }
     record.reason = requiredText(record.reason, 'Lý do làm thêm', 4000);
     if (actor.role !== 'ADMIN') { record.multiplier = current?.multiplier ?? 1; record.baseHourlyRate = current?.baseHourlyRate ?? 0; }
     record.multiplier = Number(record.multiplier ?? 1);

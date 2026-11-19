@@ -40,6 +40,17 @@ export interface EnterpriseLeaveSummaryItem {
 
 const INITIAL_LEAVES_SUMMARY: EnterpriseLeaveSummaryItem[] = [];
 
+// Điều 114 Bộ luật Lao động 2019: cứ đủ 5 năm làm việc cho cùng một người sử dụng lao động thì được thêm 1 ngày phép năm.
+const seniorityDays = (joinDate: string | undefined, year: number): number => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(joinDate || ''));
+  if (!match || !year) return 0;
+  const start = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const end = new Date(year, 11, 31);
+  let years = end.getFullYear() - start.getFullYear();
+  if (end < new Date(end.getFullYear(), start.getMonth(), start.getDate())) years -= 1;
+  return Math.max(0, Math.floor(years / 5));
+};
+
 export const LeaveSummaryModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseLeaveSummaryItem[]>(INITIAL_LEAVES_SUMMARY);
   const [employees, setEmployees] = useState(dataService.getEmployees());
@@ -319,7 +330,7 @@ export const LeaveSummaryModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân sự" rules={[{ required: true }]}>
-              <EmployeeSelect valueKey="id" onCreated={() => setEmployees(dataService.getEmployees())} onSelectEmployee={(employee) => { if (employee) { const existing = data.find((item) => item.employeeCode === employee.code && (item.year || new Date().getFullYear()) === Number(form.getFieldValue('year'))); form.setFieldsValue({ ...(existing || {}), employeeName: employee.key, employeeCode: employee.code, department: employee.department, position: employee.position, usedLeaves: (existing as any)?.openingUsedLeaves ?? existing?.usedLeaves ?? 0 }); } }} />
+              <EmployeeSelect valueKey="id" onCreated={() => setEmployees(dataService.getEmployees())} onSelectEmployee={(employee) => { if (employee) { const existing = data.find((item) => item.employeeCode === employee.code && (item.year || new Date().getFullYear()) === Number(form.getFieldValue('year'))); form.setFieldsValue({ ...(existing || {}), employeeName: employee.key, employeeCode: employee.code, department: employee.department, position: employee.position, seniorityQuota: (existing as any)?.seniorityQuota ?? seniorityDays(employee.joinDate, Number(form.getFieldValue('year'))), usedLeaves: (existing as any)?.openingUsedLeaves ?? existing?.usedLeaves ?? 0 }); } }} />
             </Form.Item>
             <Form.Item name="position" label="Chức danh">
               <Input placeholder="Ví dụ: Senior DevOps" />
