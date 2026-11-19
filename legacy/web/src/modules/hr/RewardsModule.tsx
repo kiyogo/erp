@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { EmployeeSelect } from './EmployeeSelect';
 import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob, generateValidPdfBlob } from '../../utils/fileExporter';
@@ -433,7 +434,7 @@ export const RewardsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeId" label="Nhân sự / Đại diện tập thể" rules={[{ required: true }]}>
-              <Select showSearch placeholder="Chọn nhân sự trong hệ thống" options={employees.map(employee => ({ value: employee.id, label: `${employee.employeeCode || employee.code} · ${employee.name}` }))} onChange={employeeId => { const employee = employees.find(item => item.id === employeeId); if (employee) form.setFieldsValue({ department: employee.department }); }} />
+              <EmployeeSelect valueKey="id" placeholder="Chọn nhân sự trong hệ thống" onChange={(_, employee) => { if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true }]}>
               {deptOptions.length ? <Select options={deptOptions} placeholder="Chọn phòng ban..." /> : <Input placeholder="Nhập phòng ban" />}

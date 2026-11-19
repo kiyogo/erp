@@ -26,6 +26,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Tooltip } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { useLocation } from 'react-router-dom';
 import { employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -466,7 +467,7 @@ export const AssetSystemModule: React.FC<{ subType?: string }> = ({ subType }) =
           </div>
 
           <Form.Item name="responsiblePersonId" label="Người phụ trách kiểm soát / Ban hành" rules={[{ required: true, message: 'Chọn nhân viên đang hoạt động.' }]}>
-            <Select showSearch placeholder="Chọn nhân viên" options={employees.map((employee) => ({ value: employee.id, label: `${employee.name} · ${employee.employeeCode || employee.code || employee.id}` }))} />
+            <EmployeeSelect valueKey="id" />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>

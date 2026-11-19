@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/modules/hr/PerformanceReviewModule.t
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022, jsx: ts.JsxEmit.React } });
 const imports = {
   react: 'globalThis.__performanceTest.react', '@ant-design/icons': 'globalThis.__performanceTest.icons',
-  '../../components/KTable': 'globalThis.__performanceTest.ui', '../../custom-ui': 'globalThis.__performanceTest.ui',
+  '../../components/KTable': 'globalThis.__performanceTest.ui', '../../custom-ui': 'globalThis.__performanceTest.ui', './EmployeeSelect': 'globalThis.__performanceTest.ui',
   '../../api/endpoints': 'globalThis.__performanceTest.api', '../../services/dataService': 'globalThis.__performanceTest.services', '../../utils/fileExporter': 'globalThis.__performanceTest.exporter',
 };
 const executable = outputText.replace(/import\s+([^;]+?)\s+from\s+['"]([^'"]+)['"];?/g, (_, names, path) => {
@@ -38,7 +38,7 @@ test('performance UI uses logical keys, persists real identities and zero scores
     useState: initial => { const index = cursor++; if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial; return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }]; },
     useEffect: (callback, deps) => { const index = effectCursor++; if (!dependencies[index] || deps.some((value, i) => value !== dependencies[index][i])) { dependencies[index] = deps; effects.push(callback); } },
   };
-  const ui = Object.fromEntries(['KTable', 'Button', 'Select', 'Tag', 'Progress', 'Drawer', 'Card', 'Tooltip'].map(name => [name, name]));
+  const ui = Object.fromEntries(['EmployeeSelect', 'KTable', 'Button', 'Select', 'Tag', 'Progress', 'Drawer', 'Card', 'Tooltip'].map(name => [name, name]));
   ui.Input = Object.assign(function Input() {}, { TextArea: 'TextArea' });
   ui.Modal = Object.assign(function Modal() {}, { confirm: options => options.onOk() });
   ui.Form = Object.assign(function Form() {}, { Item: 'FormItem', useForm: () => { const index = formCursor++; forms[index] ||= { values: {}, resetFields() { this.values = {}; }, setFieldsValue(values) { this.values = { ...this.values, ...values }; } }; return [forms[index]]; } });

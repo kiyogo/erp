@@ -31,7 +31,7 @@ import {
   systemApi,
 } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
-import { EmployeeQuickCreateDialog } from '../hr/EmployeeQuickCreateDialog';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { CRMContactsModule } from '../crm/CRMContactsModule';
 
 export type EnterpriseCashTransaction = FinanceCashTransaction;
@@ -88,7 +88,6 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
   const [accountingRegime, setAccountingRegime] = useState('');
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
-  const [employeeCreateOpen, setEmployeeCreateOpen] = useState(false);
   const [contactCreateOpen, setContactCreateOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState('');
@@ -771,7 +770,7 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
             <Form.Item name="sourceAccountId" label={sourceFilter === 'petty' ? 'Quỹ tiền mặt' : 'Tài khoản ngân hàng'} rules={[{ required: true, message: 'Hãy chọn tài khoản nguồn.' }]} style={{ marginBottom: 6, gridArea: 'account' }}><Select placeholder={activeCashAccounts.length ? 'Chọn tài khoản' : 'Chưa có tài khoản'} options={activeCashAccounts.map(account => ({ value: account.key, label: `${account.name} · ${Number(account.balance).toLocaleString('vi-VN')} ₫` }))} /></Form.Item>
             <Form.Item label="Kèm theo" style={{ marginBottom: 6, gridArea: 'documents' }}><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Form.Item name="attachmentCount" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><Input type="number" min={0} step={1} placeholder="Số lượng" /></Form.Item><span style={{ whiteSpace: 'nowrap' }}>chứng từ gốc</span></div></Form.Item>
 
-            <Form.Item label="Nhân viên" style={{ marginBottom: 6, gridArea: 'staff' }}><div style={{ display: 'flex', gap: 4 }}><Form.Item name="staffEmployeeCode" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><Select showSearch placeholder="Chọn nhân viên" options={employees.map(employee => ({ value: employee.employeeCode || employee.code, label: `${employee.name || employee.fullName} (${employee.employeeCode || employee.code})` }))} /></Form.Item><Button aria-label="Thêm nhân viên" title="Thêm nhân viên" icon={<PlusOutlined />} onClick={() => setEmployeeCreateOpen(true)} /></div></Form.Item>
+            <Form.Item name="staffEmployeeCode" label="Nhân viên" style={{ marginBottom: 6, gridArea: 'staff' }}><EmployeeSelect onCreated={() => { void employeesApi.getAll().then(response => setEmployees(response.data.data.filter(employee => employee.isActive))).catch(() => {}); }} /></Form.Item>
             <Form.Item label="Tham chiếu" style={{ marginBottom: 6, gridArea: 'reference' }}><div style={{ display: 'flex', gap: 4 }}><Form.Item name="reference" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><Input maxLength={500} placeholder="Mã tham chiếu" /></Form.Item><Button className="ant-btn-square-icon" aria-label="Chọn chứng từ tham chiếu" title="Chọn chứng từ tham chiếu" icon={<SearchOutlined />} onClick={() => { setReferenceSearch(''); setReferenceOpen(true); }} /></div></Form.Item>
             <Form.Item name="sourceDocument" label="Chứng từ gốc" style={{ marginBottom: 6, gridArea: 'sourceDocument' }}><Input maxLength={500} /></Form.Item>
             <Form.Item name="department" label="Phòng ban" style={{ marginBottom: 6, gridArea: 'department' }}><Input placeholder="Phòng ban liên quan" /></Form.Item>
@@ -842,24 +841,6 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
           { title: '', key: 'select', render: (_: unknown, item: FinanceReferenceRow) => <Button onClick={() => { form.setFieldsValue({ reference: item.code }); setReferenceOpen(false); }}>Chọn</Button> },
         ]} pagination={{ current: referencePage, pageSize: 20, total: referenceTotal, onChange: page => setReferencePage(page) }} disableCache />
       </Modal>
-
-      <EmployeeQuickCreateDialog
-        open={employeeCreateOpen}
-        onClose={() => setEmployeeCreateOpen(false)}
-        orgUnitOptions={orgUnitOptions}
-        positionOptions={positionOptions}
-        workStatusOptions={workStatusOptions}
-        onCreated={createdEmployee => {
-          void employeesApi.getAll().then(response => {
-            const refreshed = response.data.data.filter(employee => employee.isActive);
-            setEmployees(refreshed);
-            const created = refreshed.find(employee => employee.id === createdEmployee.id) || createdEmployee;
-            if (created) {
-              form.setFieldsValue({ staffEmployeeCode: created.employeeCode || created.code });
-            }
-          }).catch(() => message.error('Đã tạo nhân viên nhưng không tải lại được danh sách.'));
-        }}
-      />
 
       <Modal
         title={`Thêm loại phiếu ${activeVoucherType === 'Chi' ? 'chi' : 'thu'}`}

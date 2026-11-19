@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/modules/hr/RewardsModule.tsx', impor
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022, jsx: ts.JsxEmit.React } });
 const imports = {
   react: 'globalThis.__rewardsTest.react', '@ant-design/icons': 'globalThis.__rewardsTest.icons',
-  '../../components/KTable': 'globalThis.__rewardsTest.ui', '../../custom-ui': 'globalThis.__rewardsTest.ui',
+  '../../components/KTable': 'globalThis.__rewardsTest.ui', '../../custom-ui': 'globalThis.__rewardsTest.ui', './EmployeeSelect': 'globalThis.__rewardsTest.ui',
   '../../api/endpoints': 'globalThis.__rewardsTest.api', '../../services/dataService': 'globalThis.__rewardsTest.services', '../../utils/fileExporter': 'globalThis.__rewardsTest.exporter',
 };
 const executable = outputText.replace(/import\s+([^;]+?)\s+from\s+['"]([^'"]+)['"];?/g, (_, names, path) => {
@@ -51,7 +51,7 @@ test('rewards await approval and award, preserve failure state, show authoritati
     useState: initial => { const index = cursor++; if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; },
     useEffect: (callback, deps) => { const index = effectCursor++; if (!dependencies[index] || deps.some((value, i) => value !== dependencies[index][i])) { dependencies[index] = deps; effects.push(callback); } },
   };
-  const ui = Object.fromEntries(['KTable', 'Modal', 'Select', 'Button', 'Tag', 'Drawer'].map(name => [name, name]));
+  const ui = Object.fromEntries(['EmployeeSelect', 'KTable', 'Modal', 'Select', 'Button', 'Tag', 'Drawer'].map(name => [name, name]));
   ui.Input = Object.assign(function Input() {}, { TextArea: 'TextArea' });
   ui.Form = Object.assign(function Form() {}, { Item: 'FormItem', useForm: () => { const index = formCursor++; forms[index] ||= { values: {}, resetFields() { this.values = {}; }, setFieldsValue(values) { this.values = { ...this.values, ...values }; } }; return [forms[index]]; } });
   ui.message = Object.fromEntries(['success', 'warning', 'error'].map(level => [level, text => messages.push({ level, text })]));

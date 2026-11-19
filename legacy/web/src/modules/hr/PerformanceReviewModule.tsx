@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { EmployeeSelect } from './EmployeeSelect';
 
 import { useEffect } from 'react';
 import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
@@ -400,7 +401,7 @@ export const PerformanceReviewModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeId" label="Nhân sự được đánh giá" rules={[{ required: true }]}>
-              <Select options={employees.map(employee => ({ value: employee.id, label: `${employee.name} (${employee.employeeCode})` }))} onChange={value => { const employee = employees.find(item => item.id === value); if (employee) form.setFieldsValue({ department: employee.department, position: employee.position }); }} />
+              <EmployeeSelect valueKey="id" onChange={(_, employee) => { if (employee) form.setFieldsValue({ department: employee.department, position: employee.position }); }} />
             </Form.Item>
             <Form.Item name="position" label="Chức danh đảm nhiệm">
               {posOptions.length > 0 ? (
@@ -430,7 +431,7 @@ export const PerformanceReviewModule: React.FC = () => {
             <Form.Item name="innovationScore" label="Sáng tạo"><Input type="number" min={0} max={20} step={0.01} /></Form.Item>
           </div>
           <Form.Item name="evaluatorId" label="Người đánh giá" rules={[{ required: true }]}>
-            <Select options={employees.map(employee => ({ value: employee.id, label: `${employee.name} (${employee.employeeCode})` }))} />
+            <EmployeeSelect valueKey="id" />
           </Form.Item>
 
           <Form.Item name="managerComment" label="Nhận xét của Quản lý">

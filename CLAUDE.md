@@ -11,6 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Với chức năng chưa quen thuộc, không viết từ con số 0. Trước khi bắt tay làm, tìm các dự án mã nguồn mở tương tự trên GitHub, so sánh ý tưởng, mô hình dữ liệu và kiến trúc của chúng, chọn hướng phù hợp nhất rồi mới tùy biến theo kiến trúc sẵn có của dự án.
 - Giao diện: tiếng Việt, mọi ô nhập và nút cao 32px (không dùng `size="small"`), không chữ đậm, không `&` trong tiêu đề, không viền divider thừa trong dialog, dùng `Modal` chung với `title` (không tự thêm nút X). Chi tiết ở `docs/WEB_UI_GUIDELINES.md`.
 - Nút hoặc tính năng chưa rõ mục đích thì hỏi người dùng, không suy đoán.
+- Không dùng dữ liệu giả thay dữ liệu thật: bảng rỗng hiện trạng thái rỗng, không chèn nhân viên hay bản ghi mẫu. Yêu cầu này của người dùng thay thế quy tắc "dữ liệu mẫu dự phòng" cũ trong `AGENTS.md`.
+- Ô chọn nhân viên dùng `legacy/web/src/modules/hr/EmployeeSelect.tsx` (dữ liệu thật, nút "+" cho quản trị viên tạo nhân viên ngay tại chỗ). Không viết lại `Select` nhân viên riêng ở từng module. Các module chưa chuyển: `AssetAllocation`, `AssetMaintenance`, `LeaveSummary`, `LeavePlans`, `LeaveRequests`, `Overtime`, `AttendanceAlerts`, `ShiftAssignment`, `ShiftDetail`, `ShiftSummary`, `TimesheetSummary`, `BusinessTravel`, `CustomerFeedback`, `EmployeeHistory`, `Onboarding`, `WorkflowSettings`.
+- File trong working tree có CRLF lẫn LF: dùng `git diff --ignore-cr-at-eol` để xem thay đổi thật, và chuyển file sang LF (`sed -i 's/\r$//'`) trước khi `git add` để commit không bị nhiễu.
 
 ## Skill luôn dùng
 

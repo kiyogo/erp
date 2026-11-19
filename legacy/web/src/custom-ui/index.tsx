@@ -1414,6 +1414,9 @@ interface SelectProps {
   allowClear?: boolean;
   showSearch?: boolean;
   filterOption?: any;
+  /** Giữ để tương thích mã gọi cũ: ô tìm kiếm luôn lọc theo nhãn và giá trị. */
+  optionFilterProp?: string;
+  'aria-label'?: string;
   className?: string;
   size?: 'small' | 'middle' | 'large';
 }
@@ -1430,6 +1433,7 @@ export const Select: React.FC<SelectProps> = ({
   showSearch,
   allowClear,
   filterOption,
+  'aria-label': ariaLabel,
   className = '',
   size = 'middle',
 }) => {
@@ -1630,6 +1634,7 @@ export const Select: React.FC<SelectProps> = ({
   return (
     <div
       ref={containerRef}
+      aria-label={ariaLabel}
       className={`ant-select ${open ? 'ant-select-open ant-select-focused' : ''} ${disabled ? 'ant-select-disabled' : ''} ${isMultiple ? 'ant-select-multiple' : ''} ${className}`}
       style={{ ...style, position: 'relative', width: style?.width || '100%' }}
       onClick={() => {
