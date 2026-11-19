@@ -24,6 +24,7 @@ import {
   GlobalOutlined,
 } from '@ant-design/icons';
 import { Modal, Form, Input, Button, Select, message, Tag, Drawer, Radio } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { KTable } from '../../components/KTable';
 import { collectionsApi } from '../../api/endpoints';
 
@@ -271,7 +272,7 @@ export const EnterpriseServicesModule: React.FC = () => {
             <Radio.Button value="table"><BarsOutlined /> Bảng</Radio.Button>
           </Radio.Group>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã chuẩn bị báo cáo dịch vụ từ dữ liệu hiện có.')} disabled={!services.length}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredServices.length) { message.warning('Không có dịch vụ để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_dich_vu', [{ title: 'Mã dịch vụ', dataIndex: 'code' }, { title: 'Tên dịch vụ', dataIndex: 'name' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Mô tả', dataIndex: 'description' }, { title: 'Cam kết SLA', dataIndex: 'slaTarget' }, { title: 'Giá mỗi tháng', dataIndex: 'priceMonthly' }, { title: 'Hợp đồng đang chạy', dataIndex: 'activeContracts' }, { title: 'Trạng thái', dataIndex: 'status' }, { title: 'Tính năng', dataIndex: 'features' }], filteredServices); message.success(`Đã xuất ${count} dịch vụ ra tệp Excel.`); }} disabled={!services.length}>
             Xuất Báo Cáo
           </Button>
         </div>

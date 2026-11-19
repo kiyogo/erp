@@ -13,6 +13,7 @@ import {
   FileTextOutlined,
 } from '@ant-design/icons';
 import { Button, Input, message, Tag, Card, Tooltip, Progress, Form, Select } from '../../custom-ui';
+import { exportRecordToPdf } from '../../utils/fileExporter';
 import { dataService } from '../../services/dataService';
 
 export const AccountSettingsModule: React.FC = () => {
@@ -109,7 +110,7 @@ export const AccountSettingsModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8 }}>
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => message.success('Đã in hồ sơ trích lục cán bộ nhân sự (A4)')}
+            onClick={() => exportRecordToPdf('Ho_so_can_bo', 'HO SO CAN BO NHAN SU', [['Họ và tên', name], ['Email', email], ['Điện thoại', phone], ['Đơn vị', department], ['Chức danh', position]])}
           >
             In Hồ Sơ Cán Bộ (A4)
           </Button>
@@ -195,7 +196,7 @@ export const AccountSettingsModule: React.FC = () => {
                 <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Chính sách đổi mật khẩu định kỳ</div>
                 <div style={{ fontSize: 12, color: '#64748B' }}>Đã đổi mật khẩu 14 ngày trước · Còn 76 ngày cho chu kỳ tiếp theo</div>
               </div>
-              <Button size="small" onClick={() => message.info('Vui lòng vào tab Bảo Mật để đổi mật khẩu')}>Đổi ngay</Button>
+              <Button size="small" onClick={() => setActiveTab('security')}>Đổi ngay</Button>
             </div>
           </div>
         )}

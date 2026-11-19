@@ -27,6 +27,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { EmployeeQuickFormFields } from './EmployeeQuickCreateDialog';
 import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Progress, Card, Tooltip, Dropdown } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { EnterpriseEmployee, employeesApi, systemApi, collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 
@@ -768,7 +769,7 @@ export const EmployeesModule: React.FC = () => {
             ]}
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách nhân sự ra file Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có nhân sự để xuất.'); return; } const count = exportRowsToXlsx('Danh_sach_nhan_su', [{ title: 'Mã nhân viên', dataIndex: 'employeeCode' }, { title: 'Họ và tên', dataIndex: 'name' }, { title: 'Email', dataIndex: 'email' }, { title: 'Điện thoại', dataIndex: 'phone' }, { title: 'Đơn vị', dataIndex: 'department' }, { title: 'Chức danh', dataIndex: 'position' }, { title: 'Trạng thái', dataIndex: 'status' }, { title: 'Ngày vào làm', dataIndex: 'joinDate' }], filteredData); message.success(`Đã xuất ${count} nhân sự ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
 

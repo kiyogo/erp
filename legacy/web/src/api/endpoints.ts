@@ -1216,6 +1216,7 @@ export type PayrollCalculationRow = {
   employeeCode: string; employeeName: string; department: string; period: string;
   gross: number; baseSalary: number; allowance: number; bonus: number; dependents: number; taxableIncome: number;
   insuranceDeduction: number; taxDeduction: number; netSalary: number;
+  employeeInsurance: { social: number; health: number; unemployment: number; total: number };
   employerInsurance: { social: number; health: number; unemployment: number; total: number };
   warnings: string[];
 };

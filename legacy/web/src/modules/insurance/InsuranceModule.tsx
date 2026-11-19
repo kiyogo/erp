@@ -24,6 +24,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Card, Button, Input, Select, Tag, Modal, Form, message, Drawer, Progress, Alert } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { collectionsApi, contractsApi, employeesApi, type ContractPayload, type EnterpriseEmployee } from '../../api/endpoints';
 import { dataService, type PayrollRecord } from '../../services/dataService';
 
@@ -186,15 +187,19 @@ export const InsuranceModule: React.FC = () => {
         const computedContributions = Array.from(payrollMap.entries())
           .map(([period, rows]) => {
             const totalSalaryFund = rows.reduce((sum, row) => sum + Number(row.baseSalary || 0), 0);
-            const totalPayable = Math.round(totalSalaryFund * TOTAL_INSURANCE_RATE);
+            // Phiếu lương do hệ thống tính đã có số bảo hiểm theo trần đóng; dùng số đó thay vì nhân tỷ lệ với toàn bộ lương.
+            const stored = ['employerSocial', 'employerHealth', 'employerUnemployment', 'employeeSocial', 'employeeHealth', 'employeeUnemployment'];
+            const hasStored = rows.length > 0 && rows.every((row: any) => stored.every((field) => Number.isSafeInteger(row[field])));
+            const storedSum = (...fields: string[]) => rows.reduce((sum, row: any) => sum + fields.reduce((inner, field) => inner + row[field], 0), 0);
+            const totalPayable = hasStored ? storedSum(...stored) : Math.round(totalSalaryFund * TOTAL_INSURANCE_RATE);
             const paidAmount = rows.every((row) => row.status === 'Đã chi trả') ? totalPayable : 0;
             return {
               period,
               headcount: rows.length,
               totalSalaryFund,
-              socialInsAmt: Math.round(totalSalaryFund * BHXH_RATE),
-              healthInsAmt: Math.round(totalSalaryFund * BHYT_RATE),
-              unempInsAmt: Math.round(totalSalaryFund * BHTN_RATE),
+              socialInsAmt: hasStored ? storedSum('employerSocial', 'employeeSocial') : Math.round(totalSalaryFund * BHXH_RATE),
+              healthInsAmt: hasStored ? storedSum('employerHealth', 'employeeHealth') : Math.round(totalSalaryFund * BHYT_RATE),
+              unempInsAmt: hasStored ? storedSum('employerUnemployment', 'employeeUnemployment') : Math.round(totalSalaryFund * BHTN_RATE),
               totalPayable,
               paidAmount,
               balanceOwed: Math.max(0, totalPayable - paidAmount),
@@ -400,7 +405,7 @@ export const InsuranceModule: React.FC = () => {
             <Button
               type="primary"
               icon={<DownloadOutlined />}
-              onClick={() => message.success('Đã xuất báo cáo tổng hợp đóng BHXH!')}
+              onClick={() => { if (!contributions.length) { message.warning('Không có kỳ đóng để xuất.'); return; } const count = exportRowsToXlsx('Tong_hop_dong_BHXH', [{ title: 'Kỳ', dataIndex: 'period' }, { title: 'Số lao động', dataIndex: 'headcount' }, { title: 'Quỹ lương đóng', dataIndex: 'totalSalaryFund' }, { title: 'BHXH', dataIndex: 'socialInsAmt' }, { title: 'BHYT', dataIndex: 'healthInsAmt' }, { title: 'BHTN', dataIndex: 'unempInsAmt' }, { title: 'Tổng phải nộp', dataIndex: 'totalPayable' }, { title: 'Đã nộp', dataIndex: 'paidAmount' }, { title: 'Còn nợ', dataIndex: 'balanceOwed' }, { title: 'Đối soát', dataIndex: 'c12Status' }], contributions); message.success(`Đã xuất ${count} kỳ đóng ra tệp Excel.`); }}
               style={{ backgroundColor: '#009688', borderColor: '#009688', marginTop: 14 }}
               disabled={!hasContributionData}
             >
@@ -966,7 +971,7 @@ export const InsuranceModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất trích lục sổ BHXH của ${selectedLabor.fullName}`)}
+                onClick={() => exportRecordToPdf(`Tom_tat_BHXH_${selectedLabor.empCode}`, `TOM TAT THAM GIA BAO HIEM ${selectedLabor.empCode}`, [['Họ và tên', selectedLabor.fullName], ['Phòng ban', selectedLabor.dept], ['Chức danh', selectedLabor.position], ['Số sổ BHXH', selectedLabor.socialInsNumber], ['Số thẻ BHYT', selectedLabor.healthInsNumber], ['Mức lương đóng', selectedLabor.salaryBase], ['Tỷ lệ người lao động', `${selectedLabor.empRatio}%`], ['Tỷ lệ doanh nghiệp', `${selectedLabor.compRatio}%`], ['Nơi khám chữa bệnh', selectedLabor.hospitalClinic], ['Ngày tham gia', selectedLabor.startDate], ['Trạng thái', selectedLabor.status]])}
                 style={{ flex: 1 }}
               >
                 In Tờ Rời BHXH
@@ -974,7 +979,7 @@ export const InsuranceModule: React.FC = () => {
               <Button
                 type="primary"
                 icon={<CloudSyncOutlined />}
-                onClick={() => message.success(`Đã cập nhật dữ liệu từ VssID cho ${selectedLabor.fullName}`)}
+                disabled title="Hệ thống chưa kết nối cổng VssID nên chưa tra cứu tự động được."
                 style={{ backgroundColor: '#009688', borderColor: '#009688', flex: 1 }}
               >
                 Tra cứu quá trình VssID

@@ -18,6 +18,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseShareholder {
   key: string;
@@ -264,7 +265,7 @@ export const EquityModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ cổ đông ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có cổ đông để xuất.'); return; } const count = exportRowsToXlsx('So_co_dong', [{ title: 'Mã cổ đông', dataIndex: 'shareholderCode' }, { title: 'Họ và tên', dataIndex: 'fullName' }, { title: 'Số định danh', dataIndex: 'idNumber' }, { title: 'Địa chỉ', dataIndex: 'address' }, { title: 'Loại', dataIndex: 'type' }, { title: 'Số cổ phần', dataIndex: 'sharesCount' }, { title: 'Tỷ lệ sở hữu (%)', dataIndex: 'ownershipPercentage' }, { title: 'Giá trị vốn góp', dataIndex: 'capitalValue' }, { title: 'Cổ tức đã nhận', dataIndex: 'paidDividends' }, { title: 'Cổ tức đợt tới', dataIndex: 'pendingDividend' }, { title: 'Ngày tham gia', dataIndex: 'joinDate' }, { title: 'Số sổ cổ đông', dataIndex: 'certificateNumber' }], filteredData); message.success(`Đã xuất ${count} cổ đông ra tệp Excel.`); }}>
             Xuất Sổ Cổ Đông
           </Button>
 
@@ -407,7 +408,7 @@ export const EquityModule: React.FC = () => {
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               icon={<PrinterOutlined />}
-              onClick={() => message.success(`Đã in Giấy chứng nhận sở hữu cổ phần cho ${selectedShareholder.fullName}`)}
+              onClick={() => exportRecordToPdf(`Giay_chung_nhan_co_phan_${selectedShareholder.shareholderCode}`, `GIAY CHUNG NHAN SO HUU CO PHAN ${selectedShareholder.certificateNumber}`, [['Cổ đông', selectedShareholder.fullName], ['Số định danh', selectedShareholder.idNumber], ['Địa chỉ', selectedShareholder.address], ['Loại cổ đông', selectedShareholder.type], ['Số cổ phần', selectedShareholder.sharesCount], ['Tỷ lệ sở hữu', `${selectedShareholder.ownershipPercentage}%`], ['Giá trị vốn góp', selectedShareholder.capitalValue], ['Ngày tham gia', selectedShareholder.joinDate]])}
             >
               In Giấy Chứng Nhận Cổ Phần (Mẫu A4)
             </Button>

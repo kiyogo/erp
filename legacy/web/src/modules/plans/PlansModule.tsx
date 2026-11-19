@@ -16,9 +16,12 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { useNavigate } from 'react-router-dom';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { dataService, PlanItem } from '../../services/dataService';
 
 export const PlansModule: React.FC = () => {
+  const navigate = useNavigate();
   const [data, setData] = useState<PlanItem[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<{ label: string; value: string }[]>([]);
   const [searchText, setSearchText] = useState('');
@@ -243,7 +246,7 @@ export const PlansModule: React.FC = () => {
             Làm mới
           </Button>
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục kế hoạch ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có kế hoạch để xuất.'); return; } const count = exportRowsToXlsx('Danh_muc_ke_hoach', [{ title: 'Mã kế hoạch', dataIndex: 'code' }, { title: 'Tên kế hoạch', dataIndex: 'title' }, { title: 'Người phụ trách', dataIndex: 'manager' }, { title: 'Phòng ban', dataIndex: 'department' }, { title: 'Bắt đầu', dataIndex: 'startDate' }, { title: 'Kết thúc', dataIndex: 'endDate' }, { title: 'Tiến độ (%)', dataIndex: 'progress' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} kế hoạch ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
 
@@ -360,13 +363,13 @@ export const PlansModule: React.FC = () => {
               <Button
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đang mở danh sách nhiệm vụ con của kế hoạch ${selectedPlan.code}`)}
+                onClick={() => navigate('/admin/tasks')}
               >
                 Xem Nhiệm Vụ Con
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in bản kế hoạch dự án ${selectedPlan.code}`)}
+                onClick={() => exportRecordToPdf(`Ke_hoach_${selectedPlan.code}`, `KE HOACH ${selectedPlan.code}`, [['Tên kế hoạch', selectedPlan.title], ['Người phụ trách', selectedPlan.manager], ['Phòng ban', selectedPlan.department], ['Bắt đầu', selectedPlan.startDate], ['Kết thúc', selectedPlan.endDate], ['Tiến độ', `${selectedPlan.progress}%`], ['Trạng thái', selectedPlan.status]])}
               >
                 In Kế Hoạch (A4)
               </Button>

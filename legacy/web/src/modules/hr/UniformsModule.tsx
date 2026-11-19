@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 
@@ -524,7 +525,7 @@ export const UniformsModule: React.FC = () => {
 
           <Button
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất danh sách cấp phát đồng phục')}
+            onClick={() => { if (!filteredData.length) { message.warning('Không có phiếu cấp phát để xuất.'); return; } const count = exportRowsToXlsx('Cap_phat_dong_phuc', [{ title: 'Mã phiếu', dataIndex: 'code' }, { title: 'Nhân viên', dataIndex: 'employeeName' }, { title: 'Mã nhân viên', dataIndex: 'empCode' }, { title: 'Phòng ban', dataIndex: 'department' }, { title: 'Loại đồng phục', dataIndex: 'itemType' }, { title: 'Kích cỡ', dataIndex: 'size' }, { title: 'Số lượng', dataIndex: 'quantity' }, { title: 'Ngày đề nghị', dataIndex: 'requestDate' }, { title: 'Ngày giao', dataIndex: 'deliveryDate' }, { title: 'Đợt', dataIndex: 'batchName' }, { title: 'Trạng thái', dataIndex: 'status' }, { title: 'Ghi chú', dataIndex: 'note' }], filteredData); message.success(`Đã xuất ${count} phiếu cấp phát ra tệp Excel.`); }}
             style={{ height: 32 }}
           >
             Xuất Excel

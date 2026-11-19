@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Button, Input, message } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { dataService, AuditLog } from '../../services/dataService';
 
 export const LogsSettingsModule: React.FC = () => {
@@ -97,7 +98,7 @@ export const LogsSettingsModule: React.FC = () => {
           <Button icon={<ReloadOutlined />} onClick={loadData}>
           Làm mới
         </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất toàn bộ nhật ký hệ thống ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!data.length) { message.warning('Không có bản ghi nhật ký để xuất.'); return; } const count = exportRowsToXlsx('Nhat_ky_he_thong', [{ title: 'Thời gian', dataIndex: 'timestamp' }, { title: 'Người dùng', dataIndex: 'user' }, { title: 'Vai trò', dataIndex: 'role' }, { title: 'Hành động', dataIndex: 'action' }, { title: 'Phân hệ', dataIndex: 'module' }, { title: 'Chi tiết', dataIndex: 'detail' }, { title: 'Mã đối tượng', dataIndex: 'resourceId' }], data); message.success(`Đã xuất ${count} bản ghi nhật ký ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
         </div>

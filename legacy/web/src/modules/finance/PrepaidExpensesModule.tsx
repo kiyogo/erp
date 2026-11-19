@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterprisePrepaidExpense {
   key: string;
@@ -266,7 +267,7 @@ export const PrepaidExpensesModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ chi phí trả trước ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có khoản chi phí để xuất.'); return; } const count = exportRowsToXlsx('So_chi_phi_tra_truoc', [{ title: 'Mã', dataIndex: 'code' }, { title: 'Tên khoản', dataIndex: 'name' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Tổng chi phí', dataIndex: 'totalAmount' }, { title: 'Số kỳ phân bổ', dataIndex: 'allocationMonths' }, { title: 'Phân bổ mỗi tháng', dataIndex: 'monthlyAmount' }, { title: 'Đã phân bổ', dataIndex: 'allocatedAmount' }, { title: 'Còn lại', dataIndex: 'remainingAmount' }, { title: 'Bộ phận', dataIndex: 'department' }, { title: 'Bắt đầu phân bổ', dataIndex: 'startDate' }, { title: 'Tài khoản', dataIndex: 'accountCode' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} khoản chi phí ra tệp Excel.`); }}>
             Xuất Sổ CPTT
           </Button>
 
@@ -427,7 +428,7 @@ export const PrepaidExpensesModule: React.FC = () => {
             <Button
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-              onClick={() => message.success(`Đã xuất sổ chi tiết phân bổ TK 242 của ${selectedExpense.code}`)}
+              onClick={() => exportRecordToPdf(`So_chi_tiet_phan_bo_${selectedExpense.code}`, `SO CHI TIET PHAN BO ${selectedExpense.code}`, [['Tên khoản', selectedExpense.name], ['Nhóm', selectedExpense.category], ['Tài khoản', selectedExpense.accountCode], ['Bộ phận', selectedExpense.department], ['Bắt đầu phân bổ', selectedExpense.startDate], ['Tổng chi phí', selectedExpense.totalAmount], ['Số kỳ phân bổ', selectedExpense.allocationMonths], ['Phân bổ mỗi tháng', selectedExpense.monthlyAmount], ['Đã phân bổ lũy kế', selectedExpense.allocatedAmount], ['Còn lại', selectedExpense.remainingAmount], ['Trạng thái', selectedExpense.status]])}
             >
               Xuất Sổ Chi Tiết TK 242
             </Button>

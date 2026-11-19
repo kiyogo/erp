@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseSLACommitment {
   key: string;
@@ -250,7 +251,7 @@ export const SLAModule: React.FC = () => {
             style={{ width: 280 }}
             allowClear
           />
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo kiểm toán SLA Uptime')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có cam kết SLA để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_SLA', [{ title: 'Mã SLA', dataIndex: 'slaCode' }, { title: 'Dịch vụ', dataIndex: 'serviceName' }, { title: 'Hạng khách hàng', dataIndex: 'clientTier' }, { title: 'Uptime cam kết (%)', dataIndex: 'uptimeTarget' }, { title: 'Uptime thực tế (%)', dataIndex: 'actualUptime' }, { title: 'Thời gian phản hồi cam kết', dataIndex: 'responseTimeTarget' }, { title: 'MTTR cam kết', dataIndex: 'mttrTarget' }, { title: 'MTTR thực tế', dataIndex: 'actualMttr' }, { title: 'Sự cố 30 ngày', dataIndex: 'incidentCount30Days' }, { title: 'Điều khoản bồi thường', dataIndex: 'penaltyClause' }, { title: 'Số tiền bồi thường', dataIndex: 'compensationAmount' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} cam kết SLA ra tệp Excel.`); }}>
             Xuất Báo Cáo
           </Button>
           <Button

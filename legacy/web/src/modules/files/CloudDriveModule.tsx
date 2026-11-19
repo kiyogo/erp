@@ -24,6 +24,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { exportRecordToPdf } from '../../utils/fileExporter';
 import { formatFileSize } from '../../utils/fileStorage';
 import { filesApi } from '../../api/endpoints';
 
@@ -434,7 +435,7 @@ export const CloudDriveModule: React.FC = () => {
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in biên bản bàn giao tệp ${selectedFile.fileName}`)}
+                onClick={() => exportRecordToPdf(`Bien_ban_du_lieu_${selectedFile.fileName}`, `BIEN BAN DU LIEU ${selectedFile.fileName}`, [['Tên tệp', selectedFile.fileName], ['Loại', selectedFile.fileType], ['Dung lượng', selectedFile.fileSize], ['Thư mục', selectedFile.folder], ['Mã hóa', selectedFile.encryption], ['Mức truy cập', selectedFile.accessLevel], ['Người tải lên', selectedFile.uploadedBy], ['Sửa đổi lần cuối', selectedFile.modifiedDate], ['SHA-256', selectedFile.sha256Hash]])}
               >
                 In Biên Bản Dữ Liệu (A4)
               </Button>

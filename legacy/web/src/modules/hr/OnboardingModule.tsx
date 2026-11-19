@@ -1349,7 +1349,7 @@ export const OnboardingModule: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <button
                 type="button"
-                onClick={() => message.info('Chọn ứng dụng và hành động thực hiện trong hệ thống')}
+                disabled title="Chưa có danh mục ứng dụng và hành động để chọn."
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -1378,7 +1378,7 @@ export const OnboardingModule: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   type="button"
-                  onClick={() => message.info('Tính năng tải file đính kèm')}
+                  disabled title="Chưa hỗ trợ đính kèm tệp cho công việc hội nhập."
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',

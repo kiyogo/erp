@@ -1302,7 +1302,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             <Button
               type="primary"
               icon={<SafetyCertificateOutlined />}
-              onClick={() => message.info('Yêu cầu xác thực danh tính eKYC mới đã được gửi tới ứng dụng nhân sự.')}
+              disabled title="Chưa có quy trình gửi yêu cầu eKYC tới ứng dụng nhân sự."
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
             >
               Gửi yêu cầu eKYC mới

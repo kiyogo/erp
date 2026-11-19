@@ -23,7 +23,7 @@ import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Radio, Upload, Checkbox } from '../../custom-ui';
 import { ContractTemplate, dataService } from '../../services/dataService';
 import { contractsApi, filesApi } from '../../api/endpoints';
-import { downloadFile } from '../../utils/fileExporter';
+import { downloadFile, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseContractItem {
   key: string;
@@ -990,7 +990,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
             ]}
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh sách hợp đồng ra file Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có hợp đồng để xuất.'); return; } const count = exportRowsToXlsx('Danh_sach_hop_dong', [{ title: 'Số hợp đồng', dataIndex: 'code' }, { title: 'Tên hợp đồng', dataIndex: 'name' }, { title: 'Loại', dataIndex: 'contractCategory' }, { title: 'Mẫu hợp đồng', dataIndex: 'contractTemplate' }, { title: 'Bên B', dataIndex: 'partyBName' }, { title: 'Bắt đầu', dataIndex: 'startDate' }, { title: 'Kết thúc', dataIndex: 'endDate' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} hợp đồng ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
 

@@ -90,3 +90,19 @@ test('từ chối kỳ, vùng không hợp lệ và yêu cầu mã PIN', async (
   await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'X' }, 422);
   await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I' }, 428, { 'X-Security-Pin': '' });
 });
+
+test('phiếu lương lưu kèm số bảo hiểm tính được và đọc lại đúng', async () => {
+  const calculated = await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', employeeCodes: ['PAY-1'] });
+  const row = calculated.rows[0];
+  const record = {
+    key: 'payroll-2026-03-pay-1', employeeCode: row.employeeCode, employeeName: row.employeeName, department: row.department, month: '2026-03', status: 'Chưa chi trả', workDays: 0,
+    baseSalary: row.baseSalary, allowance: row.allowance, bonus: row.bonus, insuranceDeduction: row.insuranceDeduction, taxDeduction: row.taxDeduction, netSalary: row.netSalary,
+    employeeSocial: row.employeeInsurance.social, employeeHealth: row.employeeInsurance.health, employeeUnemployment: row.employeeInsurance.unemployment,
+    employerSocial: row.employerInsurance.social, employerHealth: row.employerInsurance.health, employerUnemployment: row.employerInsurance.unemployment,
+  };
+  const created = (await request('/collections/payroll', 'POST', { record }, 201)).record;
+  assert.equal(created.employerHealth, row.employerInsurance.health);
+  assert.equal(created.employeeSocial + created.employeeHealth + created.employeeUnemployment, created.insuranceDeduction);
+  const listed = (await request('/collections/payroll?limit=50')).data.find(item => item.key === record.key);
+  assert.equal(listed.employerSocial, row.employerInsurance.social);
+});

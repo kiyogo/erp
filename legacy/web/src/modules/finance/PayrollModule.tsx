@@ -152,6 +152,16 @@ export const PayrollModule: React.FC = () => {
 
   const periodData = filterPayrollForMonth(data, selectedMonth);
   const calcPeriod = `${selectedMonth.slice(3)}-${selectedMonth.slice(0, 2)}`;
+  // Điền sẵn các khoản bảo hiểm của kỳ khi toàn bộ phiếu lương đều có số liệu do hệ thống tính; chỉ điền ô còn trống.
+  useEffect(() => {
+    const fields = ['employerSocial', 'employerHealth', 'employerUnemployment', 'employeeSocial', 'employeeHealth', 'employeeUnemployment'] as const;
+    if (!periodData.length || !periodData.every((record: any) => fields.every((field) => Number.isSafeInteger(record[field])))) return;
+    const sum = (field: (typeof fields)[number]) => String(periodData.reduce((total, record: any) => total + record[field], 0));
+    setInsuranceBreakdown((current) => (Object.values(current).every((value) => value === '')
+      ? { employerSocial: sum('employerSocial'), employerHealth: sum('employerHealth'), employerUnemployment: sum('employerUnemployment'), employeeSocial: sum('employeeSocial'), employeeHealth: sum('employeeHealth'), employeeUnemployment: sum('employeeUnemployment') }
+      : current));
+    setEmployerCharge((current) => (current === '' ? String(Number(sum('employerSocial')) + Number(sum('employerHealth')) + Number(sum('employerUnemployment'))) : current));
+  }, [data, selectedMonth]);
   const existingCodes = new Set(periodData.map((record) => String(record.employeeCode).toLowerCase()));
   const calcNewRows = (calcResult?.rows || []).filter((row) => !existingCodes.has(row.employeeCode.toLowerCase()));
   const runCalculation = async () => {
@@ -178,6 +188,9 @@ export const PayrollModule: React.FC = () => {
           month: calcPeriod, status: 'Chưa chi trả', workDays: 0,
           baseSalary: row.baseSalary, allowance: row.allowance, bonus: row.bonus,
           insuranceDeduction: row.insuranceDeduction, taxDeduction: row.taxDeduction, netSalary: row.netSalary,
+          employeeSocial: row.employeeInsurance.social, employeeHealth: row.employeeInsurance.health, employeeUnemployment: row.employeeInsurance.unemployment,
+          employerSocial: row.employerInsurance.social, employerHealth: row.employerInsurance.health, employerUnemployment: row.employerInsurance.unemployment,
+          dependents: row.dependents, taxableIncome: row.taxableIncome,
         });
         created += 1;
       }
