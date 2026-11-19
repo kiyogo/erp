@@ -1,271 +1,176 @@
-import React, { useState } from 'react';
-import {
-  SaveOutlined,
-  CheckOutlined,
-  ReloadOutlined,
-  SafetyCertificateOutlined,
-  PrinterOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  EyeOutlined,
-  ThunderboltOutlined,
-  AppstoreOutlined,
-} from '@ant-design/icons';
-import { KTable } from '../../components/KTable';
-import { Button, Select, message, Tag, Card, Tooltip } from '../../custom-ui';
-
-export interface ModulePermissionRow {
-  key: string;
-  module: string;
-  category: string;
-  read: boolean;
-  create: boolean;
-  edit: boolean;
-  delete: boolean;
-  approve: boolean;
-  exportData: boolean;
-}
-
-const DEFAULT_PERMISSIONS: ModulePermissionRow[] = [
-  { key: '1', module: 'Bảng điều khiển & Giám sát', category: 'Tổng quan', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '2', module: 'Nhân sự, Hồ sơ & Hợp đồng', category: 'Vận hành', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '3', module: 'Tài chính, Thu chi & Dòng tiền', category: 'Tài chính', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '4', module: 'Bảo hiểm xã hội & Chế độ phúc lợi', category: 'Nhân sự', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '5', module: 'Tài sản cố định & Kho linh kiện', category: 'Kho vận', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '6', module: 'Quy trình trình ký điện tử', category: 'Văn thư', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '7', module: 'Văn thư & Chữ ký số HSM', category: 'Pháp lý', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '8', module: 'Kế hoạch chiến lược & Nhiệm vụ', category: 'Kế hoạch', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-  { key: '9', module: 'Quản trị hệ thống & Kiểm toán số', category: 'Hạ tầng', read: true, create: true, edit: true, delete: true, approve: true, exportData: true },
-];
-
-import { useEffect } from 'react';
-import { dataService } from '../../services/dataService';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { SaveOutlined, PrinterOutlined } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
+import { KTable } from '../../components/KTable';
+import { Button, Checkbox, Select, Tag, message } from '../../custom-ui';
+import { adminRolesApi, AdminRoleRecord, AdminRolesOverview } from '../../api/endpoints';
 import { exportRecordToPdf } from '../../utils/fileExporter';
+import { ROLE_ACTIONS, RoleAction } from './delegatedAccess';
+
+type Matrix = Record<string, Record<RoleAction, boolean>>;
+
+const EMPTY_OVERVIEW: AdminRolesOverview = { modules: [], actions: [], roles: [] };
+const cardStyle: React.CSSProperties = { background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' };
+
+const matrixFromRole = (role: AdminRoleRecord | undefined, modules: AdminRolesOverview['modules']): Matrix =>
+  Object.fromEntries(modules.map(({ key }) => [key, Object.fromEntries(ROLE_ACTIONS.map(({ key: action }) => [action, Boolean(role?.permissions[key]?.[action])]))])) as Matrix;
+
+/** Cùng quy tắc với máy chủ: thêm, sửa, xóa đều kéo theo quyền xem, và bỏ quyền xem thì bỏ luôn các quyền còn lại. */
+const toggleAction = (row: Record<RoleAction, boolean>, action: RoleAction, checked: boolean): Record<RoleAction, boolean> => {
+  if (action === 'read') return checked ? { ...row, read: true } : { read: false, create: false, edit: false, delete: false };
+  return { ...row, [action]: checked, read: checked ? true : row.read };
+};
 
 export const AdminPermissionsModule: React.FC = () => {
   const location = useLocation();
-  const [selectedRole, setSelectedRole] = useState<string>(() => String((location.state as { role?: string } | null)?.role || 'ROLE_SUPER_ADMIN'));
-  const [permissions, setPermissions] = useState<ModulePermissionRow[]>(DEFAULT_PERMISSIONS);
+  const requestedRole = String((location.state as { role?: string } | null)?.role || '');
+  const [overview, setOverview] = useState<AdminRolesOverview>(EMPTY_OVERVIEW);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [selectedCode, setSelectedCode] = useState(requestedRole);
+  const [matrix, setMatrix] = useState<Matrix>({});
+  const [dirty, setDirty] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await adminRolesApi.overview();
+      setOverview(response.data);
+      setSelectedCode((current) => {
+        const roles = response.data.roles;
+        if (current && roles.some((role) => role.roleCode === current)) return current;
+        return (roles.find((role) => !role.system) || roles[0])?.roleCode || '';
+      });
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được danh mục vai trò.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const role = overview.roles.find((item) => item.roleCode === selectedCode);
+  const editable = Boolean(role && !role.system);
 
   useEffect(() => {
-    const saved = dataService.getGenericData('admin_permissions_' + selectedRole);
-    if (Array.isArray(saved) && saved.length > 0) {
-      setPermissions(saved);
-    } else {
-      setPermissions(DEFAULT_PERMISSIONS);
+    setMatrix(matrixFromRole(role, overview.modules));
+    setDirty(false);
+  }, [role, overview.modules]);
+
+  const change = (moduleKey: string, action: RoleAction, checked: boolean) => {
+    setMatrix((current) => ({ ...current, [moduleKey]: toggleAction(current[moduleKey], action, checked) }));
+    setDirty(true);
+  };
+
+  const setWholeRow = (moduleKey: string, checked: boolean) => {
+    setMatrix((current) => ({ ...current, [moduleKey]: Object.fromEntries(ROLE_ACTIONS.map(({ key }) => [key, checked])) as Record<RoleAction, boolean> }));
+    setDirty(true);
+  };
+
+  const applyAll = (grant: (action: RoleAction) => boolean) => {
+    setMatrix(Object.fromEntries(overview.modules.map(({ key }) => [key, Object.fromEntries(ROLE_ACTIONS.map(({ key: action }) => [action, grant(action)]))])) as Matrix);
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    if (!role || !editable || saving) return;
+    setSaving(true);
+    try {
+      await adminRolesApi.update(role.roleCode, { permissions: matrix });
+      message.success(`Đã lưu ma trận quyền của vai trò ${role.roleCode}. Máy chủ áp dụng ngay cho các tài khoản đang giữ vai trò.`);
+      await load();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được ma trận quyền.');
+    } finally {
+      setSaving(false);
     }
-  }, [selectedRole]);
-
-  const handleToggle = (key: string, field: keyof ModulePermissionRow) => {
-    setPermissions((prev) =>
-      prev.map((p) => (p.key === key ? { ...p, [field]: !p[field] } : p))
-    );
   };
 
-  const handleGrantAll = () => {
-    setPermissions((prev) =>
-      prev.map((p) => ({
-        ...p,
-        read: true,
-        create: true,
-        edit: true,
-        delete: true,
-        approve: true,
-        exportData: true,
-      }))
-    );
-    message.success('Đã cấp toàn bộ đặc quyền cho vai trò hiện tại!');
-  };
-
-  const handleReadOnly = () => {
-    setPermissions((prev) =>
-      prev.map((p) => ({
-        ...p,
-        read: true,
-        create: false,
-        edit: false,
-        delete: false,
-        approve: false,
-        exportData: true,
-      }))
-    );
-    message.info('Đã chuyển vai trò về chế độ Chỉ Xem & Xuất báo cáo!');
-  };
-
-  const handleSave = () => {
-    dataService.saveGenericData('admin_permissions_' + selectedRole, permissions);
-    message.success(`Đã lưu và đồng bộ ma trận phân quyền cho vai trò [${selectedRole}] thành công!`);
-  };
-
-  const totalPermissionsChecked = permissions.reduce(
-    (acc, p) =>
-      acc +
-      (p.read ? 1 : 0) +
-      (p.create ? 1 : 0) +
-      (p.edit ? 1 : 0) +
-      (p.delete ? 1 : 0) +
-      (p.approve ? 1 : 0) +
-      (p.exportData ? 1 : 0),
-    0
-  );
-
-  const renderCheckbox = (record: ModulePermissionRow, field: keyof ModulePermissionRow) => {
-    const isChecked = !!record[field];
-    return (
-      <input
-        type="checkbox"
-        checked={isChecked}
-        onChange={() => handleToggle(record.key, field)}
-        style={{ cursor: 'pointer', accentColor: '#009688', width: 16, height: 16 }}
-      />
-    );
-  };
+  const rows = useMemo(() => overview.modules.map((module) => ({ key: module.key, label: module.label })), [overview.modules]);
+  const granted = Object.values(matrix).reduce((sum, row) => sum + ROLE_ACTIONS.filter(({ key }) => row[key]).length, 0);
 
   const columns = [
-    {
-      title: 'Phân hệ chức năng doanh nghiệp',
-      key: 'module',
-      render: (_: any, r: ModulePermissionRow) => (
-        <div>
-          <div style={{ fontWeight: 700, color: '#0F172A', fontSize: 13.5 }}>{r.module}</div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>Nhóm nghiệp vụ: <Tag color="blue">{r.category}</Tag></div>
-        </div>
+    { title: 'Phân hệ chức năng', key: 'module', render: (_: any, row: { key: string; label: string }) => <span style={{ color: '#0F172A', fontSize: 13.5 }}>{row.label}</span> },
+    ...ROLE_ACTIONS.map(({ key, label }) => ({
+      title: label,
+      key,
+      width: 130,
+      render: (_: any, row: { key: string }) => (
+        <Checkbox checked={Boolean(matrix[row.key]?.[key])} disabled={!editable} onChange={(event: any) => change(row.key, key, event.target.checked)} />
       ),
-    },
+    })),
     {
-      title: 'Xem',
-      key: 'read',
-      align: 'center' as const,
-      width: 100,
-      render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'read'),
-    },
-    {
-      title: 'Thêm mới',
-      key: 'create',
-      align: 'center' as const,
-      width: 110,
-      render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'create'),
-    },
-    {
-      title: 'Chỉnh sửa',
-      key: 'edit',
-      align: 'center' as const,
-      width: 110,
-      render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'edit'),
-    },
-    {
-      title: 'Xóa bỏ (Delete)',
-      key: 'delete',
-      align: 'center' as const,
-      width: 100,
-      render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'delete'),
-    },
-    {
-      title: 'Ký duyệt',
-      key: 'approve',
-      align: 'center' as const,
-      width: 120,
-      render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'approve'),
-    },
-    {
-      title: 'Xuất tệp',
-      key: 'exportData',
-      align: 'center' as const,
-      width: 110,
-      render: (_: any, r: ModulePermissionRow) => renderCheckbox(r, 'exportData'),
+      title: 'Cả hàng',
+      key: 'all',
+      width: 130,
+      render: (_: any, row: { key: string }) => (
+        <Checkbox checked={ROLE_ACTIONS.every(({ key }) => matrix[row.key]?.[key])} disabled={!editable} onChange={(event: any) => setWholeRow(row.key, event.target.checked)} />
+      ),
     },
   ];
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phân hệ tính năng cốt lõi</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {permissions.length} Phân hệ
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Kiểm soát ma trận CRUD 6 chiều</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Phân hệ có thể ủy quyền</div>
+          <div style={{ fontSize: 24, color: '#009688', marginTop: 4 }}>{overview.modules.length} phân hệ</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Mỗi phân hệ có bốn quyền: xem, thêm mới, sửa và duyệt, xóa</div>
         </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Đặc quyền đang được cấp</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {totalPermissionsChecked} / {permissions.length * 6} quyền
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Áp dụng trực tiếp cho tài khoản gắn role</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Quyền đang cấp cho vai trò</div>
+          <div style={{ fontSize: 24, color: '#16A34A', marginTop: 4 }}>{granted} / {overview.modules.length * ROLE_ACTIONS.length} quyền</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{dirty ? 'Có thay đổi chưa lưu' : 'Khớp với dữ liệu trên máy chủ'}</div>
         </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cấp độ an ninh phân quyền</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            RBAC Strict Level 4
-          </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Tuân thủ tiêu chuẩn ISO/IEC 27001</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Tài khoản giữ vai trò này</div>
+          <div style={{ fontSize: 24, color: '#7C3AED', marginTop: 4 }}>{role?.usersCount ?? 0} tài khoản</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Gán vai trò tại màn hình Quản lý người dùng</div>
         </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Kiểm định tính toàn vẹn</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            Đã đồng bộ HSM
-          </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Chữ ký số xác nhận không có xung đột</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Trạng thái vai trò</div>
+          <div style={{ fontSize: 24, color: role?.status === 'Tạm khóa' ? '#DC2626' : '#1E40AF', marginTop: 4 }}>{role?.status || 'Chưa chọn'}</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Vai trò tạm khóa không còn hiệu lực</div>
         </div>
       </div>
 
-      {/* Role Selector & Quick Batch Actions Bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>Vai trò cấu hình:</span>
+          <span style={{ fontSize: 13, color: '#0F172A' }}>Vai trò cấu hình</span>
           <Select
-            value={selectedRole}
-            onChange={setSelectedRole}
-            style={{ width: 300 }}
-            options={[
-              { label: '👑 Super Admin', value: 'ROLE_SUPER_ADMIN' },
-              { label: '🏛️ Ban Giám Đốc', value: 'ROLE_DIRECTOR' },
-              { label: '💰 Kế Toán Trưởng', value: 'ROLE_CHIEF_ACCOUNTANT' },
-              { label: '👥 Trưởng Phòng Nhân Sự', value: 'ROLE_HR_MANAGER' },
-              { label: '👤 Nhân Viên Tiêu Chuẩn', value: 'ROLE_STAFF' },
-            ]}
+            value={selectedCode || undefined}
+            onChange={(value: string) => setSelectedCode(value)}
+            style={{ width: 320 }}
+            placeholder="Chưa có vai trò nào"
+            options={overview.roles.map((item) => ({ label: `${item.name} · ${item.roleCode}`, value: item.roleCode }))}
           />
+          {role?.system && <Tag color="default">Vai trò của hệ thống, không chỉnh sửa</Tag>}
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button size="small" onClick={handleGrantAll}>
-            Cấp toàn quyền
-          </Button>
-          <Button size="small" onClick={handleReadOnly}>
-            Chỉ xem
-          </Button>
+          <Button disabled={!editable} onClick={() => applyAll(() => true)}>Cấp toàn quyền</Button>
+          <Button disabled={!editable} onClick={() => applyAll((action) => action === 'read')}>Chỉ xem</Button>
+          <Button disabled={!editable} onClick={() => applyAll(() => false)}>Bỏ toàn bộ quyền</Button>
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => exportRecordToPdf(`Ma_tran_phan_quyen_${selectedRole}`, `MA TRAN PHAN QUYEN ${selectedRole}`, permissions.map((row): [string, string] => [row.module, ['read', 'create', 'edit', 'delete', 'approve', 'exportData'].filter((field) => (row as any)[field]).map((field) => ({ read: 'xem', create: 'tao', edit: 'sua', delete: 'xoa', approve: 'duyet', exportData: 'xuat' } as Record<string, string>)[field]).join(', ') || 'khong co quyen']))}
+            disabled={!role}
+            onClick={() => role && exportRecordToPdf(`Ma_tran_phan_quyen_${role.roleCode}`, `MA TRAN PHAN QUYEN ${role.roleCode}`, rows.map((row): [string, string] => [row.label, ROLE_ACTIONS.filter(({ key }) => matrix[row.key]?.[key]).map(({ key }) => ({ read: 'xem', create: 'them moi', edit: 'sua va duyet', delete: 'xoa' } as Record<RoleAction, string>)[key]).join(', ') || 'khong co quyen']))}
           >
-            In Ma Trận (A4)
+            In ma trận
           </Button>
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            onClick={handleSave}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-          >
+          <Button type="primary" icon={<SaveOutlined />} disabled={!editable || !dirty} loading={saving} onClick={handleSave} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
             Lưu ma trận phân quyền
           </Button>
         </div>
       </div>
 
-      {/* Permissions Matrix Table */}
       <div className="transparent-table-card">
-        <KTable
-          dataSource={permissions}
-          columns={columns}
-          rowKey="key"
-          pagination={false}
-        />
+        <KTable dataSource={rows} columns={columns} rowKey="key" loading={loading} pagination={false} />
+      </div>
+      <div style={{ fontSize: 12, color: '#64748B', marginTop: 10, lineHeight: 1.6 }}>
+        Quyền áp dụng ngay ở máy chủ khi lưu. Menu của tài khoản đang đăng nhập cập nhật sau khi tải lại trang. Quản lý người dùng, vai trò, nhật ký kiểm toán, sao lưu và cấu hình hệ thống chỉ dành cho quản trị viên, không giao được cho vai trò nghiệp vụ.
       </div>
     </div>
   );
 };
-

@@ -35,6 +35,8 @@ test('user roles, activation and MFA reflect server facts, with independent pend
   assert.match(validate({ ...input, twoFactor: 'true' }), /MFA/);
   assert.match(validate({ ...input, password: 'short' }), /12 đến 256/);
   assert.match(validate({ ...input, email: 'broken' }), /Email/);
+  assert.match(validate({ ...input, role: 'ADMIN', roleCode: 'KE_TOAN' }), /vai trò nghiệp vụ/);
+  assert.equal(validate({ ...input, roleCode: 'KE_TOAN' }), '');
   const profile = buildProfile({
     ...input, fullName: 'Trần An Vy', middleLastName: 'Trần An', firstName: 'Vy',
     birthDate: '1998-02-03', gender: 'Nữ', address: 'Hà Nội', phone: '0900000000',
@@ -83,6 +85,10 @@ test('users load all pages, persist CRUD before success, reset actual passwords 
     services: { dataService: { fetchOrgUnitsList: async () => { if (auxFail) throw new Error('org offline'); return ['Operations']; } } },
     exporter: { generateValidXlsxBlob: rows => new Blob([JSON.stringify(rows)]), downloadFile: (filename, content) => downloads.push({ filename, content }) },
     api: {
+      adminRolesApi: { overview: async () => { if (auxFail) throw new Error('roles offline'); return { data: { modules: [], actions: [], roles: [
+        { key: 'ADMIN', roleCode: 'ADMIN', name: 'Quản trị viên', system: true, status: 'Kích hoạt', usersCount: 1, permissions: {} },
+        { key: 'KE_TOAN', roleCode: 'KE_TOAN', name: 'Kế toán', system: false, status: 'Kích hoạt', usersCount: 0, permissions: {} },
+      ] } }; } },
       adminSessionsApi: { getAll: async () => { if (auxFail) throw new Error('sessions offline'); return { data: { data: [{ userId: 'admin-1', loginTime: '2026-10-25T10:00:00Z' }, { userId: 'admin-1', loginTime: '2026-10-26T10:00:00Z' }] } }; } },
       usersApi: {
         getAll: async ({ page }) => { requests.push({ action: 'read', page }); return { data: { data: structuredClone(stored.slice((page - 1) * 2, page * 2)), pagination: { total: stored.length, limit: 2 } } }; },
@@ -113,9 +119,11 @@ test('users load all pages, persist CRUD before success, reset actual passwords 
     assert.ok(requests.some(item => item.action === 'read' && item.page === 2));
     assert.equal(table().props.dataSource.find(item => item.key === 'admin-1').lastLogin, '2026-10-26T10:00:00Z');
     button('Thêm tài khoản').props.onClick(); render();
+    const roleItem = nodes().find(node => node.type === 'FormItem' && node.props.name === 'roleCode');
+    assert.deepEqual(roleItem.props.children[0].props.options.map(option => option.value), ['KE_TOAN'], 'chỉ gợi ý vai trò nghiệp vụ, không gợi ý vai trò hệ thống');
     const values = {
       username: 'NV-NEW', fullName: 'New User', firstName: 'User', middleLastName: 'New',
-      email: 'new@example.test', workEmail: 'new@example.test', role: 'USER',
+      email: 'new@example.test', workEmail: 'new@example.test', role: 'USER', roleCode: 'KE_TOAN',
       position: 'Kế Toán Trưởng', jobTitle: 'Kế Toán Trưởng', department: 'Operations',
       phone: '0900000000', address: 'Hà Nội', personalEmail: 'new.personal@example.test',
       gender: 'Nam', birthDate: '1998-02-03', managerId: 'user-1', status: 'Thử việc',
@@ -132,6 +140,7 @@ test('users load all pages, persist CRUD before success, reset actual passwords 
     await form().props.onFinish(values); render();
     assert.equal(nodes().find(node => node.type === ui.Drawer).props.open, true, 'save and assign permissions opens the saved account details');
     assert.equal(requests.find(item => item.action === 'create').record.role, 'USER');
+    assert.equal(requests.find(item => item.action === 'create').record.roleCode, 'KE_TOAN');
     assert.equal(requests.find(item => item.action === 'create').record.position, 'Kế Toán Trưởng');
     assert.equal(requests.find(item => item.action === 'create').record.details.personalEmail, 'new.personal@example.test');
     assert.equal(requests.find(item => item.action === 'create').record.details.manager, 'Actual Employee');

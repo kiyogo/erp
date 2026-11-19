@@ -1,102 +1,162 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   SafetyCertificateOutlined,
   PlusOutlined,
   DownloadOutlined,
   EditOutlined,
+  DeleteOutlined,
   UsergroupAddOutlined,
   SearchOutlined,
   EyeOutlined,
   PrinterOutlined,
-  CheckCircleOutlined,
   KeyOutlined,
-  LockOutlined,
   CrownOutlined,
   AuditOutlined,
-  TeamOutlined,
 } from '@ant-design/icons';
-import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Button, message, Tag, Drawer, Card, Tooltip, Progress, Select } from '../../custom-ui';
-import { dataService } from '../../services/dataService';
 import { useNavigate } from 'react-router-dom';
+import { KTable } from '../../components/KTable';
+import { Modal, Form, Input, Button, message, Tag, Drawer, Select } from '../../custom-ui';
+import { adminRolesApi, AdminRoleRecord, AdminRolesOverview } from '../../api/endpoints';
 import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
+import { ROLE_ACTIONS } from './delegatedAccess';
 
-export interface EnterpriseRoleItem {
-  key: string;
-  roleCode: string;
-  name: string;
-  category: 'Quản trị' | 'Nghiệp vụ' | 'Tiêu chuẩn';
-  usersCount: number;
-  scope: string;
-  description: string;
-  status: 'Kích hoạt' | 'Tạm khóa';
-}
+const EMPTY_OVERVIEW: AdminRolesOverview = { modules: [], actions: [], roles: [] };
 
-const INITIAL_ROLES: EnterpriseRoleItem[] = [];
+const cardStyle: React.CSSProperties = { background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' };
+
+/** Mô tả phạm vi của vai trò từ ma trận quyền thật của nó. */
+const describeScope = (role: AdminRoleRecord, modules: AdminRolesOverview['modules']): string => {
+  if (role.roleCode === 'ADMIN') return 'Toàn bộ hệ thống';
+  if (role.roleCode === 'USER') return 'Dữ liệu của chính mình';
+  const labels = modules.filter((module) => ROLE_ACTIONS.some(({ key }) => role.permissions[module.key]?.[key])).map((module) => module.label);
+  return labels.length ? labels.join(', ') : 'Chưa cấp quyền module nào';
+};
 
 export const AdminRolesModule: React.FC = () => {
   const navigate = useNavigate();
-  const [data, setData] = useState<EnterpriseRoleItem[]>(INITIAL_ROLES);
+  const [overview, setOverview] = useState<AdminRolesOverview>(EMPTY_OVERVIEW);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState('all');
-
   const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<AdminRoleRecord | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedRole, setSelectedRole] = useState<EnterpriseRoleItem | null>(null);
+  const [selectedRole, setSelectedRole] = useState<AdminRoleRecord | null>(null);
   const [form] = Form.useForm();
 
-  const handleCreate = (values: any) => {
-    const newRole: EnterpriseRoleItem = {
-      key: String(Date.now()),
-      roleCode: values.roleCode,
-      name: values.name,
-      category: values.category || 'Nghiệp vụ',
-      usersCount: 0,
-      scope: values.scope,
-      description: values.description,
-      status: 'Kích hoạt',
-    };
-    setData([newRole, ...data]);
-    message.success(`Đã thêm vai trò nhóm quyền mới: ${values.name}`);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await adminRolesApi.overview();
+      setOverview(response.data);
+      setSelectedRole((current) => (current ? response.data.roles.find((role) => role.roleCode === current.roleCode) || null : null));
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được danh mục vai trò.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const rows = useMemo(() => overview.roles.map((role) => ({ ...role, scopeText: describeScope(role, overview.modules) })), [overview]);
+  const customRoles = overview.roles.filter((role) => !role.system);
+  const holders = customRoles.reduce((sum, role) => sum + role.usersCount, 0);
+  const totalAccounts = overview.roles.filter((role) => role.system).reduce((sum, role) => sum + role.usersCount, 0);
+  const administrators = overview.roles.find((role) => role.roleCode === 'ADMIN')?.usersCount || 0;
+
+  const filteredData = rows.filter((row) => {
+    const matchTab = filterTab === 'all' || (filterTab === 'system' && row.system) || (filterTab === 'business' && !row.system);
+    const query = searchText.trim().toLocaleLowerCase('vi-VN');
+    const matchSearch = !query || [row.name, row.roleCode, row.scopeText, row.description].some((value) => String(value || '').toLocaleLowerCase('vi-VN').includes(query));
+    return matchTab && matchSearch;
+  });
+
+  const openCreate = () => {
+    setEditing(null);
+    form.resetFields();
+    setModalOpen(true);
+  };
+
+  const openEdit = (role: AdminRoleRecord) => {
+    setEditing(role);
+    form.resetFields();
+    form.setFieldsValue({ roleCode: role.roleCode, name: role.name, description: role.description, status: role.status });
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (saving) return;
     setModalOpen(false);
+    setEditing(null);
     form.resetFields();
   };
 
-  const totalUsersAssigned = data.reduce((sum, r) => sum + r.usersCount, 0);
-  const adminRolesCount = data.filter((r) => r.category === 'Quản trị').length;
+  const handleSubmit = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const name = String(values.name || '').trim();
+      const description = String(values.description || '').trim();
+      if (editing) {
+        await adminRolesApi.update(editing.roleCode, { name, description, status: values.status });
+        message.success(`Đã cập nhật vai trò ${editing.roleCode}.`);
+      } else {
+        const roleCode = String(values.roleCode || '').trim().toUpperCase();
+        await adminRolesApi.create({ roleCode, name, description, status: 'Kích hoạt', permissions: {} });
+        message.success(`Đã tạo vai trò ${roleCode}. Hãy cấu hình ma trận quyền để vai trò có hiệu lực.`);
+      }
+      setModalOpen(false);
+      setEditing(null);
+      form.resetFields();
+      await load();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được vai trò.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
-  const filteredData = data.filter((d) => {
-    let matchTab = true;
-    if (filterTab === 'admin') matchTab = d.category === 'Quản trị';
-    else if (filterTab === 'business') matchTab = d.category === 'Nghiệp vụ';
-    else if (filterTab === 'standard') matchTab = d.category === 'Tiêu chuẩn';
-
-    const matchSearch =
-      d.name?.toLowerCase().includes(searchText.toLowerCase()) ||
-      d.roleCode?.toLowerCase().includes(searchText.toLowerCase()) ||
-      d.scope?.toLowerCase().includes(searchText.toLowerCase()) ||
-      d.description?.toLowerCase().includes(searchText.toLowerCase());
-
-    return matchTab && matchSearch;
+  const handleDelete = (role: AdminRoleRecord) => Modal.confirm({
+    title: 'Xóa vai trò nghiệp vụ?',
+    content: `Xóa vai trò ${role.name}. Vai trò đang gán cho tài khoản không xóa được; hãy chuyển các tài khoản sang vai trò khác trước.`,
+    okText: 'Xóa vai trò', cancelText: 'Hủy', okButtonProps: { danger: true },
+    onOk: async () => {
+      try {
+        await adminRolesApi.remove(role.roleCode);
+        setDrawerOpen(false);
+        setSelectedRole(null);
+        await load();
+        message.success(`Đã xóa vai trò ${role.roleCode}.`);
+      } catch (error: any) {
+        message.error(error?.response?.data?.message || 'Không xóa được vai trò.');
+      }
+    },
   });
+
+  const exportColumns = [
+    { title: 'Mã vai trò', dataIndex: 'roleCode' },
+    { title: 'Tên vai trò', dataIndex: 'name' },
+    { title: 'Mô tả', dataIndex: 'description' },
+    { title: 'Phạm vi', dataIndex: 'scopeText' },
+    { title: 'Số tài khoản', dataIndex: 'usersCount' },
+    { title: 'Trạng thái', dataIndex: 'status' },
+  ];
 
   const columns = [
     {
       title: 'Mã vai trò',
       dataIndex: 'roleCode',
       key: 'roleCode',
-      render: (rc: string) => (
-        <span style={{ fontWeight: 700, color: '#009688', fontFamily: 'monospace', fontSize: 13 }}>
-          {rc}
-        </span>
-      ),
+      render: (code: string) => <span style={{ color: '#009688', fontFamily: 'monospace', fontSize: 13 }}>{code}</span>,
     },
     {
-      title: 'Tên nhóm quyền & Vai trò',
+      title: 'Tên vai trò',
       key: 'name',
-      render: (_: any, record: EnterpriseRoleItem) => (
+      render: (_: any, record: AdminRoleRecord) => (
         <div>
-          <div style={{ fontWeight: 700, color: '#0F172A', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ color: '#0F172A', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
             <SafetyCertificateOutlined style={{ color: '#009688' }} /> {record.name}
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{record.description}</div>
@@ -108,104 +168,82 @@ export const AdminRolesModule: React.FC = () => {
       dataIndex: 'category',
       key: 'category',
       width: 120,
-      render: (c: string) => (
-        <Tag color={c === 'Quản trị' ? 'purple' : c === 'Nghiệp vụ' ? 'blue' : 'default'}>
-          {c}
-        </Tag>
-      ),
+      render: (category: string) => <Tag color={category === 'Quản trị' ? 'purple' : category === 'Nghiệp vụ' ? 'blue' : 'default'}>{category}</Tag>,
     },
     {
-      title: 'Số nhân sự gán quyền',
+      title: 'Phạm vi',
+      dataIndex: 'scopeText',
+      key: 'scopeText',
+      render: (text: string) => <span style={{ fontSize: 12.5, color: '#334155' }}>{text}</span>,
+    },
+    {
+      title: 'Số tài khoản',
       dataIndex: 'usersCount',
       key: 'usersCount',
-      width: 160,
-      render: (u: number) => (
-        <span style={{ fontWeight: 600, color: '#1E40AF', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <UsergroupAddOutlined /> {u} tài khoản
-        </span>
-      ),
+      width: 150,
+      render: (count: number) => <span style={{ color: '#1E40AF', display: 'flex', alignItems: 'center', gap: 6 }}><UsergroupAddOutlined /> {count} tài khoản</span>,
     },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
       width: 120,
-      render: (s: string) => <Tag color={s === 'Kích hoạt' ? 'success' : 'error'}>{s}</Tag>,
+      render: (status: string) => <Tag color={status === 'Kích hoạt' ? 'success' : 'error'}>{status}</Tag>,
     },
     {
       title: 'Thao tác',
       key: 'actions',
-      width: 140,
-      render: (_: any, record: EnterpriseRoleItem) => (
-        <Button
-          size="small"
-          icon={<EyeOutlined />}
-          onClick={() => {
-            setSelectedRole(record);
-            setDrawerOpen(true);
-          }}
-        >
-          Chi tiết
-        </Button>
+      width: 130,
+      render: (_: any, record: AdminRoleRecord) => (
+        <Button icon={<EyeOutlined />} onClick={() => { setSelectedRole(record); setDrawerOpen(true); }}>Chi tiết</Button>
       ),
     },
   ];
 
+  const roleSummary = (role: AdminRoleRecord) => overview.modules
+    .map((module) => ({ label: module.label, actions: ROLE_ACTIONS.filter(({ key }) => role.permissions[module.key]?.[key]).map(({ label }) => label) }))
+    .filter((entry) => entry.actions.length);
+
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng nhóm vai trò RBAC</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {data.length} nhóm vai trò
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Mô hình kiểm soát truy cập phân tầng</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Tổng số vai trò</div>
+          <div style={{ fontSize: 24, color: '#009688', marginTop: 4 }}>{overview.roles.length} vai trò</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>{overview.roles.length - customRoles.length} của hệ thống, {customRoles.length} nghiệp vụ</div>
         </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Nhóm Quyền Quản Trị Cấp Cao</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            {adminRolesCount} vai trò
-          </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Đặc quyền ký số và phê duyệt dòng tiền</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Vai trò nghiệp vụ</div>
+          <div style={{ fontSize: 24, color: '#7C3AED', marginTop: 4 }}>{customRoles.length} vai trò</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>{customRoles.filter((role) => role.status !== 'Kích hoạt').length} vai trò đang tạm khóa</div>
         </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng nhân sự đã gán quyền</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {totalUsersAssigned} tài khoản
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>100% cán bộ được định danh chính xác</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Tài khoản giữ vai trò nghiệp vụ</div>
+          <div style={{ fontSize: 24, color: '#16A34A', marginTop: 4 }}>{holders} tài khoản</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Trên tổng {totalAccounts} tài khoản</div>
         </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Trạng thái chính sách an ninh</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            Tuân Thủ 100%
-          </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Không có tài khoản mồ côi ngoài nhóm</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Quản trị viên</div>
+          <div style={{ fontSize: 24, color: '#1E40AF', marginTop: 4 }}>{administrators} tài khoản</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Toàn quyền, không giao được cho vai trò khác</div>
         </div>
       </div>
 
-      {/* Filter Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             { key: 'all', label: 'Tất cả vai trò' },
-            { key: 'admin', label: 'Quản trị & Điều hành', icon: <CrownOutlined style={{ color: '#F59E0B' }} /> },
-            { key: 'business', label: 'Nghiệp vụ Chuyên môn', icon: <AuditOutlined style={{ color: '#64748B' }} /> },
-            { key: 'standard', label: 'Tiêu chuẩn & Nhân viên', icon: <TeamOutlined style={{ color: '#3B82F6' }} /> },
+            { key: 'system', label: 'Vai trò hệ thống', icon: <CrownOutlined style={{ color: '#F59E0B' }} /> },
+            { key: 'business', label: 'Vai trò nghiệp vụ', icon: <AuditOutlined style={{ color: '#64748B' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
-              size="small"
+              icon={tab.icon}
               onClick={() => setFilterTab(tab.key)}
               style={{
                 backgroundColor: filterTab === tab.key ? '#E0F2F1' : '#FFFFFF',
                 borderColor: filterTab === tab.key ? '#009688' : '#CBD5E1',
                 color: filterTab === tab.key ? '#00796B' : '#475569',
-                fontWeight: filterTab === tab.key ? 700 : 500,
               }}
             >
               {tab.label}
@@ -216,129 +254,98 @@ export const AdminRolesModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Input
             prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
-            placeholder="Tìm theo vai trò, mã nhóm quyền, phạm vi..."
+            placeholder="Tìm theo tên, mã vai trò hoặc phạm vi"
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(event) => setSearchText(event.target.value)}
             style={{ width: 280 }}
             allowClear
           />
-
-          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có vai trò để xuất.'); return; } const count = exportRowsToXlsx('Danh_muc_vai_tro', columns, filteredData); message.success(`Đã xuất ${count} vai trò ra tệp Excel.`); }}>
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => {
+              if (!filteredData.length) { message.warning('Không có vai trò để xuất.'); return; }
+              const count = exportRowsToXlsx('Danh_muc_vai_tro', exportColumns, filteredData);
+              message.success(`Đã xuất ${count} vai trò ra tệp Excel.`);
+            }}
+          >
             Xuất Excel
           </Button>
-
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              form.resetFields();
-              form.setFieldsValue({ category: 'Nghiệp vụ' });
-              setModalOpen(true);
-            }}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-          >
-            Thêm vai trò mới
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            Thêm vai trò
           </Button>
         </div>
       </div>
 
-      {/* Main Table */}
       <div className="transparent-table-card">
-        <KTable
-          dataSource={filteredData}
-          columns={columns}
-          rowKey="key"
-          pagination={{ pageSize: 8 }}
-        />
+        <KTable dataSource={filteredData} columns={columns} rowKey="key" loading={loading} pagination={{ pageSize: 8 }} />
       </div>
 
-      {/* MODAL: Thêm vai trò */}
-      <Modal
-        title="Thiết Lập Nhóm Quyền &amp; Vai Trò RBAC Mới"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        footer={null}
-        width={560}
-      >
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
+      <Modal title={editing ? 'Cập nhật vai trò nghiệp vụ' : 'Thêm vai trò nghiệp vụ'} open={modalOpen} onCancel={closeModal} footer={null} width={560}>
+        <Form form={form} layout="vertical" onFinish={handleSubmit} style={{ marginTop: 14 }}>
           <Form.Item name="roleCode" label="Mã vai trò" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: ROLE_PROJECT_MANAGER" />
+            <Input disabled={Boolean(editing)} />
           </Form.Item>
-          <Form.Item name="name" label="Tên vai trò hiển thị" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Quản Lý Dự Án Kỹ Thuật" />
+          <Form.Item name="name" label="Tên vai trò" rules={[{ required: true, whitespace: true }]}>
+            <Input placeholder="Ví dụ: Kế toán tổng hợp" />
           </Form.Item>
-          <Form.Item name="category" label="Phân loại nhóm vai trò" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { label: 'Quản trị', value: 'Quản trị' },
-                { label: 'Nghiệp vụ', value: 'Nghiệp vụ' },
-                { label: 'Tiêu chuẩn', value: 'Tiêu chuẩn' },
-              ]}
-            />
+          <Form.Item name="description" label="Mô tả">
+            <Input.TextArea rows={3} placeholder="Nêu rõ vai trò này phụ trách việc gì" />
           </Form.Item>
-          <Form.Item name="scope" label="Phạm vi truy cập dữ liệu" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Phân hệ Kế hoạch & Nhiệm vụ dự án" />
-          </Form.Item>
-          <Form.Item name="description" label="Mô tả chi tiết quyền hạn" rules={[{ required: true }]}>
-            <Input.TextArea rows={3} placeholder="Nêu rõ các quyền xem, duyệt, sửa đổi..." />
-          </Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lưu vai trò
-            </Button>
+          {editing && (
+            <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]}>
+              <Select options={[{ label: 'Kích hoạt', value: 'Kích hoạt' }, { label: 'Tạm khóa', value: 'Tạm khóa' }]} />
+            </Form.Item>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
+            <Button disabled={saving} onClick={closeModal}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu vai trò</Button>
           </div>
         </Form>
       </Modal>
 
-      {/* DRAWER: Chi tiết vai trò */}
-      <Drawer
-        title="Hồ Sơ Nhóm Quyền &amp; Chính Sách RBAC"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={580}
-      >
+      <Drawer title="Hồ sơ vai trò" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={580}>
         {selectedRole && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>MÃ VAI TRÒ: {selectedRole.roleCode}</div>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-                    {selectedRole.name}
-                  </div>
-                </div>
-                <Tag color="success">{selectedRole.status}</Tag>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, color: '#009688' }}>Mã vai trò: {selectedRole.roleCode}</div>
+                <div style={{ fontSize: 17, color: '#0F172A', marginTop: 4 }}>{selectedRole.name}</div>
               </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Phân loại: <strong>{selectedRole.category}</strong> · Đang cấp cho: <strong>{selectedRole.usersCount} nhân sự</strong>
-              </div>
+              <Tag color={selectedRole.status === 'Kích hoạt' ? 'success' : 'error'}>{selectedRole.status}</Tag>
             </div>
-
-            {/* Scope info */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <KeyOutlined /> Phạm Vi Dữ Liệu &amp; Mô Tả Chính Sách:
+            <div style={{ fontSize: 12.5, color: '#64748B' }}>
+              Phân loại {selectedRole.category}, đang gán cho {selectedRole.usersCount} tài khoản.
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: '#0F172A', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <KeyOutlined /> Mô tả và phạm vi quyền
               </div>
               <div style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6, color: '#334155' }}>
-                <div>Phạm vi: <strong style={{ color: '#1E40AF' }}>{selectedRole.scope}</strong></div>
-                <div>Diễn giải: <em>"{selectedRole.description}"</em></div>
+                <div>{selectedRole.description || 'Chưa có mô tả.'}</div>
+                {selectedRole.system
+                  ? <div>{describeScope(selectedRole, overview.modules)}</div>
+                  : roleSummary(selectedRole).length
+                    ? roleSummary(selectedRole).map((entry) => <div key={entry.label}>{entry.label}: {entry.actions.join(', ')}</div>)
+                    : <div>Chưa cấp quyền module nào.</div>}
               </div>
             </div>
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-              <Button
-                type="primary"
-                style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => navigate('/admin/permissions', { state: { role: selectedRole.roleCode } })}
-              >
-                Cấu Hình Ma Trận Quyền
-              </Button>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {!selectedRole.system && (
+                <Button type="primary" onClick={() => navigate('/admin/permissions', { state: { role: selectedRole.roleCode } })} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+                  Cấu hình ma trận quyền
+                </Button>
+              )}
+              {!selectedRole.system && <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(selectedRole); }}>Sửa thông tin</Button>}
+              {!selectedRole.system && <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(selectedRole)}>Xóa vai trò</Button>}
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => exportRecordToPdf(`Vai_tro_${selectedRole.roleCode}`, 'MO TA VAI TRO', [['Ma vai tro', selectedRole.roleCode], ['Ten vai tro', selectedRole.name], ['Nhom', selectedRole.category], ['Pham vi', selectedRole.scope], ['So nguoi dung', selectedRole.usersCount], ['Trang thai', selectedRole.status], ['Dien giai', selectedRole.description]])}
+                onClick={() => exportRecordToPdf(`Vai_tro_${selectedRole.roleCode}`, 'MO TA VAI TRO', [
+                  ['Ma vai tro', selectedRole.roleCode], ['Ten vai tro', selectedRole.name], ['Nhom', selectedRole.category],
+                  ['Pham vi', describeScope(selectedRole, overview.modules)], ['So tai khoan', selectedRole.usersCount],
+                  ['Trang thai', selectedRole.status], ['Mo ta', selectedRole.description],
+                ])}
               >
-                In Bản Mô Tả (A4)
+                In bản mô tả
               </Button>
             </div>
           </div>
@@ -347,4 +354,3 @@ export const AdminRolesModule: React.FC = () => {
     </div>
   );
 };
-

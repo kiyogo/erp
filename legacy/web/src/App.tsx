@@ -12,7 +12,8 @@ import {
   HomeOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
-import { useAuth } from './context/AuthContext';
+import { useAuth, ElevatedAuthScope } from './context/AuthContext';
+import { canOpenAdminPath, delegatedMenuItems, insertDelegatedMenu } from './modules/admin/delegatedAccess';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { KIYOVN_MENU_ITEMS, EMPLOYEE_PORTAL_MENU_ITEMS, ADMIN_PORTAL_MENU_ITEMS } from './data/menuData';
 import { SidebarAccordion } from './components/sidebar/SidebarAccordion';
@@ -129,7 +130,8 @@ const AppLayout: React.FC = () => {
     () => typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches,
   );
 
-  const isEmployeePortal = location.pathname.startsWith('/employee');
+  // Tài khoản không phải quản trị viên luôn dùng cổng nhân viên, kể cả khi mở trang của module được ủy quyền.
+  const isEmployeePortal = location.pathname.startsWith('/employee') || (Boolean(user) && !isAdminUser(user));
   const isEkycPage = location.pathname.toLowerCase().includes('/employee/identity/verification');
   const appliedTheme = settings.theme === 'system' ? (systemPrefersDark ? 'dark' : 'light') : settings.theme;
   const isDark = appliedTheme === 'dark';
@@ -157,19 +159,22 @@ const AppLayout: React.FC = () => {
     setOnboardingDone(check);
   }, [user, isAdmin, onboardingStorage, location.pathname]);
 
-  const currentMenuItems = isEmployeePortal
-    ? EMPLOYEE_PORTAL_MENU_ITEMS
-    : KIYOVN_MENU_ITEMS;
+  const delegatedPermissions = isAdmin ? null : user?.delegatedPermissions;
+  const canOpenDelegated = canOpenAdminPath(delegatedPermissions, location.pathname);
+  const currentMenuItems = React.useMemo(
+    () => (isEmployeePortal ? insertDelegatedMenu(EMPLOYEE_PORTAL_MENU_ITEMS, delegatedMenuItems(KIYOVN_MENU_ITEMS, delegatedPermissions)) : KIYOVN_MENU_ITEMS),
+    [isEmployeePortal, delegatedPermissions],
+  );
 
   useEffect(() => {
     if (user) {
-      if (!isAdmin && (location.pathname.startsWith('/admin') || location.pathname === '/dashboard')) {
+      if (!isAdmin && ((location.pathname.startsWith('/admin') && !canOpenDelegated) || location.pathname === '/dashboard')) {
         navigate('/employee/home', { replace: true });
       } else if (isAdmin && location.pathname.startsWith('/employee')) {
         navigate('/admin/dashboard', { replace: true });
       }
     }
-  }, [user, isAdmin, location.pathname, navigate]);
+  }, [user, isAdmin, canOpenDelegated, location.pathname, navigate]);
 
   useEffect(() => {
     if (!user || (!isAdmin && location.pathname.startsWith('/admin')) || (isAdmin && location.pathname.startsWith('/employee'))) return;
@@ -981,7 +986,7 @@ const AppLayout: React.FC = () => {
               <Route path="/employee/settings/appearance" element={!isAdmin && canAccessEmployeePortal ? <AppearanceSettingsModule /> : <Navigate to={isAdmin ? "/admin/dashboard" : "/login"} replace />} />
               <Route path="/404" element={<NotFoundPage />} />
               <Route path="/not-found" element={<NotFoundPage />} />
-              <Route path="/admin/*" element={isAdmin ? <GenericModulePage /> : <Navigate to="/employee/home" replace />} />
+              <Route path="/admin/*" element={isAdmin ? <GenericModulePage /> : canOpenDelegated ? <ElevatedAuthScope><GenericModulePage /></ElevatedAuthScope> : <Navigate to="/employee/home" replace />} />
               <Route path="/employee/*" element={!isAdmin && canAccessEmployeePortal ? <GenericModulePage /> : <Navigate to={isAdmin ? "/admin/dashboard" : "/login"} replace />} />
               <Route path="/*" element={<GenericModulePage />} />
             </Routes>

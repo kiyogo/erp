@@ -1,6 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { authApi } from '../api/endpoints';
 import { dataService } from '../services/dataService';
+import { normalizeRolePermissions, type RolePermissions } from '../modules/admin/delegatedAccess';
 
 export interface User {
   id: string;
@@ -10,6 +11,10 @@ export interface User {
   employeeCode?: string;
   code?: string;
   onboardingCompleted?: boolean;
+  /** Mã vai trò nghiệp vụ do quản trị viên gán (nếu có). */
+  roleCode?: string;
+  /** Quyền theo module của vai trò nghiệp vụ; rỗng khi không có vai trò hoặc vai trò đang bị khóa. */
+  delegatedPermissions?: RolePermissions | null;
 }
 
 interface AuthCtx {
@@ -42,7 +47,9 @@ const normalizeUser = (value: unknown): User | null => {
   const employeeCode = typeof candidate.employeeCode === 'string' ? candidate.employeeCode.trim() : typeof candidate.code === 'string' ? candidate.code.trim() : undefined;
   const code = typeof candidate.code === 'string' ? candidate.code.trim() : typeof candidate.employeeCode === 'string' ? candidate.employeeCode.trim() : undefined;
   const onboardingCompleted = candidate.onboardingCompleted === true || candidate.onboardingDone === true;
-  return id && email && name && role ? { id, email, name, role, employeeCode: employeeCode || code, code: code || employeeCode, onboardingCompleted } : null;
+  const roleCode = typeof candidate.roleCode === 'string' ? candidate.roleCode.trim() : '';
+  const delegatedPermissions = normalizeRolePermissions(candidate.delegatedPermissions);
+  return id && email && name && role ? { id, email, name, role, employeeCode: employeeCode || code, code: code || employeeCode, onboardingCompleted, roleCode, delegatedPermissions } : null;
 };
 
 const readStoredSession = (): { token: string; user: User } | null => {
@@ -206,4 +213,14 @@ export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth phải dùng trong AuthProvider');
   return context;
+};
+
+/**
+ * Trong trang của một module được ủy quyền, giao diện coi tài khoản như quản trị viên để hiện đủ chức năng của module.
+ * Máy chủ vẫn quyết định từng thao tác theo quyền xem, thêm, sửa, xóa đã cấp cho vai trò.
+ */
+export const ElevatedAuthScope: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const context = useAuth();
+  const value = useMemo(() => (context.user ? { ...context, user: { ...context.user, role: 'ADMIN' } } : context), [context]);
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

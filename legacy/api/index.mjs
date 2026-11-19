@@ -257,13 +257,22 @@ async function ensureEmployeeProfile(user, input = {}) {
   return await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
 }
 
-async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges = false } = {}) {
+async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges = false, delegated = false } = {}) {
   const current = await employeeProfileRowByUserId(userId);
   if (!current) throw new HttpError(404, 'Không tìm thấy nhân sự.');
   const realUserId = current.id;
   await ensureEmployeeProfile(current);
   const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(realUserId);
   const changes = input || {};
+  if (delegated) {
+    // Vai trò ủy quyền được sửa hồ sơ nhưng không được đặt lại mật khẩu, đổi email đăng nhập hay mã nhân sự của ai khác.
+    const requestedCode = changes.code ?? changes.employeeCode;
+    if (changes.password || changes.newPassword) throw new HttpError(403, 'Chỉ quản trị viên được đặt lại mật khẩu.');
+    if ((changes.email !== undefined && normalizeEmail(changes.email) !== current.email)
+      || (requestedCode !== undefined && String(requestedCode).trim().toUpperCase() !== current.employee_code)) {
+      throw new HttpError(403, 'Chỉ quản trị viên được đổi email đăng nhập và mã nhân sự.');
+    }
+  }
 
   let name = current.name;
   let email = current.email;
@@ -532,7 +541,7 @@ async function createMfaChallenge(user, request, method, profile) {
   const security = await getUserTwoFactor(user.id);
   if (!security.enabled || !security.secretEncrypted) {
     const token = await createToken(user, request, method);
-    return { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: publicUser(user, profile) };
+    return { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: await publicUserWithAccess(user, profile) };
   }
 
   const challengeToken = randomBytes(32).toString('base64url');
@@ -2323,7 +2332,7 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'asset_todos' && actor.role !== 'ADMIN' && ['POST', 'DELETE'].includes(request.method)) throw new HttpError(403, 'Nhân viên chỉ được cập nhật nhiệm vụ tài sản được giao.');
   if (scope === 'attendance_explanations' && request.method === 'PUT') throw new HttpError(405, 'Giải trình phải được gửi và xử lý theo từng bản ghi để giữ lịch sử duyệt.');
   if (scope === 'attendance_explanations' && request.method === 'DELETE' && actor.role === 'ADMIN') throw new HttpError(409, 'Giải trình được lưu để bảo toàn lịch sử xử lý.');
-  if (request.method === 'PUT' && ['leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings', 'finance_inventory_locations', 'finance_loans', 'finance_loan_events'].includes(scope)) {
+  if (request.method === 'PUT' && ['admin_roles', 'leave_requests', 'attendance_overtime', 'hr_recruitment_candidates', 'hr_employee_history', 'hr_rewards', 'hr_performance_reviews', 'enterprise_documents', 'doc_archives', 'business_travels', 'asset_disposals', 'asset_todos', 'asset_maintenances', 'asset_systems', 'asset_depreciations', 'crm_feedback', 'crm_supplier_evaluations', 'crm_promotions', 'workflow_requests', 'workflow_blueprints', 'workflow_settings', 'workflow_delegations', 'workflow_security_settings', 'meeting_rooms', 'room_bookings', 'meeting_room_settings', 'finance_inventory', 'finance_inventory_transactions', 'finance_inventory_settings', 'finance_inventory_locations', 'finance_loans', 'finance_loan_events'].includes(scope)) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
   return actor;
@@ -4775,6 +4784,24 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.updatedAt = now();
     record.updatedBy = actor.name;
   }
+  if (scope === 'admin_roles') {
+    const roleCode = requiredText(record.roleCode ?? record.key, 'Mã vai trò', 40).toUpperCase();
+    if (!/^[A-Z][A-Z0-9_-]{2,39}$/.test(roleCode)) throw new HttpError(422, 'Mã vai trò gồm chữ in hoa, số, dấu gạch dưới hoặc gạch ngang, bắt đầu bằng chữ và dài từ 3 đến 40 ký tự.');
+    if (['ADMIN', 'USER'].includes(roleCode)) throw new HttpError(422, 'Mã vai trò trùng với vai trò của hệ thống.');
+    if (current && current.roleCode !== roleCode) throw new HttpError(422, 'Không thể đổi mã của vai trò đã tạo.');
+    if (!current && await db.prepare("SELECT 1 FROM collection_records WHERE scope = 'admin_roles' AND record_key = ? LIMIT 1").get(roleCode)) {
+      throw new HttpError(409, 'Mã vai trò đã tồn tại.');
+    }
+    record.roleCode = roleCode;
+    record.key = roleCode;
+    record.name = requiredText(record.name, 'Tên vai trò', 120);
+    record.description = optionalText(record.description, 'Mô tả vai trò', 500) || '';
+    record.status = oneOf(record.status || 'Kích hoạt', 'Trạng thái vai trò', ['Kích hoạt', 'Tạm khóa']);
+    record.permissions = sanitizeRolePermissions(record.permissions);
+    record.category = 'Nghiệp vụ';
+    delete record.usersCount;
+    delete record.scope;
+  }
   const candidate = record.key ?? record.id ?? record.code;
   const recordKey = candidate === undefined || candidate === null || String(candidate).trim() === ''
     ? randomUUID()
@@ -6770,6 +6797,7 @@ async function createUser(input) {
   const employeeCode = suppliedEmployeeCode || await generateEmployeeCode();
   const role = input.role === 'ADMIN' ? 'ADMIN' : input.role === 'USER' ? 'USER' : 'USER';
   if (input.role !== undefined && !['ADMIN', 'USER'].includes(input.role)) throw new HttpError(422, 'Vai trò không hợp lệ.');
+  const roleCode = role === 'USER' ? await validatedRoleCode(input.roleCode) : '';
   const employmentStatus = input.status === undefined ? 'Chính thức' : oneOf(input.status, 'Trạng thái nhân sự', EMPLOYMENT_STATUSES);
   const password = validatePassword(input.password);
   if (await getUserByEmail(email)) throw new HttpError(409, 'Email đã tồn tại.');
@@ -6786,9 +6814,9 @@ async function createUser(input) {
     timestamp: now(),
   };
   await db.transaction(async () => {
-    await db.prepare(`INSERT INTO users (id, email, name, employee_code, role, password_hash, is_active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(user.id, user.email, user.name, user.employeeCode, user.role, user.passwordHash, employmentStatus === 'Đã nghỉ việc' ? 0 : 1, user.timestamp, user.timestamp);
+    await db.prepare(`INSERT INTO users (id, email, name, employee_code, role, role_code, password_hash, is_active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(user.id, user.email, user.name, user.employeeCode, user.role, roleCode, user.passwordHash, employmentStatus === 'Đã nghỉ việc' ? 0 : 1, user.timestamp, user.timestamp);
     await ensureEmployeeProfile(user, { ...input, status: employmentStatus });
     await ensureEmployeeWorkspace(await getUserById(user.id));
   });
@@ -6860,6 +6888,139 @@ function getBearerToken(request) {
   return match[1];
 }
 
+// ===== Vai trò ủy quyền theo module =====
+// Tài khoản USER có thể được gán một vai trò (bản ghi admin_roles) cấp quyền xem, tạo, sửa, xóa theo từng module; duyệt và đổi trạng thái hồ sơ thuộc quyền sửa.
+// Với những yêu cầu thuộc đúng module và hành động được cấp, tài khoản được xử lý như quản trị viên; mọi yêu cầu khác giữ nguyên quyền USER.
+// Quản trị người dùng, hệ thống, nhật ký kiểm toán và xác thực không thuộc module nào nên không thể ủy quyền.
+const DELEGABLE_MODULES = [
+  { key: 'hr', label: 'Nhân sự' },
+  { key: 'attendance', label: 'Chấm công và ca làm việc' },
+  { key: 'finance', label: 'Tài chính kế toán' },
+  { key: 'crm', label: 'Khách hàng và kinh doanh' },
+  { key: 'assets', label: 'Tài sản' },
+  { key: 'insurance', label: 'Bảo hiểm' },
+  { key: 'workflows', label: 'Quy trình phê duyệt' },
+  { key: 'documents', label: 'Hợp đồng và tài liệu' },
+  { key: 'plans', label: 'Kế hoạch và nhiệm vụ' },
+  { key: 'tickets', label: 'Ticket hỗ trợ' },
+  { key: 'reports', label: 'Báo cáo' },
+  { key: 'business', label: 'Cơ cấu tổ chức' },
+];
+const DELEGABLE_ACTIONS = ['read', 'create', 'edit', 'delete'];
+const DELEGATED_PATH_RULES = [
+  ['finance', /^\/finance(\/|$)/],
+  ['crm', /^\/(crm|marketing)(\/|$)/],
+  ['assets', /^\/assets(\/|$)/],
+  ['hr', /^\/(employees(?!\/me(\/|$))|employee-proposals|contracts)(\/|$)/],
+  ['documents', /^\/document-notes(\/|$)/],
+  ['plans', /^\/tasks(\/|$)/],
+];
+// Đặt mật khẩu, kích hoạt tài khoản và ký thay công ty vẫn chỉ dành cho quản trị viên, nếu không một vai trò nhân sự có thể chiếm tài khoản quản trị.
+const NON_DELEGABLE_PATHS = [
+  /^\/employees\/[^/]+\/(password|activation)(\/|$)/,
+  /^\/contracts\/[^/]+\/sign(\/|$)/,
+];
+const DELEGATED_SCOPE_RULES = [
+  ['hr', /^(hr_|profile_update_requests$|business_travels$|employee_bank_accounts$)/],
+  ['attendance', /^(attendance_|leave_requests$|employee_timesheets$)/],
+  ['finance', /^(finance_|payroll$)/],
+  ['crm', /^crm_/],
+  ['assets', /^(asset_|assets$)/],
+  ['insurance', /^insurance_/],
+  ['workflows', /^workflows?(_|$)/],
+  ['documents', /^(doc_|enterprise_documents$|enterprise_contracts$|contract_templates$|digital_signature_audit_trail$)/],
+  ['plans', /^(enterprise_tasks$|plan_|plans$)/],
+  ['tickets', /^(tickets$|ticket_)/],
+  ['reports', /^reports?(_|$)/],
+  ['business', /^business_/],
+];
+
+function requestResource(request) {
+  let resource = new URL(request.url || '/', 'http://localhost').pathname;
+  if (resource.startsWith(API_PREFIX)) resource = resource.slice(API_PREFIX.length);
+  else if (resource.startsWith('/api')) resource = resource.slice('/api'.length);
+  if (!resource.startsWith('/')) resource = `/${resource}`;
+  return resource.length > 1 && resource.endsWith('/') ? resource.slice(0, -1) : resource;
+}
+
+function delegatedActionFor(method, resource) {
+  if (method === 'GET' || method === 'HEAD') return 'read';
+  if (method === 'DELETE') return 'delete';
+  // Duyệt, từ chối, ghi sổ... đổi trạng thái hồ sơ đã có nên thuộc quyền sửa dù được gọi bằng POST.
+  const changesExisting = /\/(approve|reject|confirm|execute|post|close|transition|complete|receive|cancel|determine|pay|disburse|lock|unlock|sign|reverse|void)(\/|$)/.test(resource);
+  return method === 'POST' && !changesExisting ? 'create' : 'edit';
+}
+
+function delegatedTarget(request) {
+  const resource = requestResource(request);
+  if (NON_DELEGABLE_PATHS.some(pattern => pattern.test(resource))) return null;
+  const collection = /^\/collections\/([^/]+)/.exec(resource);
+  let module = null;
+  if (collection) {
+    let scope;
+    try { scope = normalizeCollectionScope(decodeURIComponent(collection[1])); } catch { return null; }
+    module = DELEGATED_SCOPE_RULES.find(([, pattern]) => pattern.test(scope))?.[0] || null;
+  } else {
+    module = DELEGATED_PATH_RULES.find(([, pattern]) => pattern.test(resource))?.[0] || null;
+  }
+  return module ? { module, action: delegatedActionFor(request.method, resource) } : null;
+}
+
+function sanitizeRolePermissions(input) {
+  const result = {};
+  for (const { key } of DELEGABLE_MODULES) {
+    const source = input && typeof input === 'object' ? input[key] : null;
+    result[key] = Object.fromEntries(DELEGABLE_ACTIONS.map(action => [action, source?.[action] === true]));
+    // Tạo, sửa, xóa đều cần quyền xem để người dùng thấy dữ liệu mình thao tác.
+    if (DELEGABLE_ACTIONS.some(action => result[key][action])) result[key].read = true;
+  }
+  return result;
+}
+
+async function loadRoleRecord(roleCode) {
+  const code = String(roleCode || '').trim();
+  if (!code) return null;
+  const row = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'admin_roles' AND record_key = ? LIMIT 1").get(code.toUpperCase());
+  return row ? parseJsonObject(row.payload_json) : null;
+}
+
+async function validatedRoleCode(value) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string') throw new HttpError(422, 'Mã vai trò không hợp lệ.');
+  const code = value.trim().toUpperCase();
+  if (!code) return '';
+  if (!await loadRoleRecord(code)) throw new HttpError(422, 'Vai trò được chọn không tồn tại.');
+  return code;
+}
+
+async function activeRolePermissions(roleCode) {
+  const record = await loadRoleRecord(roleCode);
+  return record && record.status === 'Kích hoạt' ? sanitizeRolePermissions(record.permissions) : null;
+}
+
+async function applyDelegatedRole(user, request) {
+  if (user.role === 'ADMIN' || !user.role_code) return user;
+  const target = delegatedTarget(request);
+  if (!target) return user;
+  const permissions = await activeRolePermissions(user.role_code);
+  if (!permissions?.[target.module]?.[target.action]) return user;
+  // Hồ sơ của quản trị viên chỉ quản trị viên mới được xem hoặc sửa.
+  const employee = /^\/employees\/([^/]+)/.exec(requestResource(request));
+  if (employee) {
+    let employeeId = '';
+    try { employeeId = decodeURIComponent(employee[1]); } catch { return user; }
+    const subject = (await resolveUser(employeeId)) || (await getUserById(employeeId));
+    if (subject?.role === 'ADMIN') return user;
+  }
+  return { ...user, role: 'ADMIN', delegatedRoleCode: user.role_code };
+}
+
+async function publicUserWithAccess(user, profile = null) {
+  const base = publicUser(user, profile);
+  if (!base || user.role === 'ADMIN' || !user.role_code) return base;
+  return { ...base, delegatedPermissions: await activeRolePermissions(user.role_code) };
+}
+
 async function requireUser(request) {
   const token = getBearerToken(request);
   const claims = verifyToken(token);
@@ -6888,7 +7049,7 @@ async function requireUser(request) {
       .run(JSON.stringify({ ...session, lastActive: timestamp }), timestamp, row.id, row.payload_json);
   }
   request.authSession = { row, key, session };
-  return user;
+  return await applyDelegatedRole(user, request);
 }
 
 async function markCurrentSessionMfaVerified(request) {
@@ -7943,7 +8104,7 @@ async function handleRequest(request, response) {
     clearLoginFailures(attemptKey);
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
     const token = await createToken(user, request, method, true);
-    sendJson(response, 200, { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: publicUser(user, profile) });
+    sendJson(response, 200, { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: await publicUserWithAccess(user, profile) });
     return;
   }
 
@@ -8073,7 +8234,7 @@ async function handleRequest(request, response) {
   if (request.method === 'GET' && resource === '/auth/profile') {
     const actor = await requireUser(request);
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(actor.id);
-    sendJson(response, 200, { user: publicUser(actor, profile) });
+    sendJson(response, 200, { user: await publicUserWithAccess(actor, profile) });
     return;
   }
 
@@ -8158,6 +8319,25 @@ async function handleRequest(request, response) {
       },
       data,
     });
+    return;
+  }
+
+  // Danh mục vai trò kèm số tài khoản đang giữ vai trò, phục vụ màn hình Vai trò và Phân quyền.
+  if (request.method === 'GET' && resource === '/admin/roles/overview') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'admin_roles' ORDER BY created_at ASC, record_key ASC").all();
+    const holders = new Map((await db.prepare("SELECT role_code, COUNT(*) AS count FROM users WHERE role_code <> '' GROUP BY role_code").all()).map(row => [row.role_code, Number(row.count)]));
+    const count = async (sql) => Number((await db.prepare(sql).get())?.count || 0);
+    const everything = (value) => Object.fromEntries(DELEGABLE_MODULES.map(({ key }) => [key, Object.fromEntries(DELEGABLE_ACTIONS.map(action => [action, value]))]));
+    const systemRoles = [
+      { key: 'ADMIN', roleCode: 'ADMIN', name: 'Quản trị viên', category: 'Quản trị', system: true, status: 'Kích hoạt', description: 'Toàn quyền trên mọi module, gồm quản trị tài khoản, hệ thống và nhật ký kiểm toán.', permissions: everything(true), usersCount: await count("SELECT COUNT(*) AS count FROM users WHERE role = 'ADMIN'") },
+      { key: 'USER', roleCode: 'USER', name: 'Nhân viên', category: 'Tiêu chuẩn', system: true, status: 'Kích hoạt', description: 'Chỉ thao tác trên dữ liệu của chính mình và các mục dùng chung; các vai trò nghiệp vụ bổ sung quyền theo module.', permissions: everything(false), usersCount: await count("SELECT COUNT(*) AS count FROM users WHERE role = 'USER'") },
+    ];
+    const customRoles = rows.map(row => {
+      const record = parseJsonObject(row.payload_json);
+      return { ...record, system: false, permissions: sanitizeRolePermissions(record.permissions), usersCount: holders.get(record.roleCode) || 0 };
+    });
+    sendJson(response, 200, { modules: DELEGABLE_MODULES, actions: DELEGABLE_ACTIONS, roles: [...systemRoles, ...customRoles] });
     return;
   }
 
@@ -9372,6 +9552,10 @@ async function handleRequest(request, response) {
         if (scope === 'finance_loans' && db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`finance_loan:${recordKey}`]);
         const fresh = await db.prepare('SELECT * FROM collection_records WHERE id = ?').get(existing.id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy bản ghi.');
+        if (scope === 'admin_roles') {
+          const holders = Number((await db.prepare('SELECT COUNT(*) AS count FROM users WHERE role_code = ?').get(fresh.record_key))?.count || 0);
+          if (holders > 0) throw new HttpError(409, `Vai trò đang được gán cho ${holders} tài khoản. Hãy chuyển các tài khoản sang vai trò khác trước khi xóa.`);
+        }
         if (scope === 'finance_einvoices' && publicCollectionRecord(fresh)?.status !== 'Hóa đơn nháp') {
           throw new HttpError(409, 'Chỉ được xóa hóa đơn còn ở trạng thái nháp.');
         }
@@ -13358,7 +13542,7 @@ async function handleRequest(request, response) {
     if (request.method === 'PATCH') {
       const actor = await requireUser(request);
       if (actor.role !== 'ADMIN' && actor.id !== employeeId) throw new HttpError(403, 'Bạn không có quyền cập nhật hồ sơ nhân sự này.');
-      const employee = await updateEmployeeProfileRecord(employeeId, await readJson(request), { allowIdentityChanges: actor.role === 'ADMIN' });
+      const employee = await updateEmployeeProfileRecord(employeeId, await readJson(request), { allowIdentityChanges: actor.role === 'ADMIN', delegated: Boolean(actor.delegatedRoleCode) });
       sendJson(response, 200, { employee });
       return;
     }
@@ -13482,16 +13666,20 @@ async function handleRequest(request, response) {
       const suppliedName = payload.name === undefined && payload.fullName === undefined ? undefined : requiredText(payload.name || payload.fullName, 'Họ tên', 160);
       const suppliedEmail = payload.email === undefined ? undefined : normalizeEmail(payload.email);
       if (payload.role !== undefined && !['ADMIN', 'USER'].includes(payload.role)) throw new HttpError(422, 'Vai trò không hợp lệ.');
+      const suppliedRoleCode = payload.roleCode === undefined ? undefined : await validatedRoleCode(payload.roleCode);
       if (payload.isActive !== undefined && typeof payload.isActive !== 'boolean') throw new HttpError(422, 'Trạng thái hoạt động phải là true hoặc false.');
       const profileFields = ['phone', 'department', 'position', 'status', 'joinDate', 'salaryBase', 'avatar', 'details'];
       const profilePatch = Object.fromEntries(profileFields.filter((field) => Object.hasOwn(payload, field)).map((field) => [field, payload[field]]));
       const suppliedHash = payload.password === undefined ? undefined : await hashPassword(validatePassword(payload.password));
-      let updatedUser;
+      let updatedUser, roleChange = null;
       await db.transaction(async () => {
         await lockUserAdministration(actor);
         const fresh = await getUserById(id);
         if (!fresh) throw new HttpError(404, 'Không tìm thấy tài khoản.');
         const name = suppliedName ?? fresh.name, email = suppliedEmail ?? fresh.email, role = payload.role ?? fresh.role;
+        // Quản trị viên đã có toàn quyền nên không giữ vai trò ủy quyền.
+        const roleCode = role === 'ADMIN' ? '' : suppliedRoleCode ?? fresh.role_code ?? '';
+        roleChange = roleCode !== (fresh.role_code || '') ? { from: fresh.role_code || '', to: roleCode } : null;
         if (payload.status === 'Đã nghỉ việc' && payload.isActive === true) {
           throw new HttpError(422, 'Nhân sự đã nghỉ việc không thể có tài khoản đang hoạt động.');
         }
@@ -13500,8 +13688,8 @@ async function handleRequest(request, response) {
         const existingEmail = await getUserByEmail(email);
         if (existingEmail && existingEmail.id !== id) throw new HttpError(409, 'Email đã tồn tại.');
         if (role !== 'ADMIN' || !isActive) await retainActiveAdministrator(fresh);
-        await db.prepare('UPDATE users SET name = ?, email = ?, role = ?, is_active = ?, password_hash = ?, updated_at = ? WHERE id = ?')
-          .run(name, email, role, isActive, suppliedHash ?? fresh.password_hash, now(), id);
+        await db.prepare('UPDATE users SET name = ?, email = ?, role = ?, role_code = ?, is_active = ?, password_hash = ?, updated_at = ? WHERE id = ?')
+          .run(name, email, role, roleCode, isActive, suppliedHash ?? fresh.password_hash, now(), id);
         const updated = await getUserById(id);
         await ensureEmployeeProfile(updated);
         if (Object.keys(profilePatch).length > 0) await updateEmployeeProfileRecord(id, profilePatch, { allowIdentityChanges: true });
@@ -13509,6 +13697,7 @@ async function handleRequest(request, response) {
         if (updatedUser.is_active) await ensureEmployeeWorkspace(updatedUser);
         else await cleanupEmptyEmployeeWorkspace(id);
       });
+      if (roleChange) await recordAuditEvent(actor.id, 'assign_user_role', 'admin_users', id, roleChange);
       sendJson(response, 200, { user: publicUser(updatedUser, await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(id)) });
       return;
     }

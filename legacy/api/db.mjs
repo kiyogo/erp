@@ -742,6 +742,12 @@ export async function initDatabaseSchema() {
     CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events(actor_id, created_at DESC);
   `);
 
+  // Vai trò ủy quyền theo module (khác ADMIN và USER); rỗng nghĩa là không có.
+  const userColumnNames = new Set(isPg
+    ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND table_schema = current_schema()")).map(row => row.column_name)
+    : (await queryAll('PRAGMA table_info(users)')).map(row => row.name));
+  if (!userColumnNames.has('role_code')) await exec("ALTER TABLE users ADD COLUMN role_code TEXT NOT NULL DEFAULT ''");
+
   const bankAccountColumnNames = new Set(isPg
     ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'finance_bank_accounts' AND table_schema = current_schema()")).map(row => row.column_name)
     : (await queryAll('PRAGMA table_info(finance_bank_accounts)')).map(row => row.name));

@@ -1222,6 +1222,21 @@ export const collectionsApi = {
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
 };
 
+export type AdminRoleRecord = {
+  key: string; roleCode: string; name: string; description: string;
+  category: 'Quản trị' | 'Nghiệp vụ' | 'Tiêu chuẩn'; status: 'Kích hoạt' | 'Tạm khóa';
+  system: boolean; usersCount: number;
+  permissions: Record<string, { read: boolean; create: boolean; edit: boolean; delete: boolean }>;
+};
+export type AdminRolesOverview = { modules: Array<{ key: string; label: string }>; actions: string[]; roles: AdminRoleRecord[] };
+/** Vai trò nghiệp vụ lưu ở kho dữ liệu chung (admin_roles); máy chủ kiểm tra và làm sạch ma trận quyền. */
+export const adminRolesApi = {
+  overview: () => api.get<AdminRolesOverview>('/admin/roles/overview'),
+  create: (record: Pick<AdminRoleRecord, 'roleCode' | 'name'> & Partial<Pick<AdminRoleRecord, 'description' | 'status' | 'permissions'>>) => collectionsApi.create('admin_roles', record),
+  update: (roleCode: string, patch: Partial<Pick<AdminRoleRecord, 'name' | 'description' | 'status' | 'permissions'>>) => collectionsApi.patch('admin_roles', roleCode, patch),
+  remove: (roleCode: string) => collectionsApi.remove('admin_roles', roleCode),
+};
+
 export type PayrollCalculationRow = {
   employeeCode: string; employeeName: string; department: string; period: string;
   gross: number; baseSalary: number; allowance: number; bonus: number; dependents: number; taxableIncome: number;

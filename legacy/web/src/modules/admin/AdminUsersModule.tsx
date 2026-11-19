@@ -19,7 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
-import { adminSessionsApi, employeesApi, usersApi } from '../../api/endpoints';
+import { adminRolesApi, adminSessionsApi, AdminRoleRecord, employeesApi, usersApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
@@ -56,6 +56,7 @@ export function validateAdminUser(values: any, editing = false) {
   if (!editing && !String(values.username || '').trim()) return 'Vui lòng nhập mã nhân viên.';
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(values.email || '').trim())) return 'Email không hợp lệ.';
   if (!['ADMIN', 'USER'].includes(values.role)) return 'Vai trò phải là ADMIN hoặc USER theo quyền hệ thống hiện tại.';
+  if (values.role === 'ADMIN' && values.roleCode) return 'Quản trị viên đã có toàn quyền, không gán thêm vai trò nghiệp vụ.';
   if (!editing && (String(values.password || '').length < 12 || String(values.password || '').length > 256)) return 'Mật khẩu khởi tạo phải dài từ 12 đến 256 ký tự.';
   if (values.twoFactor === true || values.twoFactor === 'true') return 'Máy chủ chưa có bộ thực thi MFA; không thể bật bắt buộc 2FA từ biểu mẫu này.';
   return '';
@@ -69,6 +70,7 @@ export function buildAdminUserProfilePayload(values: any, avatar: string, users:
     name: fullName,
     email: String(values.email || '').trim(),
     role: values.role,
+    roleCode: values.role === 'ADMIN' ? '' : String(values.roleCode || ''),
     employeeCode: String(values.username || '').trim(),
     password: values.password,
     department: String(values.department || '').trim(),
@@ -98,6 +100,7 @@ export function buildAdminUserProfilePayload(values: any, avatar: string, users:
 export const AdminUsersModule: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [businessRoles, setBusinessRoles] = useState<AdminRoleRecord[]>([]);
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState('all');
 
@@ -126,9 +129,10 @@ export const AdminUsersModule: React.FC = () => {
         const next = await usersApi.getAll({ page, limit: 100 });
         users.push(...(next.data.data || []));
       }
-      const [orgResult, sessionResult] = await Promise.allSettled([
+      const [orgResult, sessionResult, roleResult] = await Promise.allSettled([
         dataService.fetchOrgUnitsList(),
         adminSessionsApi.getAll(),
+        adminRolesApi.overview(),
       ]);
       const lastLogins = new Map<string, string>();
       if (sessionResult.status === 'fulfilled') {
@@ -142,6 +146,8 @@ export const AdminUsersModule: React.FC = () => {
       if (orgResult.status === 'fulfilled') setDepartmentOptions(orgResult.value.map(name => ({ label: name, value: name })));
       else message.warning('Chưa tải được danh mục phòng ban. Danh sách tài khoản vẫn được hiển thị.');
       if (sessionResult.status === 'rejected') message.warning('Chưa tải được lịch sử phiên để xác định lần đăng nhập cuối.');
+      if (roleResult.status === 'fulfilled') setBusinessRoles(roleResult.value.data.roles.filter((item) => !item.system));
+      else message.warning('Chưa tải được danh mục vai trò nghiệp vụ.');
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể tải danh sách tài khoản.');
     } finally {
@@ -207,6 +213,7 @@ export const AdminUsersModule: React.FC = () => {
         middleLastName: details.middleLastName || '',
         email: employee.email || record.email,
         role: employee.role || record.role,
+        roleCode: String(employee.roleCode ?? record.roleCode ?? ''),
         department: employee.department || record.department,
         position: employee.position || record.position,
         phone: employee.phone || '',
@@ -365,9 +372,12 @@ export const AdminUsersModule: React.FC = () => {
       title: 'Vai trò',
       dataIndex: 'role',
       key: 'role',
-      render: (r: string) => {
-        return <Tag color={r === 'ADMIN' ? 'purple' : 'cyan'}>{r === 'ADMIN' ? 'Quản trị viên' : r === 'USER' ? 'Nhân viên' : r}</Tag>;
-      },
+      render: (r: string, record: any) => (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          <Tag color={r === 'ADMIN' ? 'purple' : 'cyan'}>{r === 'ADMIN' ? 'Quản trị viên' : r === 'USER' ? 'Nhân viên' : r}</Tag>
+          {record.roleCode && <Tag color="blue">{businessRoles.find((item) => item.roleCode === record.roleCode)?.name || record.roleCode}</Tag>}
+        </div>
+      ),
     },
     {
       title: 'Xác thực 2FA',
@@ -524,7 +534,7 @@ export const AdminUsersModule: React.FC = () => {
               setEditingUser(null);
               setAvatarValue('');
               if (avatarInputRef.current) avatarInputRef.current.value = '';
-              form.setFieldsValue({ role: 'USER', status: 'Chính thức', twoFactor: 'unsupported' });
+              form.setFieldsValue({ role: 'USER', roleCode: '', status: 'Chính thức', twoFactor: 'unsupported' });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -567,6 +577,13 @@ export const AdminUsersModule: React.FC = () => {
               </Form.Item>
               <Form.Item name="role" label="Vai trò hệ thống" rules={[{ required: true }]}>
                 <Select options={[{ label: 'Quản trị viên', value: 'ADMIN' }, { label: 'Nhân viên', value: 'USER' }]} />
+              </Form.Item>
+              <Form.Item name="roleCode" label="Vai trò nghiệp vụ">
+                <Select
+                  allowClear
+                  placeholder="Không gán vai trò nghiệp vụ"
+                  options={businessRoles.map((item) => ({ label: `${item.name} · ${item.roleCode}${item.status === 'Kích hoạt' ? '' : ' · tạm khóa'}`, value: item.roleCode }))}
+                />
               </Form.Item>
               <Form.Item name="email" label="Email công ty" rules={[{ required: true, type: 'email' }]}>
                 <Input placeholder="Nhập email công ty" />

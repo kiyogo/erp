@@ -180,6 +180,7 @@ export function serializeUserProfile(userRow, profileRow) {
     fullName: userRow.name,
     employeeCode: userRow.employee_code,
     role: userRow.role,
+    roleCode: userRow.role_code || '',
     isActive: Boolean(userRow.is_active),
     phone: rawPhone,
     department: profileRow?.department || '',
