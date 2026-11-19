@@ -6,6 +6,7 @@ import {
 import { collectionsApi, crmContactsApi, crmPromotionsApi, employeesApi, type CrmContact, type EnterpriseEmployee } from '../../api/endpoints';
 import { KTable } from '../../components/KTable';
 import { Button, Drawer, Form, Input, Modal, Select, Switch, Tag, message } from '../../custom-ui';
+import { ContactSelect } from './ContactSelect';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { derivePromotionStatus, promotionExportRows, promotionMetrics, type PromotionRecord, type PromotionStatus } from './promotionRules';
 
@@ -235,7 +236,8 @@ export const PromotionsModule: React.FC = () => {
         </div>
         <Form.Item name="eligibleItemCodes" label="Bộ quà hoặc hàng hóa áp dụng"><Select mode="tags" options={[]} placeholder="Nhập mã hàng hóa rồi nhấn Enter" /></Form.Item>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-          <Form.Item name="customerKeys" label="Khách hàng"><Select mode="multiple" options={customerOptions} placeholder="Để trống để không giới hạn khách hàng cụ thể" /></Form.Item>
+          <Form.Item name="customerKeys" label="Khách hàng"><ContactSelect type="customer" multiple placeholder="Để trống để không giới hạn khách hàng cụ thể"
+            onCreated={(created) => setCustomers((current) => [...current.filter((item) => item.key !== created.key), created])} /></Form.Item>
           <Form.Item name="combinablePromotionKeys" label="Chương trình được áp dụng đồng thời"><Select mode="multiple" options={promotionOptions} placeholder="Chọn chương trình có thể kết hợp" /></Form.Item>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>

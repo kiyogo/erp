@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Progress, Alert } from '../../custom-ui';
+import { ContactSelect } from './ContactSelect';
 
 export interface EnterpriseSupplierEval {
   key: string;
@@ -349,11 +350,8 @@ export const SupplierEvaluationModule: React.FC = () => {
           </div>
 
           <Form.Item name="supplierId" label="Nhà cung cấp" rules={[{ required: true }]}>
-            <Select
-              showSearch
-              placeholder="Chọn nhà cung cấp"
-              options={suppliers.map((supplier) => ({ value: supplier.key, label: `${supplier.code} · ${supplier.name}${supplier.industry ? ` · ${supplier.industry}` : ''}` }))}
-            />
+            <ContactSelect type="supplier"
+              onCreated={(created) => setSuppliers((current) => [...current.filter((item) => item.key !== created.key), created])} />
           </Form.Item>
 
           <Form.Item name="evalPeriod" label="Kỳ đánh giá" rules={[{ required: true }]}>

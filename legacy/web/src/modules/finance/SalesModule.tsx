@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
+import { ContactSelect } from '../crm/ContactSelect';
 import { crmContactsApi, crmPromotionsApi, financeDocumentsApi, type CrmContact, type CrmPromotion, type FinanceDocument, type SalePromotionPreview } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
@@ -322,13 +323,13 @@ export const SalesModule: React.FC = () => {
             </Form.Item>
           </div>
           <Form.Item name="customerId" label="Khách hàng trong danh bạ">
-            <Select allowClear showSearch options={customers.filter((item) => !item.status.toLocaleLowerCase().includes('tạm')).map((item) => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={(value) => {
-              const id = String(value || '');
-              setSelectedCustomerId(id);
-              setPromotionPreview(null);
-              const selected = customers.find((item) => item.key === id);
-              if (selected) form.setFieldsValue({ partnerName: selected.name });
-            }} />
+            <ContactSelect type="customer" allowClear
+              onCreated={(created) => setCustomers((current) => [...current.filter((item) => item.key !== created.key), created])}
+              onSelectContact={(selected) => {
+                setSelectedCustomerId(selected?.key || '');
+                setPromotionPreview(null);
+                if (selected) form.setFieldsValue({ partnerName: selected.name });
+              }} />
           </Form.Item>
           <Form.Item name="partnerName" label="Tên khách hàng" rules={[{ required: true, whitespace: true }]}>
             <Input disabled={!!selectedCustomerId} />

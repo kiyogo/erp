@@ -17,6 +17,7 @@ import {
   Tag,
   message,
 } from '../../custom-ui';
+import { ContactSelect } from '../crm/ContactSelect';
 import {
   collectionsApi,
   crmContactsApi,
@@ -361,13 +362,8 @@ export const PurchaseRequestsModule: React.FC = () => {
       <Modal title={`Xác định nhà cung cấp · ${supplierTarget?.requestNumber || ''}`} open={!!supplierTarget} onCancel={() => setSupplierTarget(null)} footer={null} width={520}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
           <div style={{ color: '#64748B' }}>Chọn nhà cung cấp đang hoạt động từ danh bạ để lưu kết quả tổng hợp yêu cầu.</div>
-          <Select
-            showSearch
-            placeholder="Chọn nhà cung cấp"
-            value={supplierKey || undefined}
-            onChange={setSupplierKey}
-            options={suppliers.map((supplier) => ({ value: supplier.key, label: `${supplier.code} · ${supplier.name}` }))}
-          />
+          <ContactSelect type="supplier" value={supplierKey || undefined} onChange={(key) => setSupplierKey(String(key || ''))}
+            onCreated={(created) => setSuppliers((current) => [...current.filter((item) => item.key !== created.key), created])} />
           {suppliers.length === 0 && <div style={{ color: '#B45309', fontSize: 13 }}>Hãy thêm nhà cung cấp trong Danh bạ trước khi xác định nhà cung cấp.</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Button onClick={() => setSupplierTarget(null)}>Hủy</Button>
