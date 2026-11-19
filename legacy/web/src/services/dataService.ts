@@ -232,6 +232,7 @@ export interface PayrollRecord {
   workDays: number;
   allowance: number;
   bonus: number;
+  overtimePay?: number;
   insuranceDeduction: number;
   taxDeduction: number;
   netSalary: number;

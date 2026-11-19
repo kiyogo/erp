@@ -138,3 +138,61 @@ test('nhân viên xem và xác nhận phiếu lương từ bảng lương đã d
   const again = await (await fetch(`${base}/employees/me/payslips`, { headers: staff })).json();
   assert.equal(again.data[0].signedStatus, 'Đã xác nhận');
 });
+
+async function lockTimesheet(record) {
+  const created = (await request('/collections/attendance_timesheet_summary', 'POST', { record: { status: 'Chờ đối soát', ...record } }, 201)).record;
+  return record.lock === false ? created : (await request(`/collections/attendance_timesheet_summary/${created.key}`, 'PATCH', { patch: { status: 'Đã khóa công' } })).record;
+}
+
+test('lương theo ngày công dùng bảng công đã khóa, tính làm thêm giờ và giữ nguyên lương đóng bảo hiểm', async () => {
+  await createEmployee('PAY-3', 26_000_000);
+  await lockTimesheet({ month: '2026-03', empCode: 'PAY-1', standardDays: 26, actualDays: 10, paidLeaveDays: 3, unpaidLeaveDays: 13, otHoursWeekday: 10, otHoursWeekend: 8 });
+  await lockTimesheet({ month: '2026-03', empCode: 'PAY-3', standardDays: 26, actualDays: 26, paidLeaveDays: 0, unpaidLeaveDays: 0, otHoursWeekday: 0, otHoursWeekend: 0, lock: false });
+
+  const result = await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', basis: 'attendance' });
+  assert.equal(result.basis, 'attendance');
+  const first = result.rows.find(row => row.employeeCode === 'PAY-1');
+  assert.equal(first.basis, 'attendance');
+  assert.equal(first.contractBaseSalary, 30_000_000);
+  assert.deepEqual(first.workdays, { standardDays: 26, payDays: 13, actualDays: 10, paidLeaveDays: 3, unpaidLeaveDays: 13 });
+  assert.equal(first.baseSalary, 15_000_000);
+  const hourly = 30_000_000 / 26 / 8;
+  assert.equal(first.overtime.weekdayPay, Math.round(hourly * 10 * 1.5));
+  assert.equal(first.overtime.weekendPay, Math.round(hourly * 8 * 2));
+  assert.equal(first.overtimePay, first.overtime.pay);
+  assert.equal(first.gross, 15_000_000 + first.overtime.pay);
+  assert.equal(first.insuranceSalary, 30_000_000, 'bảo hiểm tính theo lương hợp đồng');
+  assert.equal(first.insuranceDeduction, 3_150_000);
+  assert.equal(first.netSalary, first.gross - first.insuranceDeduction - first.taxDeduction);
+  assert.ok(first.warnings.some(text => text.includes('nghỉ không hưởng lương từ 14 ngày')) === false, 'nghỉ 13 ngày chưa tới ngưỡng cảnh báo');
+  assert.ok(result.parameters.legalBasis.some(text => text.includes('Điều 98')));
+
+  const skipped = Object.fromEntries(result.skipped.map(item => [item.employeeCode, item.reason]));
+  assert.match(skipped['PAY-2'], /Chưa có bảng công kỳ 2026-03/);
+  assert.match(skipped['PAY-3'], /chưa khóa công/);
+
+  // Cách tính mặc định vẫn là lương cố định, không bị bảng công làm thay đổi.
+  const fixed = await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', employeeCodes: ['PAY-1'] });
+  assert.equal(fixed.basis, 'fixed');
+  assert.equal(fixed.rows[0].baseSalary, 30_000_000);
+  assert.equal(fixed.rows[0].workdays, null);
+  await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', basis: 'bogus' }, 422);
+});
+
+test('phiếu lương lưu kèm tiền làm thêm giờ và nhân viên thấy đúng khoản này', async () => {
+  const calculated = (await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', employeeCodes: ['PAY-1'], basis: 'attendance' })).rows[0];
+  const record = {
+    key: 'payroll-2026-04-pay-1-ot', employeeCode: 'PAY-1', employeeName: calculated.employeeName, department: calculated.department, month: '2026-04', status: 'Chưa chi trả', workDays: calculated.workdays.payDays,
+    baseSalary: calculated.baseSalary, allowance: calculated.allowance, bonus: calculated.bonus, overtimePay: calculated.overtimePay,
+    insuranceDeduction: calculated.insuranceDeduction, taxDeduction: calculated.taxDeduction, netSalary: calculated.netSalary,
+  };
+  const created = (await request('/collections/payroll', 'POST', { record }, 201)).record;
+  assert.equal(created.overtimePay, calculated.overtimePay);
+  const login = await (await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'pay-1@example.test', password: 'Payroll-Staff-26!Secure' }) })).json();
+  const staff = { 'Content-Type': 'application/json', Authorization: `Bearer ${login.access_token || login.token}`, 'X-Security-Pin': '' };
+  const own = await (await fetch(`${base}/employees/me/payslips`, { headers: staff })).json();
+  const april = own.data.find(item => item.key === record.key);
+  assert.ok(april, JSON.stringify(own));
+  assert.equal(april.overtimePay, calculated.overtimePay);
+  assert.equal(april.workDays, 13);
+});

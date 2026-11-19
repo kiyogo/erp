@@ -122,9 +122,54 @@ function readAmount(value, label) {
   return Math.round(number);
 }
 
+// Lương theo ngày công và làm thêm giờ.
+// Làm thêm giờ: Bộ luật Lao động 2019 Điều 98 (ít nhất 150% ngày thường, 200% ngày nghỉ hằng tuần) và Nghị định 145/2020/NĐ-CP Điều 55
+// (tiền lương giờ lấy lương thực trả chia cho số giờ làm việc bình thường của tháng). Phần trả cao hơn lương giờ bình thường được miễn thuế TNCN.
+export const STANDARD_DAILY_HOURS = 8;
+export const OVERTIME_RATES = { weekday: 1.5, weekend: 2 };
+export const OVERTIME_LEGAL_BASIS = ['Bộ luật Lao động 2019 Điều 98', 'Nghị định 145/2020/NĐ-CP Điều 55'];
+
+function readQuantity(value, label, { positive = false, max = Infinity } = {}) {
+  const number = value === undefined || value === null || value === '' ? 0 : Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > max || (positive && number <= 0)) throw new Error(`${label} không hợp lệ.`);
+  return number;
+}
+
+/**
+ * Lương cơ bản theo ngày công thực tế và tiền làm thêm giờ của một tháng.
+ * - Lương tính theo ngày công = lương cơ bản x ngày hưởng lương / ngày công chuẩn; ngày hưởng lương vượt ngày công chuẩn không
+ *   làm tăng lương cơ bản (phần làm thêm phải ghi vào giờ làm thêm).
+ * - Tiền làm thêm = lương giờ x số giờ x hệ số; lương giờ = lương cơ bản của hợp đồng / ngày công chuẩn / 8 giờ.
+ */
+export function workdayPay({ baseSalary, standardDays, payDays, otHoursWeekday, otHoursWeekend }) {
+  const base = readAmount(baseSalary, 'Lương cơ bản');
+  const standard = readQuantity(standardDays, 'Ngày công chuẩn', { positive: true, max: 31 });
+  const paid = readQuantity(payDays, 'Ngày công hưởng lương', { max: 31 });
+  const weekdayHours = readQuantity(otHoursWeekday, 'Giờ làm thêm ngày thường', { max: 744 });
+  const weekendHours = readQuantity(otHoursWeekend, 'Giờ làm thêm ngày nghỉ', { max: 744 });
+  const warnings = [];
+  const counted = Math.min(paid, standard);
+  if (paid > standard) warnings.push(`Ngày hưởng lương ${paid} vượt ngày công chuẩn ${standard}; chỉ tính ${standard} ngày, phần còn lại cần ghi nhận là giờ làm thêm.`);
+  const proratedBase = Math.round(base * counted / standard);
+  const hourly = base / standard / STANDARD_DAILY_HOURS;
+  const normalWeekday = Math.round(hourly * weekdayHours);
+  const normalWeekend = Math.round(hourly * weekendHours);
+  const weekdayPay = Math.round(hourly * weekdayHours * OVERTIME_RATES.weekday);
+  const weekendPay = Math.round(hourly * weekendHours * OVERTIME_RATES.weekend);
+  return {
+    standardDays: standard, payDays: counted, proratedBase, hourlyWage: Math.round(hourly),
+    overtime: {
+      weekdayHours, weekendHours, weekdayPay, weekendPay, pay: weekdayPay + weekendPay,
+      exempt: (weekdayPay - normalWeekday) + (weekendPay - normalWeekend),
+      legalBasis: OVERTIME_LEGAL_BASIS,
+    },
+    warnings,
+  };
+}
+
 /**
  * Tính một phiếu lương tháng.
- * - baseSalary, allowance, bonus: thu nhập chịu thuế trong tháng.
+ * - baseSalary, allowance, bonus, overtimePay: thu nhập chịu thuế trong tháng.
  * - insuranceSalary: tiền lương đóng bảo hiểm, mặc định bằng baseSalary.
  * - exemptIncome: phần thu nhập miễn thuế trong tổng thu nhập (ví dụ phụ cấp được miễn theo quy định).
  */
@@ -133,11 +178,12 @@ export function calculatePayslip(input) {
   const baseSalary = readAmount(input.baseSalary, 'Lương cơ bản');
   const allowance = readAmount(input.allowance, 'Phụ cấp');
   const bonus = readAmount(input.bonus, 'Thưởng');
+  const overtimePay = readAmount(input.overtimePay, 'Tiền làm thêm giờ');
   const exemptIncome = readAmount(input.exemptIncome, 'Thu nhập miễn thuế');
   const insuranceSalary = input.insuranceSalary === undefined || input.insuranceSalary === null || input.insuranceSalary === ''
     ? baseSalary : readAmount(input.insuranceSalary, 'Lương đóng bảo hiểm');
   const dependents = Math.max(0, Math.floor(Number(input.dependents) || 0));
-  const gross = baseSalary + allowance + bonus;
+  const gross = baseSalary + allowance + bonus + overtimePay;
   if (exemptIncome > gross) throw new Error('Thu nhập miễn thuế không được lớn hơn tổng thu nhập.');
 
   const socialBase = Math.min(insuranceSalary, params.socialHealthCap);
@@ -164,7 +210,7 @@ export function calculatePayslip(input) {
   }
   if (insuranceSalary === 0) warnings.push('Lương đóng bảo hiểm bằng 0, không phát sinh bảo hiểm bắt buộc.');
   return {
-    period: params.period, region: params.region, gross, baseSalary, allowance, bonus, exemptIncome,
+    period: params.period, region: params.region, gross, baseSalary, allowance, bonus, overtimePay, exemptIncome,
     insuranceSalary, socialHealthBase: socialBase, unemploymentBase,
     employeeInsurance: { ...employee, total: employeeInsurance },
     employerInsurance: { ...employer, total: employerInsurance },

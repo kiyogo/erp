@@ -426,6 +426,16 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/finance/payroll/ledger-preview', 'POST', { ...tt99Payroll, insuranceBreakdown: { ...tt99Payroll.insuranceBreakdown, employeeSocial: 70 } }, 422);
   await request('/finance/payroll/ledger-preview', 'POST', { ...tt99Payroll, costAccount: '642' }, 422);
   await request('/finance/payroll/ledger-post', 'POST', { ...tt99Payroll, fingerprint: tt99PayrollPreview.fingerprint }, 201);
+  // Phiếu có tiền làm thêm giờ: tổng thu nhập ghi sổ phải gồm cả khoản này và phiếu phải cân đối.
+  await request('/collections/payroll', 'POST', { record: {
+    key: 'tt99-payroll-overtime', employeeCode: 'TT99-PAY-2', employeeName: 'Nhân viên làm thêm', month: '2032-10', status: 'Chưa chi trả',
+    baseSalary: 1000, allowance: 0, bonus: 0, overtimePay: 300, insuranceDeduction: 100, taxDeduction: 0, netSalary: 1200,
+  } }, 201);
+  const overtimePayroll = { ...tt99Payroll, period: '10/2032' };
+  const overtimePreview = await request('/finance/payroll/ledger-preview', 'POST', overtimePayroll);
+  assert.deepEqual(overtimePreview.lines[0] && [overtimePreview.lines[0].debitAccount, overtimePreview.lines[0].creditAccount, overtimePreview.lines[0].amount], ['TK 6421', 'TK 334', 1300]);
+  await request('/collections/payroll', 'POST', { record: { key: 'tt99-payroll-unbalanced', employeeCode: 'TT99-PAY-3', employeeName: 'Phiếu lệch', month: '2032-11', status: 'Chưa chi trả', baseSalary: 1000, allowance: 0, bonus: 0, overtimePay: 300, insuranceDeduction: 100, taxDeduction: 0, netSalary: 900 } }, 201);
+  await request('/finance/payroll/ledger-preview', 'POST', { ...tt99Payroll, period: '11/2032' }, 422);
   const tt99PayrollEntries = (await request('/collections/finance_general_ledger')).data.filter((entry) => entry.sourceReference === 'payroll:09/2032');
   assert.equal(tt99PayrollEntries.length, 7);
   assert.ok(tt99PayrollEntries.every((entry) => {

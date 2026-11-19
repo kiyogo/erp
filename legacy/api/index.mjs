@@ -17,7 +17,7 @@ import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
-import { REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters } from './payrollRules.mjs';
+import { REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -5628,7 +5628,7 @@ async function ownPayslips(actor) {
     .filter(record => record && String(record.employeeCode || '').toLocaleLowerCase('vi-VN') === code && PAYSLIP_VISIBLE_STATUSES.includes(record.status))
     .map(record => ({
       key: record.key, id: record.key, month: payrollMonth(record.month) || String(record.month || ''),
-      basicSalary: Number(record.baseSalary) || 0, allowance: Number(record.allowance) || 0, bonusKPI: Number(record.bonus) || 0,
+      basicSalary: Number(record.baseSalary) || 0, allowance: Number(record.allowance) || 0, bonusKPI: Number(record.bonus) || 0, overtimePay: Number(record.overtimePay) || 0,
       insuranceDeduction: Number(record.insuranceDeduction) || 0, personalTax: Number(record.taxDeduction) || 0, netSalary: Number(record.netSalary) || 0,
       workDays: Number(record.workDays) || 0, status: record.status === 'Đã chi trả' ? 'Đã thanh toán' : 'Đã chốt, chờ thanh toán',
       signedStatus: record.employeeConfirmedAt ? 'Đã xác nhận' : 'Chưa xác nhận', signedDate: record.employeeConfirmedAt || '', signerName: record.employeeConfirmedBy || '',
@@ -5658,7 +5658,7 @@ async function payrollLedgerPreview(period, employerInsurance, actor, { allowEmp
       if (record[field] === undefined || record[field] === null || record[field] === '') throw new HttpError(422, `Phiếu lương ${record.employeeCode} thiếu số liệu ${field}.`);
       return optionalAmount(record[field], field);
     };
-    const gross = readMoney('baseSalary') + readMoney('allowance') + readMoney('bonus');
+    const gross = readMoney('baseSalary') + readMoney('allowance') + readMoney('bonus') + (record.overtimePay ? readMoney('overtimePay') : 0);
     const insurance = readMoney('insuranceDeduction');
     const tax = readMoney('taxDeduction');
     const net = readMoney('netSalary');
@@ -12964,6 +12964,17 @@ async function handleRequest(request, response) {
     try { period = normalizePeriod(input.period); payrollParameters(period, input.region); } catch (error) { throw new HttpError(422, error.message); }
     const region = String(input.region);
     if (!REGIONS.includes(region)) throw new HttpError(422, 'Chọn vùng lương tối thiểu I, II, III hoặc IV.');
+    const basis = input.basis === undefined ? 'fixed' : input.basis;
+    if (!['fixed', 'attendance'].includes(basis)) throw new HttpError(422, 'Cách tính lương phải là lương cố định hoặc theo ngày công.');
+    // Theo ngày công: dùng bảng tổng hợp chấm công của đúng kỳ; chỉ tin bảng công đã khóa để lương không dựa trên số liệu chưa đối soát.
+    const timesheets = new Map();
+    if (basis === 'attendance') {
+      for (const row of await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_timesheet_summary' AND json_extract(payload_json, '$.month') = ?").all(period)) {
+        const summary = parseJsonObject(row.payload_json);
+        const key = String(summary.employeeCode || summary.empCode || '').toLocaleLowerCase('vi-VN');
+        if (key && (!timesheets.has(key) || summary.status === 'Đã khóa công')) timesheets.set(key, summary);
+      }
+    }
     const wanted = Array.isArray(input.employeeCodes) ? new Set(input.employeeCodes.map(code => String(code).toLocaleLowerCase('vi-VN'))) : null;
     const overrides = new Map((Array.isArray(input.items) ? input.items : []).map(item => [String(item?.employeeCode || '').toLocaleLowerCase('vi-VN'), item]));
     const employeeRows = await db.prepare(`SELECT u.*, p.phone, p.department, p.position, p.employment_status, p.join_date,
@@ -12980,12 +12991,32 @@ async function handleRequest(request, response) {
       const baseSalary = Number(employee.salaryBase) || 0;
       if (baseSalary <= 0) { skipped.push({ employeeCode: code, employeeName: employee.name, reason: 'Hồ sơ chưa có lương cơ bản.' }); continue; }
       try {
+        let attendance = null;
+        let timesheet = null;
+        if (basis === 'attendance') {
+          timesheet = timesheets.get(code.toLocaleLowerCase('vi-VN'));
+          if (!timesheet) { skipped.push({ employeeCode: code, employeeName: employee.name, reason: `Chưa có bảng công kỳ ${period}.` }); continue; }
+          if (timesheet.status !== 'Đã khóa công') { skipped.push({ employeeCode: code, employeeName: employee.name, reason: `Bảng công kỳ ${period} chưa khóa công.` }); continue; }
+          attendance = workdayPay({
+            baseSalary, standardDays: timesheet.standardDays, payDays: timesheet.totalPayDays ?? (Number(timesheet.actualDays) || 0) + (Number(timesheet.paidLeaveDays) || 0),
+            otHoursWeekday: timesheet.otHoursWeekday, otHoursWeekend: timesheet.otHoursWeekend,
+          });
+        }
         const slip = calculatePayslip({
-          period, region, baseSalary, allowance: extra.allowance, bonus: extra.bonus, exemptIncome: extra.exemptIncome,
-          insuranceSalary: extra.insuranceSalary,
+          period, region, baseSalary: attendance ? attendance.proratedBase : baseSalary, allowance: extra.allowance, bonus: extra.bonus,
+          overtimePay: attendance?.overtime.pay, exemptIncome: (Number(extra.exemptIncome) || 0) + (attendance?.overtime.exempt || 0),
+          // Đóng bảo hiểm theo lương hợp đồng, không giảm theo ngày công.
+          insuranceSalary: extra.insuranceSalary ?? (attendance ? baseSalary : undefined),
           dependents: countActiveDependents(employee.details?.familyMembers, period),
         });
-        rows.push({ employeeCode: code, employeeName: employee.name, department: employee.department || '', ...slip });
+        const extraWarnings = [...(attendance?.warnings || [])];
+        if (timesheet && Number(timesheet.unpaidLeaveDays) >= 14) extraWarnings.push(`Nghỉ không hưởng lương ${timesheet.unpaidLeaveDays} ngày: kiểm tra quy định về đóng bảo hiểm xã hội khi nghỉ không lương từ 14 ngày làm việc trở lên trong tháng.`);
+        rows.push({
+          employeeCode: code, employeeName: employee.name, department: employee.department || '', ...slip, warnings: [...slip.warnings, ...extraWarnings],
+          basis, contractBaseSalary: baseSalary,
+          workdays: attendance ? { standardDays: attendance.standardDays, payDays: attendance.payDays, actualDays: Number(timesheet.actualDays) || 0, paidLeaveDays: Number(timesheet.paidLeaveDays) || 0, unpaidLeaveDays: Number(timesheet.unpaidLeaveDays) || 0 } : null,
+          overtime: attendance ? { ...attendance.overtime, hourlyWage: attendance.hourlyWage } : null,
+        });
       } catch (error) {
         skipped.push({ employeeCode: code, employeeName: employee.name, reason: error.message });
       }
@@ -12993,7 +13024,8 @@ async function handleRequest(request, response) {
     const parameters = payrollParameters(period, region);
     sendJson(response, 200, {
       period, region,
-      parameters: { socialHealthCap: parameters.socialHealthCap, unemploymentCap: parameters.unemploymentCap, regionalMinimumWage: parameters.regionalMinimumWage, personalDeduction: parameters.pit.personalDeduction, dependentDeduction: parameters.pit.dependentDeduction, legalBasis: parameters.legalBasis },
+      basis,
+      parameters: { socialHealthCap: parameters.socialHealthCap, unemploymentCap: parameters.unemploymentCap, regionalMinimumWage: parameters.regionalMinimumWage, personalDeduction: parameters.pit.personalDeduction, dependentDeduction: parameters.pit.dependentDeduction, legalBasis: basis === 'attendance' ? [...parameters.legalBasis, 'Bộ luật Lao động 2019 Điều 98; Nghị định 145/2020/NĐ-CP Điều 55 (làm thêm giờ)'] : parameters.legalBasis },
       rows, skipped,
     });
     return;

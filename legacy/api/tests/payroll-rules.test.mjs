@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, progressiveTax } from '../payrollRules.mjs';
+import { calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, progressiveTax, workdayPay } from '../payrollRules.mjs';
 
 test('kỳ 2026 dùng giảm trừ 15,5 triệu, 6,2 triệu và biểu 5 bậc', () => {
   const slip = calculatePayslip({ period: '2026-03', region: 'I', baseSalary: 30_000_000, dependents: 1 });
@@ -72,4 +72,43 @@ test('từ chối kỳ chưa hỗ trợ, vùng sai và số tiền không hợp 
   assert.throws(() => calculatePayslip({ period: '2026-03', region: 'I', baseSalary: 1_000_000, exemptIncome: 2_000_000 }), /miễn thuế/);
   assert.equal(normalizePeriod('3/2026'), '2026-03');
   assert.throws(() => normalizePeriod('2026-13'), /Kỳ lương/);
+});
+
+test('lương theo ngày công: nhân theo ngày hưởng lương, giới hạn ở ngày công chuẩn', () => {
+  const half = workdayPay({ baseSalary: 26_000_000, standardDays: 26, payDays: 13 });
+  assert.equal(half.proratedBase, 13_000_000);
+  assert.equal(half.payDays, 13);
+  assert.deepEqual(half.warnings, []);
+  assert.equal(workdayPay({ baseSalary: 26_000_000, standardDays: 26, payDays: 26 }).proratedBase, 26_000_000);
+  const capped = workdayPay({ baseSalary: 26_000_000, standardDays: 26, payDays: 28 });
+  assert.equal(capped.proratedBase, 26_000_000);
+  assert.equal(capped.payDays, 26);
+  assert.match(capped.warnings[0], /vượt ngày công chuẩn/);
+  assert.equal(workdayPay({ baseSalary: 10_000_000, standardDays: 22, payDays: 10.5 }).proratedBase, Math.round(10_000_000 * 10.5 / 22));
+  assert.equal(workdayPay({ baseSalary: 10_000_000, standardDays: 22, payDays: 0 }).proratedBase, 0);
+});
+
+test('làm thêm giờ: 150% ngày thường, 200% ngày nghỉ, phần cao hơn lương giờ bình thường được miễn thuế', () => {
+  const pay = workdayPay({ baseSalary: 26_000_000, standardDays: 26, payDays: 26, otHoursWeekday: 10, otHoursWeekend: 8 });
+  assert.equal(pay.hourlyWage, 125_000);
+  assert.equal(pay.overtime.weekdayPay, 1_875_000);
+  assert.equal(pay.overtime.weekendPay, 2_000_000);
+  assert.equal(pay.overtime.pay, 3_875_000);
+  assert.equal(pay.overtime.exempt, 625_000 + 1_000_000);
+  // Lương giờ lấy theo lương hợp đồng, không giảm theo ngày công.
+  const absent = workdayPay({ baseSalary: 26_000_000, standardDays: 26, payDays: 13, otHoursWeekday: 10 });
+  assert.equal(absent.overtime.weekdayPay, 1_875_000);
+  assert.equal(absent.proratedBase, 13_000_000);
+  const slip = calculatePayslip({ period: '2026-03', region: 'I', baseSalary: absent.proratedBase, overtimePay: absent.overtime.pay, exemptIncome: absent.overtime.exempt, insuranceSalary: 26_000_000 });
+  assert.equal(slip.gross, 13_000_000 + 1_875_000);
+  assert.equal(slip.overtimePay, 1_875_000);
+  assert.equal(slip.insuranceSalary, 26_000_000);
+  assert.equal(slip.taxableIncome, Math.max(0, slip.gross - absent.overtime.exempt - slip.employeeInsurance.total - 15_500_000));
+});
+
+test('lương theo ngày công từ chối số liệu không hợp lệ', () => {
+  assert.throws(() => workdayPay({ baseSalary: 1_000_000, standardDays: 0, payDays: 1 }), /Ngày công chuẩn/);
+  assert.throws(() => workdayPay({ baseSalary: 1_000_000, standardDays: 26, payDays: -1 }), /Ngày công hưởng lương/);
+  assert.throws(() => workdayPay({ baseSalary: 1_000_000, standardDays: 26, payDays: 1, otHoursWeekday: -2 }), /Giờ làm thêm/);
+  assert.throws(() => workdayPay({ baseSalary: -1, standardDays: 26, payDays: 1 }), /Lương cơ bản/);
 });

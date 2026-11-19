@@ -106,7 +106,7 @@ export const EmployeePayslipModule: React.FC = () => {
       key: 'allowances',
       render: (_: any, r: any) => (
         <span style={{ color: '#2E7D32', fontWeight: 500 }}>
-          +{(r.allowance + r.bonusKPI).toLocaleString('vi-VN')} ₫
+          +{(r.allowance + r.bonusKPI + (r.overtimePay || 0)).toLocaleString('vi-VN')} ₫
         </span>
       ),
     },
@@ -193,8 +193,8 @@ export const EmployeePayslipModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button icon={<DownloadOutlined />} onClick={() => {
             downloadFile('Bang_Tong_Hop_Phieu_Luong_Ca_Nhan.xlsx', generateValidXlsxBlob([
-              ['Kỳ lương', 'Lương cơ bản', 'Phụ cấp', 'Thưởng KPI', 'Bảo hiểm', 'Thuế TNCN', 'Thực lĩnh', 'Trạng thái'],
-              ...data.map(item => [item.month, item.basicSalary, item.allowance, item.bonusKPI, item.insuranceDeduction, item.personalTax, item.netSalary, item.status]),
+              ['Kỳ lương', 'Lương cơ bản', 'Phụ cấp', 'Thưởng KPI', 'Làm thêm giờ', 'Bảo hiểm', 'Thuế TNCN', 'Thực lĩnh', 'Trạng thái'],
+              ...data.map(item => [item.month, item.basicSalary, item.allowance, item.bonusKPI, item.overtimePay || 0, item.insuranceDeduction, item.personalTax, item.netSalary, item.status]),
             ]));
             message.success('Đã xuất file bảng kê phiếu lương cá nhân thành công!');
           }}>
@@ -235,6 +235,7 @@ export const EmployeePayslipModule: React.FC = () => {
                   `Lương cơ bản: ${selectedPayslip.basicSalary} VND`,
                   `Phụ cấp: ${selectedPayslip.allowance} VND`,
                   `Thưởng KPI: ${selectedPayslip.bonusKPI} VND`,
+                  ...(selectedPayslip.overtimePay ? [`Làm thêm giờ: ${selectedPayslip.overtimePay} VND`] : []),
                   `Bảo hiểm: ${selectedPayslip.insuranceDeduction} VND`,
                   `Thuế TNCN: ${selectedPayslip.personalTax} VND`,
                   `Thực lĩnh: ${selectedPayslip.netSalary} VND`,
@@ -264,6 +265,12 @@ export const EmployeePayslipModule: React.FC = () => {
               <span style={{ color: '#757575' }}>Thưởng hiệu suất công việc:</span>
               <span style={{ color: '#2E7D32', fontWeight: 600 }}>+{selectedPayslip.bonusKPI.toLocaleString('vi-VN')} ₫</span>
             </div>
+            {selectedPayslip.overtimePay > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid #F0F0F0' }}>
+                <span style={{ color: '#757575' }}>Tiền làm thêm giờ:</span>
+                <span style={{ color: '#2E7D32', fontWeight: 600 }}>+{selectedPayslip.overtimePay.toLocaleString('vi-VN')} ₫</span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid #F0F0F0' }}>
               <span style={{ color: '#757575' }}>Trích đóng BHXH (8%), BHYT (1.5%), BHTN (1%):</span>
               <span style={{ color: '#C62828', fontWeight: 500 }}>-{selectedPayslip.insuranceDeduction.toLocaleString('vi-VN')} ₫</span>

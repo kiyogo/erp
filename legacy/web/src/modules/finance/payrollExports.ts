@@ -46,8 +46,8 @@ export function payrollReportRows(records: PayrollRecord[], report: 'payroll' | 
   }
   return [
     ['Kỳ lương', month],
-    ['Mã nhân viên', 'Họ tên', 'Phòng ban', 'Lương cơ sở', 'Ngày công', 'Phụ cấp', 'Thưởng', 'Khấu trừ bảo hiểm', 'Thực lĩnh', 'Trạng thái'],
-    ...records.map((record) => [record.employeeCode, record.employeeName, record.department, record.baseSalary, record.workDays, record.allowance, record.bonus, record.insuranceDeduction, record.netSalary, record.status]),
+    ['Mã nhân viên', 'Họ tên', 'Phòng ban', 'Lương cơ sở', 'Ngày công', 'Phụ cấp', 'Thưởng', 'Làm thêm giờ', 'Khấu trừ bảo hiểm', 'Thực lĩnh', 'Trạng thái'],
+    ...records.map((record) => [record.employeeCode, record.employeeName, record.department, record.baseSalary, record.workDays, record.allowance, record.bonus, record.overtimePay || 0, record.insuranceDeduction, record.netSalary, record.status]),
   ];
 }
 

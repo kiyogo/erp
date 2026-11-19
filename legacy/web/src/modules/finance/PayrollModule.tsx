@@ -58,6 +58,7 @@ export const PayrollModule: React.FC = () => {
   const [accountingSheetKey, setAccountingSheetKey] = useState('');
   const [calcOpen, setCalcOpen] = useState(false);
   const [calcRegion, setCalcRegion] = useState('I');
+  const [calcBasis, setCalcBasis] = useState<'fixed' | 'attendance'>('fixed');
   const [calcLoading, setCalcLoading] = useState(false);
   const [calcSaving, setCalcSaving] = useState(false);
   const [calcResult, setCalcResult] = useState<PayrollCalculationResult | null>(null);
@@ -167,7 +168,7 @@ export const PayrollModule: React.FC = () => {
   const runCalculation = async () => {
     setCalcLoading(true);
     try {
-      const response = await payrollCalculationApi.calculate({ period: calcPeriod, region: calcRegion });
+      const response = await payrollCalculationApi.calculate({ period: calcPeriod, region: calcRegion, basis: calcBasis });
       setCalcResult(response.data);
     } catch (error: any) {
       setCalcResult(null);
@@ -185,8 +186,8 @@ export const PayrollModule: React.FC = () => {
         await dataService.createGenericRecord('payroll', {
           key: `payroll-${calcPeriod}-${row.employeeCode.toLowerCase()}`,
           employeeCode: row.employeeCode, employeeName: row.employeeName, department: row.department,
-          month: calcPeriod, status: 'Chưa chi trả', workDays: 0,
-          baseSalary: row.baseSalary, allowance: row.allowance, bonus: row.bonus,
+          month: calcPeriod, status: 'Chưa chi trả', workDays: row.workdays?.payDays ?? 0,
+          baseSalary: row.baseSalary, allowance: row.allowance, bonus: row.bonus, overtimePay: row.overtimePay || 0,
           insuranceDeduction: row.insuranceDeduction, taxDeduction: row.taxDeduction, netSalary: row.netSalary,
           employeeSocial: row.employeeInsurance.social, employeeHealth: row.employeeInsurance.health, employeeUnemployment: row.employeeInsurance.unemployment,
           employerSocial: row.employerInsurance.social, employerHealth: row.employerInsurance.health, employerUnemployment: row.employerInsurance.unemployment,
@@ -206,7 +207,7 @@ export const PayrollModule: React.FC = () => {
   const orgUnits = dataService.getOrgUnits();
   const payrollSheets = dataService.getGenericData('finance_payroll_sheets');
   const totalPayroll = periodData.reduce((sum, item) => sum + item.netSalary, 0);
-  const grossPayroll = periodData.reduce((sum, item) => sum + item.baseSalary + item.allowance + item.bonus, 0);
+  const grossPayroll = periodData.reduce((sum, item) => sum + item.baseSalary + item.allowance + item.bonus + (item.overtimePay || 0), 0);
   const employeeInsurance = periodData.reduce((sum, item) => sum + item.insuranceDeduction, 0);
   const payrollCostAccounts = chartAccounts.filter((account) => account.accountType === 'Chi phí' && !chartAccounts.some((item) => item.parentCode === account.code));
   const insuranceBreakdownValues = Object.fromEntries(Object.entries(insuranceBreakdown).map(([key, value]) => [key, Number(value)])) as Record<keyof typeof insuranceBreakdown, number>;
@@ -473,6 +474,8 @@ export const PayrollModule: React.FC = () => {
           <span>Kỳ lương {selectedMonth}</span>
           <span>Vùng lương tối thiểu</span>
           <Select value={calcRegion} onChange={setCalcRegion} style={{ width: 140 }} options={['I', 'II', 'III', 'IV'].map((region) => ({ value: region, label: `Vùng ${region}` }))} />
+          <span>Cách tính lương</span>
+          <Select value={calcBasis} onChange={(value: 'fixed' | 'attendance') => { setCalcBasis(value); setCalcResult(null); }} style={{ width: 300 }} options={[{ value: 'fixed', label: 'Lương cố định cả tháng' }, { value: 'attendance', label: 'Theo ngày công thực tế, bảng công đã khóa' }]} />
           <Button type="primary" loading={calcLoading} onClick={runCalculation}>Tính lương</Button>
         </div>
         {calcResult && <>
@@ -486,6 +489,11 @@ export const PayrollModule: React.FC = () => {
               { title: 'Mã', dataIndex: 'employeeCode', key: 'employeeCode' },
               { title: 'Họ tên', dataIndex: 'employeeName', key: 'employeeName' },
               { title: 'Đơn vị', dataIndex: 'department', key: 'department' },
+              ...(calcResult.basis === 'attendance' ? [
+                { title: 'Ngày công', key: 'workdays', render: (_: unknown, row: any) => `${row.workdays?.payDays ?? 0} / ${row.workdays?.standardDays ?? 0}` },
+                { title: 'Lương theo ngày công', dataIndex: 'baseSalary', key: 'baseSalary', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
+                { title: 'Làm thêm giờ', dataIndex: 'overtimePay', key: 'overtimePay', render: (v: number) => `${(v || 0).toLocaleString('vi-VN')} ₫` },
+              ] : []),
               { title: 'Tổng thu nhập', dataIndex: 'gross', key: 'gross', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
               { title: 'Phụ thuộc', dataIndex: 'dependents', key: 'dependents' },
               { title: 'Bảo hiểm', dataIndex: 'insuranceDeduction', key: 'insuranceDeduction', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
@@ -500,7 +508,7 @@ export const PayrollModule: React.FC = () => {
           {calcResult.skipped.length > 0 && <div style={{ color: '#64748B', fontSize: 13, marginTop: 14 }}>
             Bỏ qua {calcResult.skipped.length} nhân viên: {calcResult.skipped.map((item) => `${item.employeeCode} (${item.reason})`).join('; ')}
           </div>}
-          <div style={{ color: '#64748B', fontSize: 12.5, marginTop: 14 }}>Căn cứ: {calcResult.parameters.legalBasis.join('; ')}. Lương tính theo lương cơ bản trong hồ sơ nhân sự, chưa nhân theo ngày công.</div>
+          <div style={{ color: '#64748B', fontSize: 12.5, marginTop: 14 }}>Căn cứ: {calcResult.parameters.legalBasis.join('; ')}. {calcResult.basis === 'attendance' ? 'Lương cơ bản nhân theo ngày hưởng lương trên ngày công chuẩn của bảng công đã khóa; bảo hiểm vẫn tính theo lương cơ bản trong hồ sơ nhân sự.' : 'Lương tính theo lương cơ bản trong hồ sơ nhân sự, chưa nhân theo ngày công.'}</div>
         </>}
       </Modal>
       {/* KPI Cards */}

@@ -1256,15 +1256,20 @@ export type PayrollCalculationRow = {
   employeeInsurance: { social: number; health: number; unemployment: number; total: number };
   employerInsurance: { social: number; health: number; unemployment: number; total: number };
   warnings: string[];
+  overtimePay: number;
+  basis: 'fixed' | 'attendance';
+  contractBaseSalary: number;
+  workdays: { standardDays: number; payDays: number; actualDays: number; paidLeaveDays: number; unpaidLeaveDays: number } | null;
+  overtime: { weekdayHours: number; weekendHours: number; weekdayPay: number; weekendPay: number; pay: number; exempt: number; hourlyWage: number } | null;
 };
 export type PayrollCalculationResult = {
-  period: string; region: string;
+  period: string; region: string; basis: 'fixed' | 'attendance';
   parameters: { socialHealthCap: number; unemploymentCap: number; regionalMinimumWage: number; personalDeduction: number; dependentDeduction: number; legalBasis: string[] };
   rows: PayrollCalculationRow[];
   skipped: Array<{ employeeCode: string; employeeName: string; reason: string }>;
 };
 export const payrollCalculationApi = {
-  calculate: (payload: { period: string; region: string; employeeCodes?: string[]; items?: Array<{ employeeCode: string; allowance?: number; bonus?: number; exemptIncome?: number; insuranceSalary?: number }> }) =>
+  calculate: (payload: { period: string; region: string; basis?: 'fixed' | 'attendance'; employeeCodes?: string[]; items?: Array<{ employeeCode: string; allowance?: number; bonus?: number; exemptIncome?: number; insuranceSalary?: number }> }) =>
     api.post<PayrollCalculationResult>('/finance/payroll/calculate', payload),
 };
 
