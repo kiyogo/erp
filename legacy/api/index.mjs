@@ -1535,6 +1535,14 @@ function publicBankAccount(row, actor = null) {
     accountNumber: isFull ? rawAcc : maskBankAccount(rawAcc),
     accountHolder: row.account_holder,
     branch: row.branch,
+    bankCode: row.bank_code || '',
+    legalEntity: row.legal_entity || '',
+    currency: row.currency || 'VND',
+    ledgerAccountCode: row.ledger_account_code || '',
+    openedAt: row.opened_at || '',
+    closedAt: row.closed_at || '',
+    manager: row.manager || '',
+    notes: row.notes || '',
     balance: isFull ? (row.opening_balance || 0) : 0,
     status: row.status,
     createdAt: row.created_at,
@@ -1544,17 +1552,17 @@ function publicBankAccount(row, actor = null) {
 
 async function internalTransferAccounts() {
   const banks = (await db.prepare('SELECT * FROM finance_bank_accounts ORDER BY bank_name, id').all()).map(row => publicBankAccount(row));
-  const transactions = await db.prepare("SELECT source, source_account_id, account_name, transaction_type, amount FROM finance_cash_transactions WHERE status = 'Đã hoàn thành'").all();
+  const transactions = await db.prepare("SELECT source, source_account_id, account_name, transaction_type, amount, currency FROM finance_cash_transactions WHERE status = 'Đã hoàn thành'").all();
   const bankNameCounts = new Map();
   for (const bank of banks) bankNameCounts.set(bank.bankName, (bankNameCounts.get(bank.bankName) || 0) + 1);
   const accounts = banks.map(bank => {
     const name = `${bank.bankName} (${bank.accountNumber})`;
-    const aliases = new Set([bank.key, bank.accountNumber, name, `${bank.bankName} - ${bank.accountNumber} (VND)`]);
+    const aliases = new Set([bank.key, bank.accountNumber, name, `${bank.bankName} - ${bank.accountNumber} (${bank.currency})`]);
     // Old cash entries used bank names; only assign them when the name identifies one account.
     if (bankNameCounts.get(bank.bankName) === 1) aliases.add(bank.bankName);
-    const movement = transactions.filter(item => item.source === 'bank' && (item.source_account_id === bank.key || (!item.source_account_id && aliases.has(item.account_name))))
+    const movement = transactions.filter(item => item.source === 'bank' && (item.currency || 'VND') === bank.currency && (item.source_account_id === bank.key || (!item.source_account_id && aliases.has(item.account_name))))
       .reduce((sum, item) => sum + (item.transaction_type === 'Thu' ? Number(item.amount) : -Number(item.amount)), 0);
-    return { key: bank.key, name, source: 'bank', balance: Number(bank.balance) + movement, status: bank.status };
+    return { key: bank.key, name, source: 'bank', balance: Number(bank.balance) + movement, currency: bank.currency, status: bank.status };
   });
   for (const name of new Set(['Quỹ tiền mặt', ...transactions.filter(item => item.source === 'petty').map(item => item.account_name)])) {
     const key = `petty:${name}`;
@@ -5815,6 +5823,9 @@ async function resolveCashTransactionLinks(transaction) {
     if (!account || account.status !== 'Đang hoạt động' || account.source !== transaction.source) {
       throw new HttpError(422, 'Tài khoản nhận hoặc chi không tồn tại, đã ngừng hoạt động hoặc không khớp nguồn tiền.');
     }
+    if ((account.currency || 'VND') !== (transaction.currency || 'VND')) {
+      throw new HttpError(422, 'Loại tiền của phiếu phải trùng với loại tiền của tài khoản.');
+    }
     transaction.account = account.name;
   }
 
@@ -5875,11 +5886,26 @@ function validateBankAccount(input) {
   if (input.balance === undefined || input.balance === null || input.balance === '') {
     throw new HttpError(422, 'Nhập số dư ban đầu thực tế của tài khoản ngân hàng.');
   }
+  const openedAt = optionalText(input.openedAt, 'Ngày mở tài khoản', 10);
+  const closedAt = optionalText(input.closedAt, 'Ngày đóng tài khoản', 10);
+  if (openedAt) requiredIsoDate(openedAt, 'Ngày mở tài khoản');
+  if (closedAt) requiredIsoDate(closedAt, 'Ngày đóng tài khoản');
+  if (openedAt && closedAt && closedAt < openedAt) throw new HttpError(422, 'Ngày đóng tài khoản không được trước ngày mở tài khoản.');
+  const currency = requiredText(input.currency || 'VND', 'Tiền tệ', 3).toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new HttpError(422, 'Mã tiền tệ phải gồm 3 chữ cái in hoa.');
   return {
     bankName: requiredText(input.bankName, 'Tên ngân hàng', 200),
     accountNumber: requiredText(input.accountNumber, 'Số tài khoản', 64),
     accountHolder: requiredText(input.accountHolder, 'Chủ tài khoản', 200),
     branch: optionalText(input.branch, 'Chi nhánh', 200),
+    bankCode: optionalText(input.bankCode, 'Mã ngân hàng', 32),
+    legalEntity: requiredText(input.legalEntity || input.accountHolder, 'Pháp nhân sở hữu', 220),
+    currency,
+    ledgerAccountCode: optionalText(input.ledgerAccountCode, 'Tài khoản sổ cái', 32),
+    openedAt,
+    closedAt,
+    manager: optionalText(input.manager, 'Người quản lý', 200),
+    notes: optionalText(input.notes, 'Ghi chú', 1000),
     balance: optionalAmount(input.balance, 'Số dư ban đầu'),
     status: requiredText(input.status || 'Đang hoạt động', 'Trạng thái', 80),
   };
@@ -11035,6 +11061,8 @@ async function handleRequest(request, response) {
       const destination = accounts.find(item => item.key === destinationId);
       if (!source || !destination) throw new HttpError(422, 'Không tìm thấy tài khoản hoặc quỹ đã chọn.');
       if ([source, destination].some(item => item.status !== 'Đang hoạt động')) throw new HttpError(422, 'Tài khoản điều chuyển phải đang hoạt động.');
+      if ((source.currency || 'VND') !== (destination.currency || 'VND')) throw new HttpError(422, 'Chỉ chuyển tiền giữa các tài khoản cùng loại tiền.');
+      if ((source.currency || 'VND') !== 'VND') throw new HttpError(422, 'Chuyển tiền hiện chỉ hỗ trợ tài khoản VND.');
       if (!Number.isSafeInteger(source.balance) || source.balance < amount + fee) throw new HttpError(422, 'Số dư tài khoản nguồn không đủ cho số tiền và phí điều chuyển.');
       const id = randomUUID();
       const timestamp = now();
@@ -12007,13 +12035,24 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && resource === '/finance/bank-accounts') {
     const actor = await requireAdmin(request);
     const account = validateBankAccount(await readJson(request));
+    const normalizedAccountNumber = account.accountNumber.replace(/\s+/g, '').toLocaleLowerCase();
+    const normalizedBankName = account.bankName.trim().toLocaleLowerCase();
+    const normalizedLegalEntity = account.legalEntity.trim().toLocaleLowerCase();
+    const existingAccounts = await db.prepare('SELECT bank_name, account_number, legal_entity FROM finance_bank_accounts').all();
+    const duplicate = existingAccounts.some(row => row.bank_name.trim().toLocaleLowerCase() === normalizedBankName
+      && (row.legal_entity || '').trim().toLocaleLowerCase() === normalizedLegalEntity
+      && decryptField(row.account_number, 'finance').replace(/\s+/g, '').toLocaleLowerCase() === normalizedAccountNumber);
+    if (duplicate) throw new HttpError(409, 'Số tài khoản này đã được khai báo cho cùng ngân hàng và pháp nhân.');
     const encAccountNum = encryptField(account.accountNumber, 'finance');
     const id = randomUUID();
     const timestamp = now();
     await db.prepare(`INSERT INTO finance_bank_accounts (
-      id, bank_name, account_number, account_holder, branch, opening_balance, status, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, account.bankName, encAccountNum, account.accountHolder, account.branch, account.balance, account.status, actor.id, timestamp, timestamp);
+      id, bank_name, account_number, account_holder, branch, bank_code, legal_entity, currency,
+      ledger_account_code, opened_at, closed_at, manager, notes, opening_balance, status, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, account.bankName, encAccountNum, account.accountHolder, account.branch, account.bankCode, account.legalEntity,
+        account.currency, account.ledgerAccountCode, account.openedAt, account.closedAt, account.manager, account.notes,
+        account.balance, account.status, actor.id, timestamp, timestamp);
     sendJson(response, 201, { account: publicBankAccount(await db.prepare('SELECT * FROM finance_bank_accounts WHERE id = ?').get(id), actor) });
     return;
   }

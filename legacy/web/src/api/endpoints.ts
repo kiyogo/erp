@@ -678,6 +678,14 @@ export type FinanceBankAccount = {
   accountNumber: string;
   accountHolder: string;
   branch: string;
+  bankCode?: string;
+  legalEntity?: string;
+  currency?: string;
+  ledgerAccountCode?: string;
+  openedAt?: string;
+  closedAt?: string;
+  manager?: string;
+  notes?: string;
   balance: number;
   currentBalance?: number;
   status: string;

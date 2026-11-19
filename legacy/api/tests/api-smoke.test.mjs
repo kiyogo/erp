@@ -1119,6 +1119,8 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
     staffEmployeeCode: 'CASH-STAFF', payerName: 'Nguyễn Văn A', counterpartyAddress: 'Số 1, Hà Nội', attachmentCount: 2, sourceDocument: 'PT-001',
     journalLines: [{ description: 'Thu tiền hàng', debitAccount: '1121', creditAccount: '131', amount: 1200, business: 'Thanh toán hóa đơn' }],
   };
+  const usdAccount = (await request('/finance/bank-accounts', 'POST', { bankName: 'Vietcombank USD', accountNumber: `USD${suffix.slice(-8)}`, accountHolder: 'HTX kiểm thử', currency: 'USD', balance: 1000, status: 'Đang hoạt động' }, 201)).account;
+  await request('/finance/cash-transactions', 'POST', { ...baseVoucher, sourceAccountId: usdAccount.key }, 422);
   const created = (await request('/finance/cash-transactions', 'POST', baseVoucher, 201)).transaction;
   assert.equal(created.account, `Vietcombank (${account.accountNumber})`);
   assert.equal(created.sourceAccountId, account.key);

@@ -62,8 +62,8 @@ await request('/system/company-profile', 'PUT', {
 });
 await request('/auth/security-pin', 'POST', { pin: '789012', confirmPin: '789012', currentPassword: env.SEED_ADMIN_PASSWORD });
 headers['X-Security-Pin'] = '789012';
-async function bank(balance = 100_000, status = 'Đang hoạt động', bankName = `Test ${randomUUID()}`) {
-  return (await request('/finance/bank-accounts', 'POST', { bankName, accountNumber: randomUUID(), accountHolder: 'Test Company', branch: '', balance, status }, 201)).account;
+async function bank(balance = 100_000, status = 'Đang hoạt động', bankName = `Test ${randomUUID()}`, currency = 'VND') {
+  return (await request('/finance/bank-accounts', 'POST', { bankName, accountNumber: randomUUID(), accountHolder: 'Test Company', legalEntity: 'Test Company Ltd.', branch: '', balance, status, currency }, 201)).account;
 }
 function payload(source, destination, extra = {}) {
   return {
@@ -75,15 +75,26 @@ async function balance(key) {
   return (await request('/finance/internal-transfers')).accounts.find(account => account.key === key).balance;
 }
 
-test('bank account creation requires an explicit verified opening balance and preserves zero', async () => {
-  const baseAccount = { bankName: 'Ngân hàng kiểm thử', accountHolder: 'Doanh nghiệp kiểm thử', status: 'Đang hoạt động' };
+test('bank account creation validates opening balance and account metadata, and rejects duplicate owner accounts', async () => {
+  const baseAccount = { bankName: 'Ngân hàng kiểm thử', accountHolder: 'Doanh nghiệp kiểm thử', legalEntity: 'Công ty kiểm thử', status: 'Đang hoạt động' };
   await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID() }, 422);
   await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID(), balance: 1.5 }, 422);
   await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID(), balance: -1 }, 422);
+  await request('/finance/bank-accounts', 'POST', { ...baseAccount, accountNumber: randomUUID(), balance: 0, openedAt: '2026-02-30' }, 422);
+  const accountNumber = `  ${randomUUID()}  `;
   const zeroBalanceAccount = await request('/finance/bank-accounts', 'POST', {
-    ...baseAccount, accountNumber: randomUUID(), balance: 0,
+    ...baseAccount, bankCode: 'TESTBANK', currency: 'USD', ledgerAccountCode: '1122', openedAt: '2026-01-02',
+    closedAt: '', manager: 'Kế toán trưởng', notes: 'Tài khoản kiểm thử', accountNumber, balance: 0,
   }, 201);
   assert.equal(zeroBalanceAccount.account.balance, 0);
+  assert.equal(zeroBalanceAccount.account.bankCode, 'TESTBANK');
+  assert.equal(zeroBalanceAccount.account.legalEntity, 'Công ty kiểm thử');
+  assert.equal(zeroBalanceAccount.account.currency, 'USD');
+  assert.equal(zeroBalanceAccount.account.openedAt, '2026-01-02');
+  assert.equal(zeroBalanceAccount.account.ledgerAccountCode, '1122');
+  await request('/finance/bank-accounts', 'POST', {
+    ...baseAccount, bankName: ' NGÂN HÀNG KIỂM THỬ ', accountNumber: accountNumber.trim(), balance: 0,
+  }, 409);
 });
 
 test('only authenticated administrators may read or record transfers', async () => {
@@ -136,6 +147,15 @@ test('invalid amounts, accounts, dates and overdrafts leave the ledger unchanged
   assert.equal(storage.prepare('SELECT COUNT(*) AS n FROM finance_cash_transactions').get().n, count);
   assert.equal(await balance(source.key), 5000);
   assert.equal(await balance(destination.key), 0);
+});
+
+test('transfers reject accounts with different currencies and do not post foreign amounts as VND', async () => {
+  const vnd = await bank(5000);
+  const usd = await bank(0, 'Đang hoạt động', `USD ${randomUUID()}`, 'USD');
+  const before = storage.prepare('SELECT COUNT(*) AS n FROM finance_cash_transactions').get().n;
+  await request('/finance/internal-transfers', 'POST', payload(vnd, usd), 422);
+  await request('/finance/internal-transfers', 'POST', payload(usd, await bank(0)), 422);
+  assert.equal(storage.prepare('SELECT COUNT(*) AS n FROM finance_cash_transactions').get().n, before);
 });
 
 test('a transfer records balanced legs, actual fee, real actor and audit; retries do not duplicate it', async () => {

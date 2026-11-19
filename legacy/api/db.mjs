@@ -340,6 +340,14 @@ export async function initDatabaseSchema() {
       account_number TEXT NOT NULL UNIQUE,
       account_holder TEXT NOT NULL,
       branch TEXT NOT NULL DEFAULT '',
+      bank_code TEXT NOT NULL DEFAULT '',
+      legal_entity TEXT NOT NULL DEFAULT '',
+      currency TEXT NOT NULL DEFAULT 'VND',
+      ledger_account_code TEXT NOT NULL DEFAULT '',
+      opened_at TEXT NOT NULL DEFAULT '',
+      closed_at TEXT NOT NULL DEFAULT '',
+      manager TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
       opening_balance BIGINT NOT NULL DEFAULT 0 CHECK (opening_balance >= 0),
       status TEXT NOT NULL DEFAULT 'Đang hoạt động',
       created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -733,6 +741,24 @@ export async function initDatabaseSchema() {
     CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events(actor_id, created_at DESC);
   `);
+
+  const bankAccountColumnNames = new Set(isPg
+    ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'finance_bank_accounts' AND table_schema = current_schema()")).map(row => row.column_name)
+    : (await queryAll('PRAGMA table_info(finance_bank_accounts)')).map(row => row.name));
+  for (const [name, definition] of [
+    ['bank_code', "TEXT NOT NULL DEFAULT ''"],
+    ['legal_entity', "TEXT NOT NULL DEFAULT ''"],
+    ['currency', "TEXT NOT NULL DEFAULT 'VND'"],
+    ['ledger_account_code', "TEXT NOT NULL DEFAULT ''"],
+    ['opened_at', "TEXT NOT NULL DEFAULT ''"],
+    ['closed_at', "TEXT NOT NULL DEFAULT ''"],
+    ['manager', "TEXT NOT NULL DEFAULT ''"],
+    ['notes', "TEXT NOT NULL DEFAULT ''"],
+  ]) {
+    if (bankAccountColumnNames.has(name)) continue;
+    await exec(`ALTER TABLE finance_bank_accounts ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}${name} ${definition}`);
+  }
+  await exec("UPDATE finance_bank_accounts SET legal_entity = account_holder WHERE legal_entity = ''");
 
   const cashColumnNames = isPg
     ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'finance_cash_transactions' AND table_schema = current_schema()")).map(row => row.column_name)

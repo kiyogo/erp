@@ -97,7 +97,11 @@ export const BankAccountsModule: React.FC = () => {
 
   const completedBankTransactions = transactions.filter((item) => item.status === 'Đã hoàn thành');
   const ledgerBalance = completedBankTransactions.reduce((sum, item) => sum + (item.type === 'Thu' ? item.amount : -item.amount), 0);
-  const totalBalance = data.reduce((sum, item) => sum + (item.currentBalance ?? item.balance), 0);
+  const totalBalanceByCurrency = data.reduce((totals, item) => {
+    const currency = item.currency || 'VND';
+    totals.set(currency, (totals.get(currency) || 0) + (item.currentBalance ?? item.balance));
+    return totals;
+  }, new Map<string, number>());
   const importedStatementLines = statementImports.reduce((sum, statement) => sum + statement.lines.length, 0);
   const activeStatementMatchState = getActiveBankStatementMatches(statementMatchEvents);
   const statementSummaries = statementImports.map((statement) => summarizeBankStatementReconciliation(statement, transactions, statementMatchEvents, data, activeStatementMatchState));
@@ -350,6 +354,17 @@ export const BankAccountsModule: React.FC = () => {
       render: (holder: string) => <span style={{ color: '#374151', fontSize: 12.5 }}>{holder}</span>,
     },
     {
+      title: 'Pháp nhân',
+      dataIndex: 'legalEntity',
+      key: 'legalEntity',
+    },
+    {
+      title: 'Tiền tệ',
+      dataIndex: 'currency',
+      key: 'currency',
+      render: (currency: string) => currency || 'VND',
+    },
+    {
       title: 'Chi nhánh mở',
       dataIndex: 'branch',
       key: 'branch',
@@ -361,7 +376,7 @@ export const BankAccountsModule: React.FC = () => {
       key: 'balance',
       render: (val: number, record: FinanceBankAccount) => (
         <span style={{ fontWeight: 700, fontSize: 14.5, color: '#2E7D32' }}>
-          {(record.currentBalance ?? val).toLocaleString('vi-VN')} ₫
+          {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: record.currency || 'VND' }).format(record.currentBalance ?? val)}
         </span>
       ),
     },
@@ -535,7 +550,7 @@ export const BankAccountsModule: React.FC = () => {
         <div>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng số dư tiền gửi tất cả tài khoản ngân hàng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {totalBalance.toLocaleString('vi-VN')} ₫
+            {[...totalBalanceByCurrency].map(([currency, amount]) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(amount)).join(' · ')}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -724,6 +739,14 @@ export const BankAccountsModule: React.FC = () => {
             <Input placeholder="Ví dụ: Ngân hàng TMCP Ngoại Thương VN" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="bankCode" label="Mã ngân hàng">
+              <Input placeholder="Mã do ngân hàng cung cấp" />
+            </Form.Item>
+            <Form.Item name="currency" label="Tiền tệ" initialValue="VND" rules={[{ required: true, message: 'Chọn tiền tệ của tài khoản.' }]}>
+              <Select options={['VND', 'USD', 'EUR', 'JPY', 'CNY', 'GBP', 'AUD', 'CAD', 'SGD', 'CHF', 'KRW', 'THB'].map((currency) => ({ label: currency, value: currency }))} />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="accountNumber" label="Số tài khoản" rules={[{ required: true, message: 'Nhập số tài khoản' }]}>
               <Input placeholder="0011 0042 8888" />
             </Form.Item>
@@ -734,8 +757,30 @@ export const BankAccountsModule: React.FC = () => {
           <Form.Item name="accountHolder" label="Tên chủ tài khoản" rules={[{ required: true, whitespace: true, message: 'Nhập tên chủ tài khoản theo hồ sơ ngân hàng.' }]}>
             <Input />
           </Form.Item>
+          <Form.Item name="legalEntity" label="Pháp nhân sở hữu" rules={[{ required: true, whitespace: true, message: 'Nhập tên pháp nhân sở hữu tài khoản.' }]}>
+            <Input placeholder="Tên pháp nhân theo hồ sơ doanh nghiệp" />
+          </Form.Item>
           <Form.Item name="branch" label="Chi nhánh mở tài khoản">
             <Input />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="ledgerAccountCode" label="Mã tài khoản sổ cái">
+              <Input placeholder="Ví dụ: 1121" />
+            </Form.Item>
+            <Form.Item name="manager" label="Người quản lý">
+              <Input placeholder="Người phụ trách tài khoản" />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="openedAt" label="Ngày mở tài khoản">
+              <Input type="date" />
+            </Form.Item>
+            <Form.Item name="closedAt" label="Ngày đóng tài khoản">
+              <Input type="date" />
+            </Form.Item>
+          </div>
+          <Form.Item name="notes" label="Ghi chú">
+            <Input maxLength={1000} placeholder="Thông tin bổ sung" />
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
