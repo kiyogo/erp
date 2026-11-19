@@ -400,7 +400,7 @@ export const ShiftDetailModule: React.FC = () => {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await collectionsApi.delete('attendance_shift_details', plan.key).catch(() => {});
+          await collectionsApi.remove('attendance_shift_details', plan.key);
           setData((prev) => prev.filter((p) => p.key !== plan.key));
           message.success(`Đã xóa bảng phân ca: ${plan.name}`);
         } catch {

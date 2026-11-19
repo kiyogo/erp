@@ -245,7 +245,7 @@ export const ShiftRegistrationModule: React.FC = () => {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await collectionsApi.delete('attendance_shift_registrations', record.key).catch(() => {});
+          await collectionsApi.remove('attendance_shift_registrations', record.key);
           setData((prev) => prev.filter((item) => item.key !== record.key));
           message.success(`Đã xóa yêu cầu đăng ký ca: ${record.name}`);
         } catch {

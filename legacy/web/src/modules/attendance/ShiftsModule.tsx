@@ -328,7 +328,7 @@ export const ShiftsModule: React.FC = () => {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await collectionsApi.delete('attendance_shifts', shift.key).catch(() => {});
+          await collectionsApi.remove('attendance_shifts', shift.key);
           message.success(`Đã xóa ca làm việc: ${shift.shiftName}`);
           await loadData(false);
         } catch (error: any) {
