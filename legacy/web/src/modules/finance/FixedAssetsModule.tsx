@@ -69,28 +69,33 @@ export const FixedAssetsModule: React.FC = () => {
     .filter((d) => d.status === 'Đang trích khấu hao')
     .reduce((sum, item) => sum + item.monthlyDepreciation, 0);
 
-  const handleCreate = (values: any) => {
-    const orig = Number(values.originalValue) || 0;
-    const months = Number(values.depreciationMonths) || 36;
-    const monthly = Math.round(orig / months);
-    const accum = Number(values.accumulatedDepreciation) || 0;
-    const book = orig - accum;
+  const [saving, setSaving] = useState(false);
 
-    const newAsset: EnterpriseFixedAsset = {
-      ...values,
-      key: String(Date.now()),
-      originalValue: orig,
-      depreciationMonths: months,
-      monthlyDepreciation: monthly,
-      accumulatedDepreciation: accum,
-      bookValue: book,
-      serialNumber: values.serialNumber || `SN-${String(Date.now()).slice(-4)}`,
-      status: book <= 0 ? 'Đã khấu hao hết' : 'Đang trích khấu hao',
-    };
-    const nextItems = [newAsset, ...data]; setData(nextItems); dataService.saveGenericData('finance_fixed_assets', nextItems);
-    message.success(`Đã thêm mới tài sản cố định: ${values.name}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      // Mức khấu hao, giá trị còn lại và trạng thái do máy chủ tính lại từ nguyên giá, thời gian khấu hao và khấu hao lũy kế.
+      const created = await dataService.createGenericRecord('finance_fixed_assets', {
+        code: String(values.code || '').trim(),
+        name: String(values.name || '').trim(),
+        category: values.category,
+        department: values.department,
+        originalValue: Number(values.originalValue),
+        depreciationMonths: Number(values.depreciationMonths),
+        accumulatedDepreciation: Number(values.accumulatedDepreciation || 0),
+        commissioningDate: values.commissioningDate,
+        serialNumber: String(values.serialNumber || '').trim(),
+        supplier: String(values.supplier || '').trim(),
+      });
+      message.success(`Đã ghi nhận tài sản cố định ${created.name}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không ghi nhận được tài sản cố định.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filteredData = data.filter((item) => {
@@ -281,14 +286,7 @@ export const FixedAssetsModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
-              form.setFieldsValue({
-                code: `TSCĐ-00${data.length + 1}`,
-                category: 'Máy móc & Thiết bị CNTT',
-                department: 'Phòng Ban Kỹ Thuật',
-                depreciationMonths: 36,
-                commissioningDate: new Date().toISOString().substring(0, 10),
-                accumulatedDepreciation: 0,
-              });
+              form.setFieldsValue({ accumulatedDepreciation: 0 });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -357,7 +355,7 @@ export const FixedAssetsModule: React.FC = () => {
             <Form.Item name="serialNumber" label="Số Serial / Biển kiểm soát / License Key">
               <Input placeholder="Ví dụ: DELL-PE-R750-01" />
             </Form.Item>
-            <Form.Item name="supplier" label="Nhà cung cấp / Nhà sản xuất" initialValue="Dell Technologies">
+            <Form.Item name="supplier" label="Nhà cung cấp hoặc nhà sản xuất">
               <Input />
             </Form.Item>
           </div>

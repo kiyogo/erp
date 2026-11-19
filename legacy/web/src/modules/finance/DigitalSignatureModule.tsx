@@ -31,57 +31,25 @@ import {
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Tooltip } from '../../custom-ui';
-import { useAuth } from '../../context/AuthContext';
+import { DigitalCertificateRegister, CertificateMode } from './DigitalCertificateRegister';
 import {
   verifyDocumentSignatures,
   VerificationResult,
   VerifiedSignature
 } from '../../utils/digitalSignatureVerifier';
 
-interface DigitalCert {
-  key: string;
-  certNumber: string;
-  provider: string;
-  subjectName: string;
-  signType: 'USB Token' | 'Cloud CA' | 'HSM Server';
-  authorizedSigner: string;
-  validFrom: string;
-  validTo: string;
-  status: 'Còn hiệu lực' | 'Sắp hết hạn' | 'Đã hết hạn';
-}
-
-const INITIAL_CERTS: DigitalCert[] = [];
-
 export const DigitalSignatureModule: React.FC = () => {
-  const { user: authUser } = useAuth();
   const location = useLocation();
   const currentPath = location.pathname;
 
   const isVerifyRoute = currentPath.includes('/verify');
   const isEmployeeVerifyRoute = currentPath.startsWith('/employee/digital-signature/verify');
   const isHistoryRoute = currentPath.includes('/history');
-  const isProvidersRoute = currentPath.includes('/providers');
-  const isSignersRoute = currentPath.includes('/signers');
-  const isAlertsRoute = currentPath.includes('/alerts');
-  const isRenewRoute = currentPath.includes('/renew');
-
-  const [data, setData] = useState<DigitalCert[]>(INITIAL_CERTS);
-
-  useEffect(() => {
-    const list = dataService.getGenericData('finance_digital_signatures');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('finance_digital_signatures');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
-  }, []);
+  const registerMode: CertificateMode = (['providers', 'signers', 'alerts', 'renew', 'certs'] as const).find((mode) => currentPath.includes(`/${mode}`)) || 'list';
 
   const [searchText, setSearchText] = useState('');
-  const [modalOpen, setModalOpen] = useState(false);
   const [inspectModalOpen, setInspectModalOpen] = useState(false);
   const [inspectingSig, setInspectingSig] = useState<VerifiedSignature | null>(null);
-  const [form] = Form.useForm();
 
   // Verification State
   const [verifyingFile, setVerifyingFile] = useState<File | null>(null);
@@ -90,23 +58,6 @@ export const DigitalSignatureModule: React.FC = () => {
   const [verifyResults, setVerifyResults] = useState<VerificationResult | null>(null);
 
   const [verifyPickerOpen, setVerifyPickerOpen] = useState(false);
-
-  const handleCreate = (values: any) => {
-    const newCert: DigitalCert = {
-      ...values,
-      key: String(Date.now()),
-      subjectName: 'CÔNG TY CP CÔNG NGHỆ KIYOVN',
-      status: 'Còn hiệu lực',
-    };
-    const nextItems = [newCert, ...data]; setData(nextItems); dataService.saveGenericData('finance_digital_signatures', nextItems);
-    message.success(`Đã đăng ký chứng thư chữ ký số mới: ${values.provider}`);
-    setModalOpen(false);
-    form.resetFields();
-  };
-
-  const handleRenew = (record: DigitalCert) => {
-    message.success(`Đã gửi yêu cầu gia hạn chứng thư số ${record.certNumber} đến nhà cung cấp ${record.provider}`);
-  };
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -152,85 +103,6 @@ export const DigitalSignatureModule: React.FC = () => {
       message.error({ content: `Lỗi khi kiểm tra chữ ký: ${err.message || 'Không thể giải mã tệp'}`, key: 'verifying' });
     }
   };
-
-  const filteredData = data.filter(
-    (item) =>
-      (item.provider || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      item.certNumber.includes(searchText) ||
-      (item.authorizedSigner || '').toLowerCase().includes(searchText.toLowerCase())
-  );
-
-  const columns = [
-    {
-      title: 'Số serial chứng thư số',
-      dataIndex: 'certNumber',
-      key: 'certNumber',
-      render: (num: string) => (
-        <span style={{ fontWeight: 600, color: '#009688', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <KeyOutlined /> {num}
-        </span>
-      ),
-    },
-    {
-      title: 'Nhà cung cấp dịch vụ CA',
-      dataIndex: 'provider',
-      key: 'provider',
-      render: (prov: string) => (
-        <span style={{ fontWeight: 600, color: '#1E293B' }}>{prov}</span>
-      ),
-    },
-    {
-      title: 'Chủ thể chứng thư',
-      dataIndex: 'subjectName',
-      key: 'subjectName',
-    },
-    {
-      title: 'Loại hình ký số',
-      dataIndex: 'signType',
-      key: 'signType',
-      render: (type: string) => (
-        <Tag color={type.includes('Cloud') ? 'blue' : type.includes('HSM') ? 'purple' : 'cyan'}>
-          {type}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Người được quyền ký',
-      dataIndex: 'authorizedSigner',
-      key: 'authorizedSigner',
-      render: (signer: string) => (
-        <span style={{ color: '#2563EB', fontWeight: 500 }}>{signer}</span>
-      ),
-    },
-    {
-      title: 'Thời hạn hiệu lực',
-      key: 'validity',
-      render: (_: any, record: DigitalCert) => (
-        <span style={{ fontSize: 12.5, color: '#64748B' }}>
-          {record.validFrom} → {record.validTo}
-        </span>
-      ),
-    },
-    {
-      title: 'Trạng thái',
-      dataIndex: 'status',
-      key: 'status',
-      render: (st: string) => (
-        <Tag color={st === 'Còn hiệu lực' ? 'success' : st === 'Sắp hết hạn' ? 'warning' : 'error'}>
-          {st}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Thao tác',
-      key: 'action',
-      render: (_: any, record: DigitalCert) => (
-        <Button size="small" onClick={() => handleRenew(record)}>
-          Gia hạn
-        </Button>
-      ),
-    },
-  ];
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
@@ -686,70 +558,7 @@ export const DigitalSignatureModule: React.FC = () => {
             />
           </div>
         </div>
-      ) : null}
-
-      {/* MODAL: THÊM MỚI CHỨNG THƯ SỐ */}
-      <Modal
-        title="Đăng Ký & Tích Hợp Chứng Thư Số Doanh Nghiệp Mới"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        footer={null}
-        width={560}
-      >
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
-          <Form.Item name="caProvider" label="Nhà cung cấp Dịch vụ Chữ ký số (CA)" initialValue="KIYO GROUP" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { label: 'KIYO GROUP', value: 'KIYO GROUP' },
-                { label: 'Viettel-CA', value: 'Viettel-CA (Tập đoàn Viettel)' },
-                { label: 'VNPT-CA', value: 'VNPT-CA (Tập đoàn VNPT)' },
-                { label: 'FPT-CA', value: 'FPT-CA (Hệ thống thông tin FPT)' },
-                { label: 'Bkav-CA', value: 'Bkav-CA' },
-                { label: 'MISA-CA', value: 'MISA-CA (MISA eSign)' },
-                { label: 'SmartSign', value: 'SmartSign (VINA-CA)' },
-                { label: 'Safe-CA', value: 'Safe-CA (TS24)' },
-                { label: 'FastCA', value: 'FastCA' },
-                { label: 'EasyCA', value: 'EasyCA (Softdreams)' },
-              ]}
-            />
-          </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="certNumber" label="Số serial chứng thư" rules={[{ required: true, message: 'Nhập số serial' }]}>
-              <Input placeholder="5401 0108..." />
-            </Form.Item>
-            <Form.Item name="signType" label="Loại hình ký số" initialValue="Cloud CA">
-              <Select
-                options={[
-                  { label: 'Cloud CA', value: 'Cloud CA (Ký từ xa)' },
-                  { label: 'USB Token', value: 'USB Token' },
-                  { label: 'HSM Server', value: 'HSM Server' },
-                ]}
-              />
-            </Form.Item>
-          </div>
-
-          <Form.Item name="authorizedSigner" label="Người được phân quyền ký số" initialValue={authUser?.name || ''} rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="validFrom" label="Hiệu lực từ" initialValue="2026-08-01">
-              <Input type="date" />
-            </Form.Item>
-            <Form.Item name="validTo" label="Hết hạn vào" initialValue="2029-08-01">
-              <Input type="date" />
-            </Form.Item>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Lưu chứng thư số
-            </Button>
-          </div>
-        </Form>
-      </Modal>
+      ) : <DigitalCertificateRegister mode={registerMode} />}
     </div>
   );
 };

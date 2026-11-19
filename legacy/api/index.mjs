@@ -4802,6 +4802,142 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     delete record.usersCount;
     delete record.scope;
   }
+  if (scope === 'finance_fixed_assets' || scope === 'finance_prepaid') {
+    // Số liệu phái sinh (mức khấu hao hoặc phân bổ hàng tháng, giá trị còn lại, trạng thái) luôn tính lại ở máy chủ từ số liệu gốc.
+    const fixedAsset = scope === 'finance_fixed_assets';
+    record.code = requiredText(record.code, fixedAsset ? 'Mã tài sản cố định' : 'Mã khoản chi phí trả trước', 64).toUpperCase();
+    if ((!current || current.code !== record.code)
+      && await db.prepare('SELECT 1 FROM collection_records WHERE scope = ? AND json_extract(payload_json, \'$.code\') = ? LIMIT 1').get(scope, record.code)) {
+      throw new HttpError(409, 'Mã đã tồn tại.');
+    }
+    record.name = requiredText(record.name, fixedAsset ? 'Tên tài sản cố định' : 'Tên khoản chi phí', 200);
+    record.category = requiredText(record.category, 'Phân loại', 120);
+    record.department = requiredText(record.department, 'Bộ phận quản lý', 160);
+    const wholeAmount = (value, label, min) => {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < min) throw new HttpError(422, `${label} phải là số nguyên từ ${min} trở lên.`);
+      return parsed;
+    };
+    const total = wholeAmount(fixedAsset ? record.originalValue : record.totalAmount, fixedAsset ? 'Nguyên giá' : 'Tổng chi phí trả trước', 1);
+    const months = wholeAmount(fixedAsset ? record.depreciationMonths : record.allocationMonths, fixedAsset ? 'Thời gian khấu hao (tháng)' : 'Số kỳ phân bổ (tháng)', 1);
+    if (months > 600) throw new HttpError(422, 'Thời gian tối đa là 600 tháng.');
+    const done = wholeAmount(fixedAsset ? record.accumulatedDepreciation : record.allocatedAmount, fixedAsset ? 'Khấu hao lũy kế' : 'Đã phân bổ lũy kế', 0);
+    if (done > total) throw new HttpError(422, fixedAsset ? 'Khấu hao lũy kế không được vượt nguyên giá.' : 'Số đã phân bổ không được vượt tổng chi phí.');
+    const monthly = Math.round(total / months);
+    if (fixedAsset) {
+      Object.assign(record, {
+        originalValue: total, depreciationMonths: months, accumulatedDepreciation: done, monthlyDepreciation: monthly, bookValue: total - done,
+        commissioningDate: requiredIsoDate(record.commissioningDate, 'Ngày đưa vào sử dụng'),
+        serialNumber: optionalText(record.serialNumber, 'Số serial', 120) || '',
+        supplier: optionalText(record.supplier, 'Nhà cung cấp', 200) || '',
+        status: total - done <= 0 ? 'Đã khấu hao hết' : 'Đang trích khấu hao',
+      });
+    } else {
+      Object.assign(record, {
+        totalAmount: total, allocationMonths: months, allocatedAmount: done, monthlyAmount: monthly, remainingAmount: total - done,
+        startDate: requiredIsoDate(record.startDate, 'Ngày bắt đầu phân bổ'),
+        accountCode: '242',
+        status: total - done <= 0 ? 'Đã phân bổ hết' : 'Đang phân bổ',
+      });
+    }
+  }
+  if (scope === 'finance_digital_signatures') {
+    // Trạng thái hiệu lực suy ra từ ngày hết hạn khi hiển thị nên không lưu; lịch sử gia hạn chỉ được thêm, không sửa hay xóa.
+    record.certNumber = requiredText(record.certNumber, 'Số serial chứng thư', 120);
+    if ((!current || current.certNumber !== record.certNumber)
+      && await db.prepare("SELECT 1 FROM collection_records WHERE scope = 'finance_digital_signatures' AND json_extract(payload_json, '$.certNumber') = ? LIMIT 1").get(record.certNumber)) {
+      throw new HttpError(409, 'Số serial chứng thư đã được đăng ký.');
+    }
+    record.provider = requiredText(record.provider, 'Nhà cung cấp chữ ký số', 160);
+    record.subjectName = requiredText(record.subjectName, 'Chủ thể chứng thư', 200);
+    record.signType = oneOf(record.signType, 'Loại hình ký số', ['Cloud CA', 'USB Token', 'HSM Server']);
+    record.authorizedSigner = requiredText(record.authorizedSigner, 'Người được phân quyền ký số', 160);
+    record.validFrom = requiredIsoDate(record.validFrom, 'Hiệu lực từ');
+    record.validTo = requiredIsoDate(record.validTo, 'Hết hạn vào');
+    if (record.validTo <= record.validFrom) throw new HttpError(422, 'Ngày hết hạn phải sau ngày bắt đầu hiệu lực.');
+    const keptRenewals = Array.isArray(current?.renewals) ? current.renewals : [];
+    const renewals = record.renewals === undefined ? keptRenewals : record.renewals;
+    if (!Array.isArray(renewals) || renewals.length < keptRenewals.length || renewals.length > 100) throw new HttpError(422, 'Lịch sử gia hạn không hợp lệ hoặc bị rút bớt.');
+    record.renewals = renewals.map((item, index) => {
+      if (index < keptRenewals.length) return keptRenewals[index];
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(422, 'Mục gia hạn không hợp lệ.');
+      return {
+        previousCertNumber: requiredText(item.previousCertNumber, 'Số serial trước khi gia hạn', 120),
+        previousValidFrom: requiredIsoDate(item.previousValidFrom, 'Hiệu lực trước khi gia hạn'),
+        previousValidTo: requiredIsoDate(item.previousValidTo, 'Hạn trước khi gia hạn'),
+        note: optionalText(item.note, 'Ghi chú gia hạn', 500) || '',
+        recordedAt: now(),
+        recordedBy: actor.name,
+      };
+    });
+    delete record.status;
+  }
+  if (scope === 'finance_equity') {
+    // Vốn góp = số cổ phần x mệnh giá do người dùng nhập; tỷ lệ sở hữu được tính khi hiển thị nên không lưu.
+    record.shareholderCode = requiredText(record.shareholderCode ?? record.code, 'Mã cổ đông', 64).toUpperCase();
+    if ((!current || current.shareholderCode !== record.shareholderCode)
+      && await db.prepare("SELECT 1 FROM collection_records WHERE scope = 'finance_equity' AND json_extract(payload_json, '$.shareholderCode') = ? LIMIT 1").get(record.shareholderCode)) {
+      throw new HttpError(409, 'Mã cổ đông đã tồn tại.');
+    }
+    record.fullName = requiredText(record.fullName, 'Tên cổ đông', 200);
+    record.idNumber = requiredText(record.idNumber, 'Số định danh hoặc mã số doanh nghiệp', 64);
+    record.address = requiredText(record.address, 'Địa chỉ', 300);
+    record.type = oneOf(record.type, 'Loại cổ đông', ['Cổ đông sáng lập', 'Cổ đông chiến lược', 'Cổ đông ESOP', 'Cổ đông phổ thông']);
+    const sharesCount = Number(record.sharesCount);
+    const parValue = Number(record.parValue);
+    if (!Number.isSafeInteger(sharesCount) || sharesCount < 1) throw new HttpError(422, 'Số cổ phần phải là số nguyên dương.');
+    if (!Number.isSafeInteger(parValue) || parValue < 1) throw new HttpError(422, 'Mệnh giá cổ phần phải là số nguyên dương.');
+    if (!Number.isSafeInteger(sharesCount * parValue)) throw new HttpError(422, 'Giá trị vốn góp vượt giới hạn cho phép.');
+    record.sharesCount = sharesCount;
+    record.parValue = parValue;
+    record.capitalValue = sharesCount * parValue;
+    record.joinDate = requiredIsoDate(record.joinDate, 'Ngày ghi sổ');
+    record.certificateNumber = optionalText(record.certificateNumber, 'Số sổ hoặc số cổ phiếu', 64) || '';
+    for (const field of ['ownershipPercentage', 'pendingDividend', 'paidDividends']) delete record[field];
+  }
+  if (scope === 'services_sla') {
+    // Cam kết do người dùng nhập; số liệu thực tế chỉ có từ các kỳ đo được ghi nhận, trạng thái luôn suy ra từ kỳ đo gần nhất.
+    record.slaCode = requiredText(record.slaCode ?? record.code, 'Mã cam kết SLA', 64).toUpperCase();
+    record.serviceName = requiredText(record.serviceName, 'Tên dịch vụ áp dụng', 200);
+    if ((!current || current.slaCode !== record.slaCode)
+      && await db.prepare("SELECT 1 FROM collection_records WHERE scope = 'services_sla' AND json_extract(payload_json, '$.slaCode') = ? LIMIT 1").get(record.slaCode)) {
+      throw new HttpError(409, 'Mã cam kết SLA đã tồn tại.');
+    }
+    record.clientTier = oneOf(record.clientTier, 'Hạng khách hàng', ['Kim cương', 'Bạch kim', 'Vàng', 'Tiêu chuẩn']);
+    const uptimeTarget = Number(record.uptimeTarget);
+    if (!Number.isFinite(uptimeTarget) || uptimeTarget < 90 || uptimeTarget > 100) throw new HttpError(422, 'Cam kết uptime phải từ 90 đến 100%.');
+    record.uptimeTarget = uptimeTarget;
+    record.responseTimeTarget = requiredText(record.responseTimeTarget, 'Thời gian phản hồi cam kết', 120);
+    record.mttrTarget = requiredText(record.mttrTarget, 'Thời gian khắc phục tối đa', 120);
+    record.penaltyClause = requiredText(record.penaltyClause, 'Điều khoản bồi thường', 1000);
+    const measurements = record.measurements === undefined ? [] : record.measurements;
+    if (!Array.isArray(measurements) || measurements.length > 240) throw new HttpError(422, 'Danh sách kỳ đo không hợp lệ hoặc vượt 240 kỳ.');
+    const previousByPeriod = new Map((Array.isArray(current?.measurements) ? current.measurements : []).map(item => [item.period, item]));
+    const periods = new Set();
+    record.measurements = measurements.map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(422, `Kỳ đo ${index + 1} không hợp lệ.`);
+      const period = requiredText(item.period, `Kỳ đo ${index + 1}`, 7);
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new HttpError(422, 'Kỳ đo phải có dạng năm-tháng hợp lệ.');
+      if (periods.has(period)) throw new HttpError(422, 'Mỗi kỳ chỉ ghi nhận một lần số liệu đo.');
+      periods.add(period);
+      const uptime = Number(item.uptime);
+      if (!Number.isFinite(uptime) || uptime < 0 || uptime > 100) throw new HttpError(422, 'Uptime thực tế phải từ 0 đến 100%.');
+      const incidents = Number(item.incidents);
+      if (!Number.isInteger(incidents) || incidents < 0) throw new HttpError(422, 'Số sự cố phải là số nguyên không âm.');
+      const compensation = Number(item.compensation ?? 0);
+      if (!Number.isSafeInteger(compensation) || compensation < 0) throw new HttpError(422, 'Số tiền bồi thường phải là số nguyên không âm.');
+      const previous = previousByPeriod.get(period);
+      return {
+        period, uptime, incidents, compensation,
+        mttr: optionalText(item.mttr, 'MTTR thực tế', 120) || '',
+        note: optionalText(item.note, 'Ghi chú kỳ đo', 500) || '',
+        recordedAt: previous?.recordedAt || now(),
+        recordedBy: previous?.recordedBy || actor.name,
+      };
+    }).sort((left, right) => left.period.localeCompare(right.period));
+    const latest = record.measurements.at(-1);
+    record.status = !latest ? 'Chưa có số liệu đo' : latest.uptime >= uptimeTarget ? 'Đạt cam kết' : 'Vi phạm cam kết';
+  }
   const candidate = record.key ?? record.id ?? record.code;
   const recordKey = candidate === undefined || candidate === null || String(candidate).trim() === ''
     ? randomUUID()

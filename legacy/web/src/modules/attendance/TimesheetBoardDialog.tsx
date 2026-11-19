@@ -17,20 +17,23 @@ export const TimesheetBoardDialog: React.FC<TimesheetBoardDialogProps> = ({ summ
   const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
   const units = dataService.getOrgUnits().filter((unit) => unit.status !== 'Tạm ngưng');
 
-  const createBoard = () => {
+  const createBoard = async () => {
     if (!name.trim() || selectedUnits.length === 0) { message.error('Nhập tên bảng và chọn ít nhất một đơn vị.'); return; }
     if (!summary && (!startDate || !endDate || endDate < startDate)) { message.error('Chọn khoảng ngày hợp lệ cho bảng chấm công.'); return; }
     const scope = payroll
       ? summary ? 'finance_payroll_timesheet_summaries' : 'finance_payroll_timesheet_boards'
       : summary ? 'attendance_timesheet_board_summaries' : 'attendance_timesheet_boards';
-    const rows = dataService.getGenericData(scope);
-    dataService.saveGenericData(scope, [{
-      key: crypto.randomUUID(), name: name.trim(), type: kind, month, year,
-      period: `${year}-${month}`, startDate: summary ? undefined : startDate,
-      endDate: summary ? undefined : endDate, unitKeys: selectedUnits,
-      basedOnAnother: fromAnother, createdAt: new Date().toISOString(),
-    }, ...rows]);
-    setOpen(false); setName(''); setSelectedUnits([]); message.success(summary ? 'Đã tạo bảng tổng hợp chấm công.' : 'Đã tạo bảng chấm công.');
+    try {
+      await dataService.createGenericRecord(scope, {
+        key: crypto.randomUUID(), name: name.trim(), type: kind, month, year,
+        period: `${year}-${month}`, startDate: summary ? undefined : startDate,
+        endDate: summary ? undefined : endDate, unitKeys: selectedUnits,
+        basedOnAnother: fromAnother, createdAt: new Date().toISOString(),
+      });
+      setOpen(false); setName(''); setSelectedUnits([]); message.success(summary ? 'Đã tạo bảng tổng hợp chấm công.' : 'Đã tạo bảng chấm công.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không tạo được bảng chấm công.');
+    }
   };
 
   return <>

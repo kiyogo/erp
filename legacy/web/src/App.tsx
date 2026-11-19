@@ -13,6 +13,8 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { useAuth, ElevatedAuthScope } from './context/AuthContext';
+import { dataService } from './services/dataService';
+import { message } from './custom-ui';
 import { canOpenAdminPath, delegatedMenuItems, insertDelegatedMenu } from './modules/admin/delegatedAccess';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { KIYOVN_MENU_ITEMS, EMPLOYEE_PORTAL_MENU_ITEMS, ADMIN_PORTAL_MENU_ITEMS } from './data/menuData';
@@ -129,6 +131,9 @@ const AppLayout: React.FC = () => {
   const [systemPrefersDark, setSystemPrefersDark] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches,
   );
+
+  // Lần lưu hàng loạt bị máy chủ từ chối thì dữ liệu đã được hoàn lại; báo cho người dùng biết.
+  useEffect(() => dataService.onSaveFailure((text) => { message.error(text); }), []);
 
   // Tài khoản không phải quản trị viên luôn dùng cổng nhân viên, kể cả khi mở trang của module được ủy quyền.
   const isEmployeePortal = location.pathname.startsWith('/employee') || (Boolean(user) && !isAdminUser(user));

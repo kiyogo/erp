@@ -244,54 +244,48 @@ export const InsuranceModule: React.FC = () => {
   const handleOpenAddAdjust = () => {
     setModalType('adjust');
     form.resetFields();
-    form.setFieldsValue({
-      d02Code: `D02-2026/08-0${adjustments.length + 1}`,
-      adjustType: 'Báo tăng mới',
-      effectiveMonth: 'Tháng 08/2026',
-      filingDate: new Date().toISOString().substring(0, 10),
-    });
+    form.setFieldsValue({ filingDate: new Date().toISOString().substring(0, 10) });
     setModalOpen(true);
   };
 
   const handleOpenAddRegime = () => {
     setModalType('regime');
     form.resetFields();
-    form.setFieldsValue({
-      claimCode: `CĐ-2026/0${regimes.length + 1}`,
-      regimeType: 'Ốm đau ngắn ngày',
-      leaveDays: 3,
-    });
     setModalOpen(true);
   };
 
-  const handleSaveModal = (values: any) => {
-    if (modalType === 'adjust') {
-      const newAdj: InsuranceAdjustmentItem = {
-        ...values,
-        key: String(Date.now()),
-        oldSalary: Number(values.oldSalary) || 0,
-        newSalary: Number(values.newSalary) || 15000000,
-        vssSubmissionStatus: 'Đã nộp qua Cổng eBH',
-      };
-      const nextAdjustments = [newAdj, ...adjustments];
-      setAdjustments(nextAdjustments);
-      dataService.saveGenericData('insurance_adjustments', nextAdjustments);
-      message.success(`Đã lập hồ sơ D02-LT: ${values.d02Code} (${values.empName})`);
-    } else {
-      const newRegime: InsuranceRegimeItem = {
-        ...values,
-        key: String(Date.now()),
-        leaveDays: Number(values.leaveDays) || 3,
-        calculatedAmount: Number(values.calculatedAmount) || 2500000,
-        approvalStatus: 'Đang thẩm định',
-        settlementDate: 'Chờ duyệt',
-      };
-      const nextRegimes = [newRegime, ...regimes];
-      setRegimes(nextRegimes);
-      dataService.saveGenericData('insurance_regimes', nextRegimes);
-      message.success(`Đã lập hồ sơ giải quyết chế độ ${values.claimCode} thành công!`);
+  const [savingModal, setSavingModal] = useState(false);
+
+  const handleSaveModal = async (values: any) => {
+    if (savingModal) return;
+    setSavingModal(true);
+    try {
+      if (modalType === 'adjust') {
+        const newSalary = Number(values.newSalary);
+        if (!Number.isFinite(newSalary) || newSalary <= 0) throw new Error('Nhập mức lương đóng mới lớn hơn 0.');
+        // Hồ sơ mới ở trạng thái chờ nộp: hệ thống chưa kết nối cổng của cơ quan BHXH nên không tự nộp.
+        const saved = await dataService.createGenericRecord('insurance_adjustments', {
+          ...values, oldSalary: Number(values.oldSalary) || 0, newSalary, vssSubmissionStatus: 'Chờ nộp',
+        });
+        setAdjustments((current) => [saved, ...current.filter((item) => item.key !== saved.key)]);
+        message.success(`Đã lập hồ sơ D02-LT ${values.d02Code} (${values.empName}). Hồ sơ đang chờ nộp cơ quan BHXH.`);
+      } else {
+        const leaveDays = Number(values.leaveDays);
+        const calculatedAmount = Number(values.calculatedAmount);
+        if (!Number.isFinite(leaveDays) || leaveDays <= 0) throw new Error('Nhập số ngày nghỉ hưởng trợ cấp lớn hơn 0.');
+        if (!Number.isFinite(calculatedAmount) || calculatedAmount < 0) throw new Error('Nhập số tiền đề nghị chi trả hợp lệ.');
+        const saved = await dataService.createGenericRecord('insurance_regimes', {
+          ...values, leaveDays, calculatedAmount, approvalStatus: 'Đang thẩm định', settlementDate: '',
+        });
+        setRegimes((current) => [saved, ...current.filter((item) => item.key !== saved.key)]);
+        message.success(`Đã lập hồ sơ giải quyết chế độ ${values.claimCode}.`);
+      }
+      setModalOpen(false);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không lưu được hồ sơ.');
+    } finally {
+      setSavingModal(false);
     }
-    setModalOpen(false);
   };
 
   return (

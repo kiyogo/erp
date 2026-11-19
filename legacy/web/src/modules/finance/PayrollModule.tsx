@@ -446,12 +446,15 @@ export const PayrollModule: React.FC = () => {
         <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>Kỳ lương:</span>
         <Select value={selectedMonth} onChange={(month) => { setSelectedMonth(month); setEmployerCharge(''); setInsuranceBreakdown({ employerSocial: '', employerHealth: '', employerUnemployment: '', employeeSocial: '', employeeHealth: '', employeeUnemployment: '' }); setInsuranceLoaded(false); setInsuranceAllocations({ '3383': '', '3384': '', '3385': '', '3386': '' }); setInsurancePaymentReference(''); }} options={availableMonths} style={{ width: 160 }} />
       </div>
-      <Modal title="Thêm bảng lương" open={sheetDialog} onCancel={() => setSheetDialog(false)} onOk={() => {
+      <Modal title="Thêm bảng lương" open={sheetDialog} onCancel={() => setSheetDialog(false)} onOk={async () => {
         if (!sheetName.trim() || selectedUnits.length === 0) { message.error('Nhập tên bảng lương và chọn ít nhất một đơn vị.'); return; }
-        const rows = dataService.getGenericData('finance_payroll_sheets');
         if (!sheetStartDate || !sheetEndDate || sheetEndDate < sheetStartDate) { message.error('Chọn khoảng ngày hợp lệ cho bảng lương.'); return; }
-        dataService.saveGenericData('finance_payroll_sheets', [{ key: String(Date.now()), name: sheetName.trim(), type: sheetType, month: selectedMonth.slice(0, 2), year: selectedMonth.slice(3), startDate: sheetStartDate, endDate: sheetEndDate, unitKeys: selectedUnits, basedOnOther: sheetBase, status: 'Nháp' }, ...rows]);
-        setSheetDialog(false); setSheetName(''); message.success('Đã tạo bảng lương.');
+        try {
+          await dataService.createGenericRecord('finance_payroll_sheets', { key: crypto.randomUUID(), name: sheetName.trim(), type: sheetType, month: selectedMonth.slice(0, 2), year: selectedMonth.slice(3), startDate: sheetStartDate, endDate: sheetEndDate, unitKeys: selectedUnits, basedOnOther: sheetBase, status: 'Nháp' });
+          setSheetDialog(false); setSheetName(''); message.success('Đã tạo bảng lương.');
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || error?.message || 'Không tạo được bảng lương.');
+        }
       }} okText="Lưu" width={760}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <label>Loại bảng lương<Select value={sheetType} onChange={setSheetType} options={['Lương cố định (không dựa trên bảng chấm công)', 'Lương thời gian theo buổi', 'Lương thời gian theo giờ', 'Lương tạm ứng'].map((value) => ({ value, label: value }))} /></label>

@@ -5,182 +5,217 @@ import {
   SearchOutlined,
   DownloadOutlined,
   SafetyCertificateOutlined,
-  CheckCircleOutlined,
-  ThunderboltOutlined,
-  WarningOutlined,
   ClockCircleOutlined,
-  DollarOutlined,
   EyeOutlined,
-  AlertOutlined,
+  WarningOutlined,
   HistoryOutlined,
-  FundProjectionScreenOutlined,
-  DeploymentUnitOutlined,
-  SketchOutlined,
-  TrophyOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer } from '../../custom-ui';
 import { exportRowsToXlsx } from '../../utils/fileExporter';
+
+export interface SlaMeasurement {
+  period: string;
+  uptime: number;
+  incidents: number;
+  compensation: number;
+  mttr: string;
+  note: string;
+  recordedAt: string;
+  recordedBy: string;
+}
 
 export interface EnterpriseSLACommitment {
   key: string;
   slaCode: string;
   serviceName: string;
-  clientTier: 'Kim Cương' | 'Bạch Kim' | 'Vàng' | 'Tiêu Chuẩn';
+  clientTier: 'Kim cương' | 'Bạch kim' | 'Vàng' | 'Tiêu chuẩn';
   uptimeTarget: number;
-  actualUptime: number;
   responseTimeTarget: string;
   mttrTarget: string;
-  actualMttr: string;
-  incidentCount30Days: number;
   penaltyClause: string;
-  compensationAmount: number;
-  status: 'Đạt chuẩn SLA' | 'Cảnh báo vi phạm' | 'Đang xử lý sự cố';
+  measurements: SlaMeasurement[];
+  status: 'Chưa có số liệu đo' | 'Đạt cam kết' | 'Vi phạm cam kết';
 }
 
-const INITIAL_SLA: EnterpriseSLACommitment[] = [];
+const TIERS = ['Kim cương', 'Bạch kim', 'Vàng', 'Tiêu chuẩn'];
+const cardStyle: React.CSSProperties = { background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' };
+const money = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
+const latestOf = (item: EnterpriseSLACommitment) => { const list = item.measurements || []; return list[list.length - 1]; };
+const statusColor = (status: string) => (status === 'Đạt cam kết' ? 'success' : status === 'Vi phạm cam kết' ? 'error' : 'default');
 
+/**
+ * Cam kết SLA do người dùng nhập. Uptime, MTTR và sự cố thực tế chỉ lấy từ các kỳ đo đã được ghi nhận;
+ * hệ thống không có công cụ giám sát nên không tự đo và không điền sẵn số liệu.
+ */
 export const SLAModule: React.FC = () => {
-  const [data, setData] = useState<EnterpriseSLACommitment[]>(INITIAL_SLA);
-
-  useEffect(() => {
-    const list = dataService.getGenericData('services_sla');
-    setData(Array.isArray(list) ? list : []);
-    const unsub = dataService.subscribe(() => {
-      const updated = dataService.getGenericData('services_sla');
-      setData(Array.isArray(updated) ? updated : []);
-    });
-    return unsub;
-  }, []);
-
+  const [data, setData] = useState<EnterpriseSLACommitment[]>([]);
   const [searchText, setSearchText] = useState('');
   const [tierFilter, setTierFilter] = useState('all');
-
+  const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [form] = Form.useForm();
-
+  const [measureOpen, setMeasureOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedSla, setSelectedSla] = useState<EnterpriseSLACommitment | null>(null);
+  const [selectedKey, setSelectedKey] = useState('');
+  const [form] = Form.useForm();
+  const [measureForm] = Form.useForm();
 
-  const avgUptime = (data.reduce((sum, item) => sum + item.actualUptime, 0) / data.length).toFixed(3);
-
-  const handleCreate = (values: any) => {
-    const newSla: EnterpriseSLACommitment = {
-      ...values,
-      key: String(Date.now()),
-      uptimeTarget: Number(values.uptimeTarget) || 99.95,
-      actualUptime: 100.0,
-      incidentCount30Days: 0,
-      compensationAmount: 0,
-      status: 'Đạt chuẩn SLA',
+  useEffect(() => {
+    const read = () => {
+      const list = dataService.getGenericData('services_sla');
+      setData(Array.isArray(list) ? list : []);
     };
-    setData([...data, newSla]);
-    message.success(`Đã thiết lập cam kết SLA mới: ${values.serviceName} (${values.slaCode})`);
-    setModalOpen(false);
-    form.resetFields();
-  };
+    read();
+    return dataService.subscribe(read);
+  }, []);
+
+  const selectedSla = data.find((item) => item.key === selectedKey) || null;
+  const measured = data.filter((item) => latestOf(item));
+  const passing = measured.filter((item) => item.status === 'Đạt cam kết').length;
+  const averageUptime = measured.length ? measured.reduce((sum, item) => sum + (latestOf(item)?.uptime || 0), 0) / measured.length : null;
+  const compensation = data.reduce((sum, item) => sum + (item.measurements || []).reduce((total, entry) => total + entry.compensation, 0), 0);
 
   const filteredData = data.filter((item) => {
-    const matchTier = tierFilter === 'all' || item.clientTier.includes(tierFilter);
-    const matchSearch =
-      (item.slaCode || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.serviceName || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (item.clientTier || '').toLowerCase().includes(searchText.toLowerCase());
-
+    const query = searchText.trim().toLocaleLowerCase('vi-VN');
+    const matchTier = tierFilter === 'all' || item.clientTier === tierFilter;
+    const matchSearch = !query || [item.slaCode, item.serviceName, item.clientTier].some((value) => String(value || '').toLocaleLowerCase('vi-VN').includes(query));
     return matchTier && matchSearch;
   });
 
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const created = await dataService.createGenericRecord('services_sla', {
+        slaCode: String(values.slaCode || '').trim(),
+        serviceName: String(values.serviceName || '').trim(),
+        clientTier: values.clientTier,
+        uptimeTarget: Number(values.uptimeTarget),
+        responseTimeTarget: String(values.responseTimeTarget || '').trim(),
+        mttrTarget: String(values.mttrTarget || '').trim(),
+        penaltyClause: String(values.penaltyClause || '').trim(),
+        measurements: [],
+      });
+      message.success(`Đã lưu cam kết SLA ${created.slaCode}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không lưu được cam kết SLA.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleMeasure = async (values: any) => {
+    if (saving || !selectedSla) return;
+    setSaving(true);
+    try {
+      const entry = {
+        period: values.period,
+        uptime: Number(values.uptime),
+        incidents: Number(values.incidents),
+        compensation: Number(values.compensation || 0),
+        mttr: String(values.mttr || '').trim(),
+        note: String(values.note || '').trim(),
+      };
+      await dataService.updateGenericRecord('services_sla', { ...selectedSla, measurements: [...(selectedSla.measurements || []), entry] });
+      message.success(`Đã ghi nhận số liệu đo kỳ ${entry.period}.`);
+      setMeasureOpen(false);
+      measureForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không ghi nhận được số liệu đo.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportColumns = [
+    { title: 'Mã SLA', dataIndex: 'slaCode' },
+    { title: 'Dịch vụ', dataIndex: 'serviceName' },
+    { title: 'Hạng khách hàng', dataIndex: 'clientTier' },
+    { title: 'Uptime cam kết (%)', dataIndex: 'uptimeTarget' },
+    { title: 'Kỳ đo gần nhất', dataIndex: 'latestPeriod' },
+    { title: 'Uptime thực tế (%)', dataIndex: 'latestUptime' },
+    { title: 'Thời gian phản hồi cam kết', dataIndex: 'responseTimeTarget' },
+    { title: 'MTTR cam kết', dataIndex: 'mttrTarget' },
+    { title: 'MTTR thực tế', dataIndex: 'latestMttr' },
+    { title: 'Sự cố kỳ gần nhất', dataIndex: 'latestIncidents' },
+    { title: 'Bồi thường đã ghi nhận', dataIndex: 'totalCompensation' },
+    { title: 'Điều khoản bồi thường', dataIndex: 'penaltyClause' },
+    { title: 'Trạng thái', dataIndex: 'status' },
+  ];
+
   const columns = [
     {
-      title: 'Mã & Dịch vụ áp dụng SLA',
+      title: 'Cam kết và dịch vụ',
       key: 'name',
-      render: (_: any, r: EnterpriseSLACommitment) => (
+      render: (_: any, record: EnterpriseSLACommitment) => (
         <div>
-          <div style={{ fontWeight: 700, color: '#0F172A', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <SafetyCertificateOutlined style={{ color: '#009688', fontSize: 16 }} />
-            {r.serviceName}
+          <div style={{ color: '#0F172A', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <SafetyCertificateOutlined style={{ color: '#009688', fontSize: 16 }} /> {record.serviceName}
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2, fontWeight: 600 }}>
-            Mã: <code>{r.slaCode}</code> · Hạng: <span style={{ color: '#2563EB' }}>{r.clientTier}</span>
-          </div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Mã {record.slaCode} · Hạng {record.clientTier}</div>
         </div>
       ),
     },
     {
-      title: 'Cam kết Uptime',
+      title: 'Uptime',
       key: 'uptime',
-      width: 170,
-      render: (_: any, r: EnterpriseSLACommitment) => (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-            <span>Mục tiêu: <strong>{r.uptimeTarget}%</strong></span>
-            <span style={{ color: '#16A34A', fontWeight: 800 }}>{r.actualUptime}%</span>
+      width: 190,
+      render: (_: any, record: EnterpriseSLACommitment) => {
+        const latest = latestOf(record);
+        return (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+              <span>Cam kết {record.uptimeTarget}%</span>
+              <span style={{ color: latest && latest.uptime >= record.uptimeTarget ? '#16A34A' : '#DC2626' }}>{latest ? `${latest.uptime}%` : 'Chưa đo'}</span>
+            </div>
+            {latest && <Progress percent={latest.uptime} strokeColor={latest.uptime >= record.uptimeTarget ? '#16A34A' : '#DC2626'} showInfo={false} />}
           </div>
-          <Progress
-            percent={r.actualUptime}
-            size="small"
-            strokeColor={r.actualUptime >= r.uptimeTarget ? '#16A34A' : '#DC2626'}
-            showInfo={false}
-          />
-        </div>
-      ),
+        );
+      },
     },
     {
       title: 'Thời gian phản hồi',
       dataIndex: 'responseTimeTarget',
       key: 'responseTimeTarget',
-      width: 180,
-      render: (resp: string) => (
-        <span style={{ color: '#D97706', fontWeight: 600, fontSize: 12 }}>
-          <ClockCircleOutlined style={{ marginRight: 4 }} />
-          {resp}
-        </span>
-      ),
+      width: 170,
+      render: (text: string) => <span style={{ color: '#D97706', fontSize: 12 }}><ClockCircleOutlined style={{ marginRight: 4 }} />{text}</span>,
     },
     {
-      title: 'MTTR Khắc phục',
+      title: 'MTTR',
       key: 'mttr',
       width: 150,
-      render: (_: any, r: EnterpriseSLACommitment) => (
+      render: (_: any, record: EnterpriseSLACommitment) => (
         <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{r.actualMttr}</div>
-          <div style={{ fontSize: 11, color: '#64748B' }}>Chuẩn: {r.mttrTarget}</div>
+          <div style={{ fontSize: 12, color: '#0F172A' }}>{latestOf(record)?.mttr || 'Chưa đo'}</div>
+          <div style={{ fontSize: 11, color: '#64748B' }}>Cam kết {record.mttrTarget}</div>
         </div>
       ),
     },
     {
-      title: 'Sự cố 30 ngày',
-      dataIndex: 'incidentCount30Days',
-      key: 'incidentCount30Days',
-      width: 130,
-      render: (cnt: number) => (
-        <Tag color={cnt === 0 ? 'success' : 'warning'}>
-          {cnt === 0 ? '0 Sự cố' : `${cnt} Sự cố nhẹ`}
-        </Tag>
-      ),
+      title: 'Sự cố kỳ gần nhất',
+      key: 'incidents',
+      width: 150,
+      render: (_: any, record: EnterpriseSLACommitment) => {
+        const latest = latestOf(record);
+        if (!latest) return <Tag color="default">Chưa đo</Tag>;
+        return <Tag color={latest.incidents === 0 ? 'success' : 'warning'}>{latest.incidents} sự cố</Tag>;
+      },
     },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
-      width: 140,
-      render: (st: string) => <Tag color={st === 'Đạt chuẩn SLA' ? 'success' : 'error'}>{st}</Tag>,
+      width: 150,
+      render: (status: string) => <Tag color={statusColor(status)}>{status}</Tag>,
     },
     {
       title: 'Thao tác',
       key: 'actions',
-      width: 110,
-      render: (_: any, r: EnterpriseSLACommitment) => (
-        <Button
-          size="small"
-          icon={<EyeOutlined />}
-          onClick={() => {
-            setSelectedSla(r);
-            setDrawerOpen(true);
-          }}
-        >
-          Giám sát
-        </Button>
+      width: 130,
+      render: (_: any, record: EnterpriseSLACommitment) => (
+        <Button icon={<EyeOutlined />} onClick={() => { setSelectedKey(record.key); setDrawerOpen(true); }}>Chi tiết</Button>
       ),
     },
   ];
@@ -188,220 +223,180 @@ export const SLAModule: React.FC = () => {
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tỷ lệ đáp ứng chuẩn cam kết SLA</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            100% Tuân thủ
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>5/5 Dịch vụ hoạt động hoàn hảo</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Cam kết SLA</div>
+          <div style={{ fontSize: 24, color: '#009688', marginTop: 4 }}>{data.length} cam kết</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>{measured.length} cam kết đã có số liệu đo</div>
         </div>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Uptime trung bình toàn hạ tầng IDC</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {avgUptime}% Uptime
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đo lường tự động qua Zabbix &amp; Grafana</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Đạt cam kết ở kỳ đo gần nhất</div>
+          <div style={{ fontSize: 24, color: '#16A34A', marginTop: 4 }}>{measured.length ? `${passing} / ${measured.length}` : 'Chưa có số liệu'}</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{measured.length - passing} cam kết vi phạm</div>
         </div>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phản hồi sự cố nhanh nhất</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            ≤ 5 Phút
-          </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tự động kích hoạt On-Call Engineer</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Uptime trung bình kỳ đo gần nhất</div>
+          <div style={{ fontSize: 24, color: '#2563EB', marginTop: 4 }}>{averageUptime === null ? 'Chưa có số liệu' : `${averageUptime.toFixed(3)}%`}</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Tính từ số liệu đo đã ghi nhận</div>
         </div>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quỹ dự phòng phạt vi phạm SLA</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            500.000.000 ₫
-          </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Thực chi bồi thường tháng này: 0 ₫</div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12.5, color: '#64748B' }}>Bồi thường đã ghi nhận</div>
+          <div style={{ fontSize: 24, color: '#7C3AED', marginTop: 4 }}>{money(compensation)}</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Cộng dồn các kỳ đo</div>
         </div>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {[
-            { key: 'all', label: 'Tất cả cam kết' },
-            { key: 'Kim Cương', label: 'Kim Cương VIP', icon: <SketchOutlined style={{ color: '#06B6D4' }} /> },
-            { key: 'Bạch Kim', label: 'Bạch Kim', icon: <TrophyOutlined style={{ color: '#94A3B8' }} /> },
-            { key: 'Vàng', label: 'Vàng Enterprise', icon: <TrophyOutlined style={{ color: '#F59E0B' }} /> },
-          ].map((tab) => (
+          {[{ key: 'all', label: 'Tất cả cam kết' }, ...TIERS.map((tier) => ({ key: tier, label: tier }))].map((tab) => (
             <Button
               key={tab.key}
-              size="small"
               onClick={() => setTierFilter(tab.key)}
               style={{
                 backgroundColor: tierFilter === tab.key ? '#E0F2F1' : '#FFFFFF',
                 borderColor: tierFilter === tab.key ? '#009688' : '#CBD5E1',
                 color: tierFilter === tab.key ? '#00796B' : '#475569',
-                fontWeight: tierFilter === tab.key ? 700 : 500,
               }}
             >
               {tab.label}
             </Button>
           ))}
         </div>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Input
             prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
-            placeholder="Tìm theo mã SLA, tên dịch vụ, phân hạng..."
+            placeholder="Tìm theo mã SLA, dịch vụ hoặc hạng"
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(event) => setSearchText(event.target.value)}
             style={{ width: 280 }}
             allowClear
           />
-          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có cam kết SLA để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_SLA', [{ title: 'Mã SLA', dataIndex: 'slaCode' }, { title: 'Dịch vụ', dataIndex: 'serviceName' }, { title: 'Hạng khách hàng', dataIndex: 'clientTier' }, { title: 'Uptime cam kết (%)', dataIndex: 'uptimeTarget' }, { title: 'Uptime thực tế (%)', dataIndex: 'actualUptime' }, { title: 'Thời gian phản hồi cam kết', dataIndex: 'responseTimeTarget' }, { title: 'MTTR cam kết', dataIndex: 'mttrTarget' }, { title: 'MTTR thực tế', dataIndex: 'actualMttr' }, { title: 'Sự cố 30 ngày', dataIndex: 'incidentCount30Days' }, { title: 'Điều khoản bồi thường', dataIndex: 'penaltyClause' }, { title: 'Số tiền bồi thường', dataIndex: 'compensationAmount' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} cam kết SLA ra tệp Excel.`); }}>
-            Xuất Báo Cáo
-          </Button>
           <Button
-            type="primary"
-            icon={<PlusOutlined />}
+            icon={<DownloadOutlined />}
             onClick={() => {
-              form.resetFields();
-              form.setFieldsValue({
-                slaCode: `SLA-NEW-0${data.length + 1}`,
-                clientTier: 'Kim Cương',
-                uptimeTarget: 99.99,
-                responseTimeTarget: '≤ 15 phút (24/7/365)',
-                mttrTarget: '≤ 2 giờ',
-                actualMttr: '15 phút',
-                penaltyClause: 'Hoàn lại 30% phí thuê tháng nếu Uptime dưới cam kết',
+              if (!filteredData.length) { message.warning('Không có cam kết SLA để xuất.'); return; }
+              const rows = filteredData.map((item) => {
+                const latest = latestOf(item);
+                return {
+                  ...item,
+                  latestPeriod: latest?.period || '', latestUptime: latest?.uptime ?? '', latestMttr: latest?.mttr || '',
+                  latestIncidents: latest?.incidents ?? '', totalCompensation: (item.measurements || []).reduce((sum, entry) => sum + entry.compensation, 0),
+                };
               });
-              setModalOpen(true);
+              const count = exportRowsToXlsx('Bao_cao_SLA', exportColumns, rows);
+              message.success(`Đã xuất ${count} cam kết SLA ra tệp Excel.`);
             }}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
-            Thiết lập SLA mới
+            Xuất báo cáo
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setModalOpen(true); }} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            Thiết lập cam kết
           </Button>
         </div>
       </div>
 
       <div className="transparent-table-card">
-        <KTable dataSource={filteredData} columns={columns} pagination={{ pageSize: 8 }} />
+        <KTable dataSource={filteredData} columns={columns} rowKey="key" pagination={{ pageSize: 8 }} />
       </div>
 
-      <Modal
-        title="Thiết Lập Cam Kết Chất Lượng Dịch Vụ Mới"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        footer={null}
-        width={640}
-      >
+      <Modal title="Thiết lập cam kết SLA" open={modalOpen} onCancel={() => !saving && setModalOpen(false)} footer={null} width={640}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="slaCode" label="Mã cam kết SLA" rules={[{ required: true }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item name="clientTier" label="Phân hạng khách hàng" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'Kim Cương', value: 'Kim Cương (Diamond VIP)' },
-                  { label: 'Bạch Kim', value: 'Bạch Kim (Platinum)' },
-                  { label: 'Vàng', value: 'Vàng (Gold Enterprise)' },
-                  { label: 'Tiêu Chuẩn', value: 'Tiêu Chuẩn (Standard)' },
-                ]}
-              />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="slaCode" label="Mã cam kết SLA" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="clientTier" label="Hạng khách hàng" rules={[{ required: true }]}>
+              <Select options={TIERS.map((tier) => ({ label: tier, value: tier }))} />
             </Form.Item>
           </div>
-          <Form.Item name="serviceName" label="Tên dịch vụ áp dụng" rules={[{ required: true }]}>
-            <Input placeholder="Ví dụ: Cụm GPU NVIDIA H100 Training Cluster" />
+          <Form.Item name="serviceName" label="Tên dịch vụ áp dụng" rules={[{ required: true, whitespace: true }]}>
+            <Input placeholder="Tên dịch vụ được cam kết" />
           </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="uptimeTarget" label="Cam kết Uptime" rules={[{ required: true }]}>
-              <Input type="number" step={0.01} min={90} max={100} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <Form.Item name="uptimeTarget" label="Cam kết uptime (%)" rules={[{ required: true }]}>
+              <Input type="number" step={0.01} min={90} max={100} placeholder="99.95" />
             </Form.Item>
-            <Form.Item name="responseTimeTarget" label="Thời gian phản hồi" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: ≤ 15 phút" />
+            <Form.Item name="responseTimeTarget" label="Thời gian phản hồi" rules={[{ required: true, whitespace: true }]}>
+              <Input placeholder="15 phút, 24/7" />
             </Form.Item>
-            <Form.Item name="mttrTarget" label="MTTR Khắc phục tối đa" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: ≤ 2 giờ" />
+            <Form.Item name="mttrTarget" label="Thời gian khắc phục tối đa" rules={[{ required: true, whitespace: true }]}>
+              <Input placeholder="2 giờ" />
             </Form.Item>
           </div>
-          <Form.Item name="penaltyClause" label="Điều khoản bồi thường phạt vi phạm" rules={[{ required: true }]}>
-            <Input.TextArea rows={2} placeholder="Mức khấu trừ cước phí hoặc bồi thường thiệt hại..." />
+          <Form.Item name="penaltyClause" label="Điều khoản bồi thường khi vi phạm" rules={[{ required: true, whitespace: true }]}>
+            <Input.TextArea rows={2} placeholder="Mức khấu trừ cước phí hoặc bồi thường theo hợp đồng" />
           </Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Ban hành cam kết SLA
-            </Button>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
+            <Button disabled={saving} onClick={() => setModalOpen(false)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu cam kết</Button>
           </div>
         </Form>
       </Modal>
 
-      {/* DRAWER: Giám Sát SLA Thời Gian Thực */}
-      <Drawer
-        title="Hồ Sơ Giám Sát &amp; Lịch Sử Sự Cố SLA"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={620}
-      >
+      <Modal title="Ghi nhận số liệu đo" open={measureOpen} onCancel={() => !saving && setMeasureOpen(false)} footer={null} width={560}>
+        <Form form={measureForm} layout="vertical" onFinish={handleMeasure} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="period" label="Kỳ đo" rules={[{ required: true }]}><Input type="month" aria-label="Kỳ đo" /></Form.Item>
+            <Form.Item name="uptime" label="Uptime thực tế (%)" rules={[{ required: true }]}><Input type="number" step={0.001} min={0} max={100} /></Form.Item>
+            <Form.Item name="incidents" label="Số sự cố trong kỳ" rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>
+            <Form.Item name="mttr" label="MTTR thực tế"><Input placeholder="45 phút" /></Form.Item>
+            <Form.Item name="compensation" label="Bồi thường phát sinh (₫)"><Input type="number" min={0} step={1} /></Form.Item>
+          </div>
+          <Form.Item name="note" label="Ghi chú"><Input.TextArea rows={2} placeholder="Nguồn số liệu, nguyên nhân sự cố" /></Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 14 }}>
+            <Button disabled={saving} onClick={() => setMeasureOpen(false)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Ghi nhận</Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Drawer title="Hồ sơ giám sát SLA" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={620}>
         {selectedSla && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ background: '#F8FAFC', padding: 16, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>{selectedSla.slaCode}</div>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-                    {selectedSla.serviceName}
-                  </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ fontSize: 13, color: '#009688' }}>{selectedSla.slaCode}</div>
+                <div style={{ fontSize: 16, color: '#0F172A', marginTop: 4 }}>{selectedSla.serviceName}</div>
+                <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Hạng khách hàng {selectedSla.clientTier}</div>
+              </div>
+              <Tag color={statusColor(selectedSla.status)}>{selectedSla.status}</Tag>
+            </div>
+
+            <div style={{ fontSize: 12.5, color: '#334155', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div>Cam kết uptime: {selectedSla.uptimeTarget}%</div>
+              <div>Thời gian phản hồi: {selectedSla.responseTimeTarget}</div>
+              <div>Thời gian khắc phục tối đa: {selectedSla.mttrTarget}</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 13, color: '#B45309', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <WarningOutlined /> Điều khoản bồi thường khi vi phạm
+              </div>
+              <div style={{ fontSize: 12.5, color: '#92400E', lineHeight: 1.5 }}>{selectedSla.penaltyClause}</div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div style={{ fontSize: 13, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <HistoryOutlined style={{ color: '#009688' }} /> Lịch sử số liệu đo
                 </div>
-                <Tag color="success">{selectedSla.status}</Tag>
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => { measureForm.resetFields(); setMeasureOpen(true); }} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+                  Ghi nhận số liệu đo
+                </Button>
               </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>
-                Phân hạng đối tượng: <strong>{selectedSla.clientTier}</strong>
-              </div>
-            </div>
-
-            {/* Uptime Status */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontWeight: 700, color: '#0F172A' }}>Uptime Thực Tế:</span>
-                <strong style={{ color: '#16A34A', fontSize: 15 }}>{selectedSla.actualUptime}%</strong>
-              </div>
-              <Progress percent={selectedSla.actualUptime} strokeColor="#16A34A" />
-              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
-                <span>Mục tiêu hợp đồng: {selectedSla.uptimeTarget}%</span>
-                <span>Chênh lệch: +{(selectedSla.actualUptime - selectedSla.uptimeTarget).toFixed(3)}%</span>
-              </div>
-            </div>
-
-            {/* Response Time & MTTR */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-                Chỉ Số Hiệu Năng Phục Hồi:
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
-                <div>
-                  <span style={{ color: '#64748B' }}>Thời gian phản hồi sự cố:</span>
-                  <div style={{ fontWeight: 700, color: '#D97706' }}>{selectedSla.responseTimeTarget}</div>
-                </div>
-                <div>
-                  <span style={{ color: '#64748B' }}>MTTR Khắc phục thực tế:</span>
-                  <div style={{ fontWeight: 700, color: '#2563EB' }}>{selectedSla.actualMttr} (Chuẩn: {selectedSla.mttrTarget})</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Penalty */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#FFFBEB' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#B45309', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <WarningOutlined /> Điều Khoản Bồi Thường Khi Vi Phạm:
-              </div>
-              <div style={{ fontSize: 12.5, color: '#92400E', lineHeight: 1.5 }}>
-                {selectedSla.penaltyClause}
-              </div>
-            </div>
-
-            {/* Log table */}
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <HistoryOutlined style={{ color: '#009688' }} /> Nhật Ký Gián Đoạn / Bảo Trì Hệ Thống:
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B' }}>
-                Không ghi nhận sự cố gián đoạn ngoài kế hoạch nào trong 30 ngày qua.
-              </div>
+              {(selectedSla.measurements || []).length === 0
+                ? <div style={{ fontSize: 12, color: '#64748B' }}>Chưa ghi nhận kỳ đo nào. Trạng thái và số liệu thực tế chỉ hiển thị khi có kỳ đo.</div>
+                : (
+                  <KTable
+                    dataSource={[...selectedSla.measurements].reverse()}
+                    rowKey="period"
+                    pagination={false}
+                    columns={[
+                      { title: 'Kỳ đo', dataIndex: 'period', key: 'period', width: 90 },
+                      { title: 'Uptime', key: 'uptime', width: 100, render: (_: any, entry: SlaMeasurement) => <span style={{ color: entry.uptime >= selectedSla.uptimeTarget ? '#16A34A' : '#DC2626' }}>{entry.uptime}%</span> },
+                      { title: 'Sự cố', dataIndex: 'incidents', key: 'incidents', width: 80 },
+                      { title: 'MTTR', dataIndex: 'mttr', key: 'mttr', width: 110 },
+                      { title: 'Bồi thường', key: 'compensation', render: (_: any, entry: SlaMeasurement) => money(entry.compensation) },
+                    ]}
+                  />
+                )}
             </div>
           </div>
         )}
@@ -409,4 +404,3 @@ export const SLAModule: React.FC = () => {
     </div>
   );
 };
-

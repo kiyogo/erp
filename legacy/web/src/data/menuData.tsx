@@ -415,6 +415,10 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
     title: 'Dịch vụ doanh nghiệp',
     icon: <ShopOutlined />,
     path: '/admin/services',
+    children: [
+      { id: 'svc-catalog', title: 'Danh mục dịch vụ', path: '/admin/services' },
+      { id: 'svc-sla', title: 'Cam kết SLA', path: '/admin/services/sla' },
+    ],
   },
   {
     id: 'documents',

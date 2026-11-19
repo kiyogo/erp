@@ -30,7 +30,7 @@ export interface EnterprisePrepaidExpense {
   remainingAmount: number; // Giá trị còn lại chưa phân bổ
   department: string;
   startDate: string; // Ngày bắt đầu phân bổ
-  accountCode: string; // TK 2421 hoặc TK 2422
+  accountCode: string; // Tài khoản 242 Chi phí trả trước (Thông tư 200/2014/TT-BTC)
   status: 'Đang phân bổ' | 'Đã phân bổ hết';
 }
 
@@ -65,28 +65,31 @@ export const PrepaidExpensesModule: React.FC = () => {
     .filter((d) => d.status === 'Đang phân bổ')
     .reduce((sum, item) => sum + item.monthlyAmount, 0);
 
-  const handleCreate = (values: any) => {
-    const total = Number(values.totalAmount) || 0;
-    const months = Number(values.allocationMonths) || 12;
-    const monthly = Math.round(total / months);
-    const allocated = Number(values.allocatedAmount) || 0;
-    const rem = total - allocated;
+  const [saving, setSaving] = useState(false);
 
-    const newItem: EnterprisePrepaidExpense = {
-      ...values,
-      key: String(Date.now()),
-      totalAmount: total,
-      allocationMonths: months,
-      monthlyAmount: monthly,
-      allocatedAmount: allocated,
-      remainingAmount: rem,
-      accountCode: months > 12 ? 'TK 2422' : 'TK 2421',
-      status: rem <= 0 ? 'Đã phân bổ hết' : 'Đang phân bổ',
-    };
-    const nextItems = [newItem, ...data]; setData(nextItems); dataService.saveGenericData('finance_prepaid', nextItems);
-    message.success(`Đã thêm mới khoản chi phí trả trước: ${values.name}`);
-    setModalOpen(false);
-    form.resetFields();
+  const handleCreate = async (values: any) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      // Mức phân bổ hàng tháng, giá trị còn lại, trạng thái và tài khoản 242 do máy chủ xác định.
+      const created = await dataService.createGenericRecord('finance_prepaid', {
+        code: String(values.code || '').trim(),
+        name: String(values.name || '').trim(),
+        category: values.category,
+        department: values.department,
+        totalAmount: Number(values.totalAmount),
+        allocationMonths: Number(values.allocationMonths),
+        allocatedAmount: Number(values.allocatedAmount || 0),
+        startDate: values.startDate,
+      });
+      message.success(`Đã ghi nhận chi phí trả trước ${created.name}.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không ghi nhận được chi phí trả trước.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filteredData = data.filter((item) => {
@@ -276,14 +279,7 @@ export const PrepaidExpensesModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
-              form.setFieldsValue({
-                code: `CPTT-00${data.length + 1}`,
-                category: 'Chi phí thuê địa điểm',
-                department: 'Toàn công ty',
-                allocationMonths: 12,
-                startDate: new Date().toISOString().substring(0, 10),
-                allocatedAmount: 0,
-              });
+              form.setFieldsValue({ allocatedAmount: 0 });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}

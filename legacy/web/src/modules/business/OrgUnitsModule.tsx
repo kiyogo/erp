@@ -248,7 +248,6 @@ export const OrgUnitsModule: React.FC = () => {
       return true;
     });
 
-    setData(uniqueList);
     const payload = uniqueList.map((item) => ({
       key: item.key,
       code: item.code,
@@ -265,12 +264,9 @@ export const OrgUnitsModule: React.FC = () => {
       budgetSpent: item.budgetSpent,
       status: item.status,
     }));
-    try {
-      await collectionsApi.save('business_org_units', payload);
-    } catch {
-      // safe fallback
-    }
-    dataService.saveGenericData('business_org_units', payload);
+    // Chỉ cập nhật màn hình sau khi máy chủ xác nhận; nếu bị từ chối thì ném lỗi để người dùng thấy lý do thật.
+    await dataService.saveGenericData('business_org_units', payload, { throwOnError: true });
+    setData(uniqueList);
   };
 
   const filteredData = useMemo(() => {

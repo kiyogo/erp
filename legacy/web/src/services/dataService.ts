@@ -760,13 +760,35 @@ class DataService {
     this.notify();
   }
 
-  public saveGenericData(scope: string, rows: any[]): void {
+  private saveFailureListeners = new Set<(text: string) => void>();
+
+  /** Màn hình đăng ký để hiện thông báo khi máy chủ từ chối một lần lưu hàng loạt. */
+  public onSaveFailure(listener: (text: string) => void): () => void {
+    this.saveFailureListeners.add(listener);
+    return () => { this.saveFailureListeners.delete(listener); };
+  }
+
+  /**
+   * Thay thế toàn bộ một kho dữ liệu. Giao diện thấy thay đổi ngay; nếu máy chủ từ chối thì bộ nhớ đệm được hoàn lại
+   * và người dùng được báo, thay vì giữ lại dữ liệu chưa hề được lưu. Trả về true khi máy chủ đã lưu.
+   * Với throwOnError, lỗi được ném lại cho nơi gọi tự xử lý và không phát thông báo chung.
+   */
+  public saveGenericData(scope: string, rows: any[], options: { throwOnError?: boolean } = {}): Promise<boolean> {
     const key = scope.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    const previous = this.genericCache.get(key) || [];
     this.genericCache.set(key, rows);
     saveToStorage(key, rows);
     this.notify();
-    collectionsApi.replace(key, rows).catch((e) => {
-      console.warn('Collections save failed:', e);
+    return collectionsApi.replace(key, rows).then(() => true, (error: any) => {
+      if (this.genericCache.get(key) === rows) {
+        this.genericCache.set(key, previous);
+        saveToStorage(key, previous);
+        this.notify();
+      }
+      if (options.throwOnError) throw error;
+      const detail = error?.response?.data?.message || error?.message || 'Máy chủ từ chối lưu.';
+      this.saveFailureListeners.forEach((listener) => listener(`Không lưu được thay đổi, dữ liệu đã được hoàn lại. ${detail}`));
+      return false;
     });
   }
 
