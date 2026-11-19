@@ -23,13 +23,14 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Modal, message, Tag, Switch } from '../../custom-ui';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { authApi } from '../../api/endpoints';
+import { authApi, passkeysApi, type PasskeyItem } from '../../api/endpoints';
+import { registerPasskey } from '../../utils/webauthnClient';
+import { PasskeyCancelled } from '../../utils/webauthnEncoding';
 import { dataService } from '../../services/dataService';
 import {
   getUser2FAState,
   saveUser2FAState,
   cleanupLegacyGlobal2FAKeys,
-  TwoFactorPasskey,
   TwoFactorDevice,
 } from '../../utils/twoFactorAuth';
 
@@ -66,7 +67,8 @@ export const TwoStepVerificationModule: React.FC = () => {
   const [backupCodeCount, setBackupCodeCount] = useState(0);
   const [securityLoaded, setSecurityLoaded] = useState(false);
   const [securityLoading, setSecurityLoading] = useState(false);
-  const [passkeys, setPasskeys] = useState<TwoFactorPasskey[]>(initialState.passkeys);
+  const [passkeys, setPasskeys] = useState<PasskeyItem[]>([]);
+  const [passkeySaving, setPasskeySaving] = useState(false);
   const [devices, setDevices] = useState<TwoFactorDevice[]>(initialState.devices);
   const [phoneNumber, setPhoneNumber] = useState<string>(initialState.phoneNumber);
   const [smsOtpEnabled, setSmsOtpEnabled] = useState<boolean>(initialState.smsOtpEnabled);
@@ -273,37 +275,55 @@ export const TwoStepVerificationModule: React.FC = () => {
     }
   };
 
-  const handleAddPasskey = () => {
-    if (!newPasskeyName.trim()) {
-      message.error('Vui lòng nhập tên khóa bảo mật!');
-      return;
+  const loadPasskeys = async () => {
+    try {
+      const { data } = await passkeysApi.list();
+      setPasskeys(data.passkeys);
+    } catch (error: any) {
+      message.warning(error?.response?.data?.message || 'Không tải được danh sách khóa truy cập.');
     }
-    const newKey: TwoFactorPasskey = {
-      id: String(Date.now()),
-      name: newPasskeyName.trim(),
-      addedAt: new Date().toLocaleDateString('vi-VN'),
-    };
-    const updated = [...passkeys, newKey];
-    setPasskeys(updated);
-    saveUser2FAState(userKey, { passkeys: updated });
-    setNewPasskeyName('');
-    setIsAddPasskeyModalOpen(false);
-    message.success('Đã thêm khóa bảo mật mới thành công!');
   };
 
-  const handleDeletePasskey = (keyItem: TwoFactorPasskey) => {
+  useEffect(() => { void loadPasskeys(); }, []);
+
+  // Khóa được tạo trên thiết bị (sinh trắc học, khóa bảo mật) và máy chủ xác minh trước khi lưu khóa công khai.
+  const handleAddPasskey = async () => {
+    const name = newPasskeyName.trim();
+    if (!name) {
+      message.error('Vui lòng nhập tên khóa truy cập.');
+      return;
+    }
+    setPasskeySaving(true);
+    try {
+      const created = await registerPasskey(name);
+      setPasskeys((current) => [...current, created]);
+      setNewPasskeyName('');
+      setIsAddPasskeyModalOpen(false);
+      message.success('Đã đăng ký khóa truy cập mới.');
+    } catch (error: any) {
+      if (error instanceof PasskeyCancelled) message.info(error.message);
+      else message.error(error?.message || 'Không đăng ký được khóa truy cập.');
+    } finally {
+      setPasskeySaving(false);
+    }
+  };
+
+  const handleDeletePasskey = (keyItem: PasskeyItem) => {
     Modal.confirm({
-      title: 'Xóa Khóa Bảo Mật?',
-      content: `Bạn có chắc chắn muốn xóa khóa bảo mật "${keyItem.name}" khỏi tài khoản không?`,
+      title: 'Xóa khóa truy cập?',
+      content: `Bạn có chắc chắn muốn xóa khóa truy cập "${keyItem.name}" khỏi tài khoản không?`,
       okText: 'Xóa khóa',
       cancelText: 'Hủy',
-      okButtonProps: { danger: true, style: { borderRadius: 8 } },
-      cancelButtonProps: { style: { borderRadius: 8 } },
-      onOk: () => {
-        const updated = passkeys.filter((k) => k.id !== keyItem.id);
-        setPasskeys(updated);
-        saveUser2FAState(userKey, { passkeys: updated });
-        message.success('Đã xóa khóa bảo mật.');
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await passkeysApi.remove(keyItem.id);
+          await loadPasskeys();
+          message.success('Đã xóa khóa truy cập.');
+        } catch (error: any) {
+          if (error instanceof PasskeyCancelled) message.info(error.message);
+          else message.error(error?.response?.data?.message || error?.message || 'Không xóa được khóa truy cập.');
+        }
       },
     });
   };
@@ -511,7 +531,7 @@ export const TwoStepVerificationModule: React.FC = () => {
         >
           <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 20, display: 'flex', alignItems: 'center' }}>
             <KeyOutlined style={{ color: '#009688', fontSize: 18, marginRight: 8 }} />
-            Khoá Truy Cập & Khoá Bảo Mật
+            Khoá truy cập và khoá bảo mật
           </div>
 
           {passkeys.length === 0 ? (
@@ -539,7 +559,7 @@ export const TwoStepVerificationModule: React.FC = () => {
                 >
                   <div>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: '#0F172A' }}>{k.name}</div>
-                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>Thêm ngày: {k.addedAt}</div>
+                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>Thêm ngày {new Date(k.createdAt).toLocaleDateString('vi-VN')}{k.lastUsedAt ? ` · Dùng lần cuối ${new Date(k.lastUsedAt).toLocaleDateString('vi-VN')}` : ' · Chưa dùng lần nào'}</div>
                   </div>
                   <Button
                     size="small"
@@ -561,17 +581,18 @@ export const TwoStepVerificationModule: React.FC = () => {
             }}
             style={{ borderRadius: 8, fontWeight: 500 }}
           >
-            Thêm khóa bảo mật mới
+            Thêm khóa truy cập mới
           </Button>
 
           <Modal
-            title="Thêm Khóa Bảo Mật Mới"
+            title="Thêm khóa truy cập mới"
             open={isAddPasskeyModalOpen}
             onCancel={() => {
               setIsAddPasskeyModalOpen(false);
               setNewPasskeyName('');
             }}
             onOk={handleAddPasskey}
+            confirmLoading={passkeySaving}
             okText="Thêm khóa"
             cancelText="Hủy"
             okButtonProps={{ style: { backgroundColor: '#009688', borderColor: '#009688', borderRadius: 8 } }}
@@ -1176,7 +1197,7 @@ export const TwoStepVerificationModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {securityItems.map((item) => (
+          {securityItems.filter((item) => ['passkeys', 'authenticator', 'backup-codes'].includes(item.key)).map((item) => (
             <div
               key={item.key}
               onClick={() => navigate(item.path)}

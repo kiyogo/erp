@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Typography, Alert, Modal } from '../custom-ui';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, KeyOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { User, useAuth } from '../context/AuthContext';
 import { authApi } from '../api/endpoints';
+import { loginWithPasskeySession } from '../utils/webauthnClient';
+import { PasskeyCancelled, isPasskeySupported } from '../utils/webauthnEncoding';
 
 const { Title, Text } = Typography;
 
@@ -16,7 +18,7 @@ const Login: React.FC = () => {
   const [mfaCode, setMfaCode] = useState('');
   const [mfaUser, setMfaUser] = useState<User | null>(null);
   const navigate = useNavigate();
-  const { login, loginWithGoogle, verifyMfaLogin } = useAuth();
+  const { login, loginWithGoogle, verifyMfaLogin, establishSession } = useAuth();
   const [googleModalOpen, setGoogleModalOpen] = useState(false);
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleButton, setGoogleButton] = useState<HTMLDivElement | null>(null);
@@ -113,6 +115,22 @@ const Login: React.FC = () => {
       setError(typeof serverMessage === 'string' && serverMessage.trim()
         ? serverMessage
         : 'Không thể đăng nhập. Vui lòng kiểm tra kết nối và thông tin tài khoản.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasskeyLogin = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const session = await loginWithPasskeySession();
+      establishSession(session.token, session.user);
+      const role = String((session.user as { role?: string } | null)?.role || '').toUpperCase();
+      navigate(role === 'ADMIN' ? '/admin/dashboard' : '/employee/home');
+    } catch (err: any) {
+      // Hủy hộp thoại của trình duyệt không phải lỗi đăng nhập.
+      setError(err instanceof PasskeyCancelled ? '' : (err?.message || 'Không đăng nhập được bằng khóa truy cập.'));
     } finally {
       setLoading(false);
     }
@@ -347,6 +365,20 @@ const Login: React.FC = () => {
           <span style={{ fontSize: 13.5, fontWeight: 500, color: '#374151' }}>
             Đăng nhập bằng Google
           </span>
+        </button>}
+
+        {!mfaChallenge && isPasskeySupported() && <button
+          type="button"
+          onClick={handlePasskeyLogin}
+          disabled={loading}
+          title="Đăng nhập bằng khóa truy cập"
+          style={{
+            width: '100%', height: 40, borderRadius: 6, marginTop: 10, background: '#FFFFFF', border: '1px solid #D1D5DB', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+          }}
+        >
+          <KeyOutlined style={{ fontSize: 16, color: '#374151' }} />
+          <span style={{ fontSize: 13.5, fontWeight: 500, color: '#374151' }}>Đăng nhập bằng khóa truy cập</span>
         </button>}
 
         <Text style={{ display: 'block', textAlign: 'center', marginTop: 20, color: '#9CA3AF', fontSize: 12 }}>

@@ -16,6 +16,7 @@ import { createDocxFromText } from './document-files.mjs';
 import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
+import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
 import { REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters } from './payrollRules.mjs';
 import {
   maskPhone,
@@ -2228,8 +2229,16 @@ function isAdminWriteOnlyScope(scope) {
     || ADMIN_WRITE_ONLY_SCOPES.has(scope);
 }
 
+// Các phạm vi chứa mã PIN băm, bí mật 2FA, thử thách đăng nhập và khóa passkey chỉ do các route bảo mật quản lý.
+// Mở qua kho dữ liệu chung sẽ cho phép chủ phiên đọc để dò mã PIN ngoại tuyến hoặc tự tắt PIN, 2FA và passkey.
+const SERVER_MANAGED_SCOPES = new Set(['user_security_pin', 'user_two_factor_auth', 'mfa_login_challenges', 'user_passkeys', 'user_passkey_policy']);
+// Chữ ký số cá nhân cần bằng chứng passkey mới khi người dùng bật yêu cầu này.
+const PASSKEY_PROTECTED_SCOPES = new Set(['employee_digisigs', 'employee_signing_logs']);
+
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (SERVER_MANAGED_SCOPES.has(scope)) throw new HttpError(403, 'Phạm vi này do máy chủ quản lý, không truy cập qua kho dữ liệu chung.');
+  if (PASSKEY_PROTECTED_SCOPES.has(scope) && !['GET', 'HEAD'].includes(request.method)) await requirePasskeyProof(request, actor);
   if (actor.role !== 'ADMIN' && !['GET', 'HEAD'].includes(request.method) && isAdminWriteOnlyScope(scope)) {
     throw new HttpError(403, 'Chỉ quản trị viên được thay đổi dữ liệu này.');
   }
@@ -7024,6 +7033,104 @@ function getBearerToken(request) {
   return match[1];
 }
 
+// ===== Khóa truy cập (passkey, WebAuthn) =====
+// Thử thách và bằng chứng xác thực sống ngắn nên giữ trong bộ nhớ của tiến trình, giống bộ giới hạn đăng nhập.
+const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60_000;
+const PASSKEY_PROOF_TTL_MS = 2 * 60_000;
+const MAX_PASSKEYS_PER_USER = 10;
+const PASSKEY_TRANSPORTS = new Set(['usb', 'nfc', 'ble', 'internal', 'hybrid']);
+const webauthnChallenges = new Map();
+const passkeyProofs = new Map();
+
+function sweepExpired(map) {
+  const current = Date.now();
+  for (const [key, value] of map) if (value.expiresAt <= current) map.delete(key);
+}
+
+function webauthnContext(request) {
+  const origin = String(request.headers.origin || '').trim();
+  const configured = (process.env.WEBAUTHN_ORIGINS || process.env.CORS_ORIGIN || '').split(',').map(item => item.trim()).filter(Boolean);
+  const local = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+  if (!origin || (!local && !configured.includes(origin))) throw new HttpError(403, 'Nguồn gốc của trang không được phép dùng khóa truy cập. Cần khai báo WEBAUTHN_ORIGINS.');
+  return { origin, rpId: process.env.WEBAUTHN_RP_ID?.trim() || new URL(origin).hostname };
+}
+
+function issueWebauthnChallenge(userId, purpose, context) {
+  sweepExpired(webauthnChallenges);
+  if (webauthnChallenges.size >= 5000) throw new HttpError(429, 'Hệ thống đang bận, vui lòng thử lại sau.');
+  const id = randomBytes(18).toString('base64url');
+  const challenge = randomBytes(32).toString('base64url');
+  webauthnChallenges.set(id, { challenge, userId, purpose, origin: context.origin, rpId: context.rpId, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
+  return { id, challenge };
+}
+
+function takeWebauthnChallenge(id, userId, purpose, context) {
+  const key = String(id || '');
+  const entry = webauthnChallenges.get(key);
+  webauthnChallenges.delete(key); // mỗi thử thách chỉ dùng một lần, kể cả khi xác minh thất bại
+  if (!entry || entry.expiresAt <= Date.now() || entry.purpose !== purpose || entry.userId !== userId || entry.origin !== context.origin) {
+    throw new HttpError(400, 'Phiên xác thực khóa truy cập đã hết hạn hoặc không hợp lệ. Vui lòng thử lại.');
+  }
+  return entry;
+}
+
+async function userPasskeys(userId) {
+  const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'user_passkeys' AND owner_id = ? ORDER BY created_at ASC, record_key ASC").all(userId);
+  return rows.map(row => ({ id: row.record_key, ...parseJsonObject(row.payload_json) }));
+}
+
+const publicPasskey = (item) => ({
+  id: item.id, name: item.name, createdAt: item.createdAt, lastUsedAt: item.lastUsedAt || '',
+  transports: item.transports || [], userVerified: Boolean(item.userVerified), backedUp: Boolean(item.backedUp),
+});
+
+async function passkeyPolicy(userId) {
+  const row = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'user_passkey_policy' AND record_key = ? AND owner_id = ? LIMIT 1").get(userId, userId);
+  return { requireForSigning: Boolean(row && parseJsonObject(row.payload_json).requireForSigning) };
+}
+
+async function savePasskeyPolicy(userId, policy) {
+  const timestamp = now();
+  await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'user_passkey_policy', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at")
+    .run(randomUUID(), userId, userId, JSON.stringify({ requireForSigning: Boolean(policy.requireForSigning), updatedAt: timestamp }), timestamp, timestamp);
+}
+
+function issuePasskeyProof(actor, request) {
+  sweepExpired(passkeyProofs);
+  const token = randomBytes(32).toString('base64url');
+  passkeyProofs.set(createHash('sha256').update(token).digest('hex'), { userId: actor.id, sessionKey: request.authSession?.key || '', expiresAt: Date.now() + PASSKEY_PROOF_TTL_MS });
+  return token;
+}
+
+/** Khi người dùng bật yêu cầu passkey cho chữ ký số, thao tác phải kèm bằng chứng vừa xác thực, gắn với phiên đăng nhập hiện tại. */
+async function requirePasskeyProof(request, actor) {
+  if (!(await passkeyPolicy(actor.id)).requireForSigning) return;
+  if ((await userPasskeys(actor.id)).length === 0) return;
+  const token = String(request.headers['x-passkey-proof'] || '');
+  const entry = token ? passkeyProofs.get(createHash('sha256').update(token).digest('hex')) : null;
+  if (!entry || entry.expiresAt <= Date.now() || entry.userId !== actor.id || entry.sessionKey !== (request.authSession?.key || '')) {
+    throw new HttpError(428, 'Xác thực bằng khóa truy cập (passkey) để tiếp tục.', 'PASSKEY_PROOF_REQUIRED');
+  }
+}
+
+function checkAssertion(payload, entry, passkey, context) {
+  try {
+    return verifyAssertion({
+      credential: payload.credential, expectedChallenge: entry.challenge, allowedOrigins: [context.origin], rpId: context.rpId,
+      jwk: passkey.jwk, algorithm: passkey.algorithm, signCount: Number(passkey.signCount) || 0, requireUserVerification: true,
+    });
+  } catch (error) {
+    if (error instanceof WebAuthnError) throw new HttpError(401, error.message);
+    throw error;
+  }
+}
+
+async function recordPasskeyUse(userId, passkey, result) {
+  const { id, ...stored } = passkey;
+  await db.prepare("UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE scope = 'user_passkeys' AND record_key = ? AND owner_id = ?")
+    .run(JSON.stringify({ ...stored, signCount: result.signCount, backedUp: result.backedUp, lastUsedAt: now() }), now(), id, userId);
+}
+
 // ===== Vai trò ủy quyền theo module =====
 // Tài khoản USER có thể được gán một vai trò (bản ghi admin_roles) cấp quyền xem, tạo, sửa, xóa theo từng module; duyệt và đổi trạng thái hồ sơ thuộc quyền sửa.
 // Với những yêu cầu thuộc đúng module và hành động được cấp, tài khoản được xử lý như quản trị viên; mọi yêu cầu khác giữ nguyên quyền USER.
@@ -7280,7 +7387,7 @@ function allowOrigin(request, response) {
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || origin === extraOrigin) {
     response.setHeader('Access-Control-Allow-Origin', origin);
     response.setHeader('Vary', 'Origin');
-    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Parent-Id, X-Origin-Module, X-Security-Pin, X-Workflow-Otp');
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Parent-Id, X-Origin-Module, X-Security-Pin, X-Workflow-Otp, X-Passkey-Proof');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   }
 }
@@ -7969,6 +8076,11 @@ async function handleRequest(request, response) {
     let user = null;
 
     if (adminCount === 0) {
+      // Mặc định tắt: bất kỳ ai đăng nhập đầu tiên vào hệ thống chưa có quản trị viên sẽ chiếm được quyền quản trị tối cao, kể cả với tài khoản nhân viên đã có.
+      // Chỉ bật tạm cho lần khởi tạo đầu bằng KIYOVN_ALLOW_BOOTSTRAP_ADMIN=true, hoặc tạo quản trị viên bằng npm run seed:admin.
+      if (process.env.KIYOVN_ALLOW_BOOTSTRAP_ADMIN !== 'true') {
+        throw new HttpError(401, 'Hệ thống chưa có tài khoản quản trị. Hãy tạo bằng lệnh npm run seed:admin.');
+      }
       // Khi hệ thống CHƯA CÓ TÀI KHOẢN ADMIN: Tự động lấy tài khoản đăng nhập đầu tiên làm ADMIN và tự động tạo tài khoản luôn
       const accountLower = rawAccount.toLowerCase();
       const accountNormalizedCode = accountLower.replace(/[\s-_]/g, '');
@@ -8257,6 +8369,165 @@ async function handleRequest(request, response) {
     if (!security.pinHash) throw new HttpError(409, 'Tài khoản chưa đặt mã PIN bảo mật. Hãy đặt PIN trong Cài đặt bảo mật.', 'SECURITY_PIN_NOT_CONFIGURED');
     await requireSecurityPin(request, actor);
     sendJson(response, 200, { verified: true });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/auth/passkeys') {
+    const actor = await requireUser(request);
+    sendJson(response, 200, { passkeys: (await userPasskeys(actor.id)).map(publicPasskey), policy: await passkeyPolicy(actor.id) });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/passkeys/registration/options') {
+    const actor = await requireUser(request);
+    const context = webauthnContext(request);
+    const existing = await userPasskeys(actor.id);
+    if (existing.length >= MAX_PASSKEYS_PER_USER) throw new HttpError(422, `Mỗi tài khoản chỉ đăng ký tối đa ${MAX_PASSKEYS_PER_USER} khóa truy cập.`);
+    const { id, challenge } = issueWebauthnChallenge(actor.id, 'register', context);
+    sendJson(response, 200, {
+      challengeId: id,
+      publicKey: {
+        challenge, rp: { id: context.rpId, name: 'KIYOVN' },
+        user: { id: toBase64Url(Buffer.from(actor.id)), name: actor.email, displayName: actor.name },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }, { type: 'public-key', alg: -8 }],
+        timeout: 60_000, attestation: 'none',
+        excludeCredentials: existing.filter(item => item.rpId === context.rpId).map(item => ({ type: 'public-key', id: item.id, transports: item.transports || [] })),
+        authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+      },
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/passkeys/registration/verify') {
+    const actor = await requireUser(request);
+    const context = webauthnContext(request);
+    const payload = await readJson(request, 64 * 1024);
+    await requireSecurityPin(request, actor);
+    const entry = takeWebauthnChallenge(payload.challengeId, actor.id, 'register', context);
+    const name = requiredText(payload.name, 'Tên khóa truy cập', 80);
+    let verified;
+    try {
+      verified = verifyRegistration({ credential: payload.credential, expectedChallenge: entry.challenge, allowedOrigins: [context.origin], rpId: context.rpId });
+    } catch (error) {
+      if (error instanceof WebAuthnError) throw new HttpError(422, error.message);
+      throw error;
+    }
+    const transports = (Array.isArray(payload.credential?.response?.transports) ? payload.credential.response.transports : []).filter(item => PASSKEY_TRANSPORTS.has(item));
+    const timestamp = now();
+    let saved;
+    await db.transaction(async () => {
+      if (db.pool) await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`passkeys:${actor.id}`]);
+      if ((await userPasskeys(actor.id)).length >= MAX_PASSKEYS_PER_USER) throw new HttpError(422, `Mỗi tài khoản chỉ đăng ký tối đa ${MAX_PASSKEYS_PER_USER} khóa truy cập.`);
+      if (await db.prepare("SELECT 1 FROM collection_records WHERE scope = 'user_passkeys' AND record_key = ? LIMIT 1").get(verified.credentialId)) throw new HttpError(409, 'Khóa này đã được đăng ký.');
+      saved = {
+        name, jwk: verified.jwk, algorithm: verified.algorithm, signCount: verified.signCount, rpId: context.rpId, transports, aaguid: verified.aaguid,
+        userVerified: verified.userVerified, backupEligible: verified.backupEligible, backedUp: verified.backedUp, createdAt: timestamp, lastUsedAt: '',
+      };
+      await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'user_passkeys', ?, ?, ?, ?, ?)")
+        .run(randomUUID(), verified.credentialId, actor.id, JSON.stringify(saved), timestamp, timestamp);
+    });
+    await recordAuditEvent(actor.id, 'register_passkey', 'user_passkeys', verified.credentialId.slice(0, 40), { name });
+    sendJson(response, 201, { passkey: publicPasskey({ id: verified.credentialId, ...saved }) });
+    return;
+  }
+
+  const passkeyMatch = /^\/auth\/passkeys\/([^/]+)$/.exec(resource);
+  if (request.method === 'DELETE' && passkeyMatch) {
+    const actor = await requireUser(request);
+    const id = decodeURIComponent(passkeyMatch[1]);
+    await requireSecurityPin(request, actor);
+    const target = (await userPasskeys(actor.id)).find(item => item.id === id);
+    if (!target) throw new HttpError(404, 'Không tìm thấy khóa truy cập.');
+    // Khi đang yêu cầu passkey cho chữ ký số thì cần chính bằng chứng đó mới gỡ được khóa.
+    await requirePasskeyProof(request, actor);
+    await db.transaction(async () => {
+      await db.prepare("DELETE FROM collection_records WHERE scope = 'user_passkeys' AND record_key = ? AND owner_id = ?").run(id, actor.id);
+      if ((await userPasskeys(actor.id)).length === 0) await savePasskeyPolicy(actor.id, { requireForSigning: false });
+    });
+    await recordAuditEvent(actor.id, 'remove_passkey', 'user_passkeys', id.slice(0, 40), { name: target.name });
+    sendJson(response, 200, { deleted: true });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/passkeys/assertion/options') {
+    const actor = await requireUser(request);
+    const context = webauthnContext(request);
+    const credentials = (await userPasskeys(actor.id)).filter(item => item.rpId === context.rpId);
+    if (credentials.length === 0) throw new HttpError(409, 'Tài khoản chưa đăng ký khóa truy cập nào cho địa chỉ này.');
+    const { id, challenge } = issueWebauthnChallenge(actor.id, 'assert', context);
+    sendJson(response, 200, {
+      challengeId: id,
+      publicKey: {
+        challenge, rpId: context.rpId, timeout: 60_000, userVerification: 'required',
+        allowCredentials: credentials.map(item => ({ type: 'public-key', id: item.id, transports: item.transports || [] })),
+      },
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/passkeys/assertion/verify') {
+    const actor = await requireUser(request);
+    const context = webauthnContext(request);
+    const payload = await readJson(request, 64 * 1024);
+    const attemptKey = 'passkey-assertion:' + loginKey(request, actor.id);
+    enforceLoginRateLimit(attemptKey, 'Đã thử xác thực khóa truy cập quá nhiều lần. Vui lòng thử lại sau.');
+    const entry = takeWebauthnChallenge(payload.challengeId, actor.id, 'assert', context);
+    const passkey = (await userPasskeys(actor.id)).find(item => item.id === String(payload.credential?.id || '') && item.rpId === context.rpId);
+    if (!passkey) { recordLoginFailure(attemptKey); throw new HttpError(401, 'Khóa truy cập không thuộc tài khoản này.'); }
+    let result;
+    try { result = checkAssertion(payload, entry, passkey, context); } catch (error) { recordLoginFailure(attemptKey); throw error; }
+    clearLoginFailures(attemptKey);
+    await recordPasskeyUse(actor.id, passkey, result);
+    sendJson(response, 200, { verified: true, proof: issuePasskeyProof(actor, request), expiresInSeconds: PASSKEY_PROOF_TTL_MS / 1000 });
+    return;
+  }
+
+  if (request.method === 'PUT' && resource === '/auth/passkeys/policy') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 4 * 1024);
+    if (typeof payload.requireForSigning !== 'boolean') throw new HttpError(422, 'Chế độ yêu cầu passkey phải là true hoặc false.');
+    await requireSecurityPin(request, actor);
+    if (payload.requireForSigning && (await userPasskeys(actor.id)).length === 0) throw new HttpError(409, 'Hãy đăng ký ít nhất một khóa truy cập trước khi bật yêu cầu này.');
+    await requirePasskeyProof(request, actor);
+    await savePasskeyPolicy(actor.id, { requireForSigning: payload.requireForSigning });
+    await recordAuditEvent(actor.id, payload.requireForSigning ? 'enable_passkey_signing' : 'disable_passkey_signing', 'user_passkeys', actor.id);
+    sendJson(response, 200, { policy: await passkeyPolicy(actor.id) });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/passkeys/login/options') {
+    if ((await getGoogleConfig()).enforceGoogleLogin === '100') throw new HttpError(403, 'Hệ thống yêu cầu đăng nhập bằng Google.');
+    const context = webauthnContext(request);
+    const { id, challenge } = issueWebauthnChallenge(null, 'login', context);
+    sendJson(response, 200, { challengeId: id, publicKey: { challenge, rpId: context.rpId, timeout: 60_000, userVerification: 'required', allowCredentials: [] } });
+    return;
+  }
+
+  if (request.method === 'POST' && resource === '/auth/passkeys/login/verify') {
+    if ((await getGoogleConfig()).enforceGoogleLogin === '100') throw new HttpError(403, 'Hệ thống yêu cầu đăng nhập bằng Google.');
+    const context = webauthnContext(request);
+    const payload = await readJson(request, 64 * 1024);
+    const attemptKey = 'passkey-login:' + loginKey(request, 'passkey');
+    enforceLoginRateLimit(attemptKey);
+    const fail = () => { recordLoginFailure(attemptKey); return new HttpError(401, 'Khóa truy cập không hợp lệ hoặc chưa được đăng ký.'); };
+    const entry = takeWebauthnChallenge(payload.challengeId, null, 'login', context);
+    const credentialId = String(payload.credential?.id || '');
+    const row = credentialId ? await db.prepare("SELECT record_key, owner_id, payload_json FROM collection_records WHERE scope = 'user_passkeys' AND record_key = ? LIMIT 1").get(credentialId) : null;
+    if (!row) throw fail();
+    const passkey = { id: row.record_key, ...parseJsonObject(row.payload_json) };
+    if (passkey.rpId !== context.rpId) throw fail();
+    const handle = payload.credential?.response?.userHandle;
+    if (handle && handle !== toBase64Url(Buffer.from(row.owner_id))) throw fail();
+    let result;
+    try { result = checkAssertion(payload, entry, passkey, context); } catch { throw fail(); }
+    const user = await getUserById(row.owner_id);
+    if (!user || !user.is_active) throw new HttpError(403, 'Tài khoản của bạn chưa được kích hoạt hoặc đã bị khóa. Vui lòng liên hệ Quản trị viên.');
+    clearLoginFailures(attemptKey);
+    await recordPasskeyUse(user.id, passkey, result);
+    await recordAuditEvent(user.id, 'passkey_login', 'user_passkeys', credentialId.slice(0, 40));
+    const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
+    const token = await createToken(user, request, 'passkey', true);
+    sendJson(response, 200, { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: await publicUserWithAccess(user, profile) });
     return;
   }
 
@@ -13310,6 +13581,7 @@ async function handleRequest(request, response) {
 
     const payload = await readJson(request);
     await requireSecurityPin(request, actor);
+    await requirePasskeyProof(request, actor);
     const signMethod = payload.signMethod || 'digital';
     const certName = payload.certName || (isTargetEmployee ? `${actor.name} CCCD NEAC Digital ID` : 'Ban Giám Đốc KIYOVN');
     const signedFileName = payload.signedFileName || `${row.code}_Signed_${(row.employee_name || actor.name).replace(/\s+/g, '_')}.pdf`;

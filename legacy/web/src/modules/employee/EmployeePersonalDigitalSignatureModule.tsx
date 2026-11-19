@@ -26,6 +26,8 @@ import { useAuth } from '../../context/AuthContext';
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { dataService } from '../../services/dataService';
+import { passkeysApi } from '../../api/endpoints';
+import { PasskeyCancelled } from '../../utils/webauthnEncoding';
 import { DigitalSignatureModule } from '../finance/DigitalSignatureModule';
 import { useNavigate, useLocation } from 'react-router-dom';
 import signatureImg from '../../assets/signature_son.png';
@@ -56,59 +58,6 @@ export const generateNameSignatureImage = (nameText: string, fontStyle?: string)
   return '';
 };
 
-// Kiểm tra trạng thái Xác minh 2 bước (2SV) của tài khoản
-export const checkAccount2SVStatus = () => {
-  try {
-    const sessionUser = (() => {
-      try {
-        const u = localStorage.getItem('minepanel_user');
-        return u ? JSON.parse(u) : null;
-      } catch { return null; }
-    })();
-    const userKey = sessionUser?.id || sessionUser?.email || 'default_user';
-    const is2FAEnabled = localStorage.getItem(`2fa_${userKey}_enabled`) === 'true' || localStorage.getItem('kiyovn_2sv_enabled') === 'true';
-    if (!is2FAEnabled) {
-      return { isEnabled: false, hasAnyMethod: false, reason: '2SV_DISABLED' };
-    }
-
-    let hasMethod = false;
-
-    // 1. Passkeys
-    const passkeysStr = localStorage.getItem(`2fa_${userKey}_passkeys`) || localStorage.getItem('kiyovn_2sv_passkeys');
-    if (passkeysStr) {
-      try {
-        const p = JSON.parse(passkeysStr);
-        if (Array.isArray(p) && p.length > 0) hasMethod = true;
-      } catch (e) {}
-    }
-
-    // 2. Email OTP
-    if (localStorage.getItem(`2fa_${userKey}_email_enabled`) === 'true' || localStorage.getItem('kiyovn_2sv_email_linked') === 'true') {
-      hasMethod = true;
-    }
-
-    // 3. Authenticator TOTP
-    if (localStorage.getItem(`2fa_${userKey}_auth_configured`) === 'true' || localStorage.getItem('kiyovn_2sv_auth_linked') === 'true') {
-      hasMethod = true;
-    }
-
-    // 4. Số điện thoại SMS
-    if (localStorage.getItem(`2fa_${userKey}_sms_enabled`) === 'true' || localStorage.getItem('kiyovn_2sv_phone_linked') === 'true') {
-      hasMethod = true;
-    }
-
-    // 5. Mã dự phòng
-    const backupCodesStr = localStorage.getItem(`2fa_${userKey}_backup_codes`);
-    if ((backupCodesStr && backupCodesStr !== '[]') || localStorage.getItem('kiyovn_2sv_has_backup_codes') === 'true') {
-      hasMethod = true;
-    }
-
-    return { isEnabled: is2FAEnabled, hasAnyMethod: hasMethod };
-  } catch (e) {
-    return { isEnabled: false, hasAnyMethod: false };
-  }
-};
-
 export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
   const { user: authUser } = useAuth();
   const navigate = useNavigate();
@@ -131,15 +80,18 @@ export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
   const [signingLogs, setSigningLogs] = useState<any[]>(() => dataService.getEmployeeSigningLogs(empCode));
   const [historySearch, setHistorySearch] = useState('');
 
-  // Passkey State for Digital Signature
-  const [isPasskeyActive, setIsPasskeyActive] = useState(() => {
-    try {
-      const saved = localStorage.getItem('kiyovn_digisig_passkey_enabled');
-      if (saved !== null) return saved === 'true';
-    } catch (e) {}
-    return true;
-  });
+  // Yêu cầu khóa truy cập cho chữ ký số: máy chủ lưu thiết lập và chỉ nhận thao tác ghi khi có bằng chứng vừa xác thực.
+  const [passkeyCount, setPasskeyCount] = useState(0);
+  const [isPasskeyActive, setIsPasskeyActive] = useState(false);
   const [isActivatingPasskey, setIsActivatingPasskey] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    passkeysApi.list()
+      .then(({ data }) => { if (active) { setPasskeyCount(data.passkeys.length); setIsPasskeyActive(data.policy.requireForSigning); } })
+      .catch(() => { if (active) message.warning('Không tải được thiết lập khóa truy cập của tài khoản.'); });
+    return () => { active = false; };
+  }, []);
 
   // Signature Customization Modal State
   const [isSignModalOpen, setIsSignModalOpen] = useState(false);
@@ -174,154 +126,50 @@ export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
     setSigningLogs(dataService.getEmployeeSigningLogs(empCode));
   }, [empCode]);
 
-  // Kích hoạt / Xác thực lại Passkey (Bắt buộc phải bật 2SV và có ít nhất 1 trong 6 phương thức)
   const handleTogglePasskey = async () => {
-    if (isPasskeyActive) {
-      setIsPasskeyActive(false);
-      try {
-        localStorage.setItem('kiyovn_digisig_passkey_enabled', 'false');
-      } catch (e) {}
-      message.info('Đã tắt xác thực bằng khóa truy cập cho chữ ký số.');
+    if (!isPasskeyActive && passkeyCount === 0) {
+      message.warning('Bạn cần đăng ký ít nhất một khóa truy cập trước khi bật yêu cầu này.');
+      setTimeout(() => navigate(`${twosvPath}/passkeys`), 700);
       return;
     }
-
-    // 1. Kiểm tra trạng thái Xác minh 2 bước
-    const status2SV = checkAccount2SVStatus();
-    if (!status2SV.isEnabled) {
-      message.warning('Bạn cần bật tính năng Xác minh 2 bước trước khi kích hoạt!');
-      setTimeout(() => {
-        navigate(twosvPath);
-      }, 700);
-      return;
-    }
-
-    if (!status2SV.hasAnyMethod) {
-      message.warning('Bạn cần cài đặt ít nhất 1 trong 6 phương thức bảo mật trước khi kích hoạt!');
-      setTimeout(() => {
-        navigate(twosvPath);
-      }, 700);
-      return;
-    }
-
-    // 2. Yêu cầu xác thực Passkey mới được kích hoạt
     setIsActivatingPasskey(true);
-    if (window.PublicKeyCredential && navigator.credentials) {
-      try {
-        const challenge = new Uint8Array(32);
-        crypto.getRandomValues(challenge);
-        const userId = new Uint8Array(16);
-        crypto.getRandomValues(userId);
-
-        await navigator.credentials.create({
-          publicKey: {
-            challenge,
-            rp: { name: 'KIYOVN Digital Signature' },
-            user: {
-              id: userId,
-              name: authUser?.email || authUser?.employeeCode || 'user',
-              displayName: authUser?.name || authUser?.email || 'user',
-            },
-            pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
-            authenticatorSelection: {
-              authenticatorAttachment: 'platform',
-              userVerification: 'preferred',
-            },
-            timeout: 60000,
-          },
-        });
-      } catch (err: any) {
-        if (err.name === 'NotAllowedError') {
-          message.info('Đã hủy thao tác xác thực khoá truy cập.');
-          setIsActivatingPasskey(false);
-          return;
-        }
-      }
-    }
-
-    setIsPasskeyActive(true);
     try {
-      localStorage.setItem('kiyovn_digisig_passkey_enabled', 'true');
-    } catch (e) {}
-    setIsActivatingPasskey(false);
-    message.success('Đã xác thực khoá truy cập và kích hoạt bảo mật thành công!');
+      // Tắt yêu cầu cũng cần xác thực bằng khóa: trình duyệt tự hỏi khi máy chủ đòi bằng chứng.
+      const { data } = await passkeysApi.setSigningPolicy(!isPasskeyActive);
+      setIsPasskeyActive(data.policy.requireForSigning);
+      message.success(data.policy.requireForSigning ? 'Đã bật yêu cầu khóa truy cập cho chữ ký số.' : 'Đã tắt yêu cầu khóa truy cập cho chữ ký số.');
+    } catch (error: any) {
+      if (error instanceof PasskeyCancelled) message.info(error.message);
+      else message.error(error?.response?.data?.message || error?.message || 'Không đổi được thiết lập khóa truy cập.');
+    } finally {
+      setIsActivatingPasskey(false);
+    }
   };
 
-  // Xác thực bằng khoá truy cập (Passkey) khi ký hoặc lưu
-  const requirePasskey = async (actionDesc: string, callback: () => void) => {
-    if (!isPasskeyActive) {
-      callback();
-      return;
+  const handleSaveSignature = async () => {
+    let finalImg = '';
+    if (signTab === 'draw' && canvasRef.current) {
+      finalImg = canvasRef.current.toDataURL('image/png');
+    } else if (signTab === 'upload' && uploadedSignImage) {
+      finalImg = uploadedSignImage;
+    } else {
+      const fontObj = SIGNATURE_FONTS[selectedFontIndex];
+      finalImg = generateNameSignatureImage(signText || empName, fontObj ? fontObj.font : undefined);
     }
-
-    // Kiểm tra nếu chưa bật 2SV thì cũng nhắc nhở chuyển sang 2SV
-    const status2SV = checkAccount2SVStatus();
-    if (!status2SV.isEnabled) {
-      message.warning('Bạn cần bật tính năng Xác minh 2 bước trước khi thực hiện thao tác!');
-      setTimeout(() => {
-        navigate(twosvPath);
-      }, 700);
-      return;
-    }
-
-    if (!status2SV.hasAnyMethod) {
-      message.warning('Bạn cần cài đặt ít nhất 1 trong 6 phương thức bảo mật trước khi thực hiện thao tác!');
-      setTimeout(() => {
-        navigate(twosvPath);
-      }, 700);
-      return;
-    }
-
-    if (window.PublicKeyCredential && navigator.credentials) {
-      try {
-        const challenge = new Uint8Array(32);
-        crypto.getRandomValues(challenge);
-        await navigator.credentials.get({
-          publicKey: {
-            challenge,
-            rpId: window.location.hostname || 'localhost',
-            userVerification: 'preferred',
-            timeout: 60000,
-          },
-        });
-        message.success('Xác thực khoá truy cập Passkey thành công!');
-        callback();
-        return;
-      } catch (err: any) {
-        if (err.name === 'NotAllowedError') {
-          message.info('Đã hủy xác thực khoá truy cập.');
-          return;
-        }
-      }
-    }
-    message.success('Xác thực khoá truy cập Passkey thành công!');
-    callback();
-  };
-
-  const handleSaveSignature = () => {
-    requirePasskey('Lưu mẫu chữ ký', () => {
-      let finalImg = '';
-      if (signTab === 'draw' && canvasRef.current) {
-        finalImg = canvasRef.current.toDataURL('image/png');
-      } else if (signTab === 'upload' && uploadedSignImage) {
-        finalImg = uploadedSignImage;
-      } else {
-        const fontObj = SIGNATURE_FONTS[selectedFontIndex];
-        finalImg = generateNameSignatureImage(signText || empName, fontObj ? fontObj.font : undefined);
-      }
-      const updated = dataService.updateEmployeeSignatureVisual(
-        empCode,
-        finalImg,
-        signTab,
-        signText
-      );
+    try {
+      // Máy chủ đòi bằng chứng khóa truy cập khi đã bật yêu cầu; hủy xác thực thì không lưu.
+      const updated = await dataService.saveEmployeeSignatureVisual(empCode, finalImg, signTab, signText);
       setDigisigData({ ...digisigData, ...updated, signatureType: signTab, signatureText: signText, signatureImage: finalImg });
       try {
         localStorage.setItem('kiyovn_signature_position', signaturePosition);
         localStorage.setItem('kiyovn_signature_page', signaturePage);
       } catch (e) {}
       setIsSignModalOpen(false);
-      message.success('Đã lưu mẫu chữ ký số cá nhân thành công!');
-    });
+      message.success('Đã lưu mẫu chữ ký số cá nhân.');
+    } catch (error: any) {
+      if (error instanceof PasskeyCancelled) message.info(error.message);
+      else message.error(error?.response?.data?.message || error?.message || 'Không lưu được mẫu chữ ký.');
+    }
   };
 
   const hasCert = Boolean(
@@ -336,9 +184,7 @@ export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
       message.warning('Tài khoản của bạn chưa được Quản trị viên cấp chứng thư số cá nhân.');
       return;
     }
-    requirePasskey(`Ký số "${docName}"`, () => {
-      message.warning('Không thể ký thử: hệ thống chưa được kết nối dịch vụ ký số có chứng thư và khóa riêng được xác thực.');
-    });
+    message.warning(`Không thể ký "${docName}": hệ thống chưa được kết nối dịch vụ ký số có chứng thư và khóa riêng được xác thực.`);
   };
 
   // Canvas drawing handlers

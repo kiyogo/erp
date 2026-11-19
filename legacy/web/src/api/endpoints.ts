@@ -1222,6 +1222,18 @@ export const collectionsApi = {
     api.delete<{ deleted: boolean }>(`/collections/${encodeURIComponent(scope)}/${encodeURIComponent(recordKey)}`),
 };
 
+export type PasskeyItem = { id: string; name: string; createdAt: string; lastUsedAt: string; transports: string[]; userVerified: boolean; backedUp: boolean };
+/** Khóa truy cập (WebAuthn): máy chủ cấp thử thách, xác minh chữ ký và giữ khóa công khai. */
+export const passkeysApi = {
+  list: () => api.get<{ passkeys: PasskeyItem[]; policy: { requireForSigning: boolean } }>('/auth/passkeys'),
+  registrationOptions: () => api.post('/auth/passkeys/registration/options', {}),
+  registrationVerify: (payload: { challengeId: string; name: string; credential: unknown }) => api.post<{ passkey: PasskeyItem }>('/auth/passkeys/registration/verify', payload),
+  remove: (id: string) => api.delete<{ deleted: boolean }>(`/auth/passkeys/${encodeURIComponent(id)}`),
+  setSigningPolicy: (requireForSigning: boolean) => api.put<{ policy: { requireForSigning: boolean } }>('/auth/passkeys/policy', { requireForSigning }),
+  loginOptions: () => api.post('/auth/passkeys/login/options', {}),
+  loginVerify: (payload: { challengeId: string; credential: unknown }) => api.post('/auth/passkeys/login/verify', payload),
+};
+
 export type AdminRoleRecord = {
   key: string; roleCode: string; name: string; description: string;
   category: 'Quản trị' | 'Nghiệp vụ' | 'Tiêu chuẩn'; status: 'Kích hoạt' | 'Tạm khóa';

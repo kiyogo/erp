@@ -1469,6 +1469,17 @@ class DataService {
     return updated;
   }
 
+  /** Lưu mẫu chữ ký và chỉ trả về khi máy chủ đã xác nhận; ném lỗi nếu bị từ chối hoặc người dùng hủy xác thực passkey. */
+  public async saveEmployeeSignatureVisual(employeeCode: string, signatureImage: string, signatureType: 'draw' | 'font' | 'upload', signatureText?: string): Promise<any> {
+    const current = this.getEmployeeDigisig(employeeCode) || { employeeCode };
+    const record = { ...current, signatureImage, signatureType, signatureText: signatureText || current.signatureText, updatedAt: new Date().toISOString() };
+    const list = this.getAllEmployeeDigisigs();
+    const index = list.findIndex((item) => item.employeeCode === employeeCode);
+    const next = index >= 0 ? list.map((item, position) => (position === index ? { ...item, ...record } : item)) : [record, ...list];
+    await this.saveGenericData('employee_digisigs', next, { throwOnError: true });
+    return record;
+  }
+
   public updateEmployeeSignatureVisual(employeeCode: string, signatureImage: string, signatureType: 'draw' | 'font' | 'upload', signatureText?: string): any {
     const current = this.getEmployeeDigisig(employeeCode) || { employeeCode };
     const updated = {
