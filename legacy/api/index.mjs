@@ -5413,6 +5413,24 @@ function payrollMonth(value) {
   return month >= 1 && month <= 12 && year ? `${String(month).padStart(2, '0')}/${year}` : '';
 }
 
+const PAYSLIP_VISIBLE_STATUSES = ['Chưa chi trả', 'Đã chi trả'];
+
+async function ownPayslips(actor) {
+  const code = String(actor.employee_code || '').toLocaleLowerCase('vi-VN');
+  if (!code) return [];
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll' ORDER BY record_key DESC").all();
+  return rows.map(publicCollectionRecord)
+    .filter(record => record && String(record.employeeCode || '').toLocaleLowerCase('vi-VN') === code && PAYSLIP_VISIBLE_STATUSES.includes(record.status))
+    .map(record => ({
+      key: record.key, id: record.key, month: payrollMonth(record.month) || String(record.month || ''),
+      basicSalary: Number(record.baseSalary) || 0, allowance: Number(record.allowance) || 0, bonusKPI: Number(record.bonus) || 0,
+      insuranceDeduction: Number(record.insuranceDeduction) || 0, personalTax: Number(record.taxDeduction) || 0, netSalary: Number(record.netSalary) || 0,
+      workDays: Number(record.workDays) || 0, status: record.status === 'Đã chi trả' ? 'Đã thanh toán' : 'Đã chốt, chờ thanh toán',
+      signedStatus: record.employeeConfirmedAt ? 'Đã xác nhận' : 'Chưa xác nhận', signedDate: record.employeeConfirmedAt || '', signerName: record.employeeConfirmedBy || '',
+    }))
+    .sort((a, b) => String(b.month.slice(3) + b.month.slice(0, 2)).localeCompare(a.month.slice(3) + a.month.slice(0, 2)));
+}
+
 function ledgerCashAccount(profile, source) {
   if (profile.accountingRegime === 'TT132') return source === 'petty' ? '1111' : '1112';
   if (profile.accountingRegime === 'TT133') return source === 'petty' ? '1111' : '1121';
@@ -13241,6 +13259,35 @@ async function handleRequest(request, response) {
     await requireAdmin(request);
     const result = await createPendingEmployee(await readJson(request));
     sendJson(response, 201, result);
+    return;
+  }
+
+  // Phiếu lương của chính nhân viên, lấy từ bảng lương đã được duyệt (không lấy bản ghi tự khai của nhân viên).
+  if (request.method === 'GET' && resource === '/employees/me/payslips') {
+    const actor = await requireUser(request);
+    await requireSecurityPin(request, actor);
+    sendJson(response, 200, { data: await ownPayslips(actor) });
+    return;
+  }
+
+  const ownPayslipConfirmMatch = /^\/employees\/me\/payslips\/([^/]+)\/confirm$/.exec(resource);
+  if (request.method === 'POST' && ownPayslipConfirmMatch) {
+    const actor = await requireUser(request);
+    await requireSecurityPin(request, actor);
+    const key = decodeURIComponent(ownPayslipConfirmMatch[1]);
+    const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll' AND record_key = ?").get(key);
+    const code = String(actor.employee_code || '').toLocaleLowerCase('vi-VN');
+    const record = row ? publicCollectionRecord(row) : null;
+    if (!record || !code || String(record.employeeCode || '').toLocaleLowerCase('vi-VN') !== code || !PAYSLIP_VISIBLE_STATUSES.includes(record.status)) {
+      throw new HttpError(404, 'Không tìm thấy phiếu lương của bạn.');
+    }
+    if (!record.employeeConfirmedAt) {
+      const timestamp = now();
+      await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify({ ...parseJsonObject(row.payload_json), employeeConfirmedAt: timestamp, employeeConfirmedBy: actor.name, employeeConfirmedById: actor.id }), timestamp, row.id);
+      await recordAuditEvent(actor.id, 'payslip_confirm', 'payroll', key, { period: record.month });
+    }
+    sendJson(response, 200, { data: (await ownPayslips(actor)).find(item => item.key === key) });
     return;
   }
 

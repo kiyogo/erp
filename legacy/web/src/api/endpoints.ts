@@ -1194,6 +1194,11 @@ export const attendanceApi = {
   checkIn: (type: 'in' | 'out') => api.post<{ record: Record<string, unknown> }>('/attendance/check-in', { type }),
 };
 
+export const employeePayslipsApi = {
+  list: () => api.get<{ data: any[] }>('/employees/me/payslips'),
+  confirm: (key: string) => api.post<{ data: any }>(`/employees/me/payslips/${encodeURIComponent(key)}/confirm`, {}),
+};
+
 export const collectionsApi = {
   get: <T = any>(scope: string, params?: { page?: number; limit?: number; q?: string; sort?: string; order?: 'asc' | 'desc' }) =>
     api.get<{ data: T[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>(`/collections/${encodeURIComponent(scope)}`, { params }),

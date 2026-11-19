@@ -113,3 +113,28 @@ test('xác minh mã PIN bảo mật bằng máy chủ, không dùng PIN mặc đ
   await request('/auth/security-pin/verify', 'POST', {}, 403, { 'X-Security-Pin': '123456' });
   await request('/auth/security-pin/verify', 'POST', {}, 428, { 'X-Security-Pin': '' });
 });
+
+test('nhân viên xem và xác nhận phiếu lương từ bảng lương đã duyệt của chính mình', async () => {
+  const sessionFor = async (email) => {
+    const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: 'Payroll-Staff-26!Secure' }) });
+    assert.equal(login.status, 200);
+    const session = await login.json();
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token || session.token}` };
+  };
+  const staff = await sessionFor('pay-1@example.test');
+  const own = await (await fetch(`${base}/employees/me/payslips`, { headers: staff })).json();
+  assert.equal(own.data.length, 1);
+  assert.equal(own.data[0].month, '03/2026');
+  assert.equal(own.data[0].netSalary, 30_000_000 - 3_150_000 - 257_500);
+  assert.equal(own.data[0].signedStatus, 'Chưa xác nhận');
+
+  const other = await sessionFor('pay-2@example.test');
+  assert.deepEqual((await (await fetch(`${base}/employees/me/payslips`, { headers: other })).json()).data, []);
+  assert.equal((await fetch(`${base}/employees/me/payslips/${own.data[0].key}/confirm`, { method: 'POST', headers: other, body: '{}' })).status, 404);
+
+  const confirmed = await (await fetch(`${base}/employees/me/payslips/${own.data[0].key}/confirm`, { method: 'POST', headers: staff, body: '{}' })).json();
+  assert.equal(confirmed.data.signedStatus, 'Đã xác nhận');
+  assert.ok(confirmed.data.signerName);
+  const again = await (await fetch(`${base}/employees/me/payslips`, { headers: staff })).json();
+  assert.equal(again.data[0].signedStatus, 'Đã xác nhận');
+});

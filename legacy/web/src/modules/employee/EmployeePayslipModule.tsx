@@ -14,6 +14,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Input, Button, message, Select } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
+import { employeePayslipsApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { useAuth } from '../../context/AuthContext';
 
@@ -41,8 +42,17 @@ export const EmployeePayslipModule: React.FC = () => {
     reason: '',
   });
 
+  // Phiếu lương lấy từ bảng lương đã duyệt của chính nhân viên; chỉ nạp lại khi mở trang hoặc sau khi xác nhận.
+  const loadPayslips = async () => {
+    try {
+      const response = await employeePayslipsApi.list();
+      setData(response.data.data || []);
+    } catch (error: any) {
+      if (error?.response?.status !== 428) message.error(error?.response?.data?.message || 'Không tải được phiếu lương.');
+    }
+  };
+
   const loadData = () => {
-    setData(dataService.getEmployeePayslips());
     const existing = dataService.getEmployeeBankAccount();
     if (existing) {
       setBankForm({
@@ -56,15 +66,16 @@ export const EmployeePayslipModule: React.FC = () => {
   };
 
   useEffect(() => {
+    void loadPayslips();
     loadData();
     const unsub = dataService.subscribe(loadData);
     return unsub;
   }, []);
 
   const handleSignPayslip = async (payslip: any) => {
-    const emp = dataService.getEmployeeProfile();
     try {
-      await dataService.signEmployeePayslip(payslip.key || payslip.id, user?.name || emp?.name || '');
+      await employeePayslipsApi.confirm(payslip.key || payslip.id);
+      await loadPayslips();
       setSignedMonths(prev => ({ ...prev, [payslip.key]: true }));
       message.success(`Đã lưu xác nhận phiếu lương ${payslip.month}.`);
     } catch (error: any) {
