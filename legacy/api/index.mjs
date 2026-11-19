@@ -6115,8 +6115,30 @@ function publicContract(row, actor = null) {
   };
 }
 
+// Giới hạn của Bộ luật Lao động 2019 áp dụng cho hợp đồng lao động: thử việc (Điều 25), thời hạn hợp đồng xác định thời hạn (Điều 20), ngày phép năm (Điều 113).
+function enforceLaborContractLimits(contract) {
+  if (contract.contractCategory !== 'labor') return contract;
+  if (!(contract.probationMonths >= 0) || contract.probationMonths > 6) {
+    throw new HttpError(422, 'Thời gian thử việc tối đa 6 tháng (180 ngày) theo Điều 25 Bộ luật Lao động 2019.');
+  }
+  if (contract.annualLeaveDays < 12) throw new HttpError(422, 'Số ngày phép năm tối thiểu là 12 ngày theo Điều 113 Bộ luật Lao động 2019.');
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/;
+  const from = iso.exec(contract.startDate);
+  const to = iso.exec(contract.endDate);
+  if (from && to) {
+    const start = Date.UTC(Number(from[1]), Number(from[2]) - 1, Number(from[3]));
+    const end = Date.UTC(Number(to[1]), Number(to[2]) - 1, Number(to[3]));
+    if (end < start) throw new HttpError(422, 'Ngày kết thúc hợp đồng không được trước ngày bắt đầu.');
+    const months = (Number(to[1]) - Number(from[1])) * 12 + (Number(to[2]) - Number(from[2])) - (Number(to[3]) < Number(from[3]) ? 1 : 0);
+    if (months > 36 || (months === 36 && Number(to[3]) > Number(from[3]))) {
+      throw new HttpError(422, 'Hợp đồng lao động xác định thời hạn không quá 36 tháng theo Điều 20 Bộ luật Lao động 2019; hãy bỏ ngày kết thúc nếu là hợp đồng không xác định thời hạn.');
+    }
+  }
+  return contract;
+}
+
 function validateContract(input) {
-  return {
+  return enforceLaborContractLimits({
     code: optionalText(input.code, 'Mã hợp đồng', 80) || '',
     name: requiredText(input.name, 'Tên hợp đồng', 300),
     contractCategory: optionalText(input.contractCategory, 'Danh mục hợp đồng', 80) || 'labor',
@@ -6171,7 +6193,7 @@ function validateContract(input) {
     signerPosition: optionalText(input.signerPosition, 'Chức vụ người ký', 160) || '',
     note: optionalText(input.note, 'Ghi chú', 2000) || '',
     customFieldValuesJson: JSON.stringify(input.customFieldValues || {}),
-  };
+  });
 }
 
 function generateContractDocContent(contract, user, company = {}) {
