@@ -57,57 +57,6 @@ export interface AttachedDocument {
   uploadedAt: string;
 }
 
-const SAMPLE_EMPLOYEES: EnterpriseEmployee[] = [
-  {
-    key: 'emp-uni-1',
-    id: 'emp-uni-1',
-    employeeCode: 'NV000001',
-    code: 'NV000001',
-    name: 'Nguyễn Văn An',
-    fullName: 'Nguyễn Văn An',
-    department: 'Phòng Ban Kỹ Thuật',
-    position: 'Kỹ sư phần mềm',
-    email: 'an.nguyen@company.com',
-    phone: '0901234567',
-    joinDate: '2026-01-15',
-    status: 'Chính thức',
-    role: 'USER',
-    isActive: true,
-  },
-  {
-    key: 'emp-uni-2',
-    id: 'emp-uni-2',
-    employeeCode: 'NV000002',
-    code: 'NV000002',
-    name: 'Trần Thị Bích',
-    fullName: 'Trần Thị Bích',
-    department: 'Phòng Kinh Doanh',
-    position: 'Chuyên viên tư vấn',
-    email: 'bich.tran@company.com',
-    phone: '0902345678',
-    joinDate: '2026-02-01',
-    status: 'Chính thức',
-    role: 'USER',
-    isActive: true,
-  },
-  {
-    key: 'emp-uni-3',
-    id: 'emp-uni-3',
-    employeeCode: 'NV000003',
-    code: 'NV000003',
-    name: 'Lê Hoàng Nam',
-    fullName: 'Lê Hoàng Nam',
-    department: 'Ban Giám Đốc',
-    position: 'Trưởng phòng',
-    email: 'nam.le@company.com',
-    phone: '0903456789',
-    joinDate: '2025-11-10',
-    status: 'Chính thức',
-    role: 'USER',
-    isActive: true,
-  },
-];
-
 export const UniformsModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseUniformItem[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
@@ -148,17 +97,17 @@ export const UniformsModule: React.FC = () => {
       const [res, orgUnits, empRes] = await Promise.all([
         collectionsApi.get<EnterpriseUniformItem>('hr_uniforms', { limit: 500 }),
         dataService.fetchOrgUnitsList(),
-        employeesApi.getAll().catch(() => ({ data: [] })),
+        employeesApi.getAll().then((response) => response.data.data || []).catch(() => [] as EnterpriseEmployee[]),
       ]);
       const list = res.data?.data || [];
       setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
 
-      const loadedEmps = (empRes.data && empRes.data.length > 0) ? empRes.data : SAMPLE_EMPLOYEES;
+      const loadedEmps = empRes;
       setEmployees(loadedEmps);
     } catch {
       setData([]);
-      setEmployees(SAMPLE_EMPLOYEES);
+      setEmployees([]);
     }
   };
 
@@ -246,7 +195,7 @@ export const UniformsModule: React.FC = () => {
   };
 
   const handleBatchAddEmployees = () => {
-    const pool = employees.length > 0 ? employees : SAMPLE_EMPLOYEES;
+    const pool = employees;
     const candidates = batchDepartment === 'Tất cả đơn vị'
       ? pool
       : pool.filter(e => (e.department || '').toLowerCase() === batchDepartment.toLowerCase());
@@ -274,7 +223,7 @@ export const UniformsModule: React.FC = () => {
   };
 
   const handleImportExcel = () => {
-    const pool = employees.length > 0 ? employees : SAMPLE_EMPLOYEES;
+    const pool = employees;
     const existingIds = new Set(participatingEmployees.map(e => e.id));
     const sampleImport = pool.slice(0, 3).filter(e => !existingIds.has(e.id || e.userId || e.employeeCode || e.code || ''));
 
@@ -334,7 +283,7 @@ export const UniformsModule: React.FC = () => {
   };
 
   const confirmSelectEmployees = () => {
-    const pool = employees.length > 0 ? employees : SAMPLE_EMPLOYEES;
+    const pool = employees;
     const selected = pool.filter(e => {
       const k = e.id || e.userId || e.employeeCode || e.code || '';
       return selectedPickerKeys.includes(k) || selectedPickerKeys.includes(e.key || '');
@@ -387,7 +336,7 @@ export const UniformsModule: React.FC = () => {
     return matchStatus && matchSearch;
   });
 
-  const filteredPickerEmployees = (employees.length > 0 ? employees : SAMPLE_EMPLOYEES).filter(e => {
+  const filteredPickerEmployees = employees.filter(e => {
     const name = (e.name || (e as any).fullName || '').toLowerCase();
     const code = (e.employeeCode || e.code || '').toLowerCase();
     const matchSearch = !pickerSearch.trim() || name.includes(pickerSearch.toLowerCase()) || code.includes(pickerSearch.toLowerCase());

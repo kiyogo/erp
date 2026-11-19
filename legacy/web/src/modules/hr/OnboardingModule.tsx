@@ -64,60 +64,6 @@ export const ONBOARDING_WORK_TYPES = [
   'Thực hiện bên ngoài',
 ] as const;
 
-const DEFAULT_SYSTEM_EMPLOYEES: EnterpriseEmployee[] = [
-  {
-    key: 'emp-sys-1',
-    id: 'emp-sys-1',
-    userId: 'emp-sys-1',
-    employeeCode: 'NV000001',
-    code: 'NV000001',
-    name: 'Nguyễn Văn An',
-    fullName: 'Nguyễn Văn An',
-    department: 'Ban Giám Đốc',
-    position: 'Kỹ sư phần mềm',
-    email: 'an.nguyen@company.com',
-    phone: '0901234567',
-    joinDate: '2026-01-15',
-    status: 'Chính thức',
-    role: 'USER',
-    isActive: true,
-  },
-  {
-    key: 'emp-sys-2',
-    id: 'emp-sys-2',
-    userId: 'emp-sys-2',
-    employeeCode: 'NV000002',
-    code: 'NV000002',
-    name: 'Trần Thị Bích',
-    fullName: 'Trần Thị Bích',
-    department: 'Phòng Kinh Doanh',
-    position: 'Chuyên viên tư vấn',
-    email: 'bich.tran@company.com',
-    phone: '0902345678',
-    joinDate: '2026-02-01',
-    status: 'Chính thức',
-    role: 'USER',
-    isActive: true,
-  },
-  {
-    key: 'emp-sys-3',
-    id: 'emp-sys-3',
-    userId: 'emp-sys-3',
-    employeeCode: 'NV000003',
-    code: 'NV000003',
-    name: 'Lê Hoàng Nam',
-    fullName: 'Lê Hoàng Nam',
-    department: 'Ban Giám Đốc',
-    position: 'Trưởng phòng',
-    email: 'nam.le@company.com',
-    phone: '0903456789',
-    joinDate: '2025-11-10',
-    status: 'Chính thức',
-    role: 'USER',
-    isActive: true,
-  },
-];
-
 
 type OnboardingStep = { key: typeof onboardingSteps[number]['key']; completed: boolean; completedAt?: string; completedBy?: string };
 
@@ -276,7 +222,7 @@ export const OnboardingModule: React.FC = () => {
           updatedAt: e.updatedAt || '',
         }));
 
-      setEmployees(activeStaff.length > 0 ? activeStaff : DEFAULT_SYSTEM_EMPLOYEES);
+      setEmployees(activeStaff);
 
       if (orgUnitsRes.status === 'fulfilled' && Array.isArray(orgUnitsRes.value) && orgUnitsRes.value.length > 0) {
         setDeptOptions(orgUnitsRes.value.map((u) => ({ label: u, value: u })));
@@ -299,7 +245,7 @@ export const OnboardingModule: React.FC = () => {
       setLoadError('');
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || 'Không thể tải dữ liệu hội nhập. Vui lòng thử lại.');
-      setEmployees(DEFAULT_SYSTEM_EMPLOYEES);
+      setEmployees([]);
     } finally {
       setLoading(false);
     }
@@ -367,7 +313,7 @@ export const OnboardingModule: React.FC = () => {
       message.warning('Vui lòng chọn ít nhất một nhân viên trong bảng.');
       return;
     }
-    const pool = employees.length > 0 ? employees : DEFAULT_SYSTEM_EMPLOYEES;
+    const pool = employees;
     const selectedEmps = pool.filter(emp => {
       const k = emp.id || emp.userId || emp.employeeCode || emp.code || '';
       return selectedEmpKeys.includes(k) || selectedEmpKeys.includes(emp.key || '');
@@ -525,7 +471,7 @@ export const OnboardingModule: React.FC = () => {
   });
 
   // Lọc danh sách nhân viên ứng viên trong Modal Ảnh 1
-  const poolEmployees = employees.length > 0 ? employees : DEFAULT_SYSTEM_EMPLOYEES;
+  const poolEmployees = employees;
   const candidateList = poolEmployees.filter(emp => {
     const name = (emp.name || (emp as any).fullName || '').toLowerCase();
     const code = (emp.employeeCode || emp.code || '').toLowerCase();
@@ -1382,7 +1328,7 @@ export const OnboardingModule: React.FC = () => {
                   value={otherAssignee || undefined}
                   onChange={val => setOtherAssignee(val)}
                   style={{ width: '100%' }}
-                  options={(employees.length > 0 ? employees : SAMPLE_CANDIDATE_EMPLOYEES).map(emp => ({
+                  options={employees.map(emp => ({
                     value: emp.name || (emp as any).fullName || emp.id,
                     label: `${(emp.name || (emp as any).fullName)} (${emp.employeeCode || emp.code || 'NV'})`,
                   }))}
