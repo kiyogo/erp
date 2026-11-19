@@ -2209,8 +2209,20 @@ const accountingOperationScopes = new Set([
   'finance_payroll_postings', 'finance_prepaid', 'finance_tax', 'finance_chart_of_accounts', 'finance_bank_statements', 'finance_bank_statement_matches',
 ]);
 
+// Phạm vi dữ liệu mà nhân viên thường không có nghiệp vụ nào cần ghi: chỉ quản trị viên được tạo, sửa, xóa.
+const ADMIN_WRITE_ONLY_SCOPES = new Set(['payroll', 'business_org_units', 'contract_templates', 'enterprise_contracts', 'enterprise_services', 'digital_signature_audit_trail']);
+function isAdminWriteOnlyScope(scope) {
+  return /^(finance_|hr_|crm_|admin_|address_)/.test(scope)
+    || (scope.startsWith('asset_') && scope !== 'asset_todos')
+    || /^attendance_(shift|leave_plans|alerts|raw_data|timesheet_summary)/.test(scope)
+    || ADMIN_WRITE_ONLY_SCOPES.has(scope);
+}
+
 async function requireCollectionActor(request, scope) {
   const actor = await requireUser(request);
+  if (actor.role !== 'ADMIN' && !['GET', 'HEAD'].includes(request.method) && isAdminWriteOnlyScope(scope)) {
+    throw new HttpError(403, 'Chỉ quản trị viên được thay đổi dữ liệu này.');
+  }
   if (scope === 'finance_tax_types' && request.method !== 'GET' && actor.role !== 'ADMIN') {
     throw new HttpError(403, 'Chỉ quản trị viên được quản lý danh mục sắc thuế nội bộ.');
   }
@@ -8228,7 +8240,7 @@ async function handleRequest(request, response) {
         if (lanIp !== '127.0.0.1') break;
       }
     } catch {}
-    sendJson(response, 200, { lanIp, port: 3004 });
+    sendJson(response, 200, { lanIp, port: PORT });
     return;
   }
 
