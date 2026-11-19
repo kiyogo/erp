@@ -799,6 +799,11 @@ class DataService {
   }
 
   // 2. Employees (employeesApi)
+  /** Danh bạ nhân viên cho các màn hình dùng kiểu EnterpriseEmployee; bộ nhớ đệm chỉ giữ các trường cơ bản nên trường khác có thể trống. */
+  public getEmployeeDirectory(): EnterpriseEmployee[] {
+    return this.getEmployees() as unknown as EnterpriseEmployee[];
+  }
+
   public getEmployees(): Employee[] {
     return [...this.data.employees];
   }

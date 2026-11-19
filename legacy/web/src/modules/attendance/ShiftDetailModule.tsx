@@ -228,7 +228,7 @@ export const ShiftDetailModule: React.FC = () => {
       }
 
       // 2. Load Employees
-      const empList = dataService.getEmployees();
+      const empList = dataService.getEmployeeDirectory();
       setEmployees(empList);
 
       // 3. Load Org Units (Ensure DEFAULT_COMPANY is first and normalized)
@@ -255,7 +255,7 @@ export const ShiftDetailModule: React.FC = () => {
   useEffect(() => {
     loadData();
     const unsub = dataService.subscribe(() => {
-      setEmployees(dataService.getEmployees());
+      setEmployees(dataService.getEmployeeDirectory());
     });
     return unsub;
   }, []);

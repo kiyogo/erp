@@ -682,7 +682,7 @@ export const EInvoiceModule: React.FC = () => {
                 {
                   title: 'Tài liệu API và môi trường thử nghiệm', key: 'integration',
                   render: (_: unknown, provider: (typeof providerCatalog)[number]) => {
-                    const integration = providerIntegrationCatalog[provider.taxId as keyof typeof providerIntegrationCatalog];
+                    const integration: { evidenceUrl: string; evidenceLabel: string; apiDocsUrl?: string; sandboxUrl?: string; note: string } | undefined = providerIntegrationCatalog[provider.taxId as keyof typeof providerIntegrationCatalog];
                     return integration ? <div style={{ display: 'grid', gap: 4 }}>
                       <a href={integration.evidenceUrl} target="_blank" rel="noreferrer">{integration.evidenceLabel}</a>
                       {integration.apiDocsUrl && <a href={integration.apiDocsUrl} target="_blank" rel="noreferrer">Tài liệu API kỹ thuật</a>}

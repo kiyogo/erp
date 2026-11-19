@@ -129,7 +129,7 @@ export const ShiftRegistrationModule: React.FC = () => {
       setOrgUnits(mergedUnits);
 
       // 2. Employees
-      const empList = dataService.getEmployees();
+      const empList = dataService.getEmployeeDirectory();
       setEmployees(empList);
 
       // 3. Campaigns
@@ -150,7 +150,7 @@ export const ShiftRegistrationModule: React.FC = () => {
   useEffect(() => {
     loadData();
     const unsub = dataService.subscribe(() => {
-      setEmployees(dataService.getEmployees());
+      setEmployees(dataService.getEmployeeDirectory());
     });
     return unsub;
   }, []);

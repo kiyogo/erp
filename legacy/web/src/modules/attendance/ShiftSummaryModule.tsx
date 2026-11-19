@@ -24,29 +24,28 @@ import {
   DatePicker,
 } from '../../custom-ui';
 import { EmployeeSelect } from '../hr/EmployeeSelect';
-import { collectionsApi, EnterpriseEmployee } from '../../api/endpoints';
+import { collectionsApi, EnterpriseEmployee, systemApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { generateValidXlsxBlob, downloadFile } from '../../utils/fileExporter';
 
-const DEFAULT_COMPANY = 'CÔNG TY TNHH XÂY DỰNG KINH SỞ';
+const pad2 = (value: number) => String(value).padStart(2, '0');
+const asText = (value: unknown) => (Array.isArray(value) ? value.join(', ') : String(value || ''));
 
-// 31 days in October 2026: Day 1 (Thu / T5) to Day 31 (Sat / T7)
-const OCT_2026_DAYS = Array.from({ length: 31 }, (_, i) => {
-  const day = i + 1;
-  // 2026-10-01 is Thursday (4 in 0-indexed Sun=0, Mon=1... Thu=4, Fri=5, Sat=6, Sun=0)
-  const dateObj = new Date(2026, 9, day);
-  const dow = dateObj.getDay(); // 0: CN, 1: T2, 2: T3, 3: T4, 4: T5, 5: T6, 6: T7
-  const weekdayLabel = dow === 0 ? 'CN' : `T${dow + 1}`;
-  const isWeekend = dow === 0 || dow === 6;
-  return {
-    day,
-    weekdayLabel,
-    isWeekend,
-    dateStr: `${String(day).padStart(2, '0')}/10/2026`,
-  };
-});
+// Các ngày của tháng đang xem, tháng có dạng MM/YYYY.
+const monthDays = (month: string) => {
+  const [mm, yyyy] = month.split('/').map(Number);
+  return Array.from({ length: new Date(yyyy, mm, 0).getDate() }, (_, i) => {
+    const day = i + 1;
+    const dow = new Date(yyyy, mm - 1, day).getDay();
+    return { day, weekdayLabel: dow === 0 ? 'CN' : `T${dow + 1}`, isWeekend: dow === 0 || dow === 6, dateStr: `${pad2(day)}/${pad2(mm)}/${yyyy}` };
+  });
+};
+const rosterScope = (month: string) => { const [mm, yyyy] = month.split('/'); return `attendance_shift_rosters_${yyyy}${mm.padStart(2, '0')}`; };
+const currentMonth = () => { const now = new Date(); return `${pad2(now.getMonth() + 1)}/${now.getFullYear()}`; };
+const countWorkUnits = (daily: Record<number, string>) => Object.values(daily).filter((shift) => shift && shift !== 'OFF').length;
 
 interface EmployeeShiftRoster {
+  key?: string;
   empCode: string;
   name: string;
   department: string;
@@ -58,14 +57,14 @@ interface EmployeeShiftRoster {
 
 export const ShiftSummaryModule: React.FC = () => {
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
-  const [orgUnits, setOrgUnits] = useState<string[]>([DEFAULT_COMPANY]);
+  const [orgUnits, setOrgUnits] = useState<string[]>([]);
   const [rosters, setRosters] = useState<EmployeeShiftRoster[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Filters
   const [searchText, setSearchText] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('10/2026');
-  const [orgFilter, setOrgFilter] = useState<string>(DEFAULT_COMPANY);
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [orgFilter, setOrgFilter] = useState<string>('');
   const [shiftFilter, setShiftFilter] = useState('all');
   const [deptFilter, setDeptFilter] = useState('all');
 
@@ -74,82 +73,57 @@ export const ShiftSummaryModule: React.FC = () => {
   const [selectedCell, setSelectedCell] = useState<{ empCode: string; empName: string; day: number; currentShift: string } | null>(null);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkForm] = Form.useForm();
+  const days = useMemo(() => monthDays(selectedMonth), [selectedMonth]);
+  const monthOptions = useMemo(() => {
+    const [mm, yyyy] = currentMonth().split('/').map(Number);
+    return Array.from({ length: 13 }, (_, i) => { const date = new Date(yyyy, mm - 1 + i - 6, 1); const value = `${pad2(date.getMonth() + 1)}/${date.getFullYear()}`; return { label: value, value }; });
+  }, []);
 
   const loadData = async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
-      // 1. Load Org Units
-      const fetchedUnits = await dataService.fetchOrgUnitsList().catch(() => []);
-      const mergedUnits = Array.from(new Set([DEFAULT_COMPANY, ...fetchedUnits]));
-      setOrgUnits(mergedUnits);
+      const [fetchedUnits, companyName] = await Promise.all([
+        dataService.fetchOrgUnitsList().catch(() => [] as string[]),
+        systemApi.getCompanyProfile().then((response) => String(response.data.profile.companyName || '')).catch(() => ''),
+      ]);
+      setOrgUnits(Array.from(new Set([...(companyName ? [companyName] : []), ...fetchedUnits])));
+      setOrgFilter((current) => current || companyName);
 
-      // 2. Load Employees
-      const empList = dataService.getEmployees().filter((item: any) => {
-        const isSuper = item?.role === 'ADMIN' || item?.code === 'ADMIN-001';
-        return !isSuper;
-      });
-      setEmployees(empList);
+      const empList = dataService.getEmployees().filter((item) => item.code !== 'ADMIN-001');
+      setEmployees(empList as unknown as EnterpriseEmployee[]);
 
-      // 3. Load or generate roster matrix for October 2026
-      const savedMatrix = await collectionsApi.get<any>('attendance_shift_rosters_202610').catch(() => ({ data: { data: [] } }));
-      const rows = savedMatrix.data?.data || [];
-
-      if (Array.isArray(rows) && rows.length > 0) {
-        setRosters(rows);
-      } else {
-        // Generate initial realistic roster based on employee list
-        const initialRosters: EmployeeShiftRoster[] = empList.map((emp, index) => {
-          const daily: Record<number, string> = {};
-          let workUnits = 0;
-
-          OCT_2026_DAYS.forEach((d) => {
-            if (d.isWeekend) {
-              // T7 may work morning for construction, CN is OFF
-              if (d.weekdayLabel === 'T7' && index % 2 === 0) {
-                daily[d.day] = 'HC';
-                workUnits += 1;
-              } else {
-                daily[d.day] = 'OFF';
-              }
-            } else {
-              // Weekdays: default to HC, some night / shifts
-              if (index === 1 && d.day % 3 === 0) {
-                daily[d.day] = 'SANG';
-              } else if (index === 2 && d.day % 4 === 0) {
-                daily[d.day] = 'CHIEU';
-              } else {
-                daily[d.day] = 'HC';
-              }
-              workUnits += 1;
-            }
-          });
-
-          return {
-            empCode: emp.code || emp.employeeCode || `NV${String(index + 1).padStart(6, '0')}`,
-            name: emp.name || emp.fullName || 'Nhân sự',
-            department: Array.isArray(emp.department) ? emp.department.join(', ') : (emp.department || 'Ban Giám Đốc'),
-            position: Array.isArray(emp.position) ? emp.position.join(', ') : (emp.position || 'Cán bộ'),
-            totalWorkUnits: workUnits,
-            dailyShifts: daily,
-          };
-        });
-
-        setRosters(initialRosters);
-      }
-    } catch {
-      // fallback
+      // Bảng phân ca chỉ lấy từ dữ liệu đã lưu của tháng; nhân sự chưa được phân ca hiển thị ô trống.
+      const saved = await collectionsApi.get<EmployeeShiftRoster>(rosterScope(selectedMonth), { limit: 500 });
+      const savedByCode = new Map((saved.data?.data || []).map((row) => [String(row.empCode).toLowerCase(), row]));
+      setRosters(empList.map((emp) => {
+        const row = savedByCode.get(String(emp.code).toLowerCase());
+        const daily = row?.dailyShifts || {};
+        return { key: row?.key, empCode: emp.code, name: emp.name, department: asText(emp.department), position: asText(emp.position), totalWorkUnits: countWorkUnits(daily), dailyShifts: daily };
+      }));
+    } catch (error: any) {
+      setRosters([]);
+      message.error(error?.response?.data?.message || 'Không tải được bảng phân ca của tháng đã chọn.');
     } finally {
       if (showLoading) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-    const unsub = dataService.subscribe(() => {
-      setEmployees(dataService.getEmployees());
-    });
-    return unsub;
-  }, []);
+    void loadData();
+    return dataService.subscribe(() => { void loadData(false); });
+  }, [selectedMonth]);
+
+  const saveRoster = async (roster: EmployeeShiftRoster): Promise<EmployeeShiftRoster> => {
+    const scope = rosterScope(selectedMonth);
+    const body = { empCode: roster.empCode, name: roster.name, department: roster.department, position: roster.position, totalWorkUnits: roster.totalWorkUnits, dailyShifts: roster.dailyShifts };
+    if (roster.key) {
+      await collectionsApi.update(scope, roster.key, body);
+      return roster;
+    }
+    const key = roster.empCode.toLowerCase();
+    const response = await collectionsApi.create(scope, { ...body, key });
+    return { ...roster, key: (response.data.record as { key?: string } | undefined)?.key || key };
+  };
 
   // Filtered Rosters
   const filteredRosters = useMemo(() => {
@@ -199,72 +173,50 @@ export const ShiftSummaryModule: React.FC = () => {
     setAssignModalOpen(true);
   };
 
+  const applyRosters = (updated: EmployeeShiftRoster[]) => {
+    const byCode = new Map(updated.map((roster) => [roster.empCode, roster]));
+    setRosters((prev) => prev.map((roster) => byCode.get(roster.empCode) || roster));
+  };
+
   const handleUpdateSingleShift = async (newShift: string) => {
     if (!selectedCell) return;
     const { empCode, day } = selectedCell;
-
-    setRosters((prev) =>
-      prev.map((r) => {
-        if (r.empCode !== empCode) return r;
-        const updatedDaily = { ...r.dailyShifts, [day]: newShift };
-        // Recalculate work units (OFF is 0, others 1)
-        const newUnits = Object.values(updatedDaily).filter((s) => s !== 'OFF').length;
-        return {
-          ...r,
-          dailyShifts: updatedDaily,
-          totalWorkUnits: newUnits,
-        };
-      })
-    );
-
-    setAssignModalOpen(false);
-    message.success(`Đã cập nhật ca ngày ${day}/10 cho nhân sự ${selectedCell.empName}`);
-
-    // Persist async
+    const target = rosters.find((roster) => roster.empCode === empCode);
+    if (!target) return;
+    const dailyShifts = { ...target.dailyShifts, [day]: newShift };
     try {
-      const targetRoster = rosters.find((r) => r.empCode === empCode);
-      if (targetRoster) {
-        await collectionsApi.create('attendance_shift_rosters_202610', {
-          ...targetRoster,
-          dailyShifts: { ...targetRoster.dailyShifts, [day]: newShift },
-        }).catch(() => {});
-      }
-    } catch {
-      // ignore
+      const saved = await saveRoster({ ...target, dailyShifts, totalWorkUnits: countWorkUnits(dailyShifts) });
+      applyRosters([saved]);
+      setAssignModalOpen(false);
+      message.success(`Đã cập nhật ca ngày ${days[day - 1]?.dateStr} cho ${selectedCell.empName}.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được ca làm việc.');
     }
   };
 
-  // Handle Bulk Assign
+  // Phân ca hàng loạt: lưu từng nhân sự, báo rõ số người lưu thành công.
   const handleBulkAssign = async (values: any) => {
     const shift = values.shift;
-    const fromDay = parseInt(values.fromDay, 10) || 1;
-    const toDay = parseInt(values.toDay, 10) || 31;
+    const fromDay = Math.max(1, parseInt(values.fromDay, 10) || 1);
+    const toDay = Math.min(days.length, parseInt(values.toDay, 10) || days.length);
+    if (fromDay > toDay) { message.error('Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.'); return; }
     const selectedEmpCodes: string[] = values.employees || [];
-
-    setRosters((prev) =>
-      prev.map((r) => {
-        if (selectedEmpCodes.length > 0 && !selectedEmpCodes.includes(r.empCode)) {
-          return r;
-        }
-        const updatedDaily = { ...r.dailyShifts };
-        for (let d = fromDay; d <= toDay; d++) {
-          if (!values.applyWeekend && (OCT_2026_DAYS[d - 1]?.isWeekend)) {
-            continue;
-          }
-          updatedDaily[d] = shift;
-        }
-        const newUnits = Object.values(updatedDaily).filter((s) => s !== 'OFF').length;
-        return {
-          ...r,
-          dailyShifts: updatedDaily,
-          totalWorkUnits: newUnits,
-        };
-      })
-    );
-
+    const targets = rosters.filter((roster) => selectedEmpCodes.length === 0 || selectedEmpCodes.includes(roster.empCode));
+    const saved: EmployeeShiftRoster[] = [];
+    let failed = 0;
+    for (const roster of targets) {
+      const dailyShifts = { ...roster.dailyShifts };
+      for (let d = fromDay; d <= toDay; d++) {
+        if (!values.applyWeekend && days[d - 1]?.isWeekend) continue;
+        dailyShifts[d] = shift;
+      }
+      try { saved.push(await saveRoster({ ...roster, dailyShifts, totalWorkUnits: countWorkUnits(dailyShifts) })); } catch { failed += 1; }
+    }
+    applyRosters(saved);
     setBulkModalOpen(false);
     bulkForm.resetFields();
-    message.success(`Đã phân ca hàng loạt (${shift}) từ ngày ${fromDay} đến ${toDay}/10 thành công!`);
+    if (failed) message.warning(`Đã phân ca cho ${saved.length} nhân sự, ${failed} nhân sự không lưu được.`);
+    else message.success(`Đã phân ca ${shift} từ ngày ${fromDay} đến ${toDay} cho ${saved.length} nhân sự.`);
   };
 
   const handleExportExcel = () => {
@@ -275,7 +227,7 @@ export const ShiftSummaryModule: React.FC = () => {
         'Phòng ban',
         'Chức vụ',
         'Tổng công',
-        ...OCT_2026_DAYS.map((d) => `${d.day}/10 (${d.weekdayLabel})`),
+        ...days.map((d) => `${d.day}/${selectedMonth.slice(0, 2)} (${d.weekdayLabel})`),
       ];
       const rows = filteredRosters.map((r) => [
         r.empCode,
@@ -283,7 +235,7 @@ export const ShiftSummaryModule: React.FC = () => {
         r.department,
         r.position,
         r.totalWorkUnits,
-        ...OCT_2026_DAYS.map((d) => r.dailyShifts[d.day] || 'OFF'),
+        ...days.map((d) => r.dailyShifts[d.day] || ''),
       ]);
       const blob = generateValidXlsxBlob([header, ...rows]);
       downloadFile(`bang_phan_ca_tong_hop_${selectedMonth.replace('/', '_')}.xlsx`, blob);
@@ -380,7 +332,7 @@ export const ShiftSummaryModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
             {totalEmployeesInRoster} Nhân sự
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tháng 10/2026 toàn công ty</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tháng {selectedMonth} toàn công ty</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -439,11 +391,7 @@ export const ShiftSummaryModule: React.FC = () => {
             value={selectedMonth}
             onChange={setSelectedMonth}
             style={{ width: 120, height: 32 }}
-            options={[
-              { label: '10/2026', value: '10/2026' },
-              { label: '11/2026', value: '11/2026' },
-              { label: '09/2026', value: '09/2026' },
-            ]}
+            options={monthOptions}
           />
 
           <Select
@@ -544,7 +492,7 @@ export const ShiftSummaryModule: React.FC = () => {
               </th>
 
               {/* 31 Ngày trong tháng 10 */}
-              {OCT_2026_DAYS.map((d) => (
+              {days.map((d) => (
                 <th
                   key={d.day}
                   style={{
@@ -617,13 +565,13 @@ export const ShiftSummaryModule: React.FC = () => {
                   </td>
 
                   {/* 31 Ô Phân ca ngày */}
-                  {OCT_2026_DAYS.map((d) => {
-                    const shiftCode = roster.dailyShifts[d.day] || 'OFF';
+                  {days.map((d) => {
+                    const shiftCode = roster.dailyShifts[d.day] || '';
                     return (
                       <td
                         key={d.day}
                         onClick={() => handleCellClick(roster.empCode, roster.name, d.day, shiftCode)}
-                        title={`Click để đổi ca cho ${roster.name} ngày ${d.day}/10/2026`}
+                        title={`Click để đổi ca cho ${roster.name} ngày ${d.dateStr}`}
                         style={{
                           textAlign: 'center',
                           padding: '6px 2px',
@@ -633,7 +581,7 @@ export const ShiftSummaryModule: React.FC = () => {
                           userSelect: 'none',
                         }}
                       >
-                        {renderShiftBadge(shiftCode)}
+                        {shiftCode ? renderShiftBadge(shiftCode) : <span style={{ color: '#CBD5E1' }}>–</span>}
                       </td>
                     );
                   })}
@@ -684,7 +632,7 @@ export const ShiftSummaryModule: React.FC = () => {
 
       {/* MODAL: ĐỔI CA NHANH THEO Ô (CELL QUICK ASSIGN) */}
       <Modal
-        title={selectedCell ? `Đổi ca ngày ${selectedCell.day}/10/2026 - ${selectedCell.empName}` : 'Đổi ca'}
+        title={selectedCell ? `Đổi ca ngày ${days[selectedCell.day - 1]?.dateStr} - ${selectedCell.empName}` : 'Đổi ca'}
         open={assignModalOpen}
         onCancel={() => setAssignModalOpen(false)}
         footer={null}
@@ -693,7 +641,7 @@ export const ShiftSummaryModule: React.FC = () => {
         {selectedCell && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 13, color: '#475569' }}>
-              Chọn ca làm việc áp dụng cho ngày <strong>{selectedCell.day}/10/2026</strong>:
+              Chọn ca làm việc áp dụng cho ngày <strong>{days[selectedCell.day - 1]?.dateStr}</strong>:
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
@@ -772,22 +720,22 @@ export const ShiftSummaryModule: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
             <Form.Item
               name="fromDay"
-              label="Từ ngày (tháng 10/2026)"
+              label="Từ ngày"
               initialValue={1}
               required
               style={{ margin: 0 }}
             >
-              <Input type="number" min={1} max={31} style={{ height: 32 }} />
+              <Input type="number" min={1} max={days.length} style={{ height: 32 }} />
             </Form.Item>
 
             <Form.Item
               name="toDay"
-              label="Đến ngày (tháng 10/2026)"
-              initialValue={31}
+              label="Đến ngày"
+              initialValue={days.length}
               required
               style={{ margin: 0 }}
             >
-              <Input type="number" min={1} max={31} style={{ height: 32 }} />
+              <Input type="number" min={1} max={days.length} style={{ height: 32 }} />
             </Form.Item>
           </div>
 

@@ -40,7 +40,7 @@ const isPublicPath = (pathname: string) => {
 // ===== Response interceptor – handle 401 =====
 api.interceptors.response.use(
   (res) => {
-    if (typeof res.data === 'string' && res.headers['content-type']?.includes('text/html')) {
+    if (typeof res.data === 'string' && String(res.headers['content-type'] ?? '').includes('text/html')) {
       return Promise.reject(new Error('Máy chủ API trả về dữ liệu không hợp lệ.'));
     }
     return res;
