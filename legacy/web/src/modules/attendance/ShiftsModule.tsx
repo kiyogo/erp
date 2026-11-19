@@ -49,106 +49,8 @@ export interface EnterpriseWorkShift {
 
 export type WorkShiftItem = EnterpriseWorkShift;
 
-const DEFAULT_SHIFTS: EnterpriseWorkShift[] = [
-  {
-    key: 'shift-hc-01',
-    shiftCode: 'HC',
-    shiftName: 'Ca hành chính chuẩn',
-    timeRange: '08:00 - 17:30',
-    startTime: '08:00',
-    endTime: '17:30',
-    workingHours: 8,
-    workUnits: 1,
-    breakTime: '12:00 - 13:30',
-    applicableTo: 'Toàn bộ công ty',
-    allowGraceMinutes: 15,
-    nightAllowancePct: 0,
-    shiftCategory: 'Hành chính',
-    status: 'Đang áp dụng',
-    deductNoIn: true,
-    deductNoOut: true,
-    hasMealAllowance: true,
-  },
-  {
-    key: 'shift-sang-02',
-    shiftCode: 'CA-SANG',
-    shiftName: 'Ca sáng sản xuất và vận hành',
-    timeRange: '06:00 - 14:00',
-    startTime: '06:00',
-    endTime: '14:00',
-    workingHours: 8,
-    workUnits: 1,
-    breakTime: '11:00 - 11:30',
-    applicableTo: 'Khối Dự án và Vận hành',
-    allowGraceMinutes: 10,
-    nightAllowancePct: 0,
-    shiftCategory: 'Ca kíp',
-    status: 'Đang áp dụng',
-    deductNoIn: true,
-    deductNoOut: true,
-    hasMealAllowance: true,
-  },
-  {
-    key: 'shift-chieu-03',
-    shiftCode: 'CA-CHIEU',
-    shiftName: 'Ca chiều sản xuất và dịch vụ',
-    timeRange: '14:00 - 22:00',
-    startTime: '14:00',
-    endTime: '22:00',
-    workingHours: 8,
-    workUnits: 1,
-    breakTime: '18:00 - 18:30',
-    applicableTo: 'Khối Dự án và Vận hành',
-    allowGraceMinutes: 10,
-    nightAllowancePct: 0,
-    shiftCategory: 'Ca kíp',
-    status: 'Đang áp dụng',
-    deductNoIn: true,
-    deductNoOut: true,
-    hasMealAllowance: true,
-  },
-  {
-    key: 'shift-dem-04',
-    shiftCode: 'CA-DEM',
-    shiftName: 'Ca đêm trực kỹ thuật và bảo trì',
-    timeRange: '22:00 - 06:00',
-    startTime: '22:00',
-    endTime: '06:00',
-    workingHours: 8,
-    workUnits: 1,
-    breakTime: '02:00 - 02:30',
-    applicableTo: 'Phòng Kỹ thuật và Công nghệ',
-    allowGraceMinutes: 10,
-    nightAllowancePct: 30,
-    shiftCategory: 'Ca đêm',
-    status: 'Đang áp dụng',
-    deductNoIn: true,
-    deductNoOut: true,
-    hasMealAllowance: true,
-  },
-  {
-    key: 'shift-lh-05',
-    shiftCode: 'LINH-HOAT',
-    shiftName: 'Ca làm việc linh hoạt',
-    timeRange: '08:30 - 18:00',
-    startTime: '08:30',
-    endTime: '18:00',
-    workingHours: 8,
-    workUnits: 1,
-    breakTime: '12:00 - 13:30',
-    applicableTo: 'Phòng Kinh doanh và Tiếp thị',
-    allowGraceMinutes: 30,
-    nightAllowancePct: 0,
-    shiftCategory: 'Linh hoạt',
-    status: 'Đang áp dụng',
-    deductNoIn: false,
-    deductNoOut: false,
-    hasMealAllowance: true,
-  },
-];
-
 export const ShiftsModule: React.FC = () => {
-  const [data, setData] = useState<EnterpriseWorkShift[]>(DEFAULT_SHIFTS);
+  const [data, setData] = useState<EnterpriseWorkShift[]>([]);
   const [loading, setLoading] = useState(true);
   const [orgUnitOptions, setOrgUnitOptions] = useState<Array<{ label: string; value: string }>>([]);
 
@@ -187,8 +89,6 @@ export const ShiftsModule: React.FC = () => {
         const cached = dataService.getGenericData('attendance_shifts');
         if (Array.isArray(cached) && cached.length > 0) {
           items = cached;
-        } else {
-          items = DEFAULT_SHIFTS;
         }
       }
       setData(items);
@@ -201,7 +101,8 @@ export const ShiftsModule: React.FC = () => {
       }
     } catch {
       const cached = dataService.getGenericData('attendance_shifts');
-      setData(Array.isArray(cached) && cached.length > 0 ? cached : DEFAULT_SHIFTS);
+      setData(Array.isArray(cached) ? cached : []);
+      message.error('Không tải được danh mục ca làm việc.');
     } finally {
       setLoading(false);
     }
@@ -631,7 +532,7 @@ export const ShiftsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Ca đang áp dụng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {activeShifts} Ca ({totalShifts ? Math.round((activeShifts / totalShifts) * 100) : 100}%)
+            {activeShifts} Ca ({totalShifts ? Math.round((activeShifts / totalShifts) * 100) : 0}%)
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đang phân ca và tính công tự động</div>
         </div>

@@ -32,6 +32,7 @@ import {
 } from '../../custom-ui';
 import { collectionsApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { useCompanyName } from '../../hooks/useCompanyName';
 import { generateValidXlsxBlob, downloadFile } from '../../utils/fileExporter';
 
 export interface ShiftRegistrationCampaign {
@@ -50,60 +51,15 @@ export interface ShiftRegistrationCampaign {
   createdAt?: string;
 }
 
-const DEFAULT_COMPANY = 'CÔNG TY TNHH XÂY DỰNG KINH SỞ';
-
-const INITIAL_CAMPAIGNS: ShiftRegistrationCampaign[] = [
-  {
-    key: 'camp-01',
-    code: 'DK-2026-10',
-    name: `Yêu cầu đăng ký ca từ 01/10/2026 đến 31/10/2026 - ${DEFAULT_COMPANY}`,
-    orgUnit: DEFAULT_COMPANY,
-    periodType: 'Tháng này',
-    startDate: '01/10/2026',
-    endDate: '31/10/2026',
-    deadlineDate: '29/10/2026',
-    deadlineTime: '23:59',
-    totalSubmissions: 21,
-    totalTarget: 24,
-    status: 'Đang mở',
-    createdAt: '2026-10-01',
-  },
-  {
-    key: 'camp-02',
-    code: 'DK-2026-09',
-    name: `Yêu cầu đăng ký ca từ 01/09/2026 đến 30/09/2026 - ${DEFAULT_COMPANY}`,
-    orgUnit: DEFAULT_COMPANY,
-    periodType: 'Tháng trước',
-    startDate: '01/09/2026',
-    endDate: '30/09/2026',
-    deadlineDate: '28/08/2026',
-    deadlineTime: '23:59',
-    totalSubmissions: 24,
-    totalTarget: 24,
-    status: 'Đã duyệt',
-    createdAt: '2026-08-20',
-  },
-  {
-    key: 'camp-03',
-    code: 'DK-2026-11',
-    name: `Kế hoạch đăng ký ca tháng 11/2026 - ${DEFAULT_COMPANY}`,
-    orgUnit: DEFAULT_COMPANY,
-    periodType: 'Tháng sau',
-    startDate: '01/11/2026',
-    endDate: '30/11/2026',
-    deadlineDate: '28/10/2026',
-    deadlineTime: '18:00',
-    totalSubmissions: 15,
-    totalTarget: 24,
-    status: 'Đã đóng',
-    createdAt: '2026-10-15',
-  },
-];
+const pad2 = (value: number) => String(value).padStart(2, '0');
+const formatDMY = (date: Date) => `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`;
+const monthRangeDMY = (offset = 0) => { const now = new Date(); return { start: formatDMY(new Date(now.getFullYear(), now.getMonth() + offset, 1)), end: formatDMY(new Date(now.getFullYear(), now.getMonth() + offset + 1, 0)) }; };
 
 export const ShiftRegistrationModule: React.FC = () => {
-  const [data, setData] = useState<ShiftRegistrationCampaign[]>(INITIAL_CAMPAIGNS);
+  const companyName = useCompanyName();
+  const [data, setData] = useState<ShiftRegistrationCampaign[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
-  const [orgUnits, setOrgUnits] = useState<string[]>([DEFAULT_COMPANY]);
+  const [orgUnits, setOrgUnits] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -124,9 +80,8 @@ export const ShiftRegistrationModule: React.FC = () => {
     if (showLoading) setLoading(true);
     try {
       // 1. Org units
-      const fetchedUnits = await dataService.fetchOrgUnitsList().catch(() => []);
-      const mergedUnits = Array.from(new Set([DEFAULT_COMPANY, ...fetchedUnits]));
-      setOrgUnits(mergedUnits);
+      const fetchedUnits = await dataService.fetchOrgUnitsList().catch(() => [] as string[]);
+      setOrgUnits(fetchedUnits);
 
       // 2. Employees
       const empList = dataService.getEmployeeDirectory();
@@ -138,10 +93,11 @@ export const ShiftRegistrationModule: React.FC = () => {
       if (Array.isArray(rows) && rows.length > 0) {
         setData(rows);
       } else {
-        setData(INITIAL_CAMPAIGNS);
+        setData([]);
       }
     } catch {
-      setData(INITIAL_CAMPAIGNS);
+      setData([]);
+      message.error('Không tải được các yêu cầu đăng ký ca.');
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -180,17 +136,18 @@ export const ShiftRegistrationModule: React.FC = () => {
   const activeCamp = data.find((d) => d.status === 'Đang mở') || data[0];
   const responseRate = activeCamp && activeCamp.totalTarget > 0
     ? Math.round((activeCamp.totalSubmissions / activeCamp.totalTarget) * 100)
-    : 87.5;
+    : 0;
 
   const handleOpenCreate = () => {
+    const range = monthRangeDMY();
     form.resetFields();
     form.setFieldsValue({
-      name: `Yêu cầu đăng ký ca từ 01/10/2026 đến 31/10/2026 - ${DEFAULT_COMPANY}`,
-      orgUnit: DEFAULT_COMPANY,
+      name: `Yêu cầu đăng ký ca từ ${range.start} đến ${range.end}${companyName ? ` - ${companyName}` : ''}`,
+      orgUnit: companyName || orgUnits[0] || '',
       periodType: 'Tháng này',
-      startDate: '01/10/2026',
-      endDate: '31/10/2026',
-      deadlineDate: '29/10/2026',
+      startDate: range.start,
+      endDate: range.end,
+      deadlineDate: formatDMY(new Date()),
       deadlineTime: '23:59',
     });
     setModalOpen(true);
@@ -200,23 +157,24 @@ export const ShiftRegistrationModule: React.FC = () => {
     if (saving) return;
     setSaving(true);
     try {
+      const range = monthRangeDMY();
       const newCampaign: ShiftRegistrationCampaign = {
         key: `camp-${Date.now()}`,
-        code: `DK-2026-${String(data.length + 1).padStart(2, '0')}`,
+        code: `DK-${new Date().getFullYear()}-${String(data.length + 1).padStart(2, '0')}`,
         name: values.name,
-        orgUnit: values.orgUnit || DEFAULT_COMPANY,
+        orgUnit: values.orgUnit || companyName || orgUnits[0] || '',
         periodType: values.periodType || 'Tháng này',
-        startDate: values.startDate || '01/10/2026',
-        endDate: values.endDate || '31/10/2026',
-        deadlineDate: values.deadlineDate || '29/10/2026',
+        startDate: values.startDate || range.start,
+        endDate: values.endDate || range.end,
+        deadlineDate: values.deadlineDate || formatDMY(new Date()),
         deadlineTime: values.deadlineTime || '23:59',
         totalSubmissions: 0,
-        totalTarget: employees.length || 24,
+        totalTarget: employees.length,
         status: 'Đang mở',
         createdAt: new Date().toISOString().slice(0, 10),
       };
 
-      await collectionsApi.create('attendance_shift_registrations', newCampaign).catch(() => {});
+      await collectionsApi.create('attendance_shift_registrations', newCampaign);
       setData((prev) => [newCampaign, ...prev]);
       message.success(`Đã tạo yêu cầu đăng ký ca: ${newCampaign.name}`);
       setModalOpen(false);
@@ -639,9 +597,11 @@ export const ShiftRegistrationModule: React.FC = () => {
                   ]}
                   onChange={(val) => {
                     if (val === 'Tháng này') {
-                      form.setFieldsValue({ startDate: '01/10/2026', endDate: '31/10/2026' });
+                      const range = monthRangeDMY(0);
+                      form.setFieldsValue({ startDate: range.start, endDate: range.end });
                     } else if (val === 'Tháng sau') {
-                      form.setFieldsValue({ startDate: '01/11/2026', endDate: '30/11/2026' });
+                      const range = monthRangeDMY(1);
+                      form.setFieldsValue({ startDate: range.start, endDate: range.end });
                     }
                   }}
                 />
@@ -649,18 +609,18 @@ export const ShiftRegistrationModule: React.FC = () => {
 
               <Form.Item
                 name="startDate"
-                initialValue="01/10/2026"
+                initialValue={monthRangeDMY().start}
                 style={{ margin: 0 }}
               >
-                <Input placeholder="01/10/2026" style={{ height: 32 }} />
+                <Input placeholder="dd/mm/yyyy" style={{ height: 32 }} />
               </Form.Item>
 
               <Form.Item
                 name="endDate"
-                initialValue="31/10/2026"
+                initialValue={monthRangeDMY().end}
                 style={{ margin: 0 }}
               >
-                <Input placeholder="31/10/2026" style={{ height: 32 }} />
+                <Input placeholder="dd/mm/yyyy" style={{ height: 32 }} />
               </Form.Item>
             </div>
           </div>
@@ -674,12 +634,12 @@ export const ShiftRegistrationModule: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 10 }}>
               <Form.Item
                 name="deadlineDate"
-                initialValue="29/10/2026"
+                initialValue={formatDMY(new Date())}
                 required
                 rules={[{ required: true, message: 'Vui lòng nhập ngày hết hạn' }]}
                 style={{ margin: 0 }}
               >
-                <Input placeholder="29/10/2026" style={{ height: 32 }} />
+                <Input placeholder="dd/mm/yyyy" style={{ height: 32 }} />
               </Form.Item>
 
               <Form.Item

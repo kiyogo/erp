@@ -31,6 +31,7 @@ import {
 import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { collectionsApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { useCompanyName } from '../../hooks/useCompanyName';
 import { generateValidXlsxBlob, downloadFile } from '../../utils/fileExporter';
 
 export interface EnterpriseShiftPlan {
@@ -56,129 +57,31 @@ export interface EnterpriseShiftPlan {
   createdAt?: string;
 }
 
-const DEFAULT_COMPANY = 'CÔNG TY TNHH XÂY DỰNG KINH SỞ'.normalize('NFC');
+const pad2 = (value: number) => String(value).padStart(2, '0');
+const formatDMY = (date: Date) => `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`;
+const monthRangeDMY = () => { const now = new Date(); return { start: formatDMY(new Date(now.getFullYear(), now.getMonth(), 1)), end: formatDMY(new Date(now.getFullYear(), now.getMonth() + 1, 0)) }; };
+const parseDMY = (value?: string) => {
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(value || '').trim());
+  return match ? new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1])) : null;
+};
 
-const DEFAULT_SHIFTS_FALLBACK = [
-  { key: 'shift-sang', shiftCode: 'CA-SANG', shiftName: 'Ca sáng sản xuất và vận hành', timeRange: '06:00 - 14:00' },
-  { key: 'shift-hc', shiftCode: 'HC', shiftName: 'Ca hành chính chuẩn', timeRange: '08:00 - 17:30' },
-  { key: 'shift-chieu', shiftCode: 'CA-CHIEU', shiftName: 'Ca chiều sản xuất và dịch vụ', timeRange: '14:00 - 22:00' },
-  { key: 'shift-dem', shiftCode: 'CA-DEM', shiftName: 'Ca đêm trực ca và bảo dưỡng', timeRange: '22:00 - 06:00' },
-];
-
-const INITIAL_PLANS: EnterpriseShiftPlan[] = [
-  {
-    key: 'plan-01',
-    code: 'PC-2026-001',
-    name: `Phân ca hành chính T10/2026 - ${DEFAULT_COMPANY}`,
-    orgUnit: DEFAULT_COMPANY,
-    shiftKey: 'shift-hc',
-    shiftName: 'Ca hành chính chuẩn',
-    shiftCode: 'HC',
-    workHours: '08:00 - 17:30',
-    startDate: '29/10/2026',
-    endDate: '29/10/2026',
-    repeatType: 'Tuần',
-    repeatCycle: 1,
-    daysOfWeek: [2, 3, 4, 5, 6],
-    targetType: 'all_unit',
-    skipPreview: false,
-    status: 'Đang áp dụng',
-    assignedCount: 24,
-    createdAt: '2026-10-29',
-  },
-  {
-    key: 'plan-02',
-    code: 'PC-2026-002',
-    name: `Phân ca sáng vận hành trạm trộn - ${DEFAULT_COMPANY}`,
-    orgUnit: DEFAULT_COMPANY,
-    shiftKey: 'shift-sang',
-    shiftName: 'Ca sáng sản xuất và vận hành',
-    shiftCode: 'CA-SANG',
-    workHours: '06:00 - 14:00',
-    startDate: '01/10/2026',
-    endDate: '31/10/2026',
-    repeatType: 'Tuần',
-    repeatCycle: 1,
-    daysOfWeek: [2, 3, 4, 5, 6, 7],
-    targetType: 'employees',
-    selectedEmployees: ['NV000001', 'NV000002'],
-    skipPreview: false,
-    status: 'Đang áp dụng',
-    assignedCount: 8,
-    createdAt: '2026-10-01',
-  },
-  {
-    key: 'plan-03',
-    code: 'PC-2026-003',
-    name: `Phân ca chiều bảo trì cơ giới - ${DEFAULT_COMPANY}`,
-    orgUnit: DEFAULT_COMPANY,
-    shiftKey: 'shift-chieu',
-    shiftName: 'Ca chiều sản xuất và dịch vụ',
-    shiftCode: 'CA-CHIEU',
-    workHours: '14:00 - 22:00',
-    startDate: '01/10/2026',
-    endDate: '31/10/2026',
-    repeatType: 'Tuần',
-    repeatCycle: 1,
-    daysOfWeek: [2, 3, 4, 5, 6],
-    targetType: 'departments',
-    selectedDepartments: ['Phòng Kỹ Thuật'],
-    skipPreview: false,
-    status: 'Đang áp dụng',
-    assignedCount: 6,
-    createdAt: '2026-10-05',
-  },
-];
-
-// Calendar Grid for 10/2026
-// Days: 28, 29, 30 (Sep), 1..31 (Oct), 1 (Nov)
-const OCTOBER_GRID_DAYS = [
-  { day: 28, month: 9, weekday: 2 },
-  { day: 29, month: 9, weekday: 3 },
-  { day: 30, month: 9, weekday: 4 },
-  { day: 1, month: 10, weekday: 5 },
-  { day: 2, month: 10, weekday: 6 },
-  { day: 3, month: 10, weekday: 7 },
-  { day: 4, month: 10, weekday: 8 },
-
-  { day: 5, month: 10, weekday: 2 },
-  { day: 6, month: 10, weekday: 3 },
-  { day: 7, month: 10, weekday: 4 },
-  { day: 8, month: 10, weekday: 5 },
-  { day: 9, month: 10, weekday: 6 },
-  { day: 10, month: 10, weekday: 7 },
-  { day: 11, month: 10, weekday: 8 },
-
-  { day: 12, month: 10, weekday: 2 },
-  { day: 13, month: 10, weekday: 3 },
-  { day: 14, month: 10, weekday: 4 },
-  { day: 15, month: 10, weekday: 5 },
-  { day: 16, month: 10, weekday: 6 },
-  { day: 17, month: 10, weekday: 7 },
-  { day: 18, month: 10, weekday: 8 },
-
-  { day: 19, month: 10, weekday: 2 },
-  { day: 20, month: 10, weekday: 3 },
-  { day: 21, month: 10, weekday: 4 },
-  { day: 22, month: 10, weekday: 5 },
-  { day: 23, month: 10, weekday: 6 },
-  { day: 24, month: 10, weekday: 7 },
-  { day: 25, month: 10, weekday: 8 },
-
-  { day: 26, month: 10, weekday: 2 },
-  { day: 27, month: 10, weekday: 3 },
-  { day: 28, month: 10, weekday: 4 },
-  { day: 29, month: 10, weekday: 5 },
-  { day: 30, month: 10, weekday: 6 },
-  { day: 31, month: 10, weekday: 7 },
-  { day: 1, month: 11, weekday: 8 },
-];
+// Lưới lịch của một tháng, tuần bắt đầu từ thứ 2; weekday 2 là thứ 2 và 8 là chủ nhật.
+const buildMonthGrid = (year: number, monthIndex: number) => {
+  const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
+  const total = Math.ceil((offset + new Date(year, monthIndex + 1, 0).getDate()) / 7) * 7;
+  return Array.from({ length: total }, (_, i) => {
+    const date = new Date(year, monthIndex, 1 - offset + i);
+    const dow = date.getDay();
+    return { day: date.getDate(), inMonth: date.getMonth() === monthIndex, weekday: dow === 0 ? 8 : dow + 1 };
+  });
+};
 
 export const ShiftDetailModule: React.FC = () => {
-  const [data, setData] = useState<EnterpriseShiftPlan[]>(INITIAL_PLANS);
-  const [shifts, setShifts] = useState<any[]>(DEFAULT_SHIFTS_FALLBACK);
+  const companyName = useCompanyName();
+  const [data, setData] = useState<EnterpriseShiftPlan[]>([]);
+  const [shifts, setShifts] = useState<any[]>([]);
   const [employees, setEmployees] = useState<EnterpriseEmployee[]>([]);
-  const [orgUnits, setOrgUnits] = useState<string[]>([DEFAULT_COMPANY]);
+  const [orgUnits, setOrgUnits] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -191,20 +94,22 @@ export const ShiftDetailModule: React.FC = () => {
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<EnterpriseShiftPlan | null>(null);
+  const previewBase = parseDMY(editingPlan?.startDate) || new Date();
+  const previewMonthLabel = `${pad2(previewBase.getMonth() + 1)}/${previewBase.getFullYear()}`;
   const [form] = Form.useForm();
 
   // Modal Interactive Form States
   const [selectedDaysOfWeek, setSelectedDaysOfWeek] = useState<number[]>([2, 3, 4, 5, 6]);
   const [targetType, setTargetType] = useState<'all_unit' | 'employees' | 'departments'>('all_unit');
   const [skipPreview, setSkipPreview] = useState(false);
-  const [selectedShiftKey, setSelectedShiftKey] = useState<string>('shift-sang');
+  const [selectedShiftKey, setSelectedShiftKey] = useState<string>('');
 
   const currentShift = useMemo(() => {
-    return shifts.find((s) => s.key === selectedShiftKey) || shifts[0] || DEFAULT_SHIFTS_FALLBACK[0];
+    return shifts.find((s) => s.key === selectedShiftKey) || shifts[0];
   }, [shifts, selectedShiftKey]);
 
-  const activeShiftCode = currentShift?.shiftCode || 'CA-SANG';
-  const selectedShiftDisplay = `${currentShift?.shiftCode || 'CA-SANG'} - ${currentShift?.shiftName || 'Ca sáng sản xuất và vận hành'}`;
+  const activeShiftCode = currentShift?.shiftCode || '';
+  const selectedShiftDisplay = currentShift ? `${currentShift.shiftCode} - ${currentShift.shiftName}` : 'Chưa có ca làm việc';
 
   // Drawer Detail State
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -223,7 +128,7 @@ export const ShiftDetailModule: React.FC = () => {
         if (shiftRows.length > 0) {
           setShifts(shiftRows);
         } else {
-          setShifts(DEFAULT_SHIFTS_FALLBACK);
+          setShifts([]);
         }
       }
 
@@ -231,11 +136,10 @@ export const ShiftDetailModule: React.FC = () => {
       const empList = dataService.getEmployeeDirectory();
       setEmployees(empList);
 
-      // 3. Load Org Units (Ensure DEFAULT_COMPANY is first and normalized)
+      // 3. Load Org Units
       const fetchedUnits = await dataService.fetchOrgUnitsList().catch(() => []);
       const normalizedFetched = fetchedUnits.map((u) => String(u || '').normalize('NFC').trim()).filter(Boolean);
-      const mergedUnits = Array.from(new Set([DEFAULT_COMPANY, ...normalizedFetched]));
-      setOrgUnits(mergedUnits);
+      setOrgUnits(Array.from(new Set(normalizedFetched)));
 
       // 4. Load Plans
       const plansRes = await collectionsApi.get<any>('attendance_shift_details').catch(() => ({ data: { data: [] } }));
@@ -243,10 +147,11 @@ export const ShiftDetailModule: React.FC = () => {
       if (Array.isArray(rows) && rows.length > 0) {
         setData(rows);
       } else {
-        setData(INITIAL_PLANS);
+        setData([]);
       }
     } catch {
-      setData(INITIAL_PLANS);
+      setData([]);
+      message.error('Không tải được các bảng phân ca.');
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -284,7 +189,7 @@ export const ShiftDetailModule: React.FC = () => {
   const totalAssignedStaff = useMemo(() => {
     return data.reduce((acc, cur) => acc + (cur.assignedCount || 0), 0);
   }, [data]);
-  const coverageRate = employees.length ? Math.min(100, Math.round((totalAssignedStaff / employees.length) * 100)) : 92;
+  const coverageRate = employees.length ? Math.min(100, Math.round((totalAssignedStaff / employees.length) * 100)) : 0;
 
   // Day toggle handler
   const handleToggleDay = (dayNum: number) => {
@@ -304,16 +209,17 @@ export const ShiftDetailModule: React.FC = () => {
     setSelectedDaysOfWeek([2, 3, 4, 5, 6]);
     setTargetType('all_unit');
     setSkipPreview(false);
-    const firstShift = shifts[0] || DEFAULT_SHIFTS_FALLBACK[0];
+    const firstShift = shifts[0];
+    if (!firstShift) { message.warning('Chưa có ca làm việc. Hãy tạo ca ở Danh mục ca trước khi phân ca.'); return; }
     setSelectedShiftKey(firstShift.key);
 
     form.resetFields();
     form.setFieldsValue({
-      name: `Phân ca hành chính T10/2026 - ${DEFAULT_COMPANY}`,
-      orgUnit: DEFAULT_COMPANY,
+      name: `Phân ca ${firstShift.shiftName}${companyName ? ` - ${companyName}` : ''}`,
+      orgUnit: companyName || orgUnits[0] || '',
       shiftKey: firstShift.key,
-      startDate: '29/10/2026',
-      endDate: '29/10/2026',
+      startDate: formatDMY(new Date()),
+      endDate: formatDMY(new Date()),
       repeatType: 'Tuần',
       repeatCycle: 1,
       targetType: 'all_unit',
@@ -331,10 +237,10 @@ export const ShiftDetailModule: React.FC = () => {
 
     form.setFieldsValue({
       name: plan.name,
-      orgUnit: (plan.orgUnit || DEFAULT_COMPANY).normalize('NFC'),
+      orgUnit: (plan.orgUnit || companyName).normalize('NFC'),
       shiftKey: plan.shiftKey,
-      startDate: plan.startDate || '29/10/2026',
-      endDate: plan.endDate || '29/10/2026',
+      startDate: plan.startDate || formatDMY(new Date()),
+      endDate: plan.endDate || formatDMY(new Date()),
       repeatType: plan.repeatType || 'Tuần',
       repeatCycle: plan.repeatCycle || 1,
       targetType: plan.targetType || 'all_unit',
@@ -349,18 +255,19 @@ export const ShiftDetailModule: React.FC = () => {
     if (saving) return;
     setSaving(true);
     try {
-      const shiftObj = shifts.find((s) => s.key === values.shiftKey) || DEFAULT_SHIFTS_FALLBACK[0];
+      const shiftObj = shifts.find((s) => s.key === values.shiftKey);
+      if (!shiftObj) { message.error('Chọn ca làm việc cho bảng phân ca.'); setSaving(false); return; }
       const planPayload: EnterpriseShiftPlan = {
         key: editingPlan ? editingPlan.key : `plan-${Date.now()}`,
-        code: editingPlan ? editingPlan.code : `PC-2026-${String(data.length + 1).padStart(3, '0')}`,
+        code: editingPlan ? editingPlan.code : `PC-${new Date().getFullYear()}-${String(data.length + 1).padStart(3, '0')}`,
         name: values.name,
-        orgUnit: (values.orgUnit || DEFAULT_COMPANY).normalize('NFC'),
+        orgUnit: (values.orgUnit || companyName).normalize('NFC'),
         shiftKey: shiftObj.key,
         shiftName: shiftObj.shiftName,
         shiftCode: shiftObj.shiftCode || 'CA',
         workHours: shiftObj.timeRange || `${shiftObj.startTime || '08:00'} - ${shiftObj.endTime || '17:30'}`,
-        startDate: values.startDate || '29/10/2026',
-        endDate: values.endDate || '29/10/2026',
+        startDate: values.startDate || formatDMY(new Date()),
+        endDate: values.endDate || formatDMY(new Date()),
         repeatType: values.repeatType || 'Tuần',
         repeatCycle: Number(values.repeatCycle || 1),
         daysOfWeek: selectedDaysOfWeek,
@@ -369,16 +276,16 @@ export const ShiftDetailModule: React.FC = () => {
         selectedDepartments: values.selectedDepartments || [],
         skipPreview: skipPreview,
         status: editingPlan ? editingPlan.status : 'Đang áp dụng',
-        assignedCount: targetType === 'all_unit' ? (employees.length || 24) : (values.selectedEmployees?.length || 8),
+        assignedCount: targetType === 'all_unit' ? employees.length : (values.selectedEmployees?.length || 0),
         createdAt: editingPlan?.createdAt || new Date().toISOString().slice(0, 10),
       };
 
       if (editingPlan) {
-        await collectionsApi.update('attendance_shift_details', editingPlan.key, planPayload).catch(() => {});
+        await collectionsApi.update('attendance_shift_details', editingPlan.key, planPayload);
         setData((prev) => prev.map((item) => (item.key === editingPlan.key ? planPayload : item)));
         message.success(`Đã cập nhật bảng phân ca: ${planPayload.name}`);
       } else {
-        await collectionsApi.create('attendance_shift_details', planPayload).catch(() => {});
+        await collectionsApi.create('attendance_shift_details', planPayload);
         setData((prev) => [planPayload, ...prev]);
         message.success(`Đã thêm mới bảng phân ca: ${planPayload.name}`);
       }
@@ -627,7 +534,7 @@ export const ShiftDetailModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Phân ca đang áp dụng</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {activePlans} Bảng ({totalPlans ? Math.round((activePlans / totalPlans) * 100) : 100}%)
+            {activePlans} Bảng ({totalPlans ? Math.round((activePlans / totalPlans) * 100) : 0}%)
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đang tự động gán vào bảng chấm công</div>
         </div>
@@ -776,7 +683,7 @@ export const ShiftDetailModule: React.FC = () => {
                     name="orgUnit"
                     label="Đơn vị áp dụng"
                     required
-                    initialValue={DEFAULT_COMPANY}
+                    initialValue={companyName}
                     rules={[{ required: true, message: 'Vui lòng chọn đơn vị áp dụng' }]}
                     style={{ margin: 0 }}
                   >
@@ -821,20 +728,20 @@ export const ShiftDetailModule: React.FC = () => {
                     name="startDate"
                     label="Ngày bắt đầu"
                     required
-                    initialValue="29/10/2026"
+                    initialValue={formatDMY(new Date())}
                     rules={[{ required: true, message: 'Vui lòng nhập ngày bắt đầu' }]}
                     style={{ margin: 0 }}
                   >
-                    <Input placeholder="29/10/2026" style={{ height: 32, width: '100%' }} />
+                    <Input placeholder="dd/mm/yyyy" style={{ height: 32, width: '100%' }} />
                   </Form.Item>
 
                   <Form.Item
                     name="endDate"
                     label="Ngày kết thúc"
-                    initialValue="29/10/2026"
+                    initialValue={formatDMY(new Date())}
                     style={{ margin: 0 }}
                   >
-                    <Input placeholder="29/10/2026" style={{ height: 32, width: '100%' }} />
+                    <Input placeholder="dd/mm/yyyy" style={{ height: 32, width: '100%' }} />
                   </Form.Item>
 
                   <Form.Item
@@ -991,7 +898,7 @@ export const ShiftDetailModule: React.FC = () => {
                   Xem trước phân ca
                 </div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#009688' }}>
-                  10/2026
+                  {previewMonthLabel}
                 </div>
               </div>
 
@@ -1054,8 +961,8 @@ export const ShiftDetailModule: React.FC = () => {
 
                     {/* Grid 35 ô ngày */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', padding: 4, gap: 3 }}>
-                      {OCTOBER_GRID_DAYS.map((cell, idx) => {
-                        const isOctober = cell.month === 10;
+                      {buildMonthGrid(previewBase.getFullYear(), previewBase.getMonth()).map((cell, idx) => {
+                        const isOctober = cell.inMonth;
                         const isActiveWeekday = selectedDaysOfWeek.includes(cell.weekday);
                         const isAppliedDay = isOctober && isActiveWeekday;
 
@@ -1107,7 +1014,7 @@ export const ShiftDetailModule: React.FC = () => {
                   </div>
 
                   <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>
-                    Lịch dự kiến áp dụng cho các ngày làm việc trong tháng 10/2026 theo thứ đã chọn.
+                    Lịch dự kiến áp dụng cho các ngày làm việc trong tháng {previewMonthLabel} theo thứ đã chọn.
                   </div>
                 </>
               )}
