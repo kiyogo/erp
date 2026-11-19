@@ -735,3 +735,32 @@ export function downloadFile(filename: string, customContent?: string | Blob): v
   document.body.removeChild(link);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+type ExportColumn = { title?: unknown; dataIndex?: unknown; key?: unknown };
+
+function exportCell(value: unknown): string | number | boolean | null {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'string') return value;
+  if (typeof value === 'boolean') return value ? 'Có' : 'Không';
+  if (Array.isArray(value)) return value.map((item) => String(exportCell(item))).join(', ');
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return JSON.stringify(value);
+}
+
+/**
+ * Xuất đúng các dòng đang hiển thị ra tệp Excel thật. Cột lấy từ định nghĩa bảng (cột có dataIndex dạng chuỗi),
+ * hoặc truyền danh sách cột { title, dataIndex } riêng. Trả về số dòng đã xuất.
+ */
+export function exportRowsToXlsx(fileName: string, columns: ExportColumn[], rows: Array<Record<string, any>>): number {
+  const usable = columns.filter((column) => typeof column.dataIndex === 'string' && column.dataIndex);
+  const header = usable.map((column) => (typeof column.title === 'string' ? column.title : String(column.dataIndex)));
+  const body = rows.map((row) => usable.map((column) => exportCell(row[column.dataIndex as string])));
+  downloadFile(fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`, generateValidXlsxBlob([header, ...body]));
+  return rows.length;
+}
+
+/** In một hồ sơ ra tệp PDF thật từ các cặp nhãn và giá trị của chính hồ sơ đó. */
+export function exportRecordToPdf(fileName: string, title: string, entries: Array<[string, unknown]>): void {
+  const lines = entries.map(([label, value]) => `${label}: ${String(exportCell(value)) || '-'}`);
+  downloadFile(fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`, generateValidPdfBlob(title, `Ngày xuất: ${new Date().toLocaleDateString('vi-VN')}`, lines));
+}

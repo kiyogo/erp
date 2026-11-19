@@ -10,6 +10,7 @@ import {
   EnvironmentOutlined,
 } from '@ant-design/icons';
 import { Button, message, Tag, Drawer, Progress } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { collectionsApi, employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
 
 interface OrgNode {
@@ -212,7 +213,7 @@ export const OrgChartModule: React.FC = () => {
           <Button icon={<ZoomInOutlined />} onClick={() => setZoom(Math.min(140, zoom + 10))}>Phóng to ({zoom}%)</Button>
           <Button icon={<ZoomOutOutlined />} onClick={() => setZoom(Math.max(60, zoom - 10))}>Thu nhỏ</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { setZoom(100); message.info('Đã đặt lại kích thước'); }}>Mặc định</Button>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã chuẩn bị sơ đồ tổ chức từ dữ liệu hiện có.')} disabled={!orgTree.children?.length}>
+          <Button icon={<DownloadOutlined />} onClick={() => { const flat: OrgNode[] = []; const walk = (node: OrgNode) => { flat.push(node); (node.children || []).forEach(walk); }; walk(orgTree); const count = exportRowsToXlsx('So_do_to_chuc', [{ title: 'Mã đơn vị', dataIndex: 'code' }, { title: 'Tên đơn vị', dataIndex: 'title' }, { title: 'Trưởng đơn vị', dataIndex: 'leader' }, { title: 'Chức danh', dataIndex: 'leaderTitle' }, { title: 'Email', dataIndex: 'leaderEmail' }, { title: 'Điện thoại', dataIndex: 'leaderPhone' }, { title: 'Nhân sự', dataIndex: 'headcount' }, { title: 'Địa điểm', dataIndex: 'location' }, { title: 'Chức năng', dataIndex: 'functions' }], flat); message.success(`Đã xuất ${count} đơn vị ra tệp Excel.`); }} disabled={!orgTree.children?.length}>
             Xuất sơ đồ
           </Button>
         </div>

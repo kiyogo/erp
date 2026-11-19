@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { useEffect } from 'react';
 import { collectionsApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
@@ -291,7 +292,7 @@ export const HeadcountModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất kế hoạch định biên nhân sự')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có dòng định biên để xuất.'); return; } const count = exportRowsToXlsx('Ke_hoach_dinh_bien', [{ title: 'Phòng ban', dataIndex: 'department' }, { title: 'Vị trí', dataIndex: 'position' }, { title: 'Mã vị trí', dataIndex: 'positionCode' }, { title: 'Định biên', dataIndex: 'quota' }, { title: 'Thực tế', dataIndex: 'actual' }, { title: 'Còn thiếu', dataIndex: 'vacancies' }, { title: 'Quỹ lương định biên', dataIndex: 'salaryBudget' }, { title: 'Cơ cấu cấp bậc', dataIndex: 'levelDistribution' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} dòng định biên ra tệp Excel.`); }}>
             Xuất Báo Cáo
           </Button>
 

@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Card, Tooltip } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 import { useEffect } from 'react';
 import { collectionsApi } from '../../api/endpoints';
@@ -255,7 +256,7 @@ export const TrainingModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo kế hoạch đào tạo')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có khóa học để xuất.'); return; } const count = exportRowsToXlsx('Ke_hoach_dao_tao', [{ title: 'Mã khóa', dataIndex: 'courseCode' }, { title: 'Tên khóa học', dataIndex: 'courseName' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Giảng viên', dataIndex: 'instructor' }, { title: 'Bắt đầu', dataIndex: 'startDate' }, { title: 'Kết thúc', dataIndex: 'endDate' }, { title: 'Số giờ', dataIndex: 'durationHours' }, { title: 'Số học viên', dataIndex: 'participantsCount' }, { title: 'Tỷ lệ hoàn thành', dataIndex: 'completionRate' }, { title: 'Ngân sách', dataIndex: 'budget' }, { title: 'Địa điểm', dataIndex: 'location' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} khóa học ra tệp Excel.`); }}>
             Xuất Báo Cáo
           </Button>
 
@@ -420,14 +421,14 @@ export const TrainingModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8 }}>
               <Button
                 style={{ flex: 1 }}
-                onClick={() => message.success(`Đã xuất danh sách ${selectedCourse.participantsCount} học viên điểm danh`)}
+                onClick={() => exportRecordToPdf(`Khoa_hoc_${selectedCourse.courseCode}`, `THONG TIN KHOA HOC ${selectedCourse.courseCode}`, [['Tên khóa học', selectedCourse.courseName], ['Nhóm', selectedCourse.category], ['Giảng viên', selectedCourse.instructor], ['Thời gian', `${selectedCourse.startDate} đến ${selectedCourse.endDate}`], ['Số giờ', selectedCourse.durationHours], ['Số học viên', selectedCourse.participantsCount], ['Tỷ lệ hoàn thành', `${selectedCourse.completionRate}%`], ['Ngân sách', selectedCourse.budget], ['Địa điểm', selectedCourse.location], ['Trạng thái', selectedCourse.status]])}
               >
-                Xuất DS Điểm Danh
+                Xuất thông tin khóa học
               </Button>
               <Button
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đã cấp chứng chỉ số cho học viên hoàn thành xuất sắc khóa học`)}
+                disabled title="Hệ thống chưa lưu danh sách học viên từng khóa nên chưa cấp chứng chỉ tự động được. Tạo chứng chỉ ở màn hình Chứng chỉ."
               >
                 Cấp Chứng Chỉ Số
               </Button>

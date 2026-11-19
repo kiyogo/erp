@@ -7,6 +7,7 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Button, Progress, Tag, message } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { auditLogsApi, type AuditLogEntry } from '../../api/endpoints';
 import { dataService, type AssetRecord } from '../../services/dataService';
 
@@ -142,7 +143,7 @@ export const AssetOverviewModule: React.FC = () => {
         <div style={{ display: 'flex', gap: 8 }}>
           <Button
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã chuẩn bị xuất báo cáo tài sản từ dữ liệu hiện có.')}
+            onClick={() => { if (!assets.length) { message.warning('Chưa có tài sản để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_tai_san', [{ title: 'Mã tài sản', dataIndex: 'code' }, { title: 'Tên tài sản', dataIndex: 'name' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Người sử dụng', dataIndex: 'assignedTo' }, { title: 'Bộ phận', dataIndex: 'department' }, { title: 'Ngày mua', dataIndex: 'purchaseDate' }, { title: 'Giá trị', dataIndex: 'value' }, { title: 'Trạng thái', dataIndex: 'status' }], assets); message.success(`Đã xuất ${count} tài sản ra tệp Excel.`); }}
             style={{ backgroundColor: '#009688', borderColor: '#009688', color: '#FFFFFF' }}
           >
             Xuất báo cáo

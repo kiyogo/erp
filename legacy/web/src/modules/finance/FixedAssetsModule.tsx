@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseFixedAsset {
   key: string;
@@ -271,7 +272,7 @@ export const FixedAssetsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất sổ tài sản cố định ra Excel')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có tài sản để xuất.'); return; } const count = exportRowsToXlsx('So_tai_san_co_dinh', [{ title: 'Mã TSCĐ', dataIndex: 'code' }, { title: 'Tên tài sản', dataIndex: 'name' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Nguyên giá', dataIndex: 'originalValue' }, { title: 'Số tháng khấu hao', dataIndex: 'depreciationMonths' }, { title: 'Khấu hao mỗi tháng', dataIndex: 'monthlyDepreciation' }, { title: 'Khấu hao lũy kế', dataIndex: 'accumulatedDepreciation' }, { title: 'Giá trị còn lại', dataIndex: 'bookValue' }, { title: 'Bộ phận', dataIndex: 'department' }, { title: 'Ngày đưa vào sử dụng', dataIndex: 'commissioningDate' }, { title: 'Số serial', dataIndex: 'serialNumber' }, { title: 'Nhà cung cấp', dataIndex: 'supplier' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} tài sản ra tệp Excel.`); }}>
             Xuất Sổ TSCĐ
           </Button>
 
@@ -449,7 +450,7 @@ export const FixedAssetsModule: React.FC = () => {
               type="primary"
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
               icon={<PrinterOutlined />}
-              onClick={() => message.success(`Đã in Thẻ tài sản cố định ${selectedAsset.code}`)}
+              onClick={() => exportRecordToPdf(`The_TSCD_${selectedAsset.code}`, `THE TAI SAN CO DINH ${selectedAsset.code}`, [['Tên tài sản', selectedAsset.name], ['Nhóm', selectedAsset.category], ['Bộ phận', selectedAsset.department], ['Số serial', selectedAsset.serialNumber], ['Nhà cung cấp', selectedAsset.supplier], ['Ngày đưa vào sử dụng', selectedAsset.commissioningDate], ['Nguyên giá', selectedAsset.originalValue], ['Số tháng khấu hao', selectedAsset.depreciationMonths], ['Khấu hao mỗi tháng', selectedAsset.monthlyDepreciation], ['Khấu hao lũy kế', selectedAsset.accumulatedDepreciation], ['Giá trị còn lại', selectedAsset.bookValue], ['Trạng thái', selectedAsset.status]])}
             >
               In Thẻ Tài Sản Cố Định (Mẫu S21-DN)
             </Button>

@@ -14,6 +14,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { collectionsApi, employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 
@@ -592,7 +593,7 @@ export const OrgUnitsModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã chuẩn bị danh sách đơn vị từ dữ liệu hiện có.')} disabled={!data.length}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có đơn vị để xuất.'); return; } const count = exportRowsToXlsx('Danh_sach_don_vi', [{ title: 'Mã đơn vị', dataIndex: 'code' }, { title: 'Tên đơn vị', dataIndex: 'name' }, { title: 'Đơn vị cấp trên', dataIndex: 'parentUnit' }, { title: 'Trưởng đơn vị', dataIndex: 'manager' }, { title: 'Chức danh', dataIndex: 'managerTitle' }, { title: 'Email', dataIndex: 'managerEmail' }, { title: 'Điện thoại', dataIndex: 'managerPhone' }, { title: 'Định biên', dataIndex: 'headcountLimit' }, { title: 'Nhân sự thực tế', dataIndex: 'actualHeadcount' }, { title: 'Địa điểm', dataIndex: 'location' }, { title: 'Ngày thành lập', dataIndex: 'establishedDate' }, { title: 'Ngân sách năm', dataIndex: 'annualBudget' }, { title: 'Đã chi', dataIndex: 'budgetSpent' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} đơn vị ra tệp Excel.`); }} disabled={!data.length}>
             Xuất Excel
           </Button>
 

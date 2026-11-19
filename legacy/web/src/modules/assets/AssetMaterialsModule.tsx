@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Tooltip } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface StockHistoryItem {
   id: string;
@@ -303,7 +304,7 @@ export const AssetMaterialsModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất Báo Cáo Xuất - Nhập - Tồn Kho Vật Tư')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có vật tư để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_nhap_xuat_ton_vat_tu', [{ title: 'Mã vật tư', dataIndex: 'materialCode' }, { title: 'Tên vật tư', dataIndex: 'materialName' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Đơn vị tính', dataIndex: 'unit' }, { title: 'Quy cách', dataIndex: 'specifications' }, { title: 'Nhà cung cấp', dataIndex: 'supplier' }, { title: 'Tồn kho', dataIndex: 'stockQty' }, { title: 'Ngưỡng tối thiểu', dataIndex: 'minThreshold' }, { title: 'Ngưỡng tối đa', dataIndex: 'maxThreshold' }, { title: 'Đơn giá', dataIndex: 'unitPrice' }, { title: 'Vị trí kho', dataIndex: 'warehouseLocation' }, { title: 'Bảo hành tháng', dataIndex: 'warrantyMonths' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} vật tư ra tệp Excel.`); }}>
             Xuất Báo Cáo Tồn
           </Button>
           <Button
@@ -684,7 +685,7 @@ export const AssetMaterialsModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất thẻ kho ${detailItem.materialCode} (Mẫu 06-VT PDF)`)}
+                onClick={() => exportRecordToPdf(`The_kho_${detailItem.materialCode}`, `THE KHO ${detailItem.materialCode}`, [['Tên vật tư', detailItem.materialName], ['Nhóm', detailItem.category], ['Đơn vị tính', detailItem.unit], ['Quy cách', detailItem.specifications], ['Nhà cung cấp', detailItem.supplier], ['Vị trí kho', detailItem.warehouseLocation], ['Tồn kho', detailItem.stockQty], ['Đơn giá', detailItem.unitPrice], ...detailItem.stockHistory.map((row): [string, string] => [`${row.date} ${row.ticketCode}`, `${row.type} | số lượng ${row.qty} | đơn giá ${row.unitPrice} | ${row.targetAsset} | ${row.handler} | ${row.reason}`])])}
                 style={{ flex: 1 }}
               >
                 In Thẻ Kho (PDF)

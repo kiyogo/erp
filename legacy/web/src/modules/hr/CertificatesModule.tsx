@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 import { useEffect } from 'react';
 import { collectionsApi } from '../../api/endpoints';
@@ -260,7 +261,7 @@ export const CertificatesModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo hồ sơ chứng chỉ')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có chứng chỉ để xuất.'); return; } const count = exportRowsToXlsx('Ho_so_chung_chi', [{ title: 'Mã chứng chỉ', dataIndex: 'certCode' }, { title: 'Tên chứng chỉ', dataIndex: 'certName' }, { title: 'Nhân sự', dataIndex: 'employeeName' }, { title: 'Mã nhân viên', dataIndex: 'empCode' }, { title: 'Phòng ban', dataIndex: 'department' }, { title: 'Đơn vị cấp', dataIndex: 'issuingOrg' }, { title: 'Ngày cấp', dataIndex: 'issueDate' }, { title: 'Ngày hết hạn', dataIndex: 'expireDate' }, { title: 'Số hiệu', dataIndex: 'credentialId' }, { title: 'Công ty tài trợ', dataIndex: 'companySponsored' }, { title: 'Lệ phí thi', dataIndex: 'examFee' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} chứng chỉ ra tệp Excel.`); }}>
             Xuất Báo Cáo
           </Button>
 
@@ -435,14 +436,14 @@ export const CertificatesModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8 }}>
               <Button
                 style={{ flex: 1 }}
-                onClick={() => message.success(`Đã sao chép link xác thực cho chứng chỉ ${selectedCert.certCode}`)}
+                onClick={async () => { if (!selectedCert.verificationUrl) { message.warning('Chứng chỉ này chưa có đường dẫn xác thực.'); return; } try { await navigator.clipboard.writeText(selectedCert.verificationUrl); message.success(`Đã sao chép đường dẫn xác thực của ${selectedCert.certCode}.`); } catch { message.error('Trình duyệt không cho phép sao chép. Hãy sao chép thủ công.'); } }}
               >
                 Sao Chép Link Xác Thực
               </Button>
               <Button
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đã lập hồ sơ tài trợ ôn thi gia hạn cho ${selectedCert.employeeName}`)}
+                disabled={selectedCert.companySponsored} onClick={async () => { try { await collectionsApi.update('hr_certificates', selectedCert.key, { companySponsored: true }); setSelectedCert({ ...selectedCert, companySponsored: true }); void loadData(); message.success(`Đã ghi nhận công ty tài trợ thi gia hạn cho ${selectedCert.employeeName}.`); } catch (error: any) { message.error(error?.response?.data?.message || 'Không ghi nhận được tài trợ.'); } }}
               >
                 Cấp Kinh Phí Thi Gia Hạn
               </Button>

@@ -22,6 +22,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Tooltip } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface ConsumableStockHistory {
   ticketCode: string;
@@ -304,7 +305,7 @@ export const ConsumablesModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất báo cáo xuất-nhập-tồn CCDC & vật tư tiêu hao')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có mặt hàng để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_nhap_xuat_ton_CCDC', [{ title: 'Mã CCDC', dataIndex: 'itemCode' }, { title: 'Tên CCDC', dataIndex: 'itemName' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Đơn vị tính', dataIndex: 'unit' }, { title: 'Tồn kho', dataIndex: 'stockQty' }, { title: 'Ngưỡng tối thiểu', dataIndex: 'minThreshold' }, { title: 'Ngưỡng tối đa', dataIndex: 'maxThreshold' }, { title: 'Đơn giá', dataIndex: 'unitPrice' }, { title: 'Vị trí', dataIndex: 'location' }, { title: 'Nhà cung cấp', dataIndex: 'supplier' }, { title: 'Mức dùng trung bình tháng', dataIndex: 'monthlyUsageAvg' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} mặt hàng ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
           <Button
@@ -679,7 +680,7 @@ export const ConsumablesModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất thẻ kho ${detailItem.itemCode} (Mẫu 06-VT PDF)`)}
+                onClick={() => exportRecordToPdf(`The_kho_${detailItem.itemCode}`, `THE KHO ${detailItem.itemCode}`, [['Tên mặt hàng', detailItem.itemName], ['Nhóm', detailItem.category], ['Đơn vị tính', detailItem.unit], ['Vị trí', detailItem.location], ['Nhà cung cấp', detailItem.supplier], ['Tồn kho', detailItem.stockQty], ['Đơn giá', detailItem.unitPrice], ...detailItem.stockHistory.map((row): [string, string] => [`${row.date} ${row.ticketCode}`, `${row.type} | số lượng ${row.qty} | ${row.department} | ${row.receiver} | ${row.reason}`])])}
                 style={{ flex: 1 }}
               >
                 In Thẻ Kho (PDF)

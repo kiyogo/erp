@@ -13,6 +13,7 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { Button, Drawer, Progress, Tag, message } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { contractsApi, documentsApi, filesApi, type ContractPayload, type EnterpriseDocument, type StoredFileNode } from '../../api/endpoints';
 
 type OverviewDocumentItem = {
@@ -323,7 +324,7 @@ export const DocumentOverviewModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8 }}>
               <Button
                 icon={<DownloadOutlined />}
-                onClick={() => message.success('Đã chuẩn bị báo cáo văn bản từ dữ liệu hiện có.')}
+                onClick={() => { if (!data.length) { message.warning('Chưa có văn bản để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_van_ban', [{ title: 'Số hiệu', dataIndex: 'docNumber' }, { title: 'Tiêu đề', dataIndex: 'title' }, { title: 'Loại', dataIndex: 'docType' }, { title: 'Đơn vị ban hành', dataIndex: 'issuingDept' }, { title: 'Người ký', dataIndex: 'signer' }, { title: 'Chức vụ người ký', dataIndex: 'signerRole' }, { title: 'Ngày ban hành', dataIndex: 'issuedDate' }, { title: 'Ngày hiệu lực', dataIndex: 'effectiveDate' }, { title: 'Mức bảo mật', dataIndex: 'securityLevel' }, { title: 'Trạng thái', dataIndex: 'status' }, { title: 'Số tệp', dataIndex: 'fileCount' }, { title: 'Tên tệp', dataIndex: 'fileName' }, { title: 'Dung lượng', dataIndex: 'fileSize' }, { title: 'Nguồn', dataIndex: 'source' }], data); message.success(`Đã xuất ${count} văn bản ra tệp Excel.`); }}
                 style={{ flex: 1 }}
               >
                 Xuất báo cáo
@@ -400,7 +401,7 @@ export const DocumentOverviewModule: React.FC = () => {
                     <div style={{ fontSize: 11, color: '#64748B' }}>Bản ghi liên kết: {detailItem.fileCount} · Dung lượng: {detailItem.fileSize}</div>
                   </div>
                 </div>
-                <Button size="small" icon={<DownloadOutlined />} onClick={() => message.success(`Đã chuẩn bị tải thông tin của ${detailItem.fileName}.`)}>
+                <Button size="small" icon={<DownloadOutlined />} onClick={() => exportRecordToPdf(`Van_ban_${detailItem.docNumber || detailItem.key}`, `THONG TIN VAN BAN ${detailItem.docNumber}`, [['Tiêu đề', detailItem.title], ['Loại', detailItem.docType], ['Đơn vị ban hành', detailItem.issuingDept], ['Người ký', detailItem.signer], ['Chức vụ người ký', detailItem.signerRole], ['Ngày ban hành', detailItem.issuedDate], ['Ngày hiệu lực', detailItem.effectiveDate], ['Mức bảo mật', detailItem.securityLevel], ['Trạng thái', detailItem.status], ['Tệp đính kèm', `${detailItem.fileName} (${detailItem.fileSize})`], ['Tóm tắt', detailItem.summary]])}>
                   Tải
                 </Button>
               </div>

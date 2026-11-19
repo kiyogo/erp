@@ -40,9 +40,12 @@ const DEFAULT_PERMISSIONS: ModulePermissionRow[] = [
 
 import { useEffect } from 'react';
 import { dataService } from '../../services/dataService';
+import { useLocation } from 'react-router-dom';
+import { exportRecordToPdf } from '../../utils/fileExporter';
 
 export const AdminPermissionsModule: React.FC = () => {
-  const [selectedRole, setSelectedRole] = useState('ROLE_SUPER_ADMIN');
+  const location = useLocation();
+  const [selectedRole, setSelectedRole] = useState<string>(() => String((location.state as { role?: string } | null)?.role || 'ROLE_SUPER_ADMIN'));
   const [permissions, setPermissions] = useState<ModulePermissionRow[]>(DEFAULT_PERMISSIONS);
 
   useEffect(() => {
@@ -238,7 +241,7 @@ export const AdminPermissionsModule: React.FC = () => {
           </Button>
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => message.success(`Đã in ma trận phân quyền cho vai trò ${selectedRole}`)}
+            onClick={() => exportRecordToPdf(`Ma_tran_phan_quyen_${selectedRole}`, `MA TRAN PHAN QUYEN ${selectedRole}`, permissions.map((row): [string, string] => [row.module, ['read', 'create', 'edit', 'delete', 'approve', 'exportData'].filter((field) => (row as any)[field]).map((field) => ({ read: 'xem', create: 'tao', edit: 'sua', delete: 'xoa', approve: 'duyet', exportData: 'xuat' } as Record<string, string>)[field]).join(', ') || 'khong co quyen']))}
           >
             In Ma Trận (A4)
           </Button>

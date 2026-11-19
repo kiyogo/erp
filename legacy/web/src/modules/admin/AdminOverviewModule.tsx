@@ -11,6 +11,7 @@ import {
   UsergroupAddOutlined,
 } from '@ant-design/icons';
 import { Button, Tag, message } from '../../custom-ui';
+import { exportRowsToXlsx } from '../../utils/fileExporter';
 import {
   auditLogsApi,
   contractsApi,
@@ -185,7 +186,7 @@ export const AdminOverviewModule: React.FC = () => {
           <Button
             type="primary"
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã chuẩn bị báo cáo quản trị từ dữ liệu hiện có.')}
+            onClick={() => { exportRowsToXlsx('Bao_cao_quan_tri', [{ title: 'Chỉ tiêu', dataIndex: 'name' }, { title: 'Giá trị', dataIndex: 'value' }], [{ name: 'Tài khoản', value: stats?.totalUsers ?? 0 }, { name: 'Tài khoản đang hoạt động', value: stats?.activeUsers ?? 0 }, { name: 'Nhân sự', value: stats?.totalEmployees ?? 0 }, { name: 'Nhân sự mới trong tháng', value: stats?.newEmployeesThisMonth ?? 0 }, { name: 'Tài liệu cộng tác', value: documents.length }, { name: 'Hợp đồng và pháp lý', value: contracts.length }, { name: 'Hợp đồng chờ ký hoặc duyệt', value: pendingContracts }, { name: 'Hợp đồng đã ký', value: signedContracts }, { name: 'Mục trong kho tệp', value: files.length }, { name: 'Dung lượng kho tệp (byte)', value: totalFileBytes }, { name: 'Bản ghi nhật ký kiểm toán', value: logs.length }, { name: 'Thao tác nhạy cảm', value: sensitiveLogs }, { name: 'Cổng email đã cấu hình', value: emailConfigured }]); message.success('Đã xuất báo cáo quản trị ra tệp Excel.'); }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Xuất báo cáo

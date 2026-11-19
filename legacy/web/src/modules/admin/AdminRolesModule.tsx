@@ -18,6 +18,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Button, message, Tag, Drawer, Card, Tooltip, Progress, Select } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
+import { useNavigate } from 'react-router-dom';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseRoleItem {
   key: string;
@@ -33,6 +35,7 @@ export interface EnterpriseRoleItem {
 const INITIAL_ROLES: EnterpriseRoleItem[] = [];
 
 export const AdminRolesModule: React.FC = () => {
+  const navigate = useNavigate();
   const [data, setData] = useState<EnterpriseRoleItem[]>(INITIAL_ROLES);
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState('all');
@@ -220,7 +223,7 @@ export const AdminRolesModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất danh mục vai trò RBAC')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có vai trò để xuất.'); return; } const count = exportRowsToXlsx('Danh_muc_vai_tro', columns, filteredData); message.success(`Đã xuất ${count} vai trò ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
 
@@ -327,13 +330,13 @@ export const AdminRolesModule: React.FC = () => {
               <Button
                 type="primary"
                 style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => message.success(`Đang mở giao diện cấu hình ma trận phân quyền cho vai trò ${selectedRole.roleCode}`)}
+                onClick={() => navigate('/admin/permissions', { state: { role: selectedRole.roleCode } })}
               >
                 Cấu Hình Ma Trận Quyền
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in bản mô tả chức năng vai trò ${selectedRole.roleCode}`)}
+                onClick={() => exportRecordToPdf(`Vai_tro_${selectedRole.roleCode}`, 'MO TA VAI TRO', [['Ma vai tro', selectedRole.roleCode], ['Ten vai tro', selectedRole.name], ['Nhom', selectedRole.category], ['Pham vi', selectedRole.scope], ['So nguoi dung', selectedRole.usersCount], ['Trang thai', selectedRole.status], ['Dien giai', selectedRole.description]])}
               >
                 In Bản Mô Tả (A4)
               </Button>

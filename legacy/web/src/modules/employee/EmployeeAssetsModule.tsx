@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { dataService } from '../../services/dataService';
 
 export const EmployeeAssetsModule: React.FC = () => {
@@ -247,7 +248,7 @@ export const EmployeeAssetsModule: React.FC = () => {
 
           <Button
             icon={<PrinterOutlined />}
-            onClick={() => message.success('Đã in biên bản bàn giao tài sản cá nhân (A4)')}
+            onClick={() => { if (!filteredAssets.length) { message.warning('Bạn chưa có tài sản được bàn giao.'); return; } exportRecordToPdf('Bien_ban_ban_giao_tai_san_ca_nhan', 'BIEN BAN BAN GIAO TAI SAN CA NHAN', filteredAssets.map((asset, index): [string, string] => [`Tài sản ${index + 1}`, `${asset.code} ${asset.name} | serial ${asset.serial || '-'} | bàn giao ${asset.handoverDate || '-'} | ${asset.condition || '-'} | ${asset.status || 'Đang sử dụng'}`])); }}
           >
             In Biên Bản (A4)
           </Button>
@@ -255,7 +256,7 @@ export const EmployeeAssetsModule: React.FC = () => {
           <Button
             type="primary"
             icon={<DownloadOutlined />}
-            onClick={() => message.success('Đã xuất danh sách tài sản cá nhân')}
+            onClick={() => { if (!filteredAssets.length) { message.warning('Bạn chưa có tài sản được bàn giao.'); return; } const count = exportRowsToXlsx('Tai_san_ca_nhan', [{ title: 'Mã tài sản', dataIndex: 'code' }, { title: 'Tên tài sản', dataIndex: 'name' }, { title: 'Số serial', dataIndex: 'serial' }, { title: 'Ngày bàn giao', dataIndex: 'handoverDate' }, { title: 'Tình trạng thực tế', dataIndex: 'condition' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredAssets); message.success(`Đã xuất ${count} tài sản ra tệp Excel.`); }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
           >
             Xuất Excel
@@ -374,7 +375,7 @@ export const EmployeeAssetsModule: React.FC = () => {
               </Button>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã in biên bản bàn giao thiết bị ${selectedAsset.code}`)}
+                onClick={() => exportRecordToPdf(`Bien_ban_ban_giao_${selectedAsset.code}`, `BIEN BAN BAN GIAO THIET BI ${selectedAsset.code}`, [['Tên tài sản', selectedAsset.name], ['Số serial', selectedAsset.serial], ['Ngày bàn giao', selectedAsset.handoverDate], ['Tình trạng thực tế', selectedAsset.condition], ['Trạng thái', selectedAsset.status || 'Đang sử dụng']])}
               >
                 In Biên Bản (A4)
               </Button>

@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress } from '../../custom-ui';
+import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface ScannedItemDetail {
   code: string;
@@ -329,7 +330,7 @@ export const AssetAuditModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button icon={<DownloadOutlined />} onClick={() => message.success('Đã xuất biên bản kiểm kê Mẫu 05-TSCĐ')}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredData.length) { message.warning('Không có đợt kiểm kê để xuất.'); return; } const count = exportRowsToXlsx('Bien_ban_kiem_ke_05_TSCD', [{ title: 'Mã kiểm kê', dataIndex: 'auditCode' }, { title: 'Tên đợt kiểm kê', dataIndex: 'auditName' }, { title: 'Loại', dataIndex: 'auditType' }, { title: 'Phạm vi', dataIndex: 'scope' }, { title: 'Địa điểm', dataIndex: 'location' }, { title: 'Bộ phận', dataIndex: 'department' }, { title: 'Bắt đầu', dataIndex: 'startDate' }, { title: 'Kết thúc', dataIndex: 'endDate' }, { title: 'Trưởng đoàn', dataIndex: 'auditorLeader' }, { title: 'Thành viên', dataIndex: 'auditorMembers' }, { title: 'Số liệu sổ sách', dataIndex: 'bookCount' }, { title: 'Số liệu thực tế', dataIndex: 'actualCount' }, { title: 'Khớp', dataIndex: 'matchedCount' }, { title: 'Thừa', dataIndex: 'surplusCount' }, { title: 'Thiếu', dataIndex: 'missingCount' }, { title: 'Hỏng', dataIndex: 'damagedCount' }, { title: 'Giá trị sổ sách', dataIndex: 'bookValue' }, { title: 'Giá trị thực tế', dataIndex: 'actualValue' }, { title: 'Chênh lệch giá trị', dataIndex: 'diffValue' }, { title: 'Đề xuất xử lý', dataIndex: 'resolutionProposal' }, { title: 'Trạng thái', dataIndex: 'status' }], filteredData); message.success(`Đã xuất ${count} đợt kiểm kê ra tệp Excel.`); }}>
             Xuất Mẫu 05-TSCĐ
           </Button>
           <Button
@@ -721,7 +722,7 @@ export const AssetAuditModule: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <Button
                 icon={<PrinterOutlined />}
-                onClick={() => message.success(`Đã xuất biên bản kiểm kê ${detailItem.auditCode} (Mẫu 05-TSCĐ PDF)`)}
+                onClick={() => exportRecordToPdf(`Bien_ban_kiem_ke_${detailItem.auditCode}`, `BIEN BAN KIEM KE ${detailItem.auditCode}`, [['Tên đợt kiểm kê', detailItem.auditName], ['Loại', detailItem.auditType], ['Phạm vi', detailItem.scope], ['Địa điểm', detailItem.location], ['Bộ phận', detailItem.department], ['Thời gian', `${detailItem.startDate} đến ${detailItem.endDate}`], ['Trưởng đoàn', detailItem.auditorLeader], ['Thành viên', detailItem.auditorMembers], ['Số liệu sổ sách', detailItem.bookCount], ['Số liệu thực tế', detailItem.actualCount], ['Khớp', detailItem.matchedCount], ['Thừa', detailItem.surplusCount], ['Thiếu', detailItem.missingCount], ['Hỏng', detailItem.damagedCount], ['Giá trị sổ sách', detailItem.bookValue], ['Giá trị thực tế', detailItem.actualValue], ['Chênh lệch giá trị', detailItem.diffValue], ['Đề xuất xử lý', detailItem.resolutionProposal], ['Trạng thái', detailItem.status], ...detailItem.itemsList.map((line, index): [string, string] => [`Tài sản ${index + 1}`, `${line.code} ${line.name} | ${line.holder} | ${line.location} | ${line.auditStatus}`])])}
                 style={{ flex: 1 }}
               >
                 In Mẫu 05-TSCĐ (PDF)
