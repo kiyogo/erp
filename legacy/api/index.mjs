@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, verify as verifySignature } from 'node:crypto';
-import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import net from 'node:net';
@@ -51,6 +51,8 @@ const TOKEN_TTL_SECONDS = 12 * 60 * 60;
 const WORKFLOW_LARGE_BUDGET_OTP_THRESHOLD = 500_000_000;
 const WORKFLOW_ESCALATION_INTERVAL_MS = Math.max(100, Number(process.env.WORKFLOW_ESCALATION_INTERVAL_MS) || 60_000);
 const loginAttempts = new Map();
+// Khi khôi phục dữ liệu, mọi yêu cầu khác (trừ kiểm tra sức khỏe) nhận 503 để không ai thao tác trên trạng thái nửa chừng.
+let maintenanceMessage = '';
 const publicApplicationAttempts = new Map();
 const ekycSessions = new Map();
 
@@ -7033,6 +7035,81 @@ function getBearerToken(request) {
   return match[1];
 }
 
+// ===== Kiểm tra toàn vẹn dữ liệu =====
+// Chỉ đọc. Mỗi mục báo số vấn đề thật đếm được kèm vài mẫu; không có mục nào dùng số liệu giả.
+async function runIntegrityChecks() {
+  const checks = [];
+  const SAMPLE = 10;
+  const ROW_LIMIT = 100_000;
+  const report = (key, title, problems, { samples = [], severity = 'error', note = '' } = {}) => checks.push({
+    key, title, status: problems === 0 ? 'ok' : severity, problems, samples: samples.slice(0, SAMPLE), note,
+  });
+  const parse = (row) => ({ key: row.record_key, ...parseJsonObject(row.payload_json) });
+
+  if (!db.pool) {
+    const verdict = (await db.prepare('PRAGMA integrity_check').all()).map(row => Object.values(row)[0]);
+    const damaged = verdict.filter(item => item !== 'ok');
+    report('sqlite_integrity', 'Cấu trúc tệp cơ sở dữ liệu SQLite', damaged.length, { samples: damaged });
+    const orphans = await db.prepare('PRAGMA foreign_key_check').all();
+    report('foreign_keys', 'Ràng buộc liên kết giữa các bảng', orphans.length, { samples: orphans.map(row => `${row.table} #${row.rowid} thiếu bản ghi cha trong ${row.parent}`) });
+  }
+
+  const admins = Number((await db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'ADMIN' AND is_active = 1").get())?.count || 0);
+  report('active_admin', 'Có ít nhất một quản trị viên đang hoạt động', admins > 0 ? 0 : 1, { samples: admins > 0 ? [] : ['Không có tài khoản quản trị nào đang hoạt động.'] });
+
+  const noProfile = await db.prepare("SELECT u.employee_code FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE p.user_id IS NULL AND u.role = 'USER' LIMIT 1000").all();
+  report('employee_profiles', 'Mỗi nhân viên có hồ sơ nhân sự', noProfile.length, { severity: 'warning', samples: noProfile.map(row => `Nhân viên ${row.employee_code} chưa có hồ sơ`) });
+
+  const badRoles = await db.prepare("SELECT u.employee_code, u.role_code FROM users u WHERE u.role_code <> '' AND NOT EXISTS (SELECT 1 FROM collection_records c WHERE c.scope = 'admin_roles' AND c.record_key = u.role_code) LIMIT 1000").all();
+  report('role_codes', 'Vai trò nghiệp vụ được gán đều tồn tại', badRoles.length, { samples: badRoles.map(row => `Tài khoản ${row.employee_code} giữ vai trò ${row.role_code} không còn`) });
+
+  const orphanContracts = await db.prepare('SELECT code FROM contracts WHERE employee_user_id IS NOT NULL AND employee_user_id NOT IN (SELECT id FROM users) LIMIT 1000').all();
+  report('contracts', 'Hợp đồng trỏ tới nhân sự còn tồn tại', orphanContracts.length, { samples: orphanContracts.map(row => `Hợp đồng ${row.code} trỏ tới tài khoản không còn`) });
+
+  // Tệp: nội dung phải có mặt trên đĩa và không có tệp mồ côi.
+  const nodes = await db.prepare("SELECT id, name, storage_key, deleted_at FROM file_nodes WHERE node_type = 'file' AND storage_key IS NOT NULL LIMIT ?").all(ROW_LIMIT);
+  const missing = [];
+  for (const node of nodes) {
+    if (node.deleted_at) continue;
+    try { await stat(fileStoragePath(node.storage_key)); } catch { missing.push(`${node.name} (${node.storage_key})`); }
+  }
+  report('files_missing', 'Nội dung tệp có mặt trên đĩa', missing.length, { samples: missing });
+  const known = new Set(nodes.map(node => node.storage_key));
+  const onDisk = [];
+  const walk = async (folder, prefix) => {
+    for (const entry of await readdir(folder, { withFileTypes: true }).catch(() => [])) {
+      if (onDisk.length >= ROW_LIMIT) return;
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(path.join(folder, entry.name), relative);
+      else if (entry.isFile()) onDisk.push(relative);
+    }
+  };
+  await walk(FILES_DIR, '');
+  const strays = onDisk.filter(relative => !known.has(relative));
+  report('files_orphaned', 'Tệp trên đĩa đều có hồ sơ trong hệ thống', strays.length, { severity: 'warning', samples: strays, note: 'Tệp mồ côi không mất dữ liệu nhưng chiếm dung lượng; có thể là dữ liệu của lần tải lên bị gián đoạn.' });
+
+  // Sổ cái: bút toán nhiều dòng phải cân Nợ bằng Có; bút toán hai tài khoản phải có hai tài khoản khác nhau và số tiền dương.
+  const ledger = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_general_ledger' LIMIT ?").all(ROW_LIMIT);
+  const cents = (value) => Math.round(Number(value || 0) * 100);
+  const badEntries = ledger.map(parse).filter(entry => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(entry.entryDate || ''))) return true;
+    if (Array.isArray(entry.lines) && entry.lines.length) {
+      const debit = entry.lines.reduce((sum, line) => sum + cents(line.debit), 0);
+      const credit = entry.lines.reduce((sum, line) => sum + cents(line.credit), 0);
+      return debit <= 0 || debit !== credit || entry.lines.some(line => !line.account);
+    }
+    const amount = Number(entry.amount);
+    return !entry.debitAccount || !entry.creditAccount || entry.debitAccount === entry.creditAccount || !Number.isFinite(amount) || amount <= 0;
+  });
+  report('ledger_entries', 'Bút toán sổ cái cân Nợ Có và đủ thông tin', badEntries.length, { samples: badEntries.map(entry => `Bút toán ${entry.voucherCode || entry.key}: lệch Nợ Có hoặc thiếu tài khoản, số tiền, ngày hợp lệ`) });
+
+  const payroll = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'payroll' LIMIT ?").all(ROW_LIMIT);
+  const unposted = payroll.map(parse).filter(row => row.status === 'Đã chi trả' && !row.financeTransactionId);
+  report('payroll_paid', 'Phiếu lương đã chi đều có giao dịch tài chính', unposted.length, { severity: 'warning', samples: unposted.map(row => `Phiếu lương ${row.employeeCode || row.key} kỳ ${row.month || ''} đã chi nhưng chưa gắn giao dịch`) });
+
+  return { checkedAt: now(), engine: db.pool ? 'PostgreSQL' : 'SQLite', summary: { errors: checks.filter(c => c.status === 'error').length, warnings: checks.filter(c => c.status === 'warning').length, passed: checks.filter(c => c.status === 'ok').length }, checks };
+}
+
 // ===== Khóa truy cập (passkey, WebAuthn) =====
 // Thử thách và bằng chứng xác thực sống ngắn nên giữ trong bộ nhớ của tiến trình, giống bộ giới hạn đăng nhập.
 const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -7929,6 +8006,11 @@ async function handleRequest(request, response) {
   let pathname = url.pathname;
   if (request.method === 'GET' && (pathname === '/health' || pathname === '/api/health' || pathname === '/api/v1/health')) {
     sendJson(response, 200, { status: 'ok', database: 'connected' });
+    return;
+  }
+
+  if (maintenanceMessage) {
+    sendJson(response, 503, { message: maintenanceMessage });
     return;
   }
 
@@ -9095,6 +9177,11 @@ async function handleRequest(request, response) {
     }
     return;
   }
+  if (request.method === 'GET' && resource === '/admin/integrity') {
+    await requireAdmin(request);
+    sendJson(response, 200, await runIntegrityChecks());
+    return;
+  }
   const backupMatch = /^\/admin\/backups\/([^/]+)\/(verify|download|restore)$/.exec(resource);
   if (backupMatch) {
     const actor = await requireAdmin(request);
@@ -9112,7 +9199,23 @@ async function handleRequest(request, response) {
       await pipeline(createReadStream(file.filePath), response);
       return;
     }
-    if (backupMatch[2] === 'restore' && request.method === 'POST') throw new HttpError(409, 'Khôi phục tự động chưa được hỗ trợ. Hãy kiểm tra bản sao lưu và lập kế hoạch khôi phục ngoại tuyến.');
+    if (backupMatch[2] === 'restore' && request.method === 'POST') {
+      await requireSecurityPin(request, actor);
+      const payload = await readJson(request, 4 * 1024);
+      const sessionKey = request.authSession?.key;
+      const result = await backupManager.restore(key, {
+        actor, confirmation: payload.confirmation,
+        // Giữ nhật ký kiểm toán hiện có và giữ phiên của quản trị viên đang khôi phục để họ không bị đăng xuất.
+        keepTables: ['audit_events'],
+        keepRows: sessionKey ? [{ table: 'collection_records', where: "scope = 'admin_sessions' AND record_key = ? AND owner_id = ?", params: [sessionKey, actor.id], requires: { table: 'users', column: 'id', ownerColumn: 'owner_id' } }] : [],
+        beginMaintenance: () => { maintenanceMessage = 'Hệ thống đang khôi phục dữ liệu, vui lòng thử lại sau ít phút.'; },
+        endMaintenance: () => { maintenanceMessage = ''; },
+      });
+      const stillExists = Boolean(await getUserById(actor.id));
+      await recordAuditEvent(stillExists ? actor.id : null, 'restore', 'admin_backups', key, { backup: result.backup, actorName: actor.name, safetyBackup: result.safetyBackup.code, restoredFiles: result.restoredFiles });
+      sendJson(response, 200, { restore: result, integrity: await runIntegrityChecks() });
+      return;
+    }
   }
 
   if (request.method === 'POST' && resource === '/finance/chart-of-accounts/templates/import') {

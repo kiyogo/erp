@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 
 // shortcut: classic ZIP is limited to 4 GiB and 65,535 entries; add ZIP64 before supporting larger backups.
@@ -73,7 +75,63 @@ async function writeZip(destination, entries) {
   } finally { await handle.close(); }
 }
 
+// Đọc lại tệp ZIP do chính hệ thống tạo (không nén, không ZIP64, không bình luận cuối tệp).
+async function readZipDirectory(filePath) {
+  const info = await stat(filePath);
+  if (info.size < 22) throw fail(422, 'Tệp sao lưu quá ngắn để là ZIP hợp lệ.');
+  const handle = await open(filePath, 'r');
+  try {
+    const tail = Buffer.alloc(22);
+    await handle.read(tail, 0, 22, info.size - 22);
+    if (tail.readUInt32LE(0) !== 0x06054b50) throw fail(422, 'Tệp sao lưu không có bản ghi kết thúc ZIP hợp lệ.');
+    const count = tail.readUInt16LE(10);
+    const directorySize = tail.readUInt32LE(12);
+    const directoryOffset = tail.readUInt32LE(16);
+    if (count > MAX_ENTRIES || directoryOffset + directorySize > info.size - 22) throw fail(422, 'Danh mục ZIP không hợp lệ.');
+    const directory = Buffer.alloc(directorySize);
+    await handle.read(directory, 0, directorySize, directoryOffset);
+    const entries = [];
+    let position = 0;
+    for (let index = 0; index < count; index++) {
+      if (position + 46 > directory.length || directory.readUInt32LE(position) !== 0x02014b50) throw fail(422, 'Danh mục ZIP bị hỏng.');
+      const method = directory.readUInt16LE(position + 10);
+      const compressedSize = directory.readUInt32LE(position + 20);
+      const size = directory.readUInt32LE(position + 24);
+      const nameLength = directory.readUInt16LE(position + 28);
+      const extraLength = directory.readUInt16LE(position + 30);
+      const commentLength = directory.readUInt16LE(position + 32);
+      const localOffset = directory.readUInt32LE(position + 42);
+      const name = directory.subarray(position + 46, position + 46 + nameLength).toString('utf8');
+      if (method !== 0 || compressedSize !== size) throw fail(422, 'Chỉ khôi phục được tệp ZIP không nén do hệ thống tạo.');
+      const local = Buffer.alloc(30);
+      await handle.read(local, 0, 30, localOffset);
+      if (local.readUInt32LE(0) !== 0x04034b50) throw fail(422, 'Tiêu đề tệp trong ZIP bị hỏng.');
+      const start = localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+      if (start + size > directoryOffset) throw fail(422, 'Dữ liệu tệp trong ZIP vượt ngoài vùng cho phép.');
+      entries.push({ name, size, start });
+      position += 46 + nameLength + extraLength + commentLength;
+    }
+    return entries;
+  } finally { await handle.close(); }
+}
+
+const safeEntryName = (name) => name === 'manifest.json' || name === 'database/kiyovn.sqlite'
+  || (name.startsWith('files/') && name.length > 6 && !name.includes('\\') && !name.includes('\0') && !name.startsWith('/')
+    && name.split('/').every((part) => part && part !== '.' && part !== '..'));
+
+/** Chép một tệp trong ZIP ra đĩa, vừa chép vừa tính SHA-256 để đối chiếu với bảng kê. */
+async function extractEntry(archive, entry, destination) {
+  await mkdir(path.dirname(destination), { recursive: true });
+  const hash = createHash('sha256');
+  const source = createReadStream(archive, { start: entry.start, end: entry.start + entry.size - 1 });
+  source.on('data', (chunk) => hash.update(chunk));
+  if (entry.size === 0) await writeFile(destination, '', { flag: 'wx', mode: 0o600 });
+  else await pipeline(source, createWriteStream(destination, { flags: 'wx', mode: 0o600 }));
+  return hash.digest('hex');
+}
+
 export function createBackupManager({ db, filesDir, dataDir }) {
+  let restoreRunning = false;
   const directory = path.resolve(dataDir, 'backups');
   const filesDirectory = path.resolve(filesDir);
   const validKey = key => {
@@ -85,7 +143,7 @@ export function createBackupManager({ db, filesDir, dataDir }) {
   const capabilities = () => ({
     database: !db.pool && typeof db.backupTo === 'function',
     fullSystem: !db.pool && typeof db.backupTo === 'function', storageBlob: true,
-    restore: false, autoDaily: false, encryptionKeysIncluded: false,
+    restore: !db.pool && typeof db.restoreFromSnapshot === 'function', autoDaily: false, encryptionKeysIncluded: false,
     engine: db.pool ? 'PostgreSQL' : 'SQLite', maxArchiveBytes: MAX_ARCHIVE_BYTES - 1, maxEntries: MAX_ENTRIES,
     reason: db.pool ? 'Chưa có cơ chế xuất PostgreSQL được cấu hình. Có thể sao lưu kho tệp riêng.' : '',
   });
@@ -113,7 +171,7 @@ export function createBackupManager({ db, filesDir, dataDir }) {
         const backup = await get(key);
         const file = await stat(archivePath(key)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
         const available = Boolean(file?.isFile());
-        data.push({ ...backup, available, ...(available ? { sizeBytes: file.size } : { status: 'Thiếu tệp sao lưu' }) });
+        data.push({ ...backup, available, restorable: available && capabilities().restore, ...(available ? { sizeBytes: file.size } : { status: 'Thiếu tệp sao lưu' }) });
       } catch (error) {
         if (error instanceof SyntaxError || error.statusCode === 422) continue;
         throw error;
@@ -167,7 +225,7 @@ export function createBackupManager({ db, filesDir, dataDir }) {
         format: 'KIYOVN_BACKUP_V1', key, name, type, createdAt, createdBy: actor.id, creator: actor.name,
         databaseEngine: type === 'Storage Blob' ? null : 'SQLite', compression: 'ZIP store (không nén)',
         encryptionKeysIncluded: false,
-        restoreRequirements: 'Bảo quản riêng khóa mã hóa cấu hình và dữ liệu gốc. Khôi phục tự động chưa được hỗ trợ.',
+        restoreRequirements: 'Bảo quản riêng khóa mã hóa cấu hình và dữ liệu gốc: bản sao lưu không chứa khóa mã hóa, nên chỉ khôi phục được trên máy chủ dùng cùng khóa.',
         consistency: 'SQLite dùng API snapshot. Từng tệp được kiểm tra băm khi đọc và sao chép; không có giao dịch chung giữa CSDL và kho tệp.',
         files: entries.map(({ name, size, checksumSha256 }) => ({ name, sizeBytes: size, checksumSha256 })),
       };
@@ -181,7 +239,7 @@ export function createBackupManager({ db, filesDir, dataDir }) {
         name, type, sizeBytes: actual.size, size: `${(actual.size / 1024 / 1024).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} MB`,
         createdAt, creator: actor.name, createdBy: actor.id, location: 'Kho sao lưu cục bộ trên máy chủ',
         checksumSha256: actual.checksumSha256, rtoEstimated: 'Chưa đo kiểm khôi phục', status: 'Đã xác minh SHA-256',
-        verifiedAt: new Date().toISOString(), fileName: `${key}.zip`, available: true, restorable: false,
+        verifiedAt: new Date().toISOString(), fileName: `${key}.zip`, available: true, restorable: capabilities().restore,
         fileCount: manifest.files.length, encryptionKeysIncluded: false,
       };
       await rename(output, archivePath(key));
@@ -212,5 +270,89 @@ export function createBackupManager({ db, filesDir, dataDir }) {
     if (backup.checksumSha256 !== backup.actualChecksumSha256) throw fail(409, 'Mã băm tệp sao lưu không khớp. Không tải bản sao lưu bị thay đổi.');
     return { backup, filePath: archivePath(key), fileName: `${backup.code}.zip`, sizeBytes: backup.sizeBytes };
   };
-  return { capabilities, list, create, verify, download };
+  /**
+   * Khôi phục từ một bản sao lưu: kiểm tra mã băm, bảng kê và từng tệp trước khi đụng tới dữ liệu đang chạy, tự tạo bản sao lưu
+   * trước khi khôi phục, thay cơ sở dữ liệu trong một giao dịch và đổi kho tệp cùng lúc; lỗi ở bất kỳ bước nào đều hoàn lại.
+   */
+  const restore = async (key, { actor, confirmation, keepTables = [], keepRows = [], beginMaintenance = () => {}, endMaintenance = () => {} }) => {
+    if (!capabilities().restore) throw fail(409, capabilities().reason || 'Khôi phục chỉ hỗ trợ cơ sở dữ liệu SQLite.');
+    const backup = await verify(key);
+    if (backup.checksumSha256 !== backup.actualChecksumSha256) throw fail(409, 'Mã băm tệp sao lưu không khớp. Không khôi phục từ bản sao lưu bị thay đổi.');
+    if (String(confirmation || '').trim() !== backup.code) throw fail(422, 'Hãy nhập đúng mã bản sao lưu để xác nhận khôi phục.');
+    const includesDatabase = backup.type !== 'Storage Blob';
+    const includesFiles = backup.type !== 'Database';
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    if (restoreRunning) throw fail(409, 'Đang có một lần khôi phục khác. Hãy chờ lần đó hoàn tất.');
+    restoreRunning = true;
+    const startedAt = Date.now();
+    let stage = '';
+    const stagedFiles = `${filesDirectory}.restoring-${randomUUID()}`;
+    let previousFiles = '';
+    try {
+      stage = await mkdtemp(path.join(directory, '.restoring-'));
+      // 1. Mở bản ZIP, đối chiếu bảng kê và băm từng tệp ra vùng tạm.
+      const entries = await readZipDirectory(archivePath(key));
+      const byName = new Map();
+      for (const entry of entries) {
+        if (!safeEntryName(entry.name) || byName.has(entry.name)) throw fail(422, 'Bản sao lưu chứa tên tệp không hợp lệ hoặc trùng lặp.');
+        byName.set(entry.name, entry);
+      }
+      const manifestEntry = byName.get('manifest.json');
+      if (!manifestEntry || manifestEntry.size > 64 * 1024 * 1024) throw fail(422, 'Bản sao lưu thiếu bảng kê hợp lệ.');
+      const manifestPath = path.join(stage, 'manifest.json');
+      await extractEntry(archivePath(key), manifestEntry, manifestPath);
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (manifest.format !== 'KIYOVN_BACKUP_V1' || manifest.key !== key || !Array.isArray(manifest.files)) throw fail(422, 'Bảng kê của bản sao lưu không hợp lệ.');
+      const listed = new Set(manifest.files.map((file) => file.name));
+      for (const name of byName.keys()) if (name !== 'manifest.json' && !listed.has(name)) throw fail(422, `Bản sao lưu chứa tệp ngoài bảng kê: ${name}.`);
+      if (includesDatabase && !listed.has('database/kiyovn.sqlite')) throw fail(422, 'Bản sao lưu không chứa cơ sở dữ liệu.');
+      let restoredFiles = 0;
+      for (const file of manifest.files) {
+        const entry = byName.get(file.name);
+        if (!entry || entry.size !== file.sizeBytes) throw fail(422, `Tệp ${file.name} thiếu hoặc sai kích thước so với bảng kê.`);
+        if (file.name.startsWith('files/') && !includesFiles) continue;
+        if (file.name === 'database/kiyovn.sqlite' && !includesDatabase) continue;
+        const destination = file.name === 'database/kiyovn.sqlite' ? path.join(stage, 'kiyovn.sqlite') : path.join(stagedFiles, file.name.slice('files/'.length));
+        if (await extractEntry(archivePath(key), entry, destination) !== file.checksumSha256) throw fail(422, `Tệp ${file.name} không khớp mã băm trong bảng kê.`);
+        if (file.name.startsWith('files/')) restoredFiles++;
+      }
+      if (includesFiles) await mkdir(stagedFiles, { recursive: true });
+      if (includesDatabase) {
+        const probe = new DatabaseSync(path.join(stage, 'kiyovn.sqlite'), { readOnly: true });
+        try {
+          const verdict = probe.prepare('PRAGMA integrity_check').all().map((row) => Object.values(row)[0]);
+          if (verdict.length !== 1 || verdict[0] !== 'ok') throw fail(422, `Cơ sở dữ liệu trong bản sao lưu bị hỏng: ${verdict.slice(0, 3).join('; ')}.`);
+        } finally { probe.close(); }
+      }
+      // 2. Bản sao lưu an toàn trước khi thay đổi bất cứ thứ gì.
+      const safety = await create({ name: `Trước khi khôi phục ${backup.code}`, type: includesDatabase ? 'Full System' : 'Storage Blob' }, actor);
+      // 3. Tạm dừng hệ thống, thay cơ sở dữ liệu và kho tệp.
+      beginMaintenance();
+      let restoredTables = {};
+      try {
+        const swapFiles = async () => {
+          if (!includesFiles) return;
+          previousFiles = `${filesDirectory}.before-restore-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`;
+          await rename(filesDirectory, previousFiles);
+          try { await rename(stagedFiles, filesDirectory); } catch (error) { await rename(previousFiles, filesDirectory); previousFiles = ''; throw error; }
+        };
+        if (includesDatabase) restoredTables = await db.restoreFromSnapshot(path.join(stage, 'kiyovn.sqlite'), { keepTables, keepRows, beforeCommit: swapFiles });
+        else await swapFiles();
+      } catch (error) {
+        if (previousFiles) { await rm(filesDirectory, { recursive: true, force: true }); await rename(previousFiles, filesDirectory); previousFiles = ''; }
+        throw error;
+      } finally { endMaintenance(); }
+      const restoredAt = new Date().toISOString();
+      const durationMs = Date.now() - startedAt;
+      await saveMetadata({ ...(await get(key)), lastRestoredAt: restoredAt, lastRestoredBy: actor.name, lastRestoreDurationMs: durationMs });
+      return { backup: backup.code, restoredAt, durationMs, restoredFiles, restoredTables, safetyBackup: { key: safety.key, code: safety.code } };
+    } finally {
+      restoreRunning = false;
+      if (stage) await rm(stage, { recursive: true, force: true });
+      await rm(stagedFiles, { recursive: true, force: true });
+      if (previousFiles) await rm(previousFiles, { recursive: true, force: true });
+    }
+  };
+
+  return { capabilities, list, create, verify, download, restore };
 }

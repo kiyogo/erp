@@ -171,6 +171,66 @@ export async function backupTo(destination) {
   return withSqliteConnection(() => backup(sqliteDb, destination));
 }
 
+/**
+ * Thay toàn bộ dữ liệu bằng một bản chụp SQLite đã được kiểm tra, trong một giao dịch duy nhất (SQLite).
+ * Mọi truy vấn khác phải chờ nên không ai thấy trạng thái nửa chừng. Bảng trong keepTables giữ nguyên (nhật ký kiểm toán),
+ * các dòng trong keepRows được lấy ra trước và ghi lại sau nếu chủ sở hữu còn tồn tại (giữ phiên của người đang khôi phục).
+ * beforeCommit chạy khi dữ liệu mới đã vào nhưng chưa chốt; ném lỗi ở đó thì mọi thứ được hoàn lại.
+ */
+export async function restoreFromSnapshot(snapshotPath, { keepTables = [], keepRows = [], beforeCommit } = {}) {
+  if (isPg) throw new Error('Khôi phục cơ sở dữ liệu hiện chỉ hỗ trợ SQLite.');
+  const quote = (name) => '"' + String(name).replace(/"/g, '""') + '"';
+  return withSqliteConnection(async () => {
+    // Tắt kiểm tra khóa ngoại trong lúc thay dữ liệu để xóa không kéo theo cascade vào bảng đã nạp; kiểm tra lại trước khi chốt.
+    sqliteDb.exec('PRAGMA foreign_keys = OFF;');
+    sqliteDb.prepare('ATTACH DATABASE ? AS snapshot').run(snapshotPath);
+    try {
+      const tables = (schema) => sqliteDb.prepare(`SELECT name FROM ${schema}.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().map((row) => row.name);
+      const columns = (schema, table) => sqliteDb.prepare(`PRAGMA ${schema}.table_info(${quote(table)})`).all().map((row) => row.name);
+      const liveTables = tables('main');
+      const snapshotTables = new Set(tables('snapshot'));
+      const unknown = [...snapshotTables].filter((name) => !liveTables.includes(name));
+      if (unknown.length) throw new Error(`Bản sao lưu có bảng mà phiên bản hiện tại không có: ${unknown.join(', ')}.`);
+      const restoring = liveTables.filter((name) => !keepTables.includes(name));
+      const preserved = keepRows.map((spec) => ({ spec, rows: sqliteDb.prepare(`SELECT * FROM main.${quote(spec.table)} WHERE ${spec.where}`).all(...(spec.params || [])) }));
+      sqliteDb.exec('BEGIN IMMEDIATE;');
+      try {
+        for (const table of restoring) sqliteDb.exec(`DELETE FROM main.${quote(table)}`);
+        const restored = {};
+        for (const table of restoring) {
+          if (!snapshotTables.has(table)) { restored[table] = 0; continue; }
+          const snapshotColumns = new Set(columns('snapshot', table));
+          const common = columns('main', table).filter((name) => snapshotColumns.has(name)).map(quote).join(', ');
+          const info = sqliteDb.prepare(`INSERT INTO main.${quote(table)} (${common}) SELECT ${common} FROM snapshot.${quote(table)}`).run();
+          restored[table] = Number(info.changes);
+        }
+        for (const { spec, rows } of preserved) {
+          for (const row of rows) {
+            if (spec.requires && !sqliteDb.prepare(`SELECT 1 FROM main.${quote(spec.requires.table)} WHERE ${quote(spec.requires.column)} = ?`).get(row[spec.requires.ownerColumn])) continue;
+            const names = Object.keys(row);
+            sqliteDb.prepare(`INSERT OR IGNORE INTO main.${quote(spec.table)} (${names.map(quote).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`).run(...names.map((name) => row[name]));
+          }
+        }
+        // Bảng được giữ nguyên có thể trỏ tới người dùng không còn trong bản khôi phục: giữ dấu vết nhưng bỏ liên kết.
+        if (keepTables.includes('audit_events')) {
+          sqliteDb.exec("UPDATE main.audit_events SET details_json = json_set(details_json, '$.actorId', actor_id), actor_id = NULL WHERE actor_id IS NOT NULL AND actor_id NOT IN (SELECT id FROM main.users)");
+        }
+        const violations = sqliteDb.prepare('PRAGMA main.foreign_key_check').all().filter((row) => !keepTables.includes(row.table));
+        if (violations.length) throw new Error(`Dữ liệu khôi phục vi phạm ${violations.length} ràng buộc liên kết ở bảng ${[...new Set(violations.map((row) => row.table))].join(', ')}.`);
+        if (beforeCommit) await beforeCommit(restored);
+        sqliteDb.exec('COMMIT;');
+        return restored;
+      } catch (error) {
+        sqliteDb.exec('ROLLBACK;');
+        throw error;
+      }
+    } finally {
+      try { sqliteDb.exec('DETACH DATABASE snapshot;'); } catch { /* đã tách */ }
+      sqliteDb.exec('PRAGMA foreign_keys = ON;');
+    }
+  });
+}
+
 export async function transaction(callback) {
   if (isPg) {
     const existingStore = asyncLocalStorage.getStore();
@@ -806,6 +866,7 @@ const db = {
   prepare,
   transaction,
   backupTo,
+  restoreFromSnapshot,
   close,
   initDatabaseSchema,
 };

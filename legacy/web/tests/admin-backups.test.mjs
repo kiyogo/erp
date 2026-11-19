@@ -88,7 +88,7 @@ test('backup UI starts empty, uses physical backup API and never fabricates succ
     assert.equal(record.creator, 'Actual Administrator');
     assert.equal(requests.find(item => item.method === 'POST').options.timeout, 0);
     actions(record).find(node => node.type === 'Button' && text(node) === 'Khôi phục').props.onClick(); render();
-    assert.ok(infoDialogs[0].content.includes('chưa hỗ trợ khôi phục tự động'));
+    assert.ok(messages.some(item => item.level === 'warning' && item.text.includes('chưa hỗ trợ khôi phục')), 'bản sao lưu chưa khôi phục được thì chỉ báo, không gọi máy chủ');
     assert.ok(!requests.some(item => item.route.endsWith('/restore')));
     assert.ok(!messages.some(item => item.level === 'success' && item.text.includes('khôi phục')));
     fail = true;

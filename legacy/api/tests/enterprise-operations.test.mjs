@@ -156,9 +156,9 @@ test('user administration preserves profile fields, paginates and retains an act
   await request(`/users/${created.id}`, 'PATCH', { status: 'Chính thức', isActive: true });
 });
 
-test('admin backup endpoints produce a physical ZIP and refuse forged generic snapshots or unsupported restore', async () => {
+test('admin backup endpoints produce a physical ZIP and refuse forged generic snapshots or an unconfirmed restore', async () => {
   const listing = await request('/admin/backups');
-  assert.equal(listing.data.length, 0); assert.equal(listing.capabilities.restore, false);
+  assert.equal(listing.data.length, 0); assert.equal(listing.capabilities.restore, true);
   assert.equal((await request('/admin/backups', 'POST', { name: 'Invalid', type: 'Invented' }, 422)).details, undefined);
   await request('/admin/backups/not-a-key/verify', 'POST', {}, 422);
   await request('/admin/backups/00000000-0000-0000-0000-000000000000/download', 'GET', undefined, 404);
@@ -172,7 +172,7 @@ test('admin backup endpoints produce a physical ZIP and refuse forged generic sn
   assert.equal(download.status, 200); assert.equal(download.headers.get('Content-Type'), 'application/zip');
   const bytes = Buffer.from(await download.arrayBuffer());
   assert.equal(bytes.readUInt32LE(), 0x04034b50); assert.equal(bytes.length, backup.sizeBytes);
-  await request(`/admin/backups/${backup.key}/restore`, 'POST', {}, 409);
+  await request(`/admin/backups/${backup.key}/restore`, 'POST', {}, 422);
   assert.equal((await request('/admin/backups')).data.length, 1);
   const { appendFile } = await import('node:fs/promises');
   await appendFile(path.join(directory, 'backups', `${backup.key}.zip`), 'tampered');

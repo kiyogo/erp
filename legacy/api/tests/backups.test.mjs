@@ -57,7 +57,7 @@ test('an empty backup catalog has no fictional snapshots and exposes actual engi
   assert.deepEqual(result.data, []);
   assert.equal(result.capabilities.database, true);
   assert.equal(result.capabilities.engine, 'SQLite');
-  assert.equal(result.capabilities.restore, false);
+  assert.equal(result.capabilities.restore, true);
   assert.equal(result.capabilities.autoDaily, false);
 });
 
@@ -65,7 +65,7 @@ test('full backup contains a real consistent SQLite image, uploaded bytes and a 
   const created = await manager.create({ name: 'Actual full backup', type: 'Full System' }, actor);
   assert.equal(created.creator, actor.name);
   assert.equal(created.createdBy, actor.id);
-  assert.equal(created.restorable, false);
+  assert.equal(created.restorable, true);
   const download = await manager.download(created.key);
   const bytes = await readFile(download.filePath);
   assert.equal(bytes.length, created.sizeBytes);

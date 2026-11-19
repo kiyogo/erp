@@ -38,7 +38,12 @@ export interface EnterpriseBackupItem {
   actualChecksumSha256?: string;
   available?: boolean;
   restorable?: boolean;
+  lastRestoredAt?: string;
+  lastRestoreDurationMs?: number;
 }
+
+type IntegrityCheck = { key: string; title: string; status: 'ok' | 'warning' | 'error'; problems: number; samples: string[]; note?: string };
+type IntegrityReport = { checkedAt: string; engine: string; summary: { errors: number; warnings: number; passed: number }; checks: IntegrityCheck[] };
 
 type BackupCapabilities = { database: boolean; fullSystem: boolean; storageBlob: boolean; restore: boolean; autoDaily: boolean; engine: string; reason?: string; maxArchiveBytes?: number; maxEntries?: number };
 
@@ -48,6 +53,11 @@ export const AdminBackupModule: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyKey, setBusyKey] = useState('');
+  const [restoreTarget, setRestoreTarget] = useState<EnterpriseBackupItem | null>(null);
+  const [restoreCode, setRestoreCode] = useState('');
+  const [restoring, setRestoring] = useState(false);
+  const [integrity, setIntegrity] = useState<IntegrityReport | null>(null);
+  const [integrityLoading, setIntegrityLoading] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -91,23 +101,37 @@ export const AdminBackupModule: React.FC = () => {
 
   const handleRestore = (record: EnterpriseBackupItem) => {
     if (!capabilities.restore || !record.restorable) {
-      Modal.info({ title: 'Khôi phục cần quy trình triển khai có kiểm soát', content: 'Máy chủ hiện hỗ trợ tạo, xác minh và tải bản sao lưu; chưa hỗ trợ khôi phục tự động. Hãy tải bản ZIP đã xác minh, bảo quản khóa mã hóa gốc riêng và thực hiện khôi phục trong môi trường bảo trì. Dữ liệu đang chạy chưa được thay đổi.' });
+      message.warning(capabilities.reason || 'Máy chủ chưa hỗ trợ khôi phục cho bản sao lưu này.');
       return;
     }
-    Modal.confirm({
-      title: `Khôi phục dữ liệu từ bản Snapshot ${record.code}?`,
-      content: 'Khôi phục sẽ thay đổi dữ liệu đang chạy. Chỉ tiếp tục sau khi đã kiểm tra bản sao lưu và chuẩn bị phương án phục hồi.',
-      okText: 'Xác nhận khôi phục',
-      cancelText: 'Hủy bỏ',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          await api.post(`/admin/backups/${encodeURIComponent(record.key)}/restore`, { confirmation: record.code }, { timeout: 0 });
-          message.success('Máy chủ đã hoàn tất khôi phục bản sao lưu.');
-          await loadData();
-        } catch (error: any) { message.error(error?.response?.data?.message || 'Không thể khôi phục dữ liệu.'); }
-      },
-    });
+    setRestoreCode('');
+    setRestoreTarget(record);
+  };
+
+  const confirmRestore = async () => {
+    if (!restoreTarget || restoring) return;
+    if (restoreCode.trim() !== restoreTarget.code) { message.error('Hãy nhập đúng mã bản sao lưu để xác nhận.'); return; }
+    setRestoring(true);
+    try {
+      // Máy chủ kiểm tra lại mã băm, tự tạo bản sao lưu an toàn rồi mới thay dữ liệu; nếu bất kỳ bước nào lỗi thì giữ nguyên dữ liệu hiện tại.
+      const response = await api.post<{ restore: { durationMs: number; safetyBackup: { code: string } }; integrity: IntegrityReport }>(
+        `/admin/backups/${encodeURIComponent(restoreTarget.key)}/restore`, { confirmation: restoreCode.trim() }, { timeout: 0 });
+      setIntegrity(response.data.integrity);
+      setRestoreTarget(null);
+      message.success(`Đã khôi phục từ ${restoreTarget.code} trong ${(response.data.restore.durationMs / 1000).toFixed(1)} giây. Bản sao lưu an toàn: ${response.data.restore.safetyBackup.code}. Trang sẽ tải lại.`);
+      setTimeout(() => window.location.reload(), 2500);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể khôi phục dữ liệu; dữ liệu hiện tại được giữ nguyên.');
+    } finally { setRestoring(false); }
+  };
+
+  const runIntegrity = async () => {
+    setIntegrityLoading(true);
+    try {
+      const response = await api.get<IntegrityReport>('/admin/integrity', { timeout: 0 });
+      setIntegrity(response.data);
+    } catch (error: any) { message.error(error?.response?.data?.message || 'Không chạy được kiểm tra toàn vẹn.'); }
+    finally { setIntegrityLoading(false); }
   };
 
   const handleVerify = async (record: EnterpriseBackupItem) => {
@@ -143,11 +167,13 @@ export const AdminBackupModule: React.FC = () => {
     const popup = window.open('', '_blank');
     if (!popup) { message.error('Trình duyệt đã chặn cửa sổ in. Vui lòng cho phép mở cửa sổ.'); return; }
     popup.document.write('<!doctype html><html lang="vi"><head><meta charset="UTF-8"><title>Hồ sơ sao lưu</title><style>@page{size:A4;margin:20mm}body{font-family:Arial,sans-serif;line-height:1.6;overflow-wrap:anywhere}</style></head><body></body></html>');
-    for (const text of ['HỒ SƠ TỆP SAO LƯU', `Mã: ${selectedBackup.code}`, `Tên: ${selectedBackup.name}`, `Phạm vi: ${selectedBackup.type}`, `Người tạo: ${selectedBackup.creator}`, `Thời điểm: ${selectedBackup.createdAt}`, `Dung lượng: ${formatFileSize(selectedBackup.sizeBytes)}`, `SHA-256 gốc: ${selectedBackup.checksumSha256}`, `Xác minh gần nhất: ${selectedBackup.verifiedAt || 'Chưa có'}`, `Trạng thái: ${selectedBackup.status}`, 'Khôi phục tự động chưa được hỗ trợ; khóa mã hóa gốc phải được bảo quản riêng.']) {
+    for (const text of ['HỒ SƠ TỆP SAO LƯU', `Mã: ${selectedBackup.code}`, `Tên: ${selectedBackup.name}`, `Phạm vi: ${selectedBackup.type}`, `Người tạo: ${selectedBackup.creator}`, `Thời điểm: ${selectedBackup.createdAt}`, `Dung lượng: ${formatFileSize(selectedBackup.sizeBytes)}`, `SHA-256 gốc: ${selectedBackup.checksumSha256}`, `Xác minh gần nhất: ${selectedBackup.verifiedAt || 'Chưa có'}`, `Trạng thái: ${selectedBackup.status}`, 'Bản sao lưu không chứa khóa mã hóa; khóa gốc phải được bảo quản riêng để khôi phục.']) {
       const paragraph = popup.document.createElement('p'); paragraph.textContent = text; popup.document.body.appendChild(paragraph);
     }
     popup.document.close(); popup.focus(); popup.print();
   };
+
+  const lastRestore = data.filter((item) => item.lastRestoredAt && Number.isFinite(item.lastRestoreDurationMs)).sort((a, b) => String(b.lastRestoredAt).localeCompare(String(a.lastRestoredAt)))[0];
 
   const filteredData = data.filter((d) => {
     let matchTab = true;
@@ -269,11 +295,11 @@ export const AdminBackupModule: React.FC = () => {
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian phục hồi mục tiêu (RTO)</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Thời gian khôi phục đo được gần nhất</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            Chưa đo kiểm
+            {lastRestore ? `${(Number(lastRestore.lastRestoreDurationMs) / 1000).toFixed(1)} giây` : 'Chưa đo kiểm'}
           </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Khôi phục cần quy trình triển khai có kiểm soát</div>
+          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>{lastRestore ? `Từ bản ${lastRestore.code}` : 'Chưa có lần khôi phục nào được thực hiện'}</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -353,6 +379,56 @@ export const AdminBackupModule: React.FC = () => {
         />
       </div>
 
+      {/* Kiểm tra toàn vẹn dữ liệu */}
+      <div style={{ marginTop: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 15, color: '#0F172A' }}>Kiểm tra toàn vẹn dữ liệu</div>
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+              {integrity ? `Kiểm tra lúc ${new Date(integrity.checkedAt).toLocaleString('vi-VN')} trên ${integrity.engine}: ${integrity.summary.errors} lỗi, ${integrity.summary.warnings} cảnh báo, ${integrity.summary.passed} mục đạt.` : 'Đối chiếu cơ sở dữ liệu, kho tệp và sổ cái; chỉ đọc, không thay đổi dữ liệu.'}
+            </div>
+          </div>
+          <Button icon={<SafetyCertificateOutlined />} loading={integrityLoading} onClick={() => void runIntegrity()}>Chạy kiểm tra</Button>
+        </div>
+        {integrity && (
+          <div className="transparent-table-card">
+            <KTable
+              dataSource={integrity.checks}
+              rowKey="key"
+              pagination={false}
+              columns={[
+                { title: 'Hạng mục', dataIndex: 'title', key: 'title', render: (title: string, check: IntegrityCheck) => <div><div style={{ fontSize: 13, color: '#0F172A' }}>{title}</div>{check.note && <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{check.note}</div>}</div> },
+                { title: 'Kết quả', key: 'status', width: 140, render: (_: any, check: IntegrityCheck) => <Tag color={check.status === 'ok' ? 'success' : check.status === 'warning' ? 'warning' : 'error'}>{check.status === 'ok' ? 'Đạt' : check.status === 'warning' ? `${check.problems} cảnh báo` : `${check.problems} lỗi`}</Tag> },
+                { title: 'Chi tiết', key: 'samples', render: (_: any, check: IntegrityCheck) => check.samples.length ? <div style={{ fontSize: 12, color: '#B91C1C', lineHeight: 1.6 }}>{check.samples.map((sample) => <div key={sample}>{sample}</div>)}{check.problems > check.samples.length && <div style={{ color: '#64748B' }}>và {check.problems - check.samples.length} mục khác</div>}</div> : <span style={{ color: '#94A3B8' }}>Không có vấn đề</span> },
+              ]}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* MODAL: Khôi phục */}
+      <Modal title="Khôi phục dữ liệu từ bản sao lưu" open={Boolean(restoreTarget)} onCancel={() => !restoring && setRestoreTarget(null)} footer={null} width={560}>
+        {restoreTarget && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
+            <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
+              Khôi phục bản {restoreTarget.code} ({restoreTarget.name}) tạo lúc {new Date(restoreTarget.createdAt).toLocaleString('vi-VN')}. Toàn bộ dữ liệu phát sinh sau thời điểm đó sẽ mất khỏi hệ thống đang chạy,
+              gồm cả việc tài khoản đã khóa hoặc đã xóa sau thời điểm đó có thể hoạt động trở lại.
+            </div>
+            <div style={{ fontSize: 12.5, color: '#64748B', lineHeight: 1.6 }}>
+              Trước khi thay dữ liệu, hệ thống tự tạo một bản sao lưu an toàn để có thể quay lại, tạm dừng mọi thao tác trong vài giây và giữ nguyên nhật ký kiểm toán. Nếu bất kỳ bước nào lỗi, dữ liệu hiện tại được giữ nguyên.
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: '#0F172A', marginBottom: 6 }}>Nhập mã {restoreTarget.code} để xác nhận</div>
+              <Input value={restoreCode} onChange={(event) => setRestoreCode(event.target.value)} placeholder={restoreTarget.code} disabled={restoring} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14 }}>
+              <Button disabled={restoring} onClick={() => setRestoreTarget(null)}>Hủy</Button>
+              <Button type="primary" danger loading={restoring} disabled={restoreCode.trim() !== restoreTarget.code} onClick={() => void confirmRestore()}>Khôi phục dữ liệu</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* MODAL: Tạo Snapshot */}
       <Modal
         title="Tạo Bản Sao Lưu Thủ Công Toàn Bộ Hệ Thống"
@@ -377,7 +453,7 @@ export const AdminBackupModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ padding: '12px 14px', background: '#F8FAFC', borderRadius: 6, fontSize: 12.5, color: '#334155', border: '1px solid #E2E8F0' }}>
-            Máy chủ tạo tệp ZIP thật theo phạm vi đã chọn, có manifest và mã băm SHA-256. Khóa mã hóa gốc cần được bảo quản riêng. Khôi phục tự động và lịch sao lưu chưa được hỗ trợ.
+            Máy chủ tạo tệp ZIP thật theo phạm vi đã chọn, có manifest và mã băm SHA-256. Khóa mã hóa gốc cần được bảo quản riêng. Có thể khôi phục từ bản này; lịch sao lưu tự động chưa được hỗ trợ.
             {capabilities.reason && <p>{capabilities.reason}</p>}
             {capabilities.maxArchiveBytes && <p>Giới hạn bản ZIP: {formatFileSize(capabilities.maxArchiveBytes)}, tối đa {capabilities.maxEntries?.toLocaleString('vi-VN')} tệp.</p>}
           </div>
