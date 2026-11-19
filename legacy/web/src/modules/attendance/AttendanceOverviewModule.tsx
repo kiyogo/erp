@@ -39,7 +39,19 @@ function getOverviewDateRanges(referenceDateStr = attendanceDate()) {
   const yesterdayDate = new Date(y, m, d - 1);
   const yesterdayYMD = `${yesterdayDate.getFullYear()}-${pad2(yesterdayDate.getMonth() + 1)}-${pad2(yesterdayDate.getDate())}`;
 
+  // Các khoảng thời gian dùng cho bộ lọc: hôm nay, tuần này (thứ 2 đến chủ nhật), tháng này và các kỳ liền trước, liền sau.
+  const ymd = (date: Date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  const weekOffset = (new Date(y, m, d).getDay() + 6) % 7;
+  const weekRange = (shiftDays: number): [string, string] => [ymd(new Date(y, m, d - weekOffset + shiftDays)), ymd(new Date(y, m, d - weekOffset + shiftDays + 6))];
+  const monthRange = (shiftMonths: number): [string, string] => [ymd(new Date(y, m + shiftMonths, 1)), ymd(new Date(y, m + shiftMonths + 1, 0))];
+  const periods: Record<string, [string, string]> = {
+    today: [referenceDateStr, referenceDateStr], yesterday: [yesterdayYMD, yesterdayYMD], tomorrow: [tomorrowYMD, tomorrowYMD],
+    week: weekRange(0), prevWeek: weekRange(-7), nextWeek: weekRange(7),
+    month: monthRange(0), prevMonth: monthRange(-1), nextMonth: monthRange(1),
+  };
+
   return {
+    periods,
     todayYMD: referenceDateStr,
     tomorrowYMD,
     yesterdayYMD,
@@ -174,57 +186,24 @@ export const AttendanceOverviewModule: React.FC = () => {
       if (Number(record.lateMinutes || 0) > 0 || Number(record.earlyMinutes || 0) > 0) return true;
       return false;
     };
-
-    let targetDate = dateRanges.todayYMD;
-    let prevDate = dateRanges.yesterdayYMD;
-
-    // Filter by period
-    const currentMatches = timesheets.filter((t) => {
-      if (latePeriod === 'today') return t.date === targetDate && isLateOrEarly(t);
-      if (latePeriod === 'week') return t.date >= dateRanges.startOfMonthYMD && t.date <= targetDate && isLateOrEarly(t);
-      return t.date >= dateRanges.startOfMonthYMD && t.date <= dateRanges.endOfMonthYMD && isLateOrEarly(t);
-    });
-
-    const prevMatches = timesheets.filter((t) => {
-      if (latePeriod === 'today') return t.date === prevDate && isLateOrEarly(t);
-      return false;
-    });
-
-    const count = currentMatches.length;
-    const prevCount = prevMatches.length;
-    const diff = Math.abs(count - prevCount);
-
-    return { value: count, trend: diff };
+    const countIn = ([from, to]: [string, string]) => timesheets.filter((t) => t.date >= from && t.date <= to && isLateOrEarly(t)).length;
+    const previous = latePeriod === 'today' ? 'yesterday' : latePeriod === 'week' ? 'prevWeek' : 'prevMonth';
+    const count = countIn(dateRanges.periods[latePeriod]);
+    return { value: count, trend: Math.abs(count - countIn(dateRanges.periods[previous])) };
   }, [timesheets, latePeriod, dateRanges]);
 
   // 2. Top Card: Thực tế nghỉ
   const actualLeaveStats = useMemo(() => {
-    const isLeaveActive = (req: LeaveRequest, date: string) => {
-      if (req.status !== 'Đã duyệt') return false;
-      return req.startDate <= date && req.endDate >= date;
-    };
-
-    const currentMatches = leaveRequests.filter((l) => isLeaveActive(l, dateRanges.todayYMD));
-    const prevMatches = leaveRequests.filter((l) => isLeaveActive(l, dateRanges.yesterdayYMD));
-
-    const count = currentMatches.length;
-    const prevCount = prevMatches.length;
-    const diff = Math.abs(count - prevCount);
-
-    return { value: count, trend: diff };
-  }, [leaveRequests, dateRanges]);
+    const countIn = ([from, to]: [string, string]) => leaveRequests.filter((req) => req.status === 'Đã duyệt' && req.startDate <= to && req.endDate >= from).length;
+    const previous = actualLeavePeriod === 'today' ? 'yesterday' : actualLeavePeriod === 'week' ? 'prevWeek' : 'prevMonth';
+    const count = countIn(dateRanges.periods[actualLeavePeriod]);
+    return { value: count, trend: Math.abs(count - countIn(dateRanges.periods[previous])) };
+  }, [leaveRequests, actualLeavePeriod, dateRanges]);
 
   // 3. Top Card: Kế hoạch nghỉ
   const plannedLeaveStats = useMemo(() => {
-    const isPlannedActive = (req: LeaveRequest, date: string) => {
-      if (req.status !== 'Đã duyệt') return false;
-      return req.startDate <= date && req.endDate >= date;
-    };
-
-    const targetDate = plannedLeavePeriod === 'tomorrow' ? dateRanges.tomorrowYMD : dateRanges.todayYMD;
-    const currentMatches = leaveRequests.filter((l) => isPlannedActive(l, targetDate));
-    const count = currentMatches.length;
-
+    const [from, to] = dateRanges.periods[plannedLeavePeriod === 'tomorrow' ? 'tomorrow' : plannedLeavePeriod === 'next_week' ? 'nextWeek' : 'nextMonth'];
+    const count = leaveRequests.filter((req) => req.status === 'Đã duyệt' && req.startDate <= to && req.endDate >= from).length;
     return { value: count, trend: 0 };
   }, [leaveRequests, plannedLeavePeriod, dateRanges]);
 

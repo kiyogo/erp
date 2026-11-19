@@ -65,7 +65,7 @@ export const ShiftSummaryModule: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [orgFilter, setOrgFilter] = useState<string>('');
-  const [shiftFilter, setShiftFilter] = useState('all');
+  const [rootUnit, setRootUnit] = useState('');
   const [deptFilter, setDeptFilter] = useState('all');
 
   // Quick Shift Assign Modal
@@ -88,6 +88,7 @@ export const ShiftSummaryModule: React.FC = () => {
       ]);
       setOrgUnits(Array.from(new Set([...(companyName ? [companyName] : []), ...fetchedUnits])));
       setOrgFilter((current) => current || companyName);
+      setRootUnit(companyName);
 
       const empList = dataService.getEmployees().filter((item) => item.code !== 'ADMIN-001');
       setEmployees(empList as unknown as EnterpriseEmployee[]);
@@ -129,6 +130,7 @@ export const ShiftSummaryModule: React.FC = () => {
   const filteredRosters = useMemo(() => {
     return rosters.filter((item) => {
       const matchDept = deptFilter === 'all' || item.department.includes(deptFilter);
+      const matchOrg = !orgFilter || orgFilter === rootUnit || item.department.includes(orgFilter);
       const s = searchText.toLowerCase().trim();
       const matchSearch =
         !s ||
@@ -137,9 +139,9 @@ export const ShiftSummaryModule: React.FC = () => {
         item.department.toLowerCase().includes(s) ||
         item.position.toLowerCase().includes(s);
 
-      return matchDept && matchSearch;
+      return matchDept && matchOrg && matchSearch;
     });
-  }, [rosters, deptFilter, searchText]);
+  }, [rosters, deptFilter, orgFilter, rootUnit, searchText]);
 
   // Summary Metrics
   const totalEmployeesInRoster = filteredRosters.length;

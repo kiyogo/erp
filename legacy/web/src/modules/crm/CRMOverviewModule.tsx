@@ -358,16 +358,13 @@ export const CRMOverviewModule: React.FC = () => {
 
         {/* Right filter controls */}
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          {/* Chứng từ bán hàng chưa gắn đơn vị tổ chức nên chưa lọc được theo đơn vị. */}
           <Select
+            disabled
             value={orgUnit}
             onChange={(val) => setOrgUnit(String(val))}
             style={{ width: 150 }}
-            options={[
-              { value: 'all', label: 'Cơ cấu tổ chức' },
-              { value: 'sales', label: 'Phòng Kinh doanh' },
-              { value: 'marketing', label: 'Phòng Marketing' },
-              { value: 'cskh', label: 'Chăm sóc khách hàng' },
-            ]}
+            options={[{ value: 'all', label: 'Cơ cấu tổ chức' }]}
           />
 
           <div
