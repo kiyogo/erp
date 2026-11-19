@@ -2233,7 +2233,7 @@ function isAdminWriteOnlyScope(scope) {
 
 // Các phạm vi chứa mã PIN băm, bí mật 2FA, thử thách đăng nhập và khóa passkey chỉ do các route bảo mật quản lý.
 // Mở qua kho dữ liệu chung sẽ cho phép chủ phiên đọc để dò mã PIN ngoại tuyến hoặc tự tắt PIN, 2FA và passkey.
-const SERVER_MANAGED_SCOPES = new Set(['user_security_pin', 'user_two_factor_auth', 'mfa_login_challenges', 'user_passkeys', 'user_passkey_policy']);
+const SERVER_MANAGED_SCOPES = new Set(['user_security_pin', 'user_two_factor_auth', 'mfa_login_challenges', 'user_passkeys', 'user_passkey_policy', 'reminder_log']);
 // Chữ ký số cá nhân cần bằng chứng passkey mới khi người dùng bật yêu cầu này.
 const PASSKEY_PROTECTED_SCOPES = new Set(['employee_digisigs', 'employee_signing_logs']);
 
@@ -7035,6 +7035,161 @@ function getBearerToken(request) {
   return match[1];
 }
 
+// ===== Nhắc việc tự động theo hạn =====
+// Mỗi ngày quét các mốc hết hạn thật trong dữ liệu và gửi thông báo một lần cho mỗi mốc (30, 14, 7, 1 ngày và ngày đến hạn),
+// ghi nhật ký vào phạm vi reminder_log để máy chủ khởi động lại hay chạy lại không gửi trùng.
+const REMINDER_THRESHOLDS = [0, 1, 7, 14, 30];
+const REMINDER_INTERVAL_MS = Math.max(1000, Number(process.env.KIYOVN_REMINDER_INTERVAL_MS) || 6 * 60 * 60 * 1000);
+const LABOR_RENEWAL_NOTE = 'Theo Điều 20 Bộ luật Lao động 2019, nếu người lao động vẫn làm việc sau khi hợp đồng hết hạn thì hai bên phải ký hợp đồng mới trong 30 ngày; quá hạn đó hợp đồng trở thành hợp đồng không xác định thời hạn.';
+const PROBATION_RESULT_NOTE = 'Theo Điều 27 Bộ luật Lao động 2019, khi kết thúc thử việc người sử dụng lao động phải thông báo kết quả thử việc cho người lao động.';
+let reminderSweepRunning = false;
+
+function businessToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+function daysBetween(fromIso, toIso) {
+  return Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86_400_000);
+}
+
+function addMonthsIso(iso, months) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return target.toISOString().slice(0, 10);
+}
+
+/** Mốc nhắc hiện tại của một ngày hết hạn: 30, 14, 7, 1, 0 hoặc "expired" (đã quá hạn tối đa expiredWindow ngày); null nếu chưa tới mốc nào. */
+function reminderBucket(days, expiredWindow = 30) {
+  if (days < 0) return days >= -expiredWindow ? 'expired' : null;
+  const threshold = REMINDER_THRESHOLDS.find(item => days <= item);
+  return threshold === undefined ? null : String(threshold);
+}
+
+const describeDays = (days) => (days < 0 ? `đã quá hạn ${-days} ngày` : days === 0 ? 'hết hạn hôm nay' : `còn ${days} ngày`);
+const isIsoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+
+async function reminderRecipients(moduleKey, ...extraUserIds) {
+  const ids = new Set(extraUserIds.filter(Boolean));
+  for (const row of await db.prepare("SELECT id FROM users WHERE role = 'ADMIN' AND is_active = 1").all()) ids.add(row.id);
+  const holders = await db.prepare("SELECT id, role_code FROM users WHERE role = 'USER' AND is_active = 1 AND role_code <> ''").all();
+  const cache = new Map();
+  for (const holder of holders) {
+    if (!cache.has(holder.role_code)) cache.set(holder.role_code, await activeRolePermissions(holder.role_code));
+    if (cache.get(holder.role_code)?.[moduleKey]?.read) ids.add(holder.id);
+  }
+  // Chỉ gửi cho tài khoản còn hoạt động.
+  const active = new Set((await db.prepare('SELECT id FROM users WHERE is_active = 1').all()).map(row => row.id));
+  return [...ids].filter(id => active.has(id));
+}
+
+/** Gửi một nhắc việc cho từng người nhận, mỗi người một lần cho mỗi mốc. Trả về số thông báo mới. */
+async function sendReminder({ kind, entityKey, bucket, recipients, title, message, link }) {
+  let created = 0;
+  for (const userId of recipients) {
+    await db.transaction(async () => {
+      const timestamp = now();
+      const logged = await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'reminder_log', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO NOTHING")
+        .run(randomUUID(), `${kind}:${entityKey}:${bucket}`.slice(0, 160), userId, JSON.stringify({ kind, entityKey, bucket, sentAt: timestamp }), timestamp, timestamp);
+      if (!logged.changes) return;
+      await db.prepare('INSERT INTO notifications (id, user_id, title, message, type, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)')
+        .run(randomUUID(), userId, title, message, 'expiry_reminder', link, timestamp);
+      created += 1;
+    });
+  }
+  return created;
+}
+
+async function processExpiryReminders() {
+  if (reminderSweepRunning) return { created: 0, skipped: true };
+  reminderSweepRunning = true;
+  const today = businessToday();
+  let created = 0;
+  try {
+    // 1. Hợp đồng lao động và thử việc.
+    const contracts = await db.prepare("SELECT id, code, employee_name, employee_user_id, contract_type, start_date, end_date, probation_months FROM contracts WHERE status = 'Còn hiệu lực'").all();
+    for (const contract of contracts) {
+      const person = contract.employee_name || contract.code;
+      const employeeId = contract.employee_user_id;
+      const probationOnly = /thử việc/i.test(String(contract.contract_type || ''));
+      let probationEnd = '';
+      if (probationOnly && isIsoDate(contract.end_date)) probationEnd = contract.end_date;
+      else if (Number(contract.probation_months) > 0 && isIsoDate(contract.start_date)) probationEnd = addMonthsIso(contract.start_date, Number(contract.probation_months));
+      if (probationEnd) {
+        const days = daysBetween(today, probationEnd);
+        const bucket = days >= 0 && days <= 7 ? reminderBucket(days) : null;
+        if (bucket !== null) {
+          created += await sendReminder({
+            kind: 'probation', entityKey: contract.id, bucket, recipients: await reminderRecipients('hr', employeeId),
+            title: 'Sắp hết thời gian thử việc', link: '/admin/hr/contracts',
+            message: `Thử việc của ${person} (hợp đồng ${contract.code}) kết thúc ngày ${probationEnd}, ${describeDays(days)}. ${PROBATION_RESULT_NOTE}`,
+          });
+        }
+      }
+      if (!probationOnly && isIsoDate(contract.end_date)) {
+        const days = daysBetween(today, contract.end_date);
+        const bucket = reminderBucket(days);
+        if (bucket !== null) {
+          created += await sendReminder({
+            kind: 'contract', entityKey: contract.id, bucket, recipients: await reminderRecipients('hr', employeeId),
+            title: days < 0 ? 'Hợp đồng đã hết hạn' : 'Hợp đồng sắp hết hạn', link: '/admin/hr/contracts',
+            message: `Hợp đồng ${contract.code} của ${person} hết hạn ngày ${contract.end_date}, ${describeDays(days)}. ${LABOR_RENEWAL_NOTE}`,
+          });
+        }
+      }
+    }
+
+    // 2. Chứng thư số của doanh nghiệp.
+    for (const row of await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_digital_signatures'").all()) {
+      const cert = parseJsonObject(row.payload_json);
+      if (!isIsoDate(cert.validTo)) continue;
+      const days = daysBetween(today, cert.validTo);
+      const bucket = reminderBucket(days);
+      if (bucket === null) continue;
+      created += await sendReminder({
+        kind: 'digital_certificate', entityKey: row.record_key, bucket, recipients: await reminderRecipients('finance'),
+        title: days < 0 ? 'Chứng thư số đã hết hạn' : 'Chứng thư số sắp hết hạn', link: '/admin/digital-signature/alerts',
+        message: `Chứng thư số ${cert.certNumber} của ${cert.provider} hết hạn ngày ${cert.validTo}, ${describeDays(days)}. Gia hạn với nhà cung cấp để không gián đoạn việc ký số và phát hành hóa đơn.`,
+      });
+    }
+
+    // 3. Chứng chỉ của nhân viên.
+    for (const row of await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_certificates'").all()) {
+      const cert = parseJsonObject(row.payload_json);
+      if (!isIsoDate(cert.expireDate)) continue;
+      const days = daysBetween(today, cert.expireDate);
+      const bucket = reminderBucket(days);
+      if (bucket === null) continue;
+      const owner = cert.empCode ? await db.prepare('SELECT id FROM users WHERE employee_code = ? LIMIT 1').get(String(cert.empCode).toUpperCase()) : null;
+      created += await sendReminder({
+        kind: 'certificate', entityKey: row.record_key, bucket, recipients: await reminderRecipients('hr', owner?.id),
+        title: days < 0 ? 'Chứng chỉ đã hết hiệu lực' : 'Chứng chỉ sắp hết hiệu lực', link: '/admin/hr/certificates',
+        message: `Chứng chỉ ${cert.certName} của ${cert.employeeName || cert.empCode} hết hiệu lực ngày ${cert.expireDate}, ${describeDays(days)}.`,
+      });
+    }
+
+    // 4. Bản quyền phần mềm.
+    for (const row of await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'asset_licenses'").all()) {
+      const license = parseJsonObject(row.payload_json);
+      if (!isIsoDate(license.expireDate)) continue;
+      const days = daysBetween(today, license.expireDate);
+      const bucket = reminderBucket(days);
+      if (bucket === null) continue;
+      created += await sendReminder({
+        kind: 'software_license', entityKey: row.record_key, bucket, recipients: await reminderRecipients('assets'),
+        title: days < 0 ? 'Bản quyền phần mềm đã hết hạn' : 'Bản quyền phần mềm sắp hết hạn', link: '/admin/assets/licenses',
+        message: `Bản quyền ${license.softwareName} (${license.licenseCode}) hết hạn ngày ${license.expireDate}, ${describeDays(days)}.`,
+      });
+    }
+  } catch (error) {
+    console.error('[Reminders] Không hoàn tất lượt quét nhắc việc:', error);
+  } finally {
+    reminderSweepRunning = false;
+  }
+  return { created, checkedOn: today };
+}
+
 // ===== Kiểm tra toàn vẹn dữ liệu =====
 // Chỉ đọc. Mỗi mục báo số vấn đề thật đếm được kèm vài mẫu; không có mục nào dùng số liệu giả.
 async function runIntegrityChecks() {
@@ -9175,6 +9330,11 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'create', 'admin_backups', backup.key, { type: backup.type, checksumSha256: backup.checksumSha256 });
       sendJson(response, 201, { backup });
     }
+    return;
+  }
+  if (request.method === 'POST' && resource === '/admin/reminders/run') {
+    await requireAdmin(request);
+    sendJson(response, 200, await processExpiryReminders());
     return;
   }
   if (request.method === 'GET' && resource === '/admin/integrity') {
@@ -14853,6 +15013,9 @@ const server = createServer((request, response) => {
 const workflowEscalationTimer = setInterval(() => { void processOverdueWorkflowEscalations(); }, WORKFLOW_ESCALATION_INTERVAL_MS);
 workflowEscalationTimer.unref();
 void processOverdueWorkflowEscalations();
+const expiryReminderTimer = setInterval(() => { void processExpiryReminders(); }, REMINDER_INTERVAL_MS);
+expiryReminderTimer.unref();
+setTimeout(() => { void processExpiryReminders(); }, 15_000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`KIYOVN API listening on http://${HOST}:${PORT}`);
@@ -14869,6 +15032,7 @@ process.on('unhandledRejection', (reason) => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     clearInterval(workflowEscalationTimer);
+    clearInterval(expiryReminderTimer);
     server.close(async () => {
       await db.close();
       process.exit(0);

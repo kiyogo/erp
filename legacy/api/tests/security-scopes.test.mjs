@@ -56,7 +56,7 @@ test('phạm vi bảo mật do máy chủ quản lý không đọc hay ghi đư�
   assert.equal((await call(staff, '/auth/security-pin', 'POST', { pin: '135790', confirmPin: '135790', currentPassword: staffPassword })).status, 200);
   assert.equal((await call(staff, '/collections/employee_payslips')).status, 428, 'PIN đã bật nên đọc phiếu lương cần PIN');
 
-  const serverOnly = ['user_security_pin', 'user_two_factor_auth', 'mfa_login_challenges', 'user_passkeys', 'user_passkey_policy'];
+  const serverOnly = ['user_security_pin', 'user_two_factor_auth', 'mfa_login_challenges', 'user_passkeys', 'user_passkey_policy', 'reminder_log'];
   const reachable = [];
   for (const session of [staff, admin]) {
     for (const scope of serverOnly) {
