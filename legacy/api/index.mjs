@@ -7886,6 +7886,15 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'POST' && resource === '/auth/security-pin/verify') {
+    const actor = await requireUser(request);
+    const security = await getUserSecurityPin(actor.id);
+    if (!security.pinHash) throw new HttpError(409, 'Tài khoản chưa đặt mã PIN bảo mật. Hãy đặt PIN trong Cài đặt bảo mật.', 'SECURITY_PIN_NOT_CONFIGURED');
+    await requireSecurityPin(request, actor);
+    sendJson(response, 200, { verified: true });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/auth/security-pin') {
     const actor = await requireUser(request);
     const security = await getUserSecurityPin(actor.id);

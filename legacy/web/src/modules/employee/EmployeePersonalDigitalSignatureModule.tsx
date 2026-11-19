@@ -22,6 +22,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Modal, Input as BaseInput, Select as BaseSelect, Button, message, Tag } from '../../custom-ui';
+import { useAuth } from '../../context/AuthContext';
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { dataService } from '../../services/dataService';
@@ -48,7 +49,7 @@ export const generateNameSignatureImage = (nameText: string, fontStyle?: string)
       ctx.fillStyle = '#0052CC';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(nameText || 'Nguyễn Đức Đại Sơn', 280, 70);
+      ctx.fillText(nameText || '', 280, 70);
       return canvas.toDataURL('image/png');
     }
   } catch (e) {}
@@ -109,6 +110,7 @@ export const checkAccount2SVStatus = () => {
 };
 
 export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
+  const { user: authUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const currentPath = location.pathname;
@@ -122,8 +124,8 @@ export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
     } catch { return null; }
   })();
   const empProfile = dataService.getEmployeeProfile();
-  const empCode = empProfile?.code || 'EMP-951954';
-  const empName = sessionUser?.fullName || sessionUser?.name || empProfile?.name || 'Nguyễn Đức Đại Sơn';
+  const empCode = empProfile?.code || authUser?.employeeCode || '';
+  const empName = sessionUser?.fullName || sessionUser?.name || empProfile?.name || '';
 
   const [digisigData, setDigisigData] = useState<any>(() => dataService.getEmployeeDigisig(empCode));
   const [signingLogs, setSigningLogs] = useState<any[]>(() => dataService.getEmployeeSigningLogs(empCode));
@@ -216,8 +218,8 @@ export const EmployeePersonalDigitalSignatureModule: React.FC = () => {
             rp: { name: 'KIYOVN Digital Signature' },
             user: {
               id: userId,
-              name: 'nguyenhuytung@kiyovn.vn',
-              displayName: 'Nguyễn Huy Tùng',
+              name: authUser?.email || authUser?.employeeCode || 'user',
+              displayName: authUser?.name || authUser?.email || 'user',
             },
             pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
             authenticatorSelection: {

@@ -106,3 +106,10 @@ test('phiếu lương lưu kèm số bảo hiểm tính được và đọc lạ
   const listed = (await request('/collections/payroll?limit=50')).data.find(item => item.key === record.key);
   assert.equal(listed.employerSocial, row.employerInsurance.social);
 });
+
+test('xác minh mã PIN bảo mật bằng máy chủ, không dùng PIN mặc định phía trình duyệt', async () => {
+  const verified = await request('/auth/security-pin/verify', 'POST', {});
+  assert.equal(verified.verified, true);
+  await request('/auth/security-pin/verify', 'POST', {}, 403, { 'X-Security-Pin': '123456' });
+  await request('/auth/security-pin/verify', 'POST', {}, 428, { 'X-Security-Pin': '' });
+});

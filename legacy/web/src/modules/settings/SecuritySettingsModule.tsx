@@ -14,11 +14,14 @@ import {
   BulbOutlined,
 } from '@ant-design/icons';
 import { Button, Input, Modal, message } from '../../custom-ui';
+import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { authApi } from '../../api/endpoints';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 export const SecuritySettingsModule: React.FC = () => {
+  const { user: authUser } = useAuth();
+  const empCodeKey = dataService.getEmployeeProfile()?.code || authUser?.employeeCode || '';
   const navigate = useNavigate();
   const location = useLocation();
   const sessionUser = (() => {
@@ -53,7 +56,7 @@ export const SecuritySettingsModule: React.FC = () => {
   const [isSubmittingPassword, setIsSubmittingPassword] = useState(false);
 
   // Passkey State
-  const [passkeyData, setPasskeyData] = useState<any>(() => dataService.getEmployeePasskey('EMP-951954'));
+  const [passkeyData, setPasskeyData] = useState<any>(() => dataService.getEmployeePasskey(empCodeKey));
   const [isPasskeyRegisterModalOpen, setIsPasskeyRegisterModalOpen] = useState(false);
   const [newPasskeyDeviceName, setNewPasskeyDeviceName] = useState('');
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
@@ -70,8 +73,8 @@ export const SecuritySettingsModule: React.FC = () => {
   const [isGuideModalOpen, setIsGuideModalOpen] = useState(false);
 
   useEffect(() => {
-    setPasskeyData(dataService.getEmployeePasskey('EMP-951954'));
-  }, []);
+    setPasskeyData(dataService.getEmployeePasskey(empCodeKey));
+  }, [empCodeKey]);
 
   const handlePasswordChange = async () => {
     if (!oldPassword) {
@@ -167,8 +170,8 @@ export const SecuritySettingsModule: React.FC = () => {
             },
             user: {
               id: userId,
-              name: 'nguyenhuytung@kiyovn.vn',
-              displayName: 'Nguyễn Huy Tùng',
+              name: authUser?.email || authUser?.employeeCode || 'user',
+              displayName: authUser?.name || authUser?.email || 'user',
             },
             pubKeyCredParams: [
               { alg: -7, type: 'public-key' },
@@ -199,7 +202,7 @@ export const SecuritySettingsModule: React.FC = () => {
       }
     }
 
-    const updated = dataService.saveEmployeePasskey('EMP-951954', passkeyData?.passkeyPin || '123456', devName);
+    const updated = dataService.saveEmployeePasskey(empCodeKey, '', devName);
     setPasskeyData(updated);
     setIsPasskeyLoading(false);
     setIsPasskeyRegisterModalOpen(false);

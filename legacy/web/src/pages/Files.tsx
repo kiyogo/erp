@@ -407,10 +407,10 @@ const Files: React.FC = () => {
   });
 
   const empProfile = dataService.getEmployeeProfile();
-  const digisig = dataService.getEmployeeDigisig(empProfile?.code || 'EMP-951954');
+  const digisig = dataService.getEmployeeDigisig(empProfile?.code || user?.employeeCode || '');
   const currentCertNumber = digisig?.certNumber || 'Chưa cấp chứng thư';
-  const currentUserDisplay = `${empProfile?.name || 'Nguyễn Huy Tùng'} (${empProfile?.code || 'EMP-951954'})`;
-  const currentSignatureVisual = digisig?.signatureImage || digisig?.signatureText || empProfile?.name || 'Nguyễn Huy Tùng';
+  const currentUserDisplay = `${empProfile?.name || user?.name || ''} (${empProfile?.code || user?.employeeCode || ''})`;
+  const currentSignatureVisual = digisig?.signatureImage || digisig?.signatureText || empProfile?.name || user?.name || '';
 
   const handleOpenDocxEditor = async (file: FileItem) => {
     const docType = /\.doc$/i.test(file.name) ? 'doc' : 'docx';

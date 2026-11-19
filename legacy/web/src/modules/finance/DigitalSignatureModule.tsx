@@ -31,6 +31,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Tooltip } from '../../custom-ui';
+import { useAuth } from '../../context/AuthContext';
 import {
   verifyDocumentSignatures,
   VerificationResult,
@@ -52,6 +53,7 @@ interface DigitalCert {
 const INITIAL_CERTS: DigitalCert[] = [];
 
 export const DigitalSignatureModule: React.FC = () => {
+  const { user: authUser } = useAuth();
   const location = useLocation();
   const currentPath = location.pathname;
 
@@ -727,7 +729,7 @@ export const DigitalSignatureModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="authorizedSigner" label="Người được phân quyền ký số" initialValue="Nguyễn Huy Tùng" rules={[{ required: true }]}>
+          <Form.Item name="authorizedSigner" label="Người được phân quyền ký số" initialValue={authUser?.name || ''} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
 

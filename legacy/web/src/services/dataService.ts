@@ -1469,7 +1469,7 @@ class DataService {
     const existingIdx = list.findIndex((p) => p.employeeCode === employeeCode);
     const passkeyObj = {
       employeeCode,
-      pinHash: btoa(pin),
+      pinHash: '',
       deviceType,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1483,12 +1483,6 @@ class DataService {
     }
     this.saveGenericData('employee_passkeys', updated);
     return passkeyObj;
-  }
-
-  public verifyEmployeePasskey(employeeCode: string, pinInput: string): boolean {
-    const passkey = this.getEmployeePasskey(employeeCode);
-    if (!passkey) return false;
-    return passkey.pinHash === btoa(pinInput);
   }
 
   public getEmployeeSigningLogs(employeeCode: string): any[] {

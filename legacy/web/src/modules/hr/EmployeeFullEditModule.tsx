@@ -45,7 +45,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input as BaseInput, Select as BaseSelect, message, Checkbox as BaseCheckbox, Modal, Tag, InputNumber } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
-import { collectionsApi, employeesApi } from '../../api/endpoints';
+import { authApi, collectionsApi, employeesApi } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { EmployeeProfileWizard } from '../employee/EmployeeProfileWizard';
 import { getEmployeeOnboardingStorage, isEmployeeOnboardingComplete } from '../employee/onboardingStorage';
@@ -2225,19 +2225,20 @@ export const EmployeeFullEditModule: React.FC = () => {
     setIsPasskeyModalOpen(true);
   };
 
-  const handleConfirmPasskey = () => {
+  const handleConfirmPasskey = async () => {
     if (!passkeyInput.trim()) {
-      message.error('Vui lòng nhập mã Passkey PIN!');
+      message.error('Vui lòng nhập mã PIN bảo mật!');
       return;
     }
 
-    const isValid = dataService.verifyEmployeePasskey(targetEmpCode, passkeyInput);
-    if (!isValid) {
-      message.error('Mã Passkey PIN không chính xác! Vui lòng thử lại.');
+    try {
+      await authApi.verifySecurityPin(passkeyInput.trim());
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Mã PIN bảo mật không chính xác! Vui lòng thử lại.');
       return;
     }
 
-    message.success('Xác thực Passkey bảo mật thành công!');
+    message.success('Xác thực mã PIN bảo mật thành công!');
     setIsPasskeyModalOpen(false);
     if (passkeyCallback) {
       passkeyCallback();
