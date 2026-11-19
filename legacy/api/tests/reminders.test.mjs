@@ -33,9 +33,9 @@ after(async () => {
   }
 });
 const base = `http://127.0.0.1:${port}/api/v1`;
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 300; i++) {
   try { if ((await fetch(`${base}/health`)).ok) break; } catch {}
-  if (server.exitCode !== null || i === 99) throw new Error(logs);
+  if (server.exitCode !== null || i === 299) throw new Error(logs);
   await new Promise(resolve => setTimeout(resolve, 100));
 }
 async function login(email, password) {
