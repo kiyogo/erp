@@ -134,3 +134,11 @@ test('nhân viên thường vẫn gửi được các yêu cầu thuộc nghiệ
     assert.ok(status < 400 || status === 422, `${scope} -> ${status}`);
   }
 });
+
+test('hội nhập không tự tạo tài khoản người dùng từ mã nhân viên mẫu', async () => {
+  await request('/collections/hr_onboarding_tasks', 'POST', { record: { key: 'sample-task', employeeId: 'emp-sys-9', employeeName: 'Nhân viên giả', empCode: 'NV999999', department: 'Phòng A', position: 'Nhân viên', startDate: '2026-01-05', evaluationDate: '2026-03-05', mentor: 'Người hướng dẫn' } }, 422);
+  const body = await request('/users');
+  const users = body.data || body.users;
+  assert.ok(Array.isArray(users) && users.length > 0, 'danh sách người dùng phải có dữ liệu để phép kiểm tra có ý nghĩa');
+  assert.equal(users.some(user => user.employeeCode === 'NV999999' || user.id === 'emp-sys-9'), false);
+});

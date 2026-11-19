@@ -1003,7 +1003,7 @@ export const OnboardingModule: React.FC = () => {
                       {selectedTask.employeeName} ({selectedTask.empCode})
                     </div>
                     <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
-                      {selectedTask.department || 'CÔNG TY TNHH XÂY DỰNG KINH SỞ'}
+                      {selectedTask.department || '—'}
                     </div>
                   </div>
                 </div>

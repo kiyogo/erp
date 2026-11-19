@@ -227,10 +227,29 @@ const ChartCard: React.FC<ChartCardProps> = ({
   );
 };
 
+// Bộ lọc thời gian của tổng quan kinh doanh áp dụng lên ngày chứng từ (YYYY-MM-DD).
+const inTimeRange = (dateText: string, filter: string, now = new Date()): boolean => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateText || ''));
+  if (!match) return false;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const day = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  if (filter === 'today') return day(date) === day(now);
+  if (filter === 'this_week') {
+    const offset = (now.getDay() + 6) % 7;
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+    return day(date) >= day(monday) && day(date) < day(monday) + 7 * 86400000;
+  }
+  if (filter === 'this_month') return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+  if (filter === 'this_quarter') return date.getFullYear() === now.getFullYear() && Math.floor(date.getMonth() / 3) === Math.floor(now.getMonth() / 3);
+  if (filter === 'this_year') return date.getFullYear() === now.getFullYear();
+  if (/^\d{4}$/.test(filter)) return date.getFullYear() === Number(filter);
+  return true;
+};
+
 export const CRMOverviewModule: React.FC = () => {
   const [activeActivityTab, setActiveActivityTab] = useState<'count' | 'opportunity' | 'order'>('count');
   const [timeFilter, setTimeFilter] = useState<string>('this_month');
-  const [companyName, setCompanyName] = useState<string>('CÔNG TY TNHH XÂY DỰNG KINH SỞ');
+  const [companyName, setCompanyName] = useState<string>('');
   const [orgUnit, setOrgUnit] = useState<string>('all');
   const [loading, setLoading] = useState<boolean>(false);
   const [timestamp, setTimestamp] = useState<string>('');
@@ -286,10 +305,11 @@ export const CRMOverviewModule: React.FC = () => {
 
   // Aggregate stats
   const stats = useMemo(() => {
-    const orderCount = salesDocuments.length;
-    const orderValue = salesDocuments.reduce((sum, doc) => sum + (doc.amount || 0), 0);
-    const collectedValue = salesDocuments.reduce((sum, doc) => sum + Math.max(0, (doc.amount || 0) - (doc.remainingAmount || 0)), 0);
-    const remainingValue = salesDocuments.reduce((sum, doc) => sum + (doc.remainingAmount || 0), 0);
+    const documents = salesDocuments.filter((doc) => inTimeRange(doc.documentDate, timeFilter));
+    const orderCount = documents.length;
+    const orderValue = documents.reduce((sum, doc) => sum + (doc.amount || 0), 0);
+    const collectedValue = documents.reduce((sum, doc) => sum + Math.max(0, (doc.amount || 0) - (doc.remainingAmount || 0)), 0);
+    const remainingValue = documents.reduce((sum, doc) => sum + (doc.remainingAmount || 0), 0);
 
     return {
       orderCount,
@@ -297,7 +317,7 @@ export const CRMOverviewModule: React.FC = () => {
       collectedValue: collectedValue > 0 ? collectedValue.toLocaleString('vi-VN') : '0',
       remainingValue: remainingValue > 0 ? remainingValue.toLocaleString('vi-VN') : '0',
     };
-  }, [salesDocuments]);
+  }, [salesDocuments, timeFilter]);
 
   return (
     <div style={{ backgroundColor: '#F8FAFC', minHeight: '100vh', padding: '16px 20px 40px' }}>
@@ -381,7 +401,7 @@ export const CRMOverviewModule: React.FC = () => {
               { value: 'this_month', label: 'Tháng này' },
               { value: 'this_quarter', label: 'Quý này' },
               { value: 'this_year', label: 'Năm nay' },
-              { value: '2026', label: 'Năm 2026' },
+              { value: String(new Date().getFullYear() - 1), label: `Năm ${new Date().getFullYear() - 1}` },
             ]}
           />
 

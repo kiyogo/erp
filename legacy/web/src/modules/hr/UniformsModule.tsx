@@ -74,7 +74,7 @@ export const UniformsModule: React.FC = () => {
   const [batchPeriod, setBatchPeriod] = useState('Kỳ 1');
   const [batchItemType, setBatchItemType] = useState('Áo Polo Doanh Nghiệp KIYOVN');
   const [batchDepartment, setBatchDepartment] = useState('Tất cả đơn vị');
-  const [batchYear, setBatchYear] = useState('2026');
+  const [batchYear, setBatchYear] = useState(String(new Date().getFullYear()));
   const [batchStatus, setBatchStatus] = useState('Chưa thực hiện');
 
   // Khối Nhân viên tham gia

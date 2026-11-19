@@ -307,7 +307,7 @@ export const BudgetModule: React.FC = () => {
             <Form.Item name="code" label="Mã ngân sách" initialValue={`NS-2026-0${data.length + 1}`} rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="fiscalYear" label="Kỳ áp dụng" initialValue="Năm 2026" rules={[{ required: true }]}>
+            <Form.Item name="fiscalYear" label="Kỳ áp dụng" initialValue={`Năm ${new Date().getFullYear()}`} rules={[{ required: true }]}>
               <Input />
             </Form.Item>
           </div>
