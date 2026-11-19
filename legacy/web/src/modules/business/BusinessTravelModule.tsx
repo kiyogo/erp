@@ -22,6 +22,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { employeesApi, filesApi, type EnterpriseEmployee } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -525,7 +526,7 @@ export const BusinessTravelModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeId" label="Cán bộ công tác" rules={[{ required: true }]}>
-              <Select showSearch disabled={employeesUnavailable || employees.length === 0} placeholder="Chọn nhân viên đang làm việc" options={employees.filter((employee) => user?.role === 'ADMIN' || String(employee.key || employee.id) === user?.id).map((employee) => ({ value: employee.key || employee.id, label: `${employee.fullName || employee.name} · ${employee.employeeCode || employee.code} · ${employee.department}` }))} />
+              <EmployeeSelect valueKey="id" disabled={employeesUnavailable} filter={(employee) => user?.role === 'ADMIN' || String(employee.key || employee.id) === user?.id} placeholder="Chọn nhân viên đang làm việc" onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])} />
             </Form.Item>
             <div style={{ alignSelf: 'center', fontSize: 12, color: employeesUnavailable ? '#B91C1C' : '#64748B' }}>
               {employeesUnavailable ? 'Không tải được dữ liệu nhân viên.' : 'Tên, mã, phòng ban và chức danh lấy từ hồ sơ nhân sự.'}

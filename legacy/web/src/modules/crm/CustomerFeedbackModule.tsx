@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface EnterpriseFeedbackItem {
   key: string;
@@ -424,14 +425,7 @@ export const CustomerFeedbackModule: React.FC = () => {
               />
             </Form.Item>
             <Form.Item name="assignedStaffId" label="Cán bộ phụ trách xử lý" rules={[{ required: true }]}>
-              <Select
-                showSearch
-                placeholder="Chọn nhân viên"
-                options={employees.map((employee) => ({
-                  value: employee.userId || employee.id,
-                  label: `${employee.fullName || employee.name}${employee.employeeCode ? ` · ${employee.employeeCode}` : ''}`,
-                }))}
-              />
+              <EmployeeSelect valueKey="id" placeholder="Chọn nhân viên" onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])} />
             </Form.Item>
           </div>
 

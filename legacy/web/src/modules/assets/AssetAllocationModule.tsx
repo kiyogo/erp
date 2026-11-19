@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface AllocationItem {
   key: string;
@@ -490,12 +491,11 @@ export const AssetAllocationModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
             <Form.Item name="employeeCode" label="Nhân viên nhận / bàn giao" rules={[{ required: true, message: 'Chọn nhân viên' }]}>
-              <Select
-                showSearch
+              <EmployeeSelect
+                valueKey="code"
                 placeholder="Chọn nhân viên đang làm việc..."
-                options={employees.map((employee) => ({ label: `${employee.code || employee.employeeCode} — ${employee.name || employee.fullName}`, value: employee.code || employee.employeeCode }))}
-                onChange={(code: string) => {
-                  const employee = employees.find((item) => String(item.code || item.employeeCode) === String(code));
+                onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])}
+                onSelectEmployee={(employee) => {
                   setQuotaEmployee(employee || null);
                   form.setFieldsValue({ employeeName: employee?.name || employee?.fullName || '', department: employee?.department || undefined, position: employee?.position || undefined });
                 }}

@@ -22,6 +22,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Button, Form, Input, Select, message, Tag, Modal, Card, Alert, Tooltip, Radio } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface BudgetMatrixTier {
   key: string;
@@ -612,13 +613,13 @@ export const WorkflowSettingsModule: React.FC = () => {
         <Form form={delegationForm} layout="vertical" onFinish={handleSaveDelegation} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
             <Form.Item name="delegatorId" label="Người ủy quyền" rules={[{ required: true }]}>
-              <Select options={employees.map((employee) => ({ value: employee.id, label: `${employee.name}${employee.department ? ` · ${employee.department}` : ''}` }))} />
+              <EmployeeSelect valueKey="id" onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), { id: created.id, name: created.name || created.fullName, department: created.department, position: created.position, isActive: true }])} />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
             <Form.Item name="delegateeId" label="Người nhận ủy quyền" rules={[{ required: true }]}>
-              <Select options={employees.map((employee) => ({ value: employee.id, label: `${employee.name}${employee.department ? ` · ${employee.department}` : ''}` }))} />
+              <EmployeeSelect valueKey="id" onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), { id: created.id, name: created.name || created.fullName, department: created.department, position: created.position, isActive: true }])} />
             </Form.Item>
           </div>
 

@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/modules/hr/EmployeeHistoryModule.tsx
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022, jsx: ts.JsxEmit.React } });
 const imports = {
   react: 'globalThis.__historyTest.react', '@ant-design/icons': 'globalThis.__historyTest.icons',
-  '../../components/KTable': 'globalThis.__historyTest.ui', '../../custom-ui': 'globalThis.__historyTest.ui',
+  '../../components/KTable': 'globalThis.__historyTest.ui', '../../custom-ui': 'globalThis.__historyTest.ui', './EmployeeSelect': 'globalThis.__historyTest.ui',
   '../../api/endpoints': 'globalThis.__historyTest.api', '../../services/dataService': 'globalThis.__historyTest.services', '../../utils/fileExporter': 'globalThis.__historyTest.exporter',
 };
 const executable = outputText.replace(/import\s+([^;]+?)\s+from\s+['"]([^'"]+)['"];?/g, (_, names, path) => {
@@ -50,7 +50,7 @@ test('history CRUD persists before UI success, includes former employees, export
     useState: initial => { const index = cursor++; if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; },
     useEffect: (callback, dependencies) => { const index = effectCursor++; if (!deps[index] || dependencies.some((value, i) => value !== deps[index][i])) { deps[index] = dependencies; effects.push(callback); } },
   };
-  const ui = Object.fromEntries(['KTable', 'Select', 'Button', 'Tag', 'Checkbox'].map(name => [name, name]));
+  const ui = Object.fromEntries(['EmployeeSelect', 'KTable', 'Select', 'Button', 'Tag', 'Checkbox'].map(name => [name, name]));
   ui.Input = Object.assign(function Input() {}, { TextArea: 'TextArea' });
   ui.Modal = Object.assign(function Modal() {}, { confirm: options => { confirm = options; } });
   ui.Form = Object.assign(function Form() {}, { Item: 'FormItem', useForm: () => { const index = formCursor++; forms[index] ||= { values: {}, resetFields() { this.values = {}; }, setFieldsValue(values) { this.values = { ...this.values, ...values }; } }; return [forms[index]]; } });

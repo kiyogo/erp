@@ -31,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Checkbox, Dropdown } from '../../custom-ui';
+import { EmployeeSelect } from './EmployeeSelect';
 import { collectionsApi, employeesApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { useNavigate } from 'react-router-dom';
@@ -1322,17 +1323,7 @@ export const OnboardingModule: React.FC = () => {
             {/* Khi chọn "Bộ phận khác" -> hiển thị ô chọn như Ảnh 4 */}
             {assigneeType === 'Bộ phận khác' && (
               <div style={{ marginTop: 8 }}>
-                <Select
-                  showSearch
-                  placeholder="Chọn nhân sự hoặc bộ phận thực hiện"
-                  value={otherAssignee || undefined}
-                  onChange={val => setOtherAssignee(val)}
-                  style={{ width: '100%' }}
-                  options={employees.map(emp => ({
-                    value: emp.name || (emp as any).fullName || emp.id,
-                    label: `${(emp.name || (emp as any).fullName)} (${emp.employeeCode || emp.code || 'NV'})`,
-                  }))}
-                />
+                <EmployeeSelect valueKey="name" placeholder="Chọn nhân sự hoặc bộ phận thực hiện" value={otherAssignee || undefined} onChange={(val) => setOtherAssignee(val)} onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])} />
               </div>
             )}
           </div>

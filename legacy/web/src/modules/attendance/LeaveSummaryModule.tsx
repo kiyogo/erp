@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Progress } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface EnterpriseLeaveSummaryItem {
   key: string;
@@ -318,7 +319,7 @@ export const LeaveSummaryModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân sự" rules={[{ required: true }]}>
-              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) { const existing = data.find((item) => item.employeeCode === employee.code && (item.year || new Date().getFullYear()) === Number(form.getFieldValue('year'))); form.setFieldsValue({ ...(existing || {}), employeeName: employee.key, employeeCode: employee.code, department: employee.department, position: employee.position, usedLeaves: (existing as any)?.openingUsedLeaves ?? existing?.usedLeaves ?? 0 }); } }} />
+              <EmployeeSelect valueKey="id" onCreated={() => setEmployees(dataService.getEmployees())} onSelectEmployee={(employee) => { if (employee) { const existing = data.find((item) => item.employeeCode === employee.code && (item.year || new Date().getFullYear()) === Number(form.getFieldValue('year'))); form.setFieldsValue({ ...(existing || {}), employeeName: employee.key, employeeCode: employee.code, department: employee.department, position: employee.position, usedLeaves: (existing as any)?.openingUsedLeaves ?? existing?.usedLeaves ?? 0 }); } }} />
             </Form.Item>
             <Form.Item name="position" label="Chức danh">
               <Input placeholder="Ví dụ: Senior DevOps" />

@@ -24,6 +24,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface EnterpriseTimesheetSummaryItem {
   key: string;
@@ -345,7 +346,7 @@ export const TimesheetSummaryModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân viên" rules={[{ required: true }]}>
-              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ employeeCode: employee.code, department: employee.department, position: employee.position }); }} />
+              <EmployeeSelect valueKey="id" onCreated={() => setEmployees(dataService.getEmployees())} onSelectEmployee={(employee) => { if (employee) form.setFieldsValue({ employeeCode: employee.code, department: employee.department, position: employee.position }); }} />
             </Form.Item>
             <Form.Item name="position" label="Vị trí / Chức vụ">
               <Input placeholder="Ví dụ: Senior Security Engineer" />

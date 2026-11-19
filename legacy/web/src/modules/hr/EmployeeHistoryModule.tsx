@@ -27,6 +27,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Checkbox, Tag } from '../../custom-ui';
+import { EmployeeSelect } from './EmployeeSelect';
 import { dataService, Employee } from '../../services/dataService';
 import { employeesApi, collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -1372,23 +1373,22 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
               <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#334155' }}>
                 Nhân sự nhận lương <span style={{ color: 'red' }}>*</span>
               </label>
-              <Select
-                showSearch
+              <EmployeeSelect
+                valueKey="name"
                 placeholder="Chọn nhân sự..."
                 value={bankForm.employeeName ? `${bankForm.employeeName}` : undefined}
-                onChange={(val) => {
-                  const emp = employees.find((e) => e.name === val || e.code === val);
+                onCreated={() => setEmployees(dataService.getEmployees())}
+                onChange={(_, emp) => {
                   if (emp) {
+                    const name = emp.name || emp.fullName;
                     setBankForm({
                       ...bankForm,
-                      employeeCode: emp.code,
-                      employeeName: emp.name,
-                      accountHolder: emp.name.toUpperCase(),
+                      employeeCode: emp.employeeCode || emp.code,
+                      employeeName: name,
+                      accountHolder: name.toUpperCase(),
                     });
                   }
                 }}
-                style={{ width: '100%' }}
-                options={employees.map((e) => ({ value: e.name, label: `${e.name} (${e.code})` }))}
               />
             </div>
             <div>

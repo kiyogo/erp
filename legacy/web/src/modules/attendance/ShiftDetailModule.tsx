@@ -28,6 +28,7 @@ import {
   Radio,
   RadioGroup,
 } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { collectionsApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { generateValidXlsxBlob, downloadFile } from '../../utils/fileExporter';
@@ -950,15 +951,7 @@ export const ShiftDetailModule: React.FC = () => {
                     {targetType === 'employees' && (
                       <div style={{ marginLeft: 24, marginTop: 6 }}>
                         <Form.Item name="selectedEmployees" style={{ margin: 0 }}>
-                          <Select
-                            mode="multiple"
-                            placeholder="Chọn nhân viên áp dụng..."
-                            style={{ width: '100%', height: 32 }}
-                            options={employees.map((emp) => ({
-                              label: `${emp.name} (${emp.code || emp.employeeCode} - ${emp.department})`,
-                              value: emp.code || emp.employeeCode || emp.id,
-                            }))}
-                          />
+                          <EmployeeSelect multiple valueKey="code" placeholder="Chọn nhân viên áp dụng..." onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])} />
                         </Form.Item>
                       </div>
                     )}

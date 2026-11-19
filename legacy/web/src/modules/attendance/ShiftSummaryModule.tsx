@@ -23,6 +23,7 @@ import {
   Tag,
   DatePicker,
 } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { collectionsApi, EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { generateValidXlsxBlob, downloadFile } from '../../utils/fileExporter';
@@ -795,15 +796,7 @@ export const ShiftSummaryModule: React.FC = () => {
             label="Áp dụng cho nhân sự (để trống để áp dụng toàn bộ)"
             style={{ margin: 0 }}
           >
-            <Select
-              mode="multiple"
-              placeholder="Tất cả nhân sự trong danh sách..."
-              style={{ width: '100%' }}
-              options={employees.map((e) => ({
-                label: `${e.name} (${e.code || e.employeeCode})`,
-                value: e.code || e.employeeCode || e.id,
-              }))}
-            />
+            <EmployeeSelect multiple valueKey="code" placeholder="Tất cả nhân sự trong danh sách..." onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])} />
           </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>

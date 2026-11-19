@@ -434,7 +434,7 @@ export const RewardsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeId" label="Nhân sự / Đại diện tập thể" rules={[{ required: true }]}>
-              <EmployeeSelect valueKey="id" placeholder="Chọn nhân sự trong hệ thống" onChange={(_, employee) => { if (employee) form.setFieldsValue({ department: employee.department }); }} />
+              <EmployeeSelect valueKey="id" placeholder="Chọn nhân sự trong hệ thống" onSelectEmployee={(employee) => { if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban trực thuộc" rules={[{ required: true }]}>
               {deptOptions.length ? <Select options={deptOptions} placeholder="Chọn phòng ban..." /> : <Input placeholder="Nhập phòng ban" />}

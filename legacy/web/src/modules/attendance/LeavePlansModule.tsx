@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface EnterpriseLeavePlanItem {
   key: string;
@@ -322,7 +323,7 @@ export const LeavePlansModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Họ tên nhân sự" rules={[{ required: true }]}>
-              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department }); }} />
+              <EmployeeSelect valueKey="id" onCreated={() => setEmployees(dataService.getEmployees())} onSelectEmployee={(employee) => { if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select
@@ -349,7 +350,7 @@ export const LeavePlansModule: React.FC = () => {
               <Input placeholder="Ví dụ: Đặng Đình Long" />
             </Form.Item>
             <Form.Item name="approver" label="Cán bộ phê duyệt dự kiến">
-              <Select allowClear placeholder="Chọn cán bộ" options={employees.map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.name }))} />
+              <EmployeeSelect valueKey="name" allowClear placeholder="Chọn cán bộ" onCreated={() => setEmployees(dataService.getEmployees())} />
             </Form.Item>
           </div>
 

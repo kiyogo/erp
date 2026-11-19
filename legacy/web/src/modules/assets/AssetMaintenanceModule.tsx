@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Drawer, Form, Input, Select, Button, message, Tag, Alert, Progress, Checkbox } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { collectionsApi, employeesApi, type EnterpriseEmployee } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -366,7 +367,7 @@ export const AssetMaintenanceModule: React.FC = () => {
             <Form.Item name="location" label="Vị trí lắp đặt"><Input maxLength={255} placeholder="Vị trí theo danh mục tài sản" /></Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="responsibleEngineerId" label="Kỹ sư phụ trách" rules={[{ required: true, message: 'Chọn nhân viên đang hoạt động.' }]}><Select showSearch placeholder="Chọn nhân viên" options={employees.map((employee) => ({ value: employee.id, label: `${employee.name} · ${employee.employeeCode || employee.code || employee.id}` }))} /></Form.Item>
+            <Form.Item name="responsibleEngineerId" label="Kỹ sư phụ trách" rules={[{ required: true, message: 'Chọn nhân viên đang hoạt động.' }]}><EmployeeSelect valueKey="id" onCreated={(created) => setEmployees((prev) => [...prev.filter((item) => item.id !== created.id), created])} /></Form.Item>
             <Form.Item name="vendorPartner" label="Đối tác kỹ thuật (khai báo)" rules={[{ max: 255 }]}><Input maxLength={255} placeholder="Để trống nếu không có" /></Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>

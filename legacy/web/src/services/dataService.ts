@@ -803,6 +803,25 @@ class DataService {
     return [...this.data.employees];
   }
 
+  /** Đưa nhân viên vừa được tạo qua API vào bộ nhớ đệm để các màn hình đang mở thấy ngay. */
+  public cacheEmployee(e: EnterpriseEmployee): void {
+    if (e.role === 'ADMIN') return;
+    const entry = {
+      key: e.id || e.key,
+      code: e.employeeCode || e.code,
+      name: e.name || e.fullName,
+      email: e.email,
+      phone: e.phone,
+      department: e.department,
+      position: e.position,
+      status: e.status,
+      joinDate: e.joinDate,
+      salaryBase: e.salaryBase,
+      avatar: e.avatar,
+    } as Employee;
+    this.data.employees = [entry, ...this.data.employees.filter((item) => item.key !== entry.key)];
+  }
+
   public addEmployee(emp: Omit<Employee, 'key'>): Employee {
     const newEmp: Employee = { ...emp, key: String(Date.now()) };
     this.data.employees = [newEmp, ...this.data.employees];

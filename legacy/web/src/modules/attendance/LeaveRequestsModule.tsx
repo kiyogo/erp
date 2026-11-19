@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { dataService, LeaveRequest } from '../../services/dataService';
 import { collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -346,7 +347,7 @@ export const LeaveRequestsModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeName" label="Người làm đơn" rules={[{ required: true }]}>
-              <Select placeholder="Chọn nhân viên" options={employees.filter((employee) => employee.status !== 'Đã nghỉ việc').map((employee) => ({ label: `${employee.name} (${employee.code})`, value: employee.key }))} onChange={(key) => { const employee = employees.find((item) => item.key === key); if (employee) form.setFieldsValue({ department: employee.department }); }} />
+              <EmployeeSelect valueKey="id" onCreated={() => setEmployees(dataService.getEmployees())} onSelectEmployee={(employee) => { if (employee) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban trực thuộc" >
               <Select

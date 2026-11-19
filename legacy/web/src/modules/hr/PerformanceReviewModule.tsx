@@ -401,7 +401,7 @@ export const PerformanceReviewModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="employeeId" label="Nhân sự được đánh giá" rules={[{ required: true }]}>
-              <EmployeeSelect valueKey="id" onChange={(_, employee) => { if (employee) form.setFieldsValue({ department: employee.department, position: employee.position }); }} />
+              <EmployeeSelect valueKey="id" onSelectEmployee={(employee) => { if (employee) form.setFieldsValue({ department: employee.department, position: employee.position }); }} />
             </Form.Item>
             <Form.Item name="position" label="Chức danh đảm nhiệm">
               {posOptions.length > 0 ? (
