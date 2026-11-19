@@ -18,8 +18,11 @@ import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
 import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { dataService } from '../../services/dataService';
+import { employeeAssetsApi } from '../../api/endpoints';
+import { useAuth } from '../../context/AuthContext';
 
 export const EmployeeAssetsModule: React.FC = () => {
+  const { user } = useAuth();
   const [assets, setAssets] = useState<any[]>([]);
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'it' | 'accessory'>('all');
@@ -29,25 +32,42 @@ export const EmployeeAssetsModule: React.FC = () => {
   const [selectedAsset, setSelectedAsset] = useState<any | null>(null);
   const [form] = Form.useForm();
 
-  const loadData = () => {
-    setAssets(dataService.getEmployeeAssets());
+  // Tài sản lấy từ các biên bản cấp phát đã được xác nhận bàn giao cho chính nhân viên.
+  const loadData = async () => {
+    try {
+      const response = await employeeAssetsApi.list();
+      setAssets(response.data.data || []);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được danh sách tài sản được bàn giao.');
+    }
   };
 
   useEffect(() => {
-    loadData();
-    const unsub = dataService.subscribe(() => {
-      loadData();
-    });
-    return unsub;
+    void loadData();
   }, []);
 
-  const handleRequestAction = (values: any) => {
+  // Yêu cầu hỗ trợ về tài sản được lưu thành ticket để bộ phận IT tiếp nhận ở màn hình Ticket.
+  const handleRequestAction = async (values: any) => {
     if (!selectedAsset) return;
-    dataService.requestEmployeeAssetAction(selectedAsset.key, values.actionType, values.note);
-    message.success(`Đã gửi yêu cầu ${values.actionType} cho tài sản ${selectedAsset.name} thành công!`);
-    setModalOpen(false);
-    form.resetFields();
-    setSelectedAsset(null);
+    const code = `TS-${Date.now().toString(36).toUpperCase()}`;
+    try {
+      await dataService.addTicket({
+        code,
+        title: `${values.actionType} tài sản ${selectedAsset.code}`,
+        description: `${values.note}\nTài sản: ${selectedAsset.code} - ${selectedAsset.name}${selectedAsset.serial ? ` (serial ${selectedAsset.serial})` : ''}`,
+        requester: user?.name || '',
+        department: String(dataService.getEmployeeProfile()?.department || ''),
+        priority: 'Trung bình',
+        status: 'Mới tạo',
+        createdDate: new Date().toISOString(),
+      });
+      message.success(`Đã gửi yêu cầu ${values.actionType} cho tài sản ${selectedAsset.name}. Mã ticket: ${code}.`);
+      setModalOpen(false);
+      form.resetFields();
+      setSelectedAsset(null);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không gửi được yêu cầu hỗ trợ.');
+    }
   };
 
   const totalCount = assets.length;

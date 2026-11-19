@@ -1194,6 +1194,10 @@ export const attendanceApi = {
   checkIn: (type: 'in' | 'out') => api.post<{ record: Record<string, unknown> }>('/attendance/check-in', { type }),
 };
 
+export const employeeAssetsApi = {
+  list: () => api.get<{ data: any[] }>('/employees/me/assets'),
+};
+
 export const employeePayslipsApi = {
   list: () => api.get<{ data: any[] }>('/employees/me/payslips'),
   confirm: (key: string) => api.post<{ data: any }>(`/employees/me/payslips/${encodeURIComponent(key)}/confirm`, {}),

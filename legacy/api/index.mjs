@@ -2092,6 +2092,7 @@ const USER_COLLECTION_SCOPES = new Set([
   'meeting_rooms',
   'room_bookings',
   'tickets.requests',
+  'tickets',
   'leave_requests',
   'attendance_overtime',
   'attendance_leave_summary',
@@ -2280,7 +2281,7 @@ async function requireCollectionActor(request, scope) {
   if (scope === 'finance_purchase_requests' && !['GET', 'POST', 'PATCH'].includes(request.method)) {
     throw new HttpError(request.method === 'DELETE' ? 409 : 405, 'Yêu cầu mua sắm phải được cập nhật theo luồng để giữ lịch sử xử lý.');
   }
-  if (scope === 'tickets' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý ticket hỗ trợ.');
+  if (scope === 'tickets' && actor.role !== 'ADMIN' && request.method !== 'POST') throw new HttpError(403, 'Chỉ quản trị viên được xử lý ticket hỗ trợ; nhân viên chỉ tạo yêu cầu mới.');
   if (scope === 'tickets' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Ticket phải được tạo hoặc cập nhật từng hồ sơ để giữ lịch sử xử lý.');
   if (scope === 'doc_notes' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được quản lý sổ chỉ đạo.');
   if (scope === 'doc_notes' && ['PUT', 'DELETE'].includes(request.method)) throw new HttpError(405, 'Chỉ đạo phải được cập nhật từng hồ sơ để giữ lịch sử xử lý.');
@@ -5414,6 +5415,22 @@ function payrollMonth(value) {
 }
 
 const PAYSLIP_VISIBLE_STATUSES = ['Chưa chi trả', 'Đã chi trả'];
+
+// Tài sản nhân viên đang giữ: biên bản cấp phát đã được xác nhận bàn giao, chưa có biên bản thu hồi sau đó và tài sản gốc vẫn đang sử dụng.
+async function ownAssets(actor) {
+  const allocations = (await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_allocations'").all()).map(publicCollectionRecord)
+    .filter(record => record && record.employeeId === actor.id);
+  const assets = new Map((await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items'").all()).map(publicCollectionRecord).filter(Boolean).map(asset => [asset.key, asset]));
+  const latest = new Map();
+  for (const record of allocations.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) latest.set(record.assetKey, record);
+  return [...latest.values()]
+    .filter(record => record.type === 'Cấp phát' && record.signedByReceiver === true && assets.get(record.assetKey)?.status === 'Đang sử dụng')
+    .map(record => ({
+      key: record.assetKey, code: record.assetCode, name: record.assetName, category: record.category || '', serial: record.serialNo || '',
+      handoverDate: record.allocatedDate, condition: record.condition || '', accessories: record.accessories || '', ticketCode: record.ticketCode, status: 'Đang sử dụng',
+    }))
+    .sort((a, b) => String(b.handoverDate).localeCompare(String(a.handoverDate)));
+}
 
 async function ownPayslips(actor) {
   const code = String(actor.employee_code || '').toLocaleLowerCase('vi-VN');
@@ -13267,6 +13284,12 @@ async function handleRequest(request, response) {
     const actor = await requireUser(request);
     await requireSecurityPin(request, actor);
     sendJson(response, 200, { data: await ownPayslips(actor) });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/employees/me/assets') {
+    const actor = await requireUser(request);
+    sendJson(response, 200, { data: await ownAssets(actor) });
     return;
   }
 

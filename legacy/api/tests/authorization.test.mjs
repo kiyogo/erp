@@ -142,3 +142,28 @@ test('hội nhập không tự tạo tài khoản người dùng từ mã nhân 
   assert.ok(Array.isArray(users) && users.length > 0, 'danh sách người dùng phải có dữ liệu để phép kiểm tra có ý nghĩa');
   assert.equal(users.some(user => user.employeeCode === 'NV999999' || user.id === 'emp-sys-9'), false);
 });
+
+test('nhân viên chỉ tạo được ticket hỗ trợ mới, không sửa hoặc xóa được', async () => {
+  await request('/collections/business_org_units', 'POST', { record: { key: 'unit-it', code: 'IT', name: 'Phòng Công nghệ', status: 'Đang hoạt động' } }, 201);
+  const created = await fetch(`${base}/collections/tickets`, { method: 'POST', headers: staffHeaders, body: JSON.stringify({ record: { code: 'IT-AUTHZ-1', title: 'Máy tính hỏng', description: 'Không khởi động được', priority: 'Trung bình', department: 'Phòng Công nghệ' } }) });
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).record.requester, 'Nhân viên thường');
+  assert.equal(await asStaff('/collections/tickets/IT-AUTHZ-1', 'PATCH', { patch: { status: 'Đã hoàn thành' } }), 403);
+  assert.equal(await asStaff('/collections/tickets/IT-AUTHZ-1', 'DELETE'), 403);
+});
+
+test('nhân viên thấy tài sản được bàn giao cho chính mình sau khi biên bản được xác nhận', async () => {
+  const before = await fetch(`${base}/employees/me/assets`, { headers: staffHeaders });
+  assert.equal(before.status, 200);
+  assert.deepEqual((await before.json()).data, []);
+  const asset = { key: 'authz-asset', code: 'TS-AUTHZ-1', name: 'Máy tính xách tay', category: 'Laptop', serialNo: 'SN-AUTHZ-1', status: 'Trong kho', location: 'Kho A', department: 'IT', assignedTo: '', originalPrice: 1000, history: [] };
+  await request('/collections/asset_items', 'POST', { record: asset }, 201);
+  const allocation = (await request('/assets/allocations', 'POST', { ticketCode: 'CP-AUTHZ-1', type: 'Cấp phát', assetCode: asset.code, employeeCode: 'AUTHZ-USER', department: 'Phòng Công nghệ', position: 'Nhân viên', handoverPerson: 'Thủ kho', allocatedDate: '2026-11-02', expectedReturnDate: 'Vô thời hạn', purpose: 'Cấp phát chính thức cho nhân viên mới', condition: 'Tốt', accessories: 'Sạc' }, 201)).record;
+  assert.deepEqual((await (await fetch(`${base}/employees/me/assets`, { headers: staffHeaders })).json()).data, []);
+  await request(`/assets/allocations/${allocation.key}/confirm`, 'POST', { receiverName: 'Nhân viên thường' });
+  const own = (await (await fetch(`${base}/employees/me/assets`, { headers: staffHeaders })).json()).data;
+  assert.equal(own.length, 1);
+  assert.equal(own[0].code, 'TS-AUTHZ-1');
+  assert.equal(own[0].serial, 'SN-AUTHZ-1');
+  assert.equal(own[0].handoverDate, '2026-11-02');
+});
