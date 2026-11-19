@@ -446,10 +446,10 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
       employeeName: emp.name,
       partyBName: emp.name,
       partyBRepresentative: emp.name,
-      partyBIdNumber: emp.identityNumber || '064210005343',
+      partyBIdNumber: emp.identityNumber || '',
       partyBPhone: emp.phone || '',
-      partyBEmail: emp.email || `${(emp.code || '').toLowerCase()}@kiyovn.com`,
-      partyBBank: emp.bankAccount || `${emp.bankName || 'Techcombank'} - 19034567890011`,
+      partyBEmail: emp.email || '',
+      partyBBank: emp.bankAccount ? `${emp.bankName ? `${emp.bankName} - ` : ''}${emp.bankAccount}` : '',
       partyBAddress: emp.address || 'Hà Nội, Việt Nam',
       department: emp.department || 'Phòng Kỹ Thuật & Công Nghệ',
       position: emp.position || 'Chuyên viên cao cấp',
@@ -1758,11 +1758,11 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
                       <div style={{ fontSize: 11.5, color: '#64748B' }}>{emp.department || 'Phòng ban'}</div>
                     </td>
                     <td style={{ padding: '12px 16px', fontSize: 12, color: '#475569' }}>
-                      <div>CCCD: {emp.identityNumber || '064210005343'}</div>
+                      <div>CCCD: {emp.identityNumber || 'Chưa cập nhật'}</div>
                       <div style={{ color: '#64748B' }}>SĐT: {emp.phone || 'Chưa cập nhật'}</div>
                     </td>
                     <td style={{ padding: '12px 16px', fontSize: 12, color: '#0F766E' }}>
-                      {emp.bankAccount ? emp.bankAccount : `${emp.bankName || 'Techcombank'} - 19034567890011`}
+                      {emp.bankAccount ? `${emp.bankName ? `${emp.bankName} - ` : ''}${emp.bankAccount}` : 'Chưa cập nhật'}
                     </td>
                     <td style={{ padding: '12px 20px', textAlign: 'right' }}>
                       <Button

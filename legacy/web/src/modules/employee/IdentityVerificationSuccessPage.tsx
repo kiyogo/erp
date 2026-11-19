@@ -140,12 +140,12 @@ export const IdentityVerificationSuccessPage: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: '#64748B' }}>Họ và tên:</span>
-            <strong style={{ color: '#0F172A' }}>{data.name || 'NGUYỄN ĐỨC ĐẠI SƠN'}</strong>
+            <strong style={{ color: '#0F172A' }}>{data.name || '—'}</strong>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: '#64748B' }}>Số CCCD:</span>
-            <strong style={{ color: '#009688', letterSpacing: 0.5 }}>{data.idNumber || '064210005343'}</strong>
+            <strong style={{ color: '#009688', letterSpacing: 0.5 }}>{data.idNumber || '—'}</strong>
           </div>
 
           {data.birthDate && (

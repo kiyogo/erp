@@ -118,4 +118,8 @@ export interface BiometricMatchResult {
   certId: string;
   verifiedAt: string;
   confidenceGrade: 'A+' | 'A' | 'B' | 'C';
+  /** Khoảng cách giữa hai vector đặc trưng khuôn mặt; càng nhỏ càng giống, so khớp khi không lớn hơn ngưỡng. */
+  distance?: number;
+  /** Lý do khi không so khớp được, ví dụ không phát hiện khuôn mặt. */
+  reason?: string;
 }

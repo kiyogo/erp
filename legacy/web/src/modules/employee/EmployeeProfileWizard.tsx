@@ -1146,8 +1146,8 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
       const effectiveCardBack = ekycCardBackPhoto || formData.cardBackUrl || '';
       const effectiveLivePhoto = ekycLivePhoto || ekycCroppedAvatar || formData.livePhotoUrl || '';
       const effectiveLiveVideo = formData.liveVideoUrl || '';
-      const effectiveMatchScore = ekycMatchResult?.matchScore || formData.faceMatchScore || 98.5;
-      const effectiveCertId = ekycMatchResult?.certId || formData.certificateId || 'NEAC-EKYC-2026-8951';
+      const effectiveMatchScore = ekycMatchResult?.matchScore ?? formData.faceMatchScore ?? 0;
+      const effectiveCertId = ekycMatchResult?.certId || formData.certificateId || '';
 
       const updated = {
         name: formData.name || formData.displayName || user?.name || '',
@@ -2300,8 +2300,8 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
                     </strong>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: '#4B5563' }}>Mã chứng thư số:</span>
-                    <span style={{ color: '#0F766E', fontFamily: 'monospace', fontWeight: 600 }}>{ekycMatchResult?.certId || 'NEAC-EKYC-2026-8951'}</span>
+                    <span style={{ color: '#4B5563' }}>Mã tham chiếu xác thực:</span>
+                    <span style={{ color: '#0F766E', fontFamily: 'monospace', fontWeight: 600 }}>{ekycMatchResult?.certId || '—'}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#4B5563' }}>Trạng thái đối soát:</span>

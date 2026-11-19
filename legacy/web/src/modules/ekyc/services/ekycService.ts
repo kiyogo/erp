@@ -4,96 +4,76 @@
 
 import { BiometricMatchResult } from '../types/ekyc.types';
 
+type FaceApi = typeof import('@vladmandic/face-api');
+
+const MODEL_URL = '/models/face-api';
+/** Ngưỡng khoảng cách vector đặc trưng; mặc định của face-api là 0,6, ở đây dùng 0,5 để chặt hơn. */
+export const FACE_MATCH_DISTANCE_THRESHOLD = 0.5;
+
+let faceApiPromise: Promise<FaceApi> | null = null;
+
+const loadFaceApi = (): Promise<FaceApi> => {
+  if (!faceApiPromise) {
+    faceApiPromise = (async () => {
+      const faceapi = await import('@vladmandic/face-api');
+      await (faceapi.tf as unknown as { ready: () => Promise<void> }).ready();
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+      ]);
+      return faceapi;
+    })().catch((error) => { faceApiPromise = null; throw error; });
+  }
+  return faceApiPromise;
+};
+
+const loadImage = (source: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  image.onload = () => resolve(image);
+  image.onerror = () => reject(new Error('Không đọc được ảnh để so khớp khuôn mặt.'));
+  image.src = source;
+});
+
+const referenceCode = (): string => {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return `EKYC-${Date.now().toString(36).toUpperCase()}-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+};
+
+const failure = (reason: string): BiometricMatchResult => ({
+  matchScore: 0, isMatch: false, certId: '', verifiedAt: new Date().toISOString(), confidenceGrade: 'C', reason,
+});
+
 export class EkycService {
   /**
-   * So khớp sinh trắc học giữa ảnh chân dung camera và ảnh thẻ CCCD
+   * So khớp sinh trắc học giữa ảnh chân dung camera và ảnh thẻ CCCD bằng vector đặc trưng khuôn mặt
+   * (mạng nhận diện khuôn mặt của face-api), không dùng so sánh điểm ảnh.
    */
-  static async matchFaces(
-    livePhotoBase64: string,
-    cardAvatarBase64?: string
-  ): Promise<BiometricMatchResult> {
-    return new Promise((resolve) => {
-      const img1 = new Image();
-      const img2 = new Image();
-      let loaded = 0;
-
-      const finishCheck = () => {
-        loaded++;
-        if (loaded < 2) return;
-
-        try {
-          const canvas1 = document.createElement('canvas');
-          const canvas2 = document.createElement('canvas');
-          canvas1.width = 64;
-          canvas1.height = 64;
-          canvas2.width = 64;
-          canvas2.height = 64;
-
-          const ctx1 = canvas1.getContext('2d');
-          const ctx2 = canvas2.getContext('2d');
-
-          if (!ctx1 || !ctx2) {
-            const certId = `NEAC-EKYC-${Date.now().toString(36).toUpperCase()}-${String(Date.now()).slice(-4)}`;
-            resolve({
-              matchScore: 99.4,
-              isMatch: true,
-              certId,
-              verifiedAt: new Date().toISOString(),
-              confidenceGrade: 'A+',
-            });
-            return;
-          }
-
-          ctx1.drawImage(img1, 0, 0, 64, 64);
-          ctx2.drawImage(img2, 0, 0, 64, 64);
-
-          const d1 = ctx1.getImageData(0, 0, 64, 64).data;
-          const d2 = ctx2.getImageData(0, 0, 64, 64).data;
-
-          let diffSum = 0;
-          for (let i = 0; i < d1.length; i += 4) {
-            const diffR = Math.abs(d1[i] - d2[i]);
-            const diffG = Math.abs(d1[i + 1] - d2[i + 1]);
-            const diffB = Math.abs(d1[i + 2] - d2[i + 2]);
-            diffSum += (diffR + diffG + diffB) / 3;
-          }
-
-          const avgDiff = diffSum / (d1.length / 4);
-          let matchScore = Number((100 - (avgDiff / 255) * 15).toFixed(1));
-          if (matchScore > 99.8) matchScore = 99.8;
-          if (matchScore < 88.0) matchScore = 88.5;
-
-          const certId = `NEAC-EKYC-${Date.now().toString(36).toUpperCase()}-${String(Date.now()).slice(-4)}`;
-
-          resolve({
-            matchScore,
-            isMatch: matchScore >= 80.0,
-            certId,
-            verifiedAt: new Date().toISOString(),
-            confidenceGrade: matchScore >= 95 ? 'A+' : 'A',
-          });
-        } catch {
-          const certId = `NEAC-EKYC-${Date.now().toString(36).toUpperCase()}-${String(Date.now()).slice(-4)}`;
-          resolve({
-            matchScore: 99.2,
-            isMatch: true,
-            certId,
-            verifiedAt: new Date().toISOString(),
-            confidenceGrade: 'A+',
-          });
-        }
+  static async matchFaces(livePhotoBase64: string, cardAvatarBase64?: string): Promise<BiometricMatchResult> {
+    if (!cardAvatarBase64) return failure('Chưa có ảnh chân dung trên thẻ để đối chiếu.');
+    try {
+      const faceapi = await loadFaceApi();
+      const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+      const describe = async (source: string) => faceapi.detectSingleFace(await loadImage(source), options).withFaceLandmarks().withFaceDescriptor();
+      const [live, card] = [await describe(livePhotoBase64), await describe(cardAvatarBase64)];
+      if (!live) return failure('Không phát hiện khuôn mặt trong ảnh chụp trực tiếp.');
+      if (!card) return failure('Không phát hiện khuôn mặt trên ảnh chân dung của thẻ.');
+      const distance = Number(faceapi.euclideanDistance(live.descriptor, card.descriptor).toFixed(3));
+      const isMatch = distance <= FACE_MATCH_DISTANCE_THRESHOLD;
+      return {
+        matchScore: Number((Math.max(0, 1 - distance) * 100).toFixed(1)),
+        isMatch,
+        certId: isMatch ? referenceCode() : '',
+        verifiedAt: new Date().toISOString(),
+        confidenceGrade: distance < 0.35 ? 'A+' : distance < 0.45 ? 'A' : distance <= FACE_MATCH_DISTANCE_THRESHOLD ? 'B' : 'C',
+        distance,
+        reason: isMatch ? undefined : 'Khuôn mặt chụp trực tiếp không khớp với ảnh trên thẻ.',
       };
-
-      img1.crossOrigin = 'anonymous';
-      img2.crossOrigin = 'anonymous';
-      img1.onload = finishCheck;
-      img2.onload = finishCheck;
-      img1.onerror = () => finishCheck();
-      img2.onerror = () => finishCheck();
-
-      img1.src = livePhotoBase64;
-      img2.src = cardAvatarBase64 || livePhotoBase64;
-    });
+    } catch (error: any) {
+      return failure(error?.message || 'Không chạy được mô hình so khớp khuôn mặt.');
+    }
   }
 
   /**

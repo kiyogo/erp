@@ -105,16 +105,8 @@ export const IdentityVerificationPage: React.FC = () => {
   // eKYC Data State
 
   const [ekycData, setEkycData] = useState<EkycExtractedData>({
-    idNumber: '001095012345',
-    name: 'Nguyễn Huy Tùng',
-    birthDate: '1995-08-19',
-    gender: 'Nam',
-    nationality: 'Việt Nam',
-    originPlace: 'Hà Nội',
-    residencePlace: 'Thôn 1 Bát Tràng, Gia Lâm, Hà Nội',
-    issueDate: '2021-05-20',
-    issuePlace: 'Cục Cảnh sát Quản lý hành chính về trật tự xã hội',
-    expiryDate: '2035-08-19',
+    idNumber: '', name: '', birthDate: '', gender: '', nationality: 'Việt Nam',
+    originPlace: '', residencePlace: '', issueDate: '', issuePlace: '', expiryDate: '',
   });
 
   const [livePhoto, setLivePhoto] = useState<string | null>(null);
@@ -291,16 +283,30 @@ export const IdentityVerificationPage: React.FC = () => {
     const match = await EkycService.matchFaces(livePhoto, croppedAvatar || cardFrontPhoto || undefined);
     setMatchResult(match);
 
+    if (!match.isMatch) {
+      setIsProcessing(false);
+      message.error(match.reason || 'Khuôn mặt không khớp với ảnh trên thẻ CCCD. Vui lòng chụp lại.');
+      return;
+    }
+
+    const readValue = (key: 'idNumber' | 'name' | 'birthDate' | 'gender' | 'originPlace' | 'residencePlace' | 'issueDate' | 'issuePlace' | 'expiryDate') =>
+      (ekycData[key] || cardFrontResult?.extractedData?.[key] || cardBackResult?.extractedData?.[key] || '') as string;
+    if (!readValue('idNumber') || !readValue('name')) {
+      setIsProcessing(false);
+      message.error('Chưa đọc được số định danh hoặc họ tên từ thẻ. Vui lòng chụp lại hai mặt thẻ rõ nét hơn.');
+      return;
+    }
+
     const finalVerifiedData: EkycExtractedData = {
-      idNumber: ekycData.idNumber || cardFrontResult?.extractedData?.idNumber || cardBackResult?.extractedData?.idNumber || '064210005343',
-      name: ekycData.name || cardFrontResult?.extractedData?.name || 'NGUYỄN ĐỨC ĐẠI SƠN',
-      birthDate: ekycData.birthDate || cardFrontResult?.extractedData?.birthDate || '2010-06-06',
-      gender: ekycData.gender || cardFrontResult?.extractedData?.gender || 'Nam',
-      originPlace: ekycData.originPlace || cardFrontResult?.extractedData?.originPlace || 'Trà Đa, Pleiku, Gia Lai',
-      residencePlace: ekycData.residencePlace || cardBackResult?.extractedData?.residencePlace || '42 Trần Văn Bình, Thôn 6, Trà Đa, Pleiku, Gia Lai',
-      issueDate: ekycData.issueDate || cardBackResult?.extractedData?.issueDate || '2025-03-24',
-      issuePlace: cardBackResult?.extractedData?.issuePlace || ekycData.issuePlace || 'Bộ Công an',
-      expiryDate: ekycData.expiryDate || cardBackResult?.extractedData?.expiryDate || '2035-06-06',
+      idNumber: readValue('idNumber'),
+      name: readValue('name'),
+      birthDate: readValue('birthDate'),
+      gender: readValue('gender'),
+      originPlace: readValue('originPlace'),
+      residencePlace: readValue('residencePlace'),
+      issueDate: readValue('issueDate'),
+      issuePlace: readValue('issuePlace'),
+      expiryDate: readValue('expiryDate'),
       nationality: 'Việt Nam',
       ...ekycData,
       livePhotoUrl: livePhoto,
@@ -308,7 +314,7 @@ export const IdentityVerificationPage: React.FC = () => {
       cardFrontUrl: cardFrontPhoto || undefined,
       cardBackUrl: cardBackPhoto || undefined,
       cardAvatarUrl: croppedAvatar || undefined,
-      faceMatchScore: match.matchScore || 98,
+      faceMatchScore: match.matchScore,
       certificateId: match.certId,
       verifiedAt: match.verifiedAt || new Date().toISOString(),
       ekycVerified: true,
@@ -336,10 +342,10 @@ export const IdentityVerificationPage: React.FC = () => {
           const merged = {
             ...existing,
             docType: 'Căn cước công dân',
-            docNumber: finalVerifiedData.idNumber || existing.docNumber || '001095012345',
-            docIssueDate: finalVerifiedData.issueDate || existing.docIssueDate || '2025-03-24',
+            docNumber: finalVerifiedData.idNumber || existing.docNumber || '',
+            docIssueDate: finalVerifiedData.issueDate || existing.docIssueDate || '',
             docIssuePlace: finalVerifiedData.issuePlace || existing.docIssuePlace || 'Bộ Công an',
-            docExpiryDate: finalVerifiedData.expiryDate || existing.docExpiryDate || '2035-06-06',
+            docExpiryDate: finalVerifiedData.expiryDate || existing.docExpiryDate || '',
             name: finalVerifiedData.name || existing.name,
             displayName: finalVerifiedData.name || existing.displayName || existing.name,
             birthDate: finalVerifiedData.birthDate || existing.birthDate,
@@ -1054,7 +1060,7 @@ export const IdentityVerificationPage: React.FC = () => {
                     Xác thực danh tính Thành Công
                   </div>
                   <div style={{ fontSize: 12.5, color: '#64748B', marginTop: 2 }}>
-                    Chứng thư xác thực điện tử: <strong>{ekycData.certificateId || 'NEAC-EKYC-2026'}</strong>
+                    Mã tham chiếu xác thực: <strong>{ekycData.certificateId || '—'}</strong>
                   </div>
                 </div>
               </div>
@@ -1068,7 +1074,7 @@ export const IdentityVerificationPage: React.FC = () => {
                   fontSize: 13,
                 }}
               >
-                Độ khớp sinh trắc: {ekycData.faceMatchScore || 99.4}%
+                Độ khớp sinh trắc: {ekycData.faceMatchScore ?? '—'}%
               </div>
             </div>
 

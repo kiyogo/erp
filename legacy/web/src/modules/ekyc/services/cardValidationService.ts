@@ -236,7 +236,7 @@ export class CardValidationService {
         }
 
         // Trích xuất Giới tính (Nam / Nữ) - Chuẩn quy tắc Bộ Công An & Nhận diện nhãn
-        let extractedGender = 'Nam';
+        let extractedGender = '';
         const genderMatch = ocrText.match(/(?:Giới\s*tính|Sex)\s*[:.\/]?\s*(Nam|Nữ|Male|Female)/i);
         if (genderMatch && genderMatch[1]) {
           const g = genderMatch[1].toLowerCase();
@@ -260,10 +260,22 @@ export class CardValidationService {
             extractedResidence = cleanRes;
           }
         }
+        if (!extractedId || !extractedName) {
+          resolve({
+            hasCard: true,
+            isValid: false,
+            score: 40,
+            sharpnessScore: sharpness,
+            brightnessScore: brightness,
+            message: `Chưa đọc được ${!extractedId ? 'số định danh' : 'họ và tên'} trên mặt trước. Hãy chụp lại rõ nét, đủ sáng, thẻ nằm trọn trong khung hình.`,
+          });
+          return;
+        }
+
         resolve({
           hasCard: true,
           isValid: true,
-          score: 98,
+          score: 50 + [extractedId, extractedName, extractedBirth, extractedGender].filter(Boolean).length * 12,
           sharpnessScore: sharpness,
           brightnessScore: brightness,
           message: 'Đã nhận dạng thẻ CCCD mặt trước thành công!',
@@ -413,12 +425,9 @@ export class CardValidationService {
         }
 
         // Trích xuất hoặc sinh dải mã MRZ chuẩn ICAO 9303
-        const effectiveId = currentData?.idNumber || '064210005343';
-        const effectiveName = (currentData?.name || 'NGUYEN DUC DAI SON').toUpperCase().replace(/[^A-Z\s]/g, '').trim().replace(/\s+/g, '<');
         const mrzLinesMatch = ocrBackText.match(/(IDVNM[0-9A-Z<]{15,35})/i);
-        const mrzCode = mrzLinesMatch
-          ? mrzLinesMatch[1]
-          : `IDVNM${effectiveId.substring(4)}80${effectiveId}<<0\n1006065M3506064VNM<<<<<<<<<<<8\n${effectiveName}<<<<<<<<<<<<`;
+        // Chỉ dùng dải MRZ thực sự đọc được từ thẻ, không tự dựng.
+        const mrzCode = mrzLinesMatch ? mrzLinesMatch[1] : '';
 
         if (qrDataString) {
           const parsed = this.parseCccdQrCode(qrDataString);
@@ -472,7 +481,7 @@ export class CardValidationService {
                 idNumber: parsed.idNumber || currentData?.idNumber || '',
                 name: parsed.name || currentData?.name || '',
                 birthDate: parsed.birthDate || currentData?.birthDate || '',
-                gender: parsed.gender || currentData?.gender || 'Nam',
+                gender: parsed.gender || currentData?.gender || '',
                 nationality: 'Việt Nam',
                 originPlace: extractedOrigin || currentData?.originPlace || '',
                 residencePlace: parsed.residencePlace || extractedResidence || currentData?.residencePlace || '',
@@ -513,21 +522,21 @@ export class CardValidationService {
           message: 'Đã nhận diện mặt sau thẻ Căn cước!',
           rawOcrText: ocrBackText,
           extractedData: {
-            idNumber: currentData?.idNumber || '064210005343',
-            name: currentData?.name || 'NGUYỄN ĐỨC ĐẠI SƠN',
-            birthDate: currentData?.birthDate || '2010-06-06',
-            gender: currentData?.gender || 'Nam',
+            idNumber: currentData?.idNumber || '',
+            name: currentData?.name || '',
+            birthDate: currentData?.birthDate || '',
+            gender: currentData?.gender || '',
             nationality: 'Việt Nam',
-            originPlace: extractedOrigin || currentData?.originPlace || 'Trà Đa, Pleiku, Gia Lai',
-            residencePlace: extractedResidence || currentData?.residencePlace || '42 Trần Văn Bình, Thôn 6, Trà Đa, Pleiku, Gia Lai',
-            issueDate: extractedIssueDate || '2025-03-24',
+            originPlace: extractedOrigin || currentData?.originPlace || '',
+            residencePlace: extractedResidence || currentData?.residencePlace || '',
+            issueDate: extractedIssueDate || currentData?.issueDate || '',
             issuePlace: extractedIssuePlace,
-            expiryDate: extractedExpiryDate || currentData?.expiryDate || '2035-06-06',
+            expiryDate: extractedExpiryDate || currentData?.expiryDate || '',
             cardFrontUrl: currentData?.cardFrontUrl,
             cardBackUrl: imageBase64,
             cardAvatarUrl: currentData?.cardAvatarUrl,
             mrzCode: mrzCode,
-            qrRaw: `064210005343||${currentData?.name || 'NGUYỄN ĐỨC ĐẠI SƠN'}|06062010|Nam|42 Trần Văn Bình, Thôn 6, Trà Đa, Pleiku, Gia Lai|24032025`,
+            qrRaw: '',
           },
         });
       };
@@ -560,7 +569,7 @@ export class CardValidationService {
     const oldIdNumber = parts[1]?.trim() || '';
     const name = parts[2]?.trim() || '';
     const rawBirthDate = parts[3]?.trim() || '';
-    const gender = parts[4]?.trim() || 'Nam';
+    const gender = parts[4]?.trim() || '';
     const residencePlace = parts[5]?.trim() || '';
     const rawIssueDate = parts[6]?.trim() || '';
 
