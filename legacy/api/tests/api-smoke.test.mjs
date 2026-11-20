@@ -2017,14 +2017,17 @@ test('inventory receipts, FIFO issues, transfers and counts persist batch stock 
   await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-COMMON-API-02', transactionDate: today,
     destinationWarehouse: 'Kho C', lines: [{ productKey: commonMethodItem.key, quantity: 2, unitCost: 200, lotCode: 'COMMON-NEW', expiryDate: '2027-02-01' }] }, 201);
   const config = await request('/collections/finance_inventory_settings', 'POST', { record: {
-    key: 'global', issueMethodMode: 'Dùng chung', issueMethod: 'LIFO', lotManagedDefault: false, barcodeManagedDefault: false,
+    key: 'global', issueMethodMode: 'Dùng chung', issueMethod: 'Bình quân', lotManagedDefault: false, barcodeManagedDefault: false,
     warehouseNames: ['Kho A', 'Kho B', 'Kho C'], categoryNames: ['Linh kiện', 'Bộ kit'],
   } }, 201);
   assert.equal(config.record.key, 'global');
-  await request('/collections/finance_inventory_settings/global', 'PATCH', { patch: { issueMethodMode: 'Dùng chung', issueMethod: 'LIFO' } }, 200);
+  await request('/collections/finance_inventory_settings/global', 'PATCH', { patch: { issueMethodMode: 'Dùng chung', issueMethod: 'LIFO' } }, 422);
+  await request('/collections/finance_inventory', 'POST', { record: { key: 'inventory-lifo-api', sku: 'LIFO-API', name: 'Hàng LIFO', category: 'Linh kiện', unit: 'Cái', warehouse: 'Kho C', issueMethod: 'LIFO' } }, 422);
+  await request('/collections/finance_inventory_settings/global', 'PATCH', { patch: { issueMethodMode: 'Dùng chung', issueMethod: 'Bình quân' } }, 200);
   const commonIssue = await request('/finance/inventory/transactions', 'POST', { type: 'Xuất kho', transactionCode: 'XK-COMMON-API-01', transactionDate: today,
     sourceWarehouse: 'Kho C', reason: 'Kiểm tra phương pháp dùng chung', lines: [{ productKey: commonMethodItem.key, quantity: 1 }] }, 201);
-  assert.equal(commonIssue.transaction.lines[0].allocatedLots[0].lotCode, 'COMMON-NEW');
+  assert.equal(commonIssue.transaction.lines[0].allocatedLots[0].unitCost, 150, 'bình quân gia quyền (2 x 100 + 2 x 200) / 4');
+  assert.equal(commonIssue.transaction.totalAmount, 150);
 
   const locationA = (await request('/collections/finance_inventory_locations', 'POST', { record: {
     key: 'inventory-location-a1', warehouse: 'Kho A', code: 'a-01', zone: 'A', shelf: '01', capacityItems: 1, pickOrder: 1,
@@ -2679,3 +2682,28 @@ test('ledger entries are built from documents and disposals with leaf accounts a
   await request('/finance/asset-disposals/ledger-disposal/ledger-entry', 'POST', {}, 409);
   await request('/finance/asset-disposals/missing/ledger-entry', 'POST', {}, 404);
 });
+
+test('inventory issues post cost of goods sold once and reconcile with the ledger', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  await request('/collections/finance_inventory_settings/global', 'PATCH', { patch: { warehouseNames: ['Kho A', 'Kho B', 'Kho C', 'Kho giá vốn'] } }, 200);
+  const product = (await request('/collections/finance_inventory', 'POST', { record: { key: 'cogs-item', sku: 'COGS-ITEM', name: 'Hàng giá vốn', category: 'Linh kiện', unit: 'Cái', warehouse: 'Kho giá vốn', issueMethod: 'FIFO' } }, 201)).record;
+  await request('/finance/inventory/transactions', 'POST', { type: 'Nhập kho', transactionCode: 'NK-COGS-01', transactionDate: today, destinationWarehouse: 'Kho giá vốn', lines: [{ productKey: product.key, quantity: 10, unitCost: 1000 }] }, 201);
+  const issue = (await request('/finance/inventory/transactions', 'POST', { type: 'Xuất kho', transactionCode: 'XK-COGS-01', transactionDate: today, sourceWarehouse: 'Kho giá vốn', reason: 'Bán hàng', lines: [{ productKey: product.key, quantity: 4 }] }, 201)).transaction;
+  assert.equal(issue.totalAmount, 4000);
+  const preview = (await request('/finance/inventory-transactions/XK-COGS-01/ledger-entry', 'POST', { preview: true })).preview;
+  assert.deepEqual(preview.lines.map((line) => [line.defaultAccount, line.debit, line.credit]), [['632', 4000, 0], ['156', 0, 4000]]);
+  const posted = (await request('/finance/inventory-transactions/XK-COGS-01/ledger-entry', 'POST', {}, 201)).record;
+  assert.equal(posted.sourceReference, 'inventory-issue:XK-COGS-01');
+  await request('/finance/inventory-transactions/XK-COGS-01/ledger-entry', 'POST', {}, 409);
+  assert.ok((await request('/finance/ledger-postings')).data.some((item) => item.sourceReference === 'inventory-issue:XK-COGS-01'));
+  await request('/finance/inventory-transactions/NK-COGS-01/ledger-entry', 'POST', {}, 422);
+  await request('/finance/inventory-transactions/MISSING/ledger-entry', 'POST', {}, 404);
+  const shipment = (await request('/finance/inventory/transactions', 'POST', { type: 'Giao hàng', transactionCode: 'GH-COGS-01', transactionDate: today, sourceWarehouse: 'Kho giá vốn', reason: 'Khách A', deliveryAddress: 'Hà Nội', lines: [{ productKey: product.key, quantity: 1 }] }, 201)).transaction;
+  assert.equal(shipment.shipmentStatus, 'Chờ giao');
+  await request('/finance/inventory-transactions/GH-COGS-01/ledger-entry', 'POST', {}, 422);
+  const reconciliation = await request('/finance/inventory/ledger-reconciliation');
+  assert.equal(typeof reconciliation.inventoryValue, 'number');
+  assert.equal(reconciliation.difference, reconciliation.inventoryValue - reconciliation.ledgerBalance);
+  assert.deepEqual(reconciliation.byAccount.map((row) => row.account), ['152', '153', '155', '156']);
+});
+

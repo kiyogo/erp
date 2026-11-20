@@ -18,7 +18,7 @@ export function useLedgerPostings() {
   return { posted, reload };
 }
 
-export const ledgerReference = (kind: LedgerSourceKind, key: string) => (kind === 'documents' ? `document:${key}` : `asset-disposal:${key}`);
+export const ledgerReference = (kind: LedgerSourceKind, key: string) => (kind === 'documents' ? `document:${key}` : kind === 'asset-disposals' ? `asset-disposal:${key}` : `inventory-issue:${key}`);
 
 /** Cột "Sổ cái" của bảng: nhãn đã ghi sổ hoặc nút mở hộp thoại ghi sổ. */
 export const ledgerPostingColumn = (kind: LedgerSourceKind, posted: Set<string>, open: (key: string, title: string) => void, titleOf: (record: any) => string) => ({

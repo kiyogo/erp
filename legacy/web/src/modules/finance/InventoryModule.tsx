@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { DownloadOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { inventoryApi } from '../../api/endpoints';
+import { inventoryApi, inventoryReconciliationApi } from '../../api/endpoints';
+import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import type { LedgerSourceKind } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
 import { Button, Card, Modal, Progress, Tag, message } from '../../custom-ui';
 import { buildWarehouseLayout, type WarehouseLocation } from './warehouseLayoutRules';
@@ -33,7 +35,7 @@ type InventoryItem = {
   barcode?: string;
   barcodeManaged?: boolean;
   lotManaged?: boolean;
-  issueMethod?: 'FIFO' | 'LIFO' | 'Bình quân';
+  issueMethod?: 'FIFO' | 'Bình quân';
   status: string;
   lots?: InventoryLot[];
   stockByWarehouse?: Array<{ warehouse: string; quantity: number }>;
@@ -85,7 +87,7 @@ type InventoryTransaction = {
 type InventorySettings = {
   key: string;
   issueMethodMode: 'Mỗi mặt hàng' | 'Dùng chung';
-  issueMethod: 'FIFO' | 'LIFO' | 'Bình quân';
+  issueMethod: 'FIFO' | 'Bình quân';
   lotManagedDefault: boolean;
   barcodeManagedDefault: boolean;
   warehouseNames: string[];
@@ -158,6 +160,9 @@ export const InventoryModule: React.FC = () => {
   const [productDraft, setProductDraft] = useState<Record<string, any>>({});
   const [transactionDraft, setTransactionDraft] = useState<Record<string, any>>({});
   const [draftLines, setDraftLines] = useState<DraftLine[]>([]);
+  const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
+  const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ inventoryValue: number; ledgerBalance: number; difference: number } | null>(null);
   const [returnShipment, setReturnShipment] = useState<InventoryTransaction | null>(null);
   const [returnCode, setReturnCode] = useState('');
   const [returnDate, setReturnDate] = useState(localDate());
@@ -181,6 +186,7 @@ export const InventoryModule: React.FC = () => {
       const saved = Array.isArray(config) ? config.find((row) => row.key === 'global') : undefined;
       setSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) });
       setLocations(Array.isArray(warehouseLocations) ? warehouseLocations : []);
+      inventoryReconciliationApi.get().then((response) => setReconciliation(response.data)).catch(() => setReconciliation(null));
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || error?.message || 'Không tải được dữ liệu kho.');
     } finally {
@@ -709,7 +715,16 @@ export const InventoryModule: React.FC = () => {
           { title: 'Mã phiếu', dataIndex: 'transactionCode', key: 'code' }, { title: 'Ngày', dataIndex: 'transactionDate', key: 'date' },
           { title: 'Mặt hàng', dataIndex: 'lines', key: 'lines', render: (lines: InventoryLine[] = []) => lines.map((line) => `${line.sku} × ${line.quantity}`).join(', ') },
           { title: 'Giá vốn', dataIndex: 'totalAmount', key: 'amount', render: (value: number) => money(value) },
+          ledgerPostingColumn('inventory-transactions', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'inventory-transactions', key, title }), (record) => record.transactionCode),
         ]} /></Card>
+        <Card title="Đối chiếu tồn kho với sổ cái" style={cardStyle}>
+          {reconciliation ? <div style={{ display: 'grid', gap: 6 }}>
+            <div>Giá trị tồn trong kho: <strong>{money(reconciliation.inventoryValue)}</strong></div>
+            <div>Số dư sổ cái (TK 152, 153, 155, 156): <strong>{money(reconciliation.ledgerBalance)}</strong></div>
+            <div style={{ color: reconciliation.difference === 0 ? '#16A34A' : '#D97706' }}>Chênh lệch: {money(reconciliation.difference)}</div>
+            <div style={{ fontSize: 12, color: '#64748B' }}>Sổ cái chỉ có hàng mua đã ghi sổ từ chứng từ mua và giá vốn đã ghi sổ từ phiếu xuất; chưa có số dư đầu kỳ, kiểm kê, điều chuyển nên chênh lệch có thể khác 0.</div>
+          </div> : <div style={{ color: '#64748B' }}>Chưa tải được số liệu đối chiếu.</div>}
+        </Card>
       </div>}
 
       {isCharts && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
@@ -742,7 +757,7 @@ export const InventoryModule: React.FC = () => {
       {isSettings && <Card title="Thiết lập vận hành kho" style={cardStyle}><form onSubmit={saveSettings}>
         <div style={gridStyle}>
           <Field label="Phương pháp xuất kho áp dụng"><select style={fieldStyle} value={settings.issueMethodMode} onChange={(event) => setSettings((current) => ({ ...current, issueMethodMode: event.target.value as InventorySettings['issueMethodMode'] }))}><option>Mỗi mặt hàng</option><option>Dùng chung</option></select></Field>
-          <Field label="Phương pháp chung"><select style={fieldStyle} value={settings.issueMethod} onChange={(event) => setSettings((current) => ({ ...current, issueMethod: event.target.value as InventorySettings['issueMethod'] }))}><option>FIFO</option><option>LIFO</option><option>Bình quân</option></select></Field>
+          <Field label="Phương pháp chung"><select style={fieldStyle} value={settings.issueMethod} onChange={(event) => setSettings((current) => ({ ...current, issueMethod: event.target.value as InventorySettings['issueMethod'] }))}><option>FIFO</option><option>Bình quân</option></select></Field>
           <Field label="Tên kho (mỗi dòng một kho)"><textarea style={{ ...fieldStyle, minHeight: 96 }} value={settings.warehouseNames.join('\n')} onChange={(event) => setSettings((current) => ({ ...current, warehouseNames: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) }))} /></Field>
           <Field label="Nhóm hàng (mỗi dòng một nhóm)"><textarea style={{ ...fieldStyle, minHeight: 96 }} value={settings.categoryNames.join('\n')} onChange={(event) => setSettings((current) => ({ ...current, categoryNames: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) }))} /></Field>
         </div>
@@ -772,7 +787,7 @@ export const InventoryModule: React.FC = () => {
               </select> : <input maxLength={160} style={fieldStyle} value={productDraft.storageLocation || ''} onChange={(event) => updateProduct('storageLocation', event.target.value)} />}
             </Field>
             <Field label="Barcode / QR"><input style={fieldStyle} value={productDraft.barcode || ''} onChange={(event) => updateProduct('barcode', event.target.value)} /></Field>
-            <Field label="Phương pháp xuất kho"><select style={fieldStyle} value={productDraft.issueMethod || 'FIFO'} onChange={(event) => updateProduct('issueMethod', event.target.value)}><option>FIFO</option><option>LIFO</option><option>Bình quân</option></select></Field>
+            <Field label="Phương pháp xuất kho"><select style={fieldStyle} value={productDraft.issueMethod || 'FIFO'} onChange={(event) => updateProduct('issueMethod', event.target.value)}><option>FIFO</option><option>Bình quân</option></select></Field>
           </div>
           {!!additionalProductWarehouses.length && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
             {additionalProductWarehouses.map((warehouse) => {
@@ -862,6 +877,7 @@ export const InventoryModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button disabled={saving} onClick={() => setReturnShipment(null)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Ghi nhận hàng về kho</Button></div>
         </form>}
       </Modal>
+      <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => { void reloadLedgerPostings(); void inventoryReconciliationApi.get().then((response) => setReconciliation(response.data)).catch(() => undefined); }} />
     </div>
   );
 };

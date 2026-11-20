@@ -22,7 +22,7 @@ import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, 
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
-import { applyAccountMap, documentLedgerLines, documentPostingProblem } from './ledgerPostingRules.mjs';
+import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem } from './ledgerPostingRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
@@ -3953,7 +3953,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record = current ? { ...current } : { key: 'global' };
     for (const field of editable) if (value[field] !== undefined) record[field] = value[field];
     record.issueMethodMode = oneOf(record.issueMethodMode || 'Mỗi mặt hàng', 'Chế độ tính giá xuất', ['Mỗi mặt hàng', 'Dùng chung']);
-    record.issueMethod = oneOf(record.issueMethod || 'FIFO', 'Phương pháp xuất kho chung', ['FIFO', 'LIFO', 'Bình quân']);
+    record.issueMethod = issueMethodOf(record.issueMethod, 'Phương pháp xuất kho chung');
     record.lotManagedDefault = Boolean(record.lotManagedDefault);
     record.barcodeManagedDefault = Boolean(record.barcodeManagedDefault);
     const warehouseNames = Array.isArray(record.warehouseNames) ? record.warehouseNames : ['Kho chính'];
@@ -4039,7 +4039,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.lotManaged = Boolean(record.lotManaged ?? inventorySettings.lotManagedDefault);
     record.barcodeManaged = Boolean(record.barcodeManaged ?? inventorySettings.barcodeManagedDefault);
     if (record.barcodeManaged && !record.barcode) throw new HttpError(422, 'Mặt hàng bật quản lý Barcode/QR cần có mã quét.');
-    record.issueMethod = oneOf(record.issueMethod || 'FIFO', 'Phương pháp xuất kho', ['FIFO', 'LIFO', 'Bình quân']);
+    record.issueMethod = issueMethodOf(record.issueMethod, 'Phương pháp xuất kho');
     const duplicateSku = await db.prepare(`SELECT record_key FROM collection_records
       WHERE scope = 'finance_inventory' AND LOWER(json_extract(payload_json, '$.sku')) = LOWER(?) AND record_key <> ? LIMIT 1`).get(record.sku, record.key);
     if (duplicateSku) throw new HttpError(409, 'Mã SKU đã tồn tại.');
@@ -7107,6 +7107,13 @@ async function nextUniqueCode(prefix, tableName, columnName = 'code') {
   throw new HttpError(500, 'Không thể tạo mã hệ thống. Vui lòng thử lại.');
 }
 
+// Thông tư 99/2025/TT-BTC chỉ liệt kê các phương pháp tính giá xuất kho: đích danh, bình quân gia quyền, nhập trước xuất trước,
+// giá bán lẻ, chi phí chuẩn; không có nhập sau xuất trước (LIFO). Hệ thống hỗ trợ FIFO và bình quân gia quyền.
+function issueMethodOf(value, label) {
+  if (value === 'LIFO') throw new HttpError(422, `${label}: phương pháp nhập sau xuất trước (LIFO) không nằm trong các phương pháp tính giá xuất kho theo Thông tư 99/2025/TT-BTC; chọn FIFO hoặc Bình quân.`);
+  return oneOf(value || 'FIFO', label, ['FIFO', 'Bình quân']);
+}
+
 function cashTypeForDocument(document) {
   // Hoàn tiền: trả lại hàng bán, giảm giá hàng bán là chi cho khách; trả lại hàng mua, giảm giá hàng mua là thu từ nhà cung cấp.
   if (isAdjustmentSubtype(document.subtype)) return adjustmentSide(document.subtype) === 'sale' ? 'Chi' : 'Thu';
@@ -9858,15 +9865,23 @@ async function handleRequest(request, response) {
   }
 
   // Ghi sổ cái từ chứng từ mua, bán, hóa đơn, hàng trả lại, giảm giá và từ hồ sơ thanh lý tài sản. Body: { preview?: boolean, accountMap?: { mã mặc định: mã chi tiết } }.
-  const ledgerSourceMatch = /^\/finance\/(documents|asset-disposals)\/([^/]+)\/ledger-entry$/.exec(resource);
+  const ledgerSourceMatch = /^\/finance\/(documents|asset-disposals|inventory-transactions)\/([^/]+)\/ledger-entry$/.exec(resource);
   if (request.method === 'POST' && ledgerSourceMatch) {
     const actor = await requireAdmin(request);
     const profile = await requireAccountingProfile();
     const payload = await readJson(request, 64 * 1024);
     const isDocument = ledgerSourceMatch[1] === 'documents';
+    const isInventory = ledgerSourceMatch[1] === 'inventory-transactions';
     const sourceKey = requiredText(decodeURIComponent(ledgerSourceMatch[2]), 'Mã nguồn', 160);
     let source;
-    if (isDocument) {
+    if (isInventory) {
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(sourceKey.toLocaleUpperCase('vi-VN'));
+      const transaction = row && publicCollectionRecord(row);
+      if (!transaction) throw new HttpError(404, 'Không tìm thấy phiếu kho.');
+      const problem = inventoryIssuePostingProblem(transaction);
+      if (problem) throw new HttpError(422, problem);
+      source = { sourceModule: 'inventory_issue', sourceReference: `inventory-issue:${transaction.transactionCode}`, voucherCode: transaction.transactionCode, entryDate: transaction.transactionDate, description: `Giá vốn xuất kho ${transaction.transactionCode}${transaction.reason ? ` - ${transaction.reason}` : ''}`, lines: inventoryIssueLedgerLines(transaction) };
+    } else if (isDocument) {
       const row = await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(sourceKey);
       if (!row) throw new HttpError(404, 'Không tìm thấy chứng từ.');
       const document = publicFinanceDocument(row);
@@ -9913,10 +9928,22 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Đối chiếu giá trị tồn kho trong kho với số dư các tài khoản hàng tồn kho (152, 153, 155, 156) trong sổ cái.
+  if (request.method === 'GET' && resource === '/finance/inventory/ledger-reconciliation') {
+    await requireAdmin(request);
+    const products = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory'").all()).map(row => parseJsonObject(row.payload_json));
+    const inventoryValue = Math.round(products.reduce((sum, product) => sum + (Array.isArray(product.lots) ? product.lots.reduce((lotSum, lot) => lotSum + (Number(lot.quantity) || 0) * (Number(lot.unitCost) || 0), 0) : 0), 0));
+    const ledger = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all()).map(row => parseJsonObject(row.payload_json));
+    const byAccount = accountBalance(ledger, ['152', '153', '155', '156']);
+    const ledgerBalance = byAccount.reduce((sum, row) => sum + row.balance, 0);
+    sendJson(response, 200, { inventoryValue, ledgerBalance, difference: inventoryValue - ledgerBalance, byAccount });
+    return;
+  }
+
   // Các chứng từ, hồ sơ thanh lý đã ghi sổ cái (để màn hình ẩn nút ghi sổ).
   if (request.method === 'GET' && resource === '/finance/ledger-postings') {
     await requireAdmin(request);
-    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger' AND (json_extract(payload_json, '$.sourceModule') = 'finance_document' OR json_extract(payload_json, '$.sourceModule') = 'asset_disposal')").all();
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceModule') IN ('finance_document', 'asset_disposal', 'inventory_issue')").all();
     sendJson(response, 200, { data: rows.map(row => parseJsonObject(row.payload_json)).map(item => ({ sourceReference: item.sourceReference, voucherCode: item.voucherCode, entryDate: item.entryDate, amount: item.amount })) });
     return;
   }

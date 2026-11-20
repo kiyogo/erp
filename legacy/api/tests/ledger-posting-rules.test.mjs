@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyAccountMap, documentLedgerLines, documentPostingProblem } from '../ledgerPostingRules.mjs';
+import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem } from '../ledgerPostingRules.mjs';
 
 const doc = (over) => ({ documentType: 'sale', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 1_100_000, vatAmount: 100_000, ...over });
 const totals = (lines) => [lines.reduce((s, l) => s + l.debit, 0), lines.reduce((s, l) => s + l.credit, 0)];
@@ -42,4 +42,22 @@ test('đổi mã tài khoản: chỉ nhận mã 3 đến 6 chữ số', () => {
   assert.deepEqual(applyAccountMap(lines, { 511: '5111' }).map((l) => l.account), ['131', '5111', '3331']);
   assert.deepEqual(applyAccountMap(lines, undefined).map((l) => l.account), ['131', '511', '3331']);
   assert.throws(() => applyAccountMap(lines, { 511: 'abc' }), /511/);
+});
+
+test('giá vốn xuất kho: chỉ phiếu xuất hoặc giao đã giao, Nợ 632 Có 156', () => {
+  assert.equal(inventoryIssuePostingProblem({ type: 'Xuất kho', totalAmount: 100 }), '');
+  assert.equal(inventoryIssuePostingProblem({ type: 'Giao hàng', shipmentStatus: 'Đã giao', totalAmount: 100 }), '');
+  assert.match(inventoryIssuePostingProblem({ type: 'Giao hàng', shipmentStatus: 'Đang giao', totalAmount: 100 }), /đã giao/);
+  assert.match(inventoryIssuePostingProblem({ type: 'Nhập kho', totalAmount: 100 }), /xuất kho/);
+  assert.match(inventoryIssuePostingProblem({ type: 'Xuất kho', totalAmount: 0 }), /giá trị/);
+  assert.deepEqual(inventoryIssueLedgerLines({ totalAmount: 4000 }).map((l) => [l.account, l.debit, l.credit]), [['632', 4000, 0], ['156', 0, 4000]]);
+});
+
+test('số dư tài khoản hàng tồn kho từ sổ cái gồm tài khoản con và bút toán nhiều dòng', () => {
+  const entries = [
+    { status: 'Đã ghi sổ cái', lines: [{ account: '1561', debit: 500, credit: 0 }, { account: '331', debit: 0, credit: 500 }] },
+    { status: 'Đã ghi sổ cái', debitAccount: 'TK 632', creditAccount: 'TK 156', amount: 200 },
+    { status: 'Nháp', debitAccount: 'TK 156', creditAccount: 'TK 331', amount: 999 },
+  ];
+  assert.deepEqual(accountBalance(entries, ['152', '156']), [{ account: '152', balance: 0 }, { account: '156', balance: 300 }]);
 });

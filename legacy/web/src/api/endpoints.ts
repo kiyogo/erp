@@ -707,7 +707,10 @@ export const financeDocumentsApi = {
 };
 
 export type LedgerPreviewLine = { account: string; defaultAccount: string; debit: number; credit: number; note: string; alternatives: string[] };
-export type LedgerSourceKind = 'documents' | 'asset-disposals';
+export type LedgerSourceKind = 'documents' | 'asset-disposals' | 'inventory-transactions';
+export const inventoryReconciliationApi = {
+  get: () => api.get<{ inventoryValue: number; ledgerBalance: number; difference: number; byAccount: Array<{ account: string; balance: number }> }>('/finance/inventory/ledger-reconciliation'),
+};
 export const financeLedgerPostingApi = {
   preview: (kind: LedgerSourceKind, key: string, accountMap?: Record<string, string>) => api.post<{ preview: { voucherCode: string; entryDate: string; description: string; amount: number; lines: LedgerPreviewLine[] }; posted: boolean }>(`/finance/${kind}/${encodeURIComponent(key)}/ledger-entry`, { preview: true, accountMap }),
   post: (kind: LedgerSourceKind, key: string, accountMap?: Record<string, string>) => api.post<{ record: { key: string; voucherCode: string } }>(`/finance/${kind}/${encodeURIComponent(key)}/ledger-entry`, { accountMap }),

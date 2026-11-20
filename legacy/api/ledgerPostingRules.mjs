@@ -68,3 +68,37 @@ export function applyAccountMap(lines, accountMap) {
   }
   return lines.map((line) => ({ ...line, account: map[line.account] ? String(map[line.account]).trim() : line.account }));
 }
+
+// Giá vốn hàng xuất kho: Nợ 632, Có 156 theo giá trị xuất đã tính ở kho (FIFO hoặc bình quân gia quyền). Xuất dùng nội bộ có thể đổi 632
+// sang 641, 642... khi ghi sổ. Hàng giao đi chỉ ghi giá vốn khi đã giao (chuyển giao quyền sở hữu); điều chuyển, kiểm kê, nhập kho không ghi.
+export function inventoryIssuePostingProblem(transaction) {
+  if (!['Xuất kho', 'Giao hàng'].includes(transaction.type)) return 'Chỉ ghi giá vốn cho phiếu xuất kho hoặc giao hàng.';
+  if (transaction.type === 'Giao hàng' && transaction.shipmentStatus !== 'Đã giao') return 'Chỉ ghi giá vốn phiếu giao hàng đã giao.';
+  if (!(Number(transaction.totalAmount) > 0)) return 'Phiếu không có giá trị xuất để ghi sổ.';
+  return '';
+}
+
+export function inventoryIssueLedgerLines(transaction) {
+  const amount = Math.round(Number(transaction.totalAmount));
+  return [
+    { account: '632', debit: amount, credit: 0, note: 'Giá vốn hàng xuất kho' },
+    { account: '156', debit: 0, credit: amount, note: 'Giảm giá trị hàng tồn kho (đổi sang 152, 153, 155 theo loại hàng)' },
+  ];
+}
+
+// Số dư Nợ trừ Có theo tài khoản đầu mã (kể cả tài khoản con) của các bút toán đã ghi sổ cái.
+export function accountBalance(entries, prefixes) {
+  const digits = (account) => String(account || '').replace(/^TK\s*/i, '').replace(/\D.*$/, '');
+  const totals = new Map(prefixes.map(prefix => [prefix, 0]));
+  for (const entry of entries) {
+    if (entry.status !== 'Đã ghi sổ cái') continue;
+    const lines = Array.isArray(entry.lines) && entry.lines.length
+      ? entry.lines.map(line => ({ account: digits(line.account), debit: Number(line.debit) || 0, credit: Number(line.credit) || 0 }))
+      : [{ account: digits(entry.debitAccount), debit: Number(entry.amount) || 0, credit: 0 }, { account: digits(entry.creditAccount), debit: 0, credit: Number(entry.amount) || 0 }];
+    for (const line of lines) {
+      const prefix = prefixes.find(item => line.account.startsWith(item));
+      if (prefix) totals.set(prefix, totals.get(prefix) + line.debit - line.credit);
+    }
+  }
+  return prefixes.map(prefix => ({ account: prefix, balance: totals.get(prefix) }));
+}
