@@ -157,6 +157,26 @@ test('kiểm tra toàn vẹn chỉ báo lỗi thật: phát hiện tệp thiếu
   assert.ok(broken.summary.errors >= 1);
 });
 
+test('kiểm tra toàn vẹn báo phiếu AUTO- cũ và số đã thanh toán không có phiếu thật', async () => {
+  const before = (await call(admin, '/admin/integrity')).body;
+  assert.equal(before.checks.find(check => check.key === 'auto_vouchers').status, 'ok');
+  assert.equal(before.checks.find(check => check.key === 'document_payments_backed').status, 'ok');
+  const db = new DatabaseSync(env.KIYOVN_DB_PATH);
+  try {
+    const owner = db.prepare('SELECT id FROM users WHERE role = ? LIMIT 1').get('ADMIN');
+    const stamp = new Date().toISOString();
+    db.prepare("INSERT INTO finance_documents (id, document_type, code, subtype, partner_name, description, amount, paid_amount, document_date, status, created_by, created_at, updated_at) VALUES ('legacy-doc', 'sale', 'SALE-LEGACY', 'Đơn bán hàng', 'Khách cũ', '', 1000, 400, '2026-10-01', 'Đã bàn giao', ?, ?, ?)").run(owner.id, stamp, stamp);
+    db.prepare("INSERT INTO finance_cash_transactions (id, code, transaction_type, source, category, amount, transaction_date, counterparty, account_name, status, note, created_by, created_at, updated_at) VALUES ('legacy-auto', 'AUTO-SALE-LEGACY', 'Thu', 'bank', 'Bán', 400, '2026-10-01', 'Khách cũ', 'Tài khoản ngân hàng', 'Đã hoàn thành', '', ?, ?, ?)").run(owner.id, stamp, stamp);
+  } finally { db.close(); }
+  const after = (await call(admin, '/admin/integrity')).body;
+  const auto = after.checks.find(check => check.key === 'auto_vouchers');
+  assert.equal(auto.status, 'warning');
+  assert.ok(auto.samples.some(sample => sample.includes('AUTO-SALE-LEGACY')));
+  const unbacked = after.checks.find(check => check.key === 'document_payments_backed');
+  assert.equal(unbacked.status, 'warning');
+  assert.ok(unbacked.samples.some(sample => sample.includes('SALE-LEGACY') && sample.includes('400')));
+});
+
 test('khôi phục bản sao lưu kho tệp chỉ thay tệp, không đụng tới cơ sở dữ liệu', async () => {
   mkdirSync(filesDir, { recursive: true });
   writeFileSync(path.join(filesDir, 'doc.txt'), 'bản trong sao lưu');

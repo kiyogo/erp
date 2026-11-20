@@ -7528,6 +7528,19 @@ async function runIntegrityChecks() {
   const strays = onDisk.filter(relative => !known.has(relative));
   report('files_orphaned', 'Tệp trên đĩa đều có hồ sơ trong hệ thống', strays.length, { severity: 'warning', samples: strays, note: 'Tệp mồ côi không mất dữ liệu nhưng chiếm dung lượng; có thể là dữ liệu của lần tải lên bị gián đoạn.' });
 
+  // Phiếu thu chi tự sinh từ chứng từ (mã AUTO-, đã gỡ) không có tài khoản tiền và không có bút toán; số đã thanh toán của chứng từ phải có phiếu thật.
+  const autoVouchers = await db.prepare("SELECT code, amount, source_document, counterparty FROM finance_cash_transactions WHERE code LIKE 'AUTO-%' AND status = 'Đã hoàn thành' LIMIT 1000").all();
+  report('auto_vouchers', 'Không còn phiếu thu chi tự sinh (AUTO-) thiếu tài khoản tiền và bút toán', autoVouchers.length, {
+    severity: 'warning', samples: autoVouchers.map(row => `${row.code}: ${Number(row.amount).toLocaleString('vi-VN')} đồng, ${row.counterparty}`),
+    note: 'Phiếu cũ tính vào tổng thu chi nhưng không đổi số dư tài khoản nào và không có bút toán sổ cái; lập phiếu thật bằng nút Thu tiền, Chi tiền rồi hủy xử lý phiếu cũ theo quy trình kế toán.',
+  });
+  const paidDocuments = await db.prepare("SELECT d.code, d.paid_amount, COALESCE((SELECT SUM(t.amount) FROM finance_cash_transactions t WHERE t.source_document = d.code AND t.status = 'Đã hoàn thành' AND t.code NOT LIKE 'AUTO-%'), 0) AS backed FROM finance_documents d WHERE d.paid_amount > 0 LIMIT 100000").all();
+  const unbacked = paidDocuments.filter(row => Number(row.backed) < Number(row.paid_amount));
+  report('document_payments_backed', 'Số đã thanh toán của chứng từ đều có phiếu thu chi thật', unbacked.length, {
+    severity: 'warning', samples: unbacked.map(row => `${row.code}: đã thanh toán ${Number(row.paid_amount).toLocaleString('vi-VN')} đồng, có phiếu thật ${Number(row.backed).toLocaleString('vi-VN')} đồng`),
+    note: 'Phần chênh lệch là số nhập tay hoặc từ phiếu AUTO- cũ, chưa có phiếu thu chi và bút toán thật.',
+  });
+
   // Sổ cái: bút toán nhiều dòng phải cân Nợ bằng Có; bút toán hai tài khoản phải có hai tài khoản khác nhau và số tiền dương.
   const ledger = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_general_ledger' LIMIT ?").all(ROW_LIMIT);
   const cents = (value) => Math.round(Number(value || 0) * 100);
