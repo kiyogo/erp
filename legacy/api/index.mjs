@@ -7132,43 +7132,6 @@ function issueMethodOf(value, label) {
   return oneOf(value || 'FIFO', label, ['FIFO', 'Bình quân']);
 }
 
-function cashTypeForDocument(document) {
-  // Hoàn tiền: trả lại hàng bán, giảm giá hàng bán là chi cho khách; trả lại hàng mua, giảm giá hàng mua là thu từ nhà cung cấp.
-  if (isAdjustmentSubtype(document.subtype)) return adjustmentSide(document.subtype) === 'sale' ? 'Chi' : 'Thu';
-  if (document.documentType === 'sale') return 'Thu';
-  if (document.documentType === 'purchase') return 'Chi';
-  if (document.documentType === 'invoice' && document.subtype.includes('Đầu ra')) return 'Thu';
-  if (document.documentType === 'invoice' && document.subtype.includes('Đầu vào')) return 'Chi';
-  return null;
-}
-
-async function insertAutomaticCashTransaction(document, actorId, timestamp) {
-  if (document.paidAmount <= 0) return;
-  const type = cashTypeForDocument(document);
-  if (!type) return;
-  const code = `AUTO-${document.code}`;
-  if (await db.prepare('SELECT id FROM finance_cash_transactions WHERE code = ?').get(code)) return;
-  await db.prepare(`INSERT INTO finance_cash_transactions (
-    id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-    account_name, status, note, department, employee_code, created_by, created_at, updated_at
-  ) VALUES (?, ?, ?, 'bank', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`)
-    .run(
-      randomUUID(),
-      code,
-      type,
-      document.description || document.subtype,
-      document.paidAmount,
-      document.documentDate,
-      document.partnerName,
-      'Tài khoản ngân hàng',
-      'Đã hoàn thành',
-      `Tự động ghi nhận từ chứng từ ${document.code}`,
-      actorId,
-      timestamp,
-      timestamp,
-    );
-}
-
 function validatePassword(value) {
   const password = String(value || '');
   if (password.length < 6 || password.length > 256) {
@@ -13528,6 +13491,8 @@ async function handleRequest(request, response) {
         const amountProblem = adjustmentAmountProblem(document, original, alreadyAdjusted);
         if (amountProblem) throw new HttpError(422, amountProblem);
       }
+      // Tiền thu chi phải có phiếu thu, chi thật: không nhập số đã thanh toán lúc tạo, dùng POST /finance/documents/:id/payments.
+      if (document.paidAmount > 0) throw new HttpError(422, 'Không nhập số đã thu hoặc đã trả khi tạo chứng từ; lập phiếu bằng nút Thu tiền hoặc Chi tiền để có phiếu thu chi và bút toán thật.');
       if (terms.deliveryDate && terms.deliveryDate < document.documentDate && /^Đơn|^Hợp đồng/.test(document.subtype)) {
         throw new HttpError(422, 'Ngày giao hàng không được trước ngày chứng từ.');
       }
@@ -13581,7 +13546,6 @@ async function handleRequest(request, response) {
           .run(randomUUID(), id, actor.id, JSON.stringify(snapshot), timestamp, timestamp);
         await recordAuditEvent(actor.id, 'apply_sale_promotions', 'finance_sale_promotions', id, { customerId, promotionKeys, discountAmount: snapshot.discountAmount });
       }
-      await insertAutomaticCashTransaction(document, actor.id, timestamp);
     });
     const saved = withAdjustmentCredit(withDocumentTerms(publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id)), (await financeDocumentTerms()).get(id)), await adjustedAmounts());
     const result = { ...saved, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(snapshot) };

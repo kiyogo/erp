@@ -80,7 +80,6 @@ export const InvoicesModule: React.FC = () => {
     const vatRate = Number(values.vatRate) || 0;
     const vatAmount = Math.round((subTotal * vatRate) / 100);
     const amount = subTotal + vatAmount;
-    const paidAmount = Number(values.paidAmount) || 0;
     try {
       await financeDocumentsApi.create({
         documentType: 'invoice',
@@ -88,16 +87,16 @@ export const InvoicesModule: React.FC = () => {
         partnerName: values.partnerName,
         description: values.description || '',
         amount,
-        paidAmount,
+        paidAmount: 0,
         documentDate: values.documentDate || new Date().toISOString().substring(0, 10),
         dueDate: values.dueDate || '',
-        status: values.status || (paidAmount >= amount ? 'Đã thanh toán' : 'Đã phát hành'),
+        status: values.status || 'Đã phát hành',
         taxCode: values.taxCode || '',
         vatRate,
         vatAmount,
         terms: termsFromValues(values),
       });
-      message.success('Đã lưu hóa đơn và đồng bộ công nợ, dòng tiền theo số tiền đã thanh toán.');
+      message.success('Đã lưu hóa đơn. Lập phiếu thu hoặc chi bằng nút Thu tiền, Chi tiền ở cột Thanh toán.');
       setModalOpen(false);
       form.resetFields();
       await loadData();
@@ -207,7 +206,7 @@ export const InvoicesModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
-              setInvoiceDate(new Date().toISOString().substring(0, 10)); form.setFieldsValue({ subtype: outputSubtype, documentDate: new Date().toISOString().substring(0, 10), vatRate: 10, paidAmount: 0, status: 'Đã phát hành' });
+              setInvoiceDate(new Date().toISOString().substring(0, 10)); form.setFieldsValue({ subtype: outputSubtype, documentDate: new Date().toISOString().substring(0, 10), vatRate: 10, status: 'Đã phát hành' });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -250,15 +249,12 @@ export const InvoicesModule: React.FC = () => {
           <Form.Item name="description" label="Nội dung hóa đơn">
             <Input.TextArea rows={2} />
           </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="subTotal" label="Tiền trước thuế" rules={[{ required: true }]}>
               <Input type="number" min={1} />
             </Form.Item>
             <Form.Item name="vatRate" label="VAT" rules={[{ required: true }]}>
               <Select options={vatRateOptions(invoiceDate)} />
-            </Form.Item>
-            <Form.Item name="paidAmount" label="Đã thanh toán">
-              <Input type="number" min={0} />
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

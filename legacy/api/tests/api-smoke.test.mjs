@@ -1218,11 +1218,11 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(completed.status, 'Đã hoàn thành');
   await request('/finance/documents', 'POST', {
     documentType: 'sale', subtype: 'Bán hàng tổng quan', partnerName: `Khách hàng tổng quan ${suffix}`,
-    description: 'Chứng từ tổng quan phải thu', amount: 5000, paidAmount: 1500, documentDate: '2026-10-29', dueDate: '2026-10-29', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0,
+    description: 'Chứng từ tổng quan phải thu', amount: 5000, paidAmount: 0, documentDate: '2026-10-29', dueDate: '2026-10-29', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0,
   }, 201);
   await request('/finance/documents', 'POST', {
     documentType: 'purchase', subtype: 'Mua hàng tổng quan', partnerName: `Nhà cung cấp tổng quan ${suffix}`,
-    description: 'Chứng từ tổng quan phải trả', amount: 9000, paidAmount: 2000, documentDate: '2026-10-29', dueDate: '2026-10-29', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0,
+    description: 'Chứng từ tổng quan phải trả', amount: 9000, paidAmount: 0, documentDate: '2026-10-29', dueDate: '2026-10-29', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0,
   }, 201);
   const overview = await request('/finance/overview?dateFrom=2026-10-29&dateTo=2026-10-29');
   assert.ok(overview.cash.income >= completed.amount);
@@ -1236,8 +1236,9 @@ test('cash vouchers link active accounts and CRM contacts, allow pending edits a
   assert.equal(cashFlow.cash.flows.find(item => item.category === 'Thu tiền theo hóa đơn')?.income, completed.amount);
   assert.ok(overview.documents.sales >= 5000);
   assert.ok(overview.documents.purchases >= 9000);
-  assert.ok(overview.documents.receivable >= 3500);
-  assert.ok(overview.documents.payable >= 7000);
+  assert.ok(overview.documents.receivable >= 5000);
+  assert.ok(overview.documents.payable >= 9000);
+  await request('/finance/documents', 'POST', { documentType: 'sale', subtype: 'Bán hàng tổng quan', partnerName: 'Khách đã thu sẵn', description: 'Nhập đã thu', amount: 5000, paidAmount: 1500, documentDate: '2026-10-29', dueDate: '', status: 'Chưa thanh toán', taxCode: '', vatRate: 0, vatAmount: 0 }, 422);
   await request('/finance/overview?dateFrom=2026-02-30', 'GET', undefined, 422);
   await request('/finance/overview?dateFrom=2026-11-01&dateTo=2026-10-01', 'GET', undefined, 422);
   await request('/finance/cash-transactions', 'POST', {
@@ -2621,7 +2622,7 @@ test('returns and discounts adjust the original document, debts, sales totals, c
   assert.deepEqual(saved.termWarnings, []);
   await request('/finance/documents', 'POST', { ...ret, adjustsDocumentId: saved.key }, 422);
   await request('/finance/documents', 'POST', { ...ret, amount: 770_001, vatAmount: 70_000, terms: { reason: 'Quá mức' } }, 422);
-  const refunded = (await request('/finance/documents', 'POST', { ...ret, amount: 110_000, vatAmount: 10_000, paidAmount: 110_000, description: 'Giảm giá sau bán' , subtype: 'Giảm giá hàng bán', terms: { reason: 'Giảm giá', invoiceNo: 'DC-02' } }, 201)).document;
+  const refunded = (await request('/finance/documents', 'POST', { ...ret, amount: 110_000, vatAmount: 10_000, paidAmount: 0, description: 'Giảm giá sau bán' , subtype: 'Giảm giá hàng bán', terms: { reason: 'Giảm giá', invoiceNo: 'DC-02' } }, 201)).document;
   const listed = (await request('/finance/documents?documentType=sale')).data;
   const updated = listed.find((item) => item.key === original.key);
   assert.equal(updated.adjustedAmount, 440_000);
@@ -2629,8 +2630,6 @@ test('returns and discounts adjust the original document, debts, sales totals, c
   const overviewAfter = (await request(`/finance/overview?dateFrom=${today}&dateTo=${today}`)).documents;
   assert.equal(overviewBefore.sales - overviewAfter.sales, 440_000, 'doanh số giảm đúng phần điều chỉnh');
   assert.equal(overviewBefore.receivable - overviewAfter.receivable, 440_000, 'công nợ phải thu giảm đúng phần điều chỉnh');
-  const cash = (await request('/finance/cash-transactions?source=bank')).data;
-  assert.ok(cash.some((item) => item.code === `AUTO-${refunded.code}` && item.type === 'Chi'), 'hoàn tiền cho khách là phiếu chi');
 
   const invoice = (await request('/finance/documents', 'POST', { documentType: 'invoice', subtype: 'Đầu ra', partnerName: 'Khách VAT', description: 'Hóa đơn', amount: 11_000_000, paidAmount: 0, documentDate: '2026-03-10', dueDate: '', status: 'Đã phát hành', taxCode: '', vatRate: 10, vatAmount: 1_000_000 }, 201)).document;
   const estimate = async () => (await request('/finance/tax/estimate?taxType=Thu%E1%BA%BF%20GTGT&periodStart=2026-03-01&periodEnd=2026-03-31&filingMethod=Th%C3%A1ng')).data.vat.outputVat;

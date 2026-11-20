@@ -73,7 +73,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
     form.resetFields();
     setOriginalKey('');
     setNet(0);
-    form.setFieldsValue({ documentDate: currentBusinessDate(), paidAmount: 0 });
+    form.setFieldsValue({ documentDate: currentBusinessDate() });
     setModalOpen(true);
   };
 
@@ -89,7 +89,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         partnerName: original.document.partnerName,
         description: values.description || '',
         amount: netAmount + vat,
-        paidAmount: Number(values.paidAmount) || 0,
+        paidAmount: 0,
         documentDate: values.documentDate,
         dueDate: '',
         status: 'Đã ghi nhận',
@@ -99,7 +99,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         adjustsDocumentId: original.document.key,
         terms: termsFromValues(values),
       });
-      message.success(`Đã lưu ${label.title.toLocaleLowerCase('vi-VN')}, công nợ của chứng từ gốc đã giảm tương ứng.`);
+      message.success(`Đã lưu ${label.title.toLocaleLowerCase('vi-VN')}, công nợ của chứng từ gốc đã giảm tương ứng. Hoàn tiền bằng nút ở cột Thanh toán.`);
       setModalOpen(false);
       await loadData();
     } catch (error: any) {
@@ -187,9 +187,6 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
             <Form.Item name="terms_invoiceNo" label="Số hóa đơn điều chỉnh"><Input /></Form.Item>
             <Form.Item name="terms_invoiceSymbol" label="Ký hiệu hóa đơn điều chỉnh"><Input /></Form.Item>
           </div>
-          <Form.Item name="paidAmount" label={label.refundLabel}>
-            <Input type="number" min={0} />
-          </Form.Item>
           <Form.Item name="description" label="Ghi chú">
             <Input.TextArea rows={2} />
           </Form.Item>

@@ -103,7 +103,6 @@ const PurchasingDocumentsModule: React.FC = () => {
     const rate = Number(values.vatRate) || 0;
     const vat = vatOf(net, rate);
     const amount = net + vat;
-    const paidAmount = Number(values.paidAmount) || 0;
     setSaving(true);
     try {
       await financeDocumentsApi.create({
@@ -112,7 +111,7 @@ const PurchasingDocumentsModule: React.FC = () => {
         partnerName: values.partnerName,
         description: values.description || '',
         amount,
-        paidAmount,
+        paidAmount: 0,
         documentDate: values.documentDate || currentBusinessDate(),
         dueDate: values.dueDate || '',
         status: values.status || 'Chờ xử lý',
@@ -122,7 +121,7 @@ const PurchasingDocumentsModule: React.FC = () => {
         ...(values.supplierId ? { supplierId: values.supplierId } : {}),
         terms: termsFromValues(values),
       });
-      message.success('Đã lưu chứng từ mua hàng và đồng bộ sang dòng tiền nếu có khoản đã trả.');
+      message.success('Đã lưu chứng từ mua hàng. Trả tiền bằng nút Chi tiền ở cột Thanh toán.');
       setModalOpen(false);
       setSupplierId('');
       form.resetFields();
@@ -223,7 +222,7 @@ const PurchasingDocumentsModule: React.FC = () => {
                   setSubTotal(0);
                   setVatRate(10);
                   setDocumentDate(currentBusinessDate());
-                  form.setFieldsValue({ subtype: isContracts ? 'Hợp đồng mua' : isInputInvoices ? 'Hóa đơn đầu vào' : 'Đơn mua hàng', documentDate: currentBusinessDate(), paidAmount: 0, vatRate: 10 });
+                  form.setFieldsValue({ subtype: isContracts ? 'Hợp đồng mua' : isInputInvoices ? 'Hóa đơn đầu vào' : 'Đơn mua hàng', documentDate: currentBusinessDate(), vatRate: 10 });
                   setModalOpen(true);
                 }}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -272,15 +271,12 @@ const PurchasingDocumentsModule: React.FC = () => {
               <Input type="date" />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="subTotal" label="Tiền hàng chưa thuế" rules={[{ required: true }]}>
               <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setSubTotal(Number(event.target.value) || 0)} />
             </Form.Item>
             <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
               <Select options={vatRateOptions(documentDate)} onChange={(value: number) => setVatRate(Number(value) || 0)} />
-            </Form.Item>
-            <Form.Item name="paidAmount" label="Đã trả">
-              <Input type="number" min={0} />
             </Form.Item>
           </div>
           <div style={{ marginBottom: 14, color: '#64748B' }}>

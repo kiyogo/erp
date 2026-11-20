@@ -168,7 +168,6 @@ const SalesDocumentsModule: React.FC = () => {
       return;
     }
     const amount = context.amount;
-    const paidAmount = Number(values.paidAmount) || 0;
     setSaving(true);
     try {
       await financeDocumentsApi.create({
@@ -177,10 +176,10 @@ const SalesDocumentsModule: React.FC = () => {
         partnerName: values.partnerName,
         description: values.description || '',
         amount,
-        paidAmount,
+        paidAmount: 0,
         documentDate: values.documentDate || currentBusinessDate(),
         dueDate: values.dueDate || '',
-        status: values.status || (paidAmount >= amount ? 'Đã bàn giao' : 'Đang triển khai'),
+        status: values.status || 'Đang triển khai',
         taxCode: values.taxCode || '',
         vatRate: context.vatRate,
         vatAmount: context.vatAmount,
@@ -188,7 +187,7 @@ const SalesDocumentsModule: React.FC = () => {
         ...(values.customerId ? { customerId: values.customerId } : {}),
         ...(context.promotionKeys.length && promotionPreview ? { promotionKeys: context.promotionKeys, promotionFingerprint: promotionPreview.fingerprint, requestId } : {}),
       });
-      message.success('Đã lưu chứng từ bán hàng và đồng bộ sang dòng tiền nếu có khoản đã thu.');
+      message.success('Đã lưu chứng từ bán hàng. Thu tiền bằng nút Thu tiền ở cột Thanh toán.');
       setModalOpen(false);
       setSelectedCustomerId('');
       setSelectedPromotions([]);
@@ -317,7 +316,7 @@ const SalesDocumentsModule: React.FC = () => {
                     setSubTotal(0);
                     setVatRate(10);
                     setDocumentDate(currentBusinessDate());
-                    form.setFieldsValue({ subtype: isQuotes ? 'Báo giá' : 'Đơn bán hàng', documentDate: currentBusinessDate(), paidAmount: 0, vatRate: 10, promotionKeys: [] });
+                    form.setFieldsValue({ subtype: isQuotes ? 'Báo giá' : 'Đơn bán hàng', documentDate: currentBusinessDate(), vatRate: 10, promotionKeys: [] });
                     setModalOpen(true);
                   }}
                   style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -375,15 +374,12 @@ const SalesDocumentsModule: React.FC = () => {
               <Input type="date" />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="subTotal" label="Tiền hàng chưa thuế, trước khuyến mại" rules={[{ required: true }]}>
               <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => { setSubTotal(Number(event.target.value) || 0); setPromotionPreview(null); }} />
             </Form.Item>
             <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
               <Select options={vatRateOptions(documentDate)} onChange={(value: number) => { setVatRate(Number(value) || 0); setPromotionPreview(null); }} />
-            </Form.Item>
-            <Form.Item name="paidAmount" label="Đã thu">
-              <Input type="number" min={0} />
             </Form.Item>
           </div>
           <div style={{ marginBottom: 14, color: '#64748B' }}>
