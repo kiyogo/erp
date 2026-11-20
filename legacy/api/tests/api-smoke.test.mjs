@@ -230,7 +230,7 @@ test('tax type profiles are internal references and only active saved profiles c
 test('supplier tax reviews require a real CRM supplier and evidence before recording a reviewed source', async () => {
   const stamp = Date.now();
   const supplier = (await request('/crm/contacts', 'POST', {
-    type: 'supplier', name: `Nhà cung cấp rà soát ${stamp}`, taxCode: '0109876543', status: 'Đang hoạt động',
+    type: 'supplier', name: `Nhà cung cấp rà soát ${stamp}`, taxCode: '0109876532', status: 'Đang hoạt động',
   }, 201)).contact;
   const workspace = await request('/files?scope=employee');
   const evidenceFolder = (await request('/files/folders', 'POST', {
@@ -1329,7 +1329,7 @@ test('cash counts require a real petty cash account and recompute book balance a
 
 test('CRM contacts can be updated without changing their identity or exposing invalid data', async () => {
   const created = (await request('/crm/contacts', 'POST', {
-    name: 'Đối tác trước cập nhật', type: 'customer', taxCode: 'CRM-EDIT-001', contactPerson: 'Nguyễn An',
+    name: 'Đối tác trước cập nhật', type: 'customer', taxCode: '0100109106', contactPerson: 'Nguyễn An',
     phone: '0900000001', email: 'crm-before@example.test', address: 'Địa chỉ cũ', bankAccount: '0123456789',
     creditLimit: 1000000, totalValue: 200000, debtBalance: 50000, status: 'Đang hoạt động',
     details: { entityKind: 'person', isSupplier: true, isMember: true, citizenId: '012345678901', paymentTerm: 'NET30', creditDays: 30,
@@ -1357,6 +1357,23 @@ test('CRM contacts can be updated without changing their identity or exposing in
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { type: 'supplier' } }, 422);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { code: 'FORGED-CODE' } }, 422);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { email: 'invalid-email' } }, 422);
+  // Mã số thuế, số căn cước, điện thoại và đồng ý xử lý dữ liệu được kiểm tra; giá trị cũ không bị chặn khi sửa trường khác.
+  const newContact = (extra, details = {}) => ({ name: 'Khách kiểm tra quy tắc', type: 'customer', details: { entityKind: 'organization', ...details }, ...extra });
+  await request('/crm/contacts', 'POST', newContact({ taxCode: '0100109107' }), 422);
+  await request('/crm/contacts', 'POST', newContact({ taxCode: '0100109106' }), 409);
+  await request('/crm/contacts', 'POST', newContact({ phone: '12345' }), 422);
+  await request('/crm/contacts', 'POST', newContact({}, { citizenId: '123456789' }), 422);
+  await request('/crm/contacts', 'POST', newContact({}, { dateOfBirth: '2999-01-01' }), 422);
+  await request('/crm/contacts', 'POST', newContact({}, { invoiceRecipientEmails: 'a@b.vn; hong-hop-le' }), 422);
+  await request('/crm/contacts', 'POST', newContact({}, { dataConsent: true }), 422);
+  await request('/crm/contacts', 'POST', newContact({}, { marketingOptIn: true }), 422);
+  const consented = (await request('/crm/contacts', 'POST', newContact({ taxCode: '079123456789', phone: '+84 90 123 4567' }, {
+    entityKind: 'person', gender: 'Nữ', dateOfBirth: '1990-05-20', citizenId: '079123456789', province: 'Thành phố Hồ Chí Minh', ward: 'Phường Bến Nghé',
+    dataConsent: true, dataConsentDate: '2026-01-02', dataConsentPurposes: 'Chăm sóc khách hàng', marketingOptIn: true, invoiceRecipientEmails: 'a@b.vn; c@d.vn',
+  }), 201)).contact;
+  assert.equal(consented.details.dataConsentPurposes, 'Chăm sóc khách hàng');
+  assert.equal(consented.details.marketingOptIn, true);
+  assert.equal(consented.details.province, 'Thành phố Hồ Chí Minh');
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: { details: { bankAccounts: Array.from({ length: 21 }, (_, index) => ({ accountNumber: `BA-${index}` })) } } }, 422);
   await request(`/crm/contacts/${created.key}`, 'PATCH', { patch: {} }, 422);
   await request('/crm/contacts/missing-crm-contact', 'PATCH', { patch: { name: 'Không tồn tại' } }, 404);

@@ -849,6 +849,8 @@ export type CrmContact = {
     customerGroup?: string; paymentTerm?: string; creditDays?: number; maxDebt?: number; receivableAccount?: string;
     invoiceRecipientName?: string; invoiceRecipientEmails?: string; invoiceRecipientPhone?: string;
     isSupplier?: boolean; isMember?: boolean; isInternal?: boolean; memberType?: string; memberGroup?: string; note?: string;
+    dateOfBirth?: string; gender?: string; nationality?: string; province?: string; ward?: string; representative?: string; representativeTitle?: string;
+    dataConsent?: boolean; dataConsentDate?: string; dataConsentPurposes?: string; marketingOptIn?: boolean; customerSource?: string;
     bankAccounts?: Array<{ accountNumber: string; bankName: string; branch: string; province: string }>;
     addresses?: string[]; customFields?: Array<{ name: string; value: string }>;
   };

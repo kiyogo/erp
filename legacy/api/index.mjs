@@ -18,6 +18,7 @@ import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsT
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
 import { vatRateProblem } from './vatRules.mjs';
+import { contactTaxCodeProblem, dataConsentProblem, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
@@ -6175,22 +6176,31 @@ function validateBankAccount(input) {
   };
 }
 
-function validateCrmContact(input) {
+function validateCrmContact(input, current = null) {
   const type = oneOf(input.type, 'Loại đối tác', ['customer', 'supplier', 'partner']);
   const email = optionalText(input.email, 'Email', 254);
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(422, 'Email liên hệ không đúng định dạng.');
+  const details = validateCrmContactDetails(input.details, current?.details);
+  // Giá trị đã lưu từ trước không bị chặn khi sửa các trường khác; chỉ kiểm tra giá trị mới hoặc đã đổi.
+  const taxCode = optionalText(input.taxCode, 'Mã số thuế', 32);
+  if (taxCode && taxCode !== current?.taxCode) {
+    const taxProblem = contactTaxCodeProblem(taxCode, details.entityKind);
+    if (taxProblem) throw new HttpError(422, taxProblem);
+  }
+  const phone = optionalText(input.phone, 'Số điện thoại', 32);
+  if (phone && phone !== current?.phone && !isValidPhone(phone)) throw new HttpError(422, 'Số điện thoại không hợp lệ (10 hoặc 11 số bắt đầu bằng 0, hoặc dạng quốc tế +84...).');
   return {
     code: '',
     name: requiredText(input.name, 'Tên đối tác', 220),
     type,
-    taxCode: optionalText(input.taxCode, 'Mã số thuế', 32),
+    taxCode,
     industry: optionalText(input.industry, 'Ngành nghề', 220),
     contactPerson: optionalText(input.contactPerson, 'Người liên hệ', 200),
-    phone: optionalText(input.phone, 'Số điện thoại', 32),
+    phone,
     email,
     address: optionalText(input.address, 'Địa chỉ', 500),
     bankAccount: optionalText(input.bankAccount, 'Tài khoản ngân hàng', 220),
-    details: validateCrmContactDetails(input.details),
+    details,
     creditLimit: optionalAmount(input.creditLimit, 'Hạn mức tín dụng'),
     totalValue: optionalAmount(input.totalValue, 'Giá trị giao dịch'),
     debtBalance: optionalAmount(input.debtBalance, 'Công nợ'),
@@ -6200,16 +6210,35 @@ function validateCrmContact(input) {
   };
 }
 
-function validateCrmContactDetails(input) {
+async function assertUniqueContactTaxCode(contact, selfId) {
+  if (!contact.taxCode) return;
+  const duplicate = await db.prepare('SELECT code, name FROM crm_contacts WHERE contact_type = ? AND LOWER(tax_code) = LOWER(?) AND id <> ? LIMIT 1').get(contact.type, contact.taxCode, selfId);
+  if (duplicate) throw new HttpError(409, `Mã số thuế ${contact.taxCode} đã có ở ${duplicate.code} (${duplicate.name}).`);
+}
+
+function validateCrmContactDetails(input, currentDetails = null) {
   if (input === undefined || input === null) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(422, 'Thông tin mở rộng đối tác không hợp lệ.');
-  const strings = ['entityKind', 'salutation', 'personalName', 'socialInsuranceCode', 'citizenId', 'idIssueDate', 'idIssuePlace', 'passportNo', 'website', 'customerGroup', 'paymentTerm', 'receivableAccount', 'invoiceRecipientName', 'invoiceRecipientEmails', 'invoiceRecipientPhone', 'memberType', 'memberGroup', 'note'];
+  const strings = ['entityKind', 'salutation', 'personalName', 'socialInsuranceCode', 'citizenId', 'idIssueDate', 'idIssuePlace', 'passportNo', 'website', 'customerGroup', 'paymentTerm', 'receivableAccount', 'invoiceRecipientName', 'invoiceRecipientEmails', 'invoiceRecipientPhone', 'memberType', 'memberGroup', 'note',
+    'dateOfBirth', 'gender', 'nationality', 'province', 'ward', 'representative', 'representativeTitle', 'dataConsentDate', 'dataConsentPurposes', 'customerSource'];
   const details = Object.fromEntries(strings.map(field => [field, optionalText(input[field], `Thông tin ${field}`, field === 'note' ? 4000 : 500)]));
   if (details.entityKind && !['organization', 'person'].includes(details.entityKind)) throw new HttpError(422, 'Loại đối tượng phải là tổ chức hoặc cá nhân.');
-  for (const field of ['isSupplier', 'isMember', 'isInternal']) {
+  for (const field of ['isSupplier', 'isMember', 'isInternal', 'dataConsent', 'marketingOptIn']) {
     if (input[field] !== undefined && typeof input[field] !== 'boolean') throw new HttpError(422, `Trường ${field} phải là đúng hoặc sai.`);
     details[field] = input[field] === true;
   }
+  const changed = (field) => details[field] && details[field] !== (currentDetails?.[field] || '');
+  if (details.gender && !['Nam', 'Nữ', 'Khác'].includes(details.gender)) throw new HttpError(422, 'Giới tính phải là Nam, Nữ hoặc Khác.');
+  const dateProblem = pastDateProblem(details.dateOfBirth, 'Ngày sinh') || pastDateProblem(details.idIssueDate, 'Ngày cấp giấy tờ');
+  if (dateProblem) throw new HttpError(422, dateProblem);
+  if (changed('citizenId') && !/^\d{12}$/.test(details.citizenId)) throw new HttpError(422, 'Số căn cước phải gồm 12 chữ số.');
+  if (changed('passportNo') && !isValidPassportNumber(details.passportNo)) throw new HttpError(422, 'Số hộ chiếu gồm 6 đến 12 chữ cái hoặc chữ số.');
+  if (changed('website') && !isValidWebsite(details.website)) throw new HttpError(422, 'Website không đúng định dạng.');
+  if (changed('invoiceRecipientPhone') && !isValidPhone(details.invoiceRecipientPhone)) throw new HttpError(422, 'Điện thoại nhận hóa đơn không hợp lệ.');
+  const emailsProblem = changed('invoiceRecipientEmails') ? invoiceEmailsProblem(details.invoiceRecipientEmails) : '';
+  if (emailsProblem) throw new HttpError(422, emailsProblem);
+  const consentProblem = dataConsentProblem(details);
+  if (consentProblem) throw new HttpError(422, consentProblem);
   for (const field of ['creditDays', 'maxDebt']) {
     if (input[field] !== undefined && input[field] !== '') details[field] = optionalAmount(input[field], field === 'creditDays' ? 'Số ngày được nợ' : 'Số nợ tối đa');
   }
@@ -13439,7 +13468,9 @@ async function handleRequest(request, response) {
     if (unsupportedFields.length) throw new HttpError(422, 'Không thể thay đổi mã hoặc loại đối tác.');
     if (!Object.keys(patch).length) throw new HttpError(422, 'Chưa có thông tin nào để cập nhật.');
 
-    const contact = validateCrmContact({ ...publicCrmContact(row, actor), ...patch, type: row.contact_type });
+    const stored = publicCrmContact(row, actor);
+    const contact = validateCrmContact({ ...stored, ...patch, type: row.contact_type }, stored);
+    await assertUniqueContactTaxCode(contact, id);
     const timestamp = now();
     await db.prepare(`UPDATE crm_contacts SET
       name = ?, tax_code = ?, industry = ?, contact_person = ?, phone = ?, email = ?, address = ?, bank_account = ?,
@@ -13471,6 +13502,7 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && resource === '/crm/contacts') {
     const actor = await requireAdmin(request);
     const contact = validateCrmContact(await readJson(request));
+    await assertUniqueContactTaxCode(contact, '');
     contact.code = await nextUniqueCode(contact.type === 'customer' ? 'KH' : contact.type === 'supplier' ? 'NCC' : 'DT', 'crm_contacts');
     const id = randomUUID();
     const timestamp = now();

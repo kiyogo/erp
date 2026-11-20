@@ -16,6 +16,7 @@ import { CrmContact, CrmContactType, crmContactsApi, collectionsApi } from '../.
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { useNavigate } from 'react-router-dom';
 import { crmContactExportRows } from './crmContactExports';
+import { PROVINCE_OPTIONS } from '../../services/addressService';
 
 type ContactFilter = CrmContactType | 'all';
 
@@ -347,6 +348,9 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
             <Form.Item name={['details', 'website']} label="Website"><Input /></Form.Item>
             <Form.Item name={['details', 'customerGroup']} label="Nhóm khách hàng"><Input /></Form.Item>
             <Form.Item name="address" label="Địa chỉ"><Input /></Form.Item>
+            <Form.Item name={['details', 'province']} label="Tỉnh, thành phố"><Select showSearch allowClear options={PROVINCE_OPTIONS.map(option => ({ label: option.label, value: option.label }))} /></Form.Item>
+            <Form.Item name={['details', 'ward']} label="Xã, phường, đặc khu"><Input /></Form.Item>
+            <Form.Item name={['details', 'customerSource']} label="Nguồn khách hàng"><Input /></Form.Item>
           </div>
           <div className="crm-contact-fields-grid crm-contact-money-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 14px' }}>
             <Form.Item name="creditLimit" label="Hạn mức">
@@ -366,8 +370,18 @@ export const CRMContactsModule: React.FC<{ type?: ContactFilter; createDialogOpe
             { key: 'contact', label: 'Thông tin liên hệ', children: <div className="crm-contact-tab-panel crm-contact-tab-grid">
               <div className="crm-contact-salutation-grid"><Form.Item name={['details', 'salutation']} label="Xưng hô"><Select options={['Anh', 'Bà', 'Bạn', 'Chị', 'Miss', 'Ông'].map(value => ({ label: value, value }))} /></Form.Item><Form.Item name={['details', 'personalName']} label="Họ và tên"><Input /></Form.Item></div>
               <div><Form.Item name={['details', 'invoiceRecipientName']} label="Người nhận hóa đơn điện tử"><Input /></Form.Item><Form.Item name={['details', 'invoiceRecipientEmails']} label="Email nhận hóa đơn"><Input placeholder="Có thể nhập nhiều email, phân cách bằng dấu ;" /></Form.Item></div>
-              <div className="crm-contact-id-grid"><Form.Item name={['details', 'citizenId']} label="Số CMND/Thẻ căn cước"><Input /></Form.Item><Form.Item name={['details', 'idIssueDate']} label="Ngày cấp"><Input type="date" /></Form.Item><Form.Item name={['details', 'idIssuePlace']} label="Nơi cấp"><Input /></Form.Item><Form.Item name={['details', 'passportNo']} label="Số hộ chiếu"><Input /></Form.Item></div>
+              <div className="crm-contact-id-grid"><Form.Item name={['details', 'citizenId']} label="Số căn cước (12 số)"><Input maxLength={12} /></Form.Item><Form.Item name={['details', 'idIssueDate']} label="Ngày cấp"><Input type="date" /></Form.Item><Form.Item name={['details', 'idIssuePlace']} label="Nơi cấp"><Input /></Form.Item><Form.Item name={['details', 'passportNo']} label="Số hộ chiếu"><Input /></Form.Item></div>
               <div><Form.Item name={['details', 'invoiceRecipientPhone']} label="Điện thoại nhận hóa đơn"><Input /></Form.Item><Form.Item name={['details', 'socialInsuranceCode']} label="Mã số ĐVQHNS / BHXH"><Input /></Form.Item></div>
+            </div> },
+            { key: 'identity', label: 'Thông tin pháp lý', children: <div className="crm-contact-tab-panel crm-contact-tab-grid">
+              <div><Form.Item name={['details', 'representative']} label="Người đại diện pháp luật"><Input /></Form.Item><Form.Item name={['details', 'representativeTitle']} label="Chức danh người đại diện"><Input /></Form.Item></div>
+              <div><Form.Item name={['details', 'dateOfBirth']} label="Ngày sinh"><Input type="date" /></Form.Item><Form.Item name={['details', 'gender']} label="Giới tính"><Select allowClear options={['Nam', 'Nữ', 'Khác'].map(value => ({ label: value, value }))} /></Form.Item></div>
+              <div><Form.Item name={['details', 'nationality']} label="Quốc tịch"><Input /></Form.Item></div>
+            </div> },
+            { key: 'privacy', label: 'Dữ liệu cá nhân', children: <div className="crm-contact-tab-panel crm-contact-tab-grid">
+              <div style={{ color: '#64748B', fontStyle: 'italic' }}>Ghi nhận việc khách hàng đồng ý cho doanh nghiệp xử lý dữ liệu cá nhân theo Luật Bảo vệ dữ liệu cá nhân. Việc xử lý để thực hiện hợp đồng hoặc nghĩa vụ pháp luật như xuất hóa đơn không cần ghi nhận đồng ý.</div>
+              <div><Form.Item name={['details', 'dataConsent']} valuePropName="checked"><Checkbox>Khách hàng đã đồng ý xử lý dữ liệu cá nhân</Checkbox></Form.Item><Form.Item name={['details', 'dataConsentDate']} label="Ngày đồng ý"><Input type="date" /></Form.Item></div>
+              <div><Form.Item name={['details', 'dataConsentPurposes']} label="Mục đích đã đồng ý"><Input placeholder="Ví dụ: chăm sóc khách hàng, giao hàng" /></Form.Item><Form.Item name={['details', 'marketingOptIn']} valuePropName="checked"><Checkbox>Đồng ý nhận tin quảng cáo, khuyến mại</Checkbox></Form.Item></div>
             </div> },
             { key: 'payment', label: 'Điều khoản thanh toán', children: <div className="crm-contact-tab-panel crm-contact-payment-grid">
               <Form.Item label="Điều khoản thanh toán"><div style={{ display: 'flex', gap: 4 }}><Form.Item name={['details', 'paymentTerm']} style={{ flex: 1, marginBottom: 0 }}><Select showSearch placeholder="Chọn điều khoản" options={paymentTerms.map(term => ({ value: term.code, label: `${term.code} · ${term.name}` }))} onChange={(value: string) => { const term = paymentTerms.find(item => item.code === value); if (term) form.setFieldsValue({ details: { ...form.getFieldValue('details'), creditDays: term.creditDays } }); }} /></Form.Item><Button aria-label="Thêm điều khoản thanh toán" icon={<PlusOutlined />} onClick={() => { paymentTermForm.resetFields(); setPaymentTermOpen(true); }} /></div></Form.Item>
