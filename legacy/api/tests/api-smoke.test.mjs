@@ -1571,10 +1571,21 @@ test('asset disposal API snapshots inventory, records approval and finalization 
     status: 'Đã thanh lý & Hoàn tất sổ sách', actualDisposalPrice: 800, disposalCost: 100,
     disposalDate: '2026-10-27', buyerName: 'Đơn vị thu mua', buyerPhone: '',
     securityDataWipeCertified: true, dataWipeOfficer: 'Người ghi nhận',
+    invoiceNo: 'HD-TL-01', invoiceSymbol: '1C26TAA', vatRate: 10, paymentMethod: 'Chuyển khoản', buyerTaxCode: '0100109106',
   };
   await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: { ...finalize, securityDataWipeCertified: false, dataWipeOfficer: '' } }, 422);
+  await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: { ...finalize, invoiceNo: '' } }, 422);
+  await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: { ...finalize, vatRate: 7 } }, 422);
+  await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: { ...finalize, buyerTaxCode: '0100109107' } }, 422);
+  await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: { ...finalize, disposalDate: '2026-10-26' } }, 422);
+  await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: { ...finalize, disposalDate: '2099-01-01' } }, 422);
   const completed = await request('/collections/asset_disposals/disposal-api', 'PATCH', { patch: finalize });
   assert.equal(completed.record.netGainLoss, 200);
+  assert.equal(completed.record.vatAmount, 80);
+  assert.equal(completed.record.totalReceived, 880);
+  assert.equal(completed.record.journal.reduce((sum, line) => sum + line.debit, 0), completed.record.journal.reduce((sum, line) => sum + line.credit, 0));
+  assert.ok(completed.record.journal.some((line) => line.account === '3331' && line.credit === 80));
+  assert.match(completed.record.disposalWarnings.join(' '), /quyết định thanh lý/);
   assert.equal(completed.record.completedById, session.user.id);
   assert.ok(completed.record.completedAt);
   asset = (await request('/collections/asset_items')).data.find(item => item.key === 'disposal-asset-api');

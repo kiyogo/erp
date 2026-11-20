@@ -22,6 +22,7 @@ import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, 
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
+import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
@@ -3837,8 +3838,9 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         record.approvedBy = actor.name; record.approvedById = actor.id; record.approvedAt = now();
       } else if (['Đang thực hiện xử lý', 'Đang đấu giá / Thu gom'].includes(current.status) && finalStatuses.includes(requestedStatus)) {
         record.status = requestedStatus;
-        record.actualDisposalPrice = optionalAmount(value.actualDisposalPrice, 'Số tiền thu thực tế');
+        record.actualDisposalPrice = optionalAmount(value.actualDisposalPrice, 'Giá bán hoặc số tiền thu thực tế (chưa thuế)');
         record.disposalCost = optionalAmount(value.disposalCost, 'Chi phí xử lý');
+        const proposalDate = current.disposalDate;
         record.disposalDate = requiredIsoDate(value.disposalDate, 'Ngày xử lý thực tế');
         record.buyerName = optionalText(value.buyerName, 'Bên mua / tiếp nhận', 255);
         record.buyerPhone = optionalText(value.buyerPhone, 'Số điện thoại liên hệ', 80);
@@ -3855,8 +3857,36 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         if (needsDataWipe(record.category, record.disposalMethod) && !record.securityDataWipeCertified) {
           throw new HttpError(422, 'Tài sản hoặc hình thức xử lý này cần ghi nhận thao tác xóa dữ liệu trước khi hoàn tất.');
         }
-        record.netGainLoss = record.actualDisposalPrice - record.disposalCost - record.netBookValue;
+        // Hao mòn lũy kế lấy lại từ danh mục tại thời điểm hoàn tất (khấu hao có thể đã ghi thêm từ lúc đề xuất).
+        const assetRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_items' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(current.assetKey);
+        const asset = publicCollectionRecord(assetRow);
+        if (!asset) throw new HttpError(422, 'Không tìm thấy tài sản liên kết để hoàn tất thanh lý.');
+        record.originalCost = optionalAmount(asset.originalPrice, 'Nguyên giá tài sản');
+        record.accumulatedDepreciation = optionalAmount(asset.accumulatedDepreciation, 'Khấu hao lũy kế');
+        if (record.accumulatedDepreciation > record.originalCost) throw new HttpError(422, 'Khấu hao lũy kế không được vượt nguyên giá.');
+        const sale = isSaleDisposal(record.disposalMethod);
+        record.councilDecisionNo = optionalText(value.councilDecisionNo, 'Số quyết định thanh lý', 120);
+        record.councilDecisionDate = value.councilDecisionDate ? requiredIsoDate(value.councilDecisionDate, 'Ngày quyết định thanh lý') : '';
+        record.paymentMethod = value.paymentMethod ? oneOf(value.paymentMethod, 'Hình thức thanh toán', ['Tiền mặt', 'Chuyển khoản', 'Tiền mặt hoặc chuyển khoản', 'Thẻ', 'Bù trừ công nợ', 'Khác']) : '';
+        record.buyerTaxCode = optionalText(value.buyerTaxCode, 'Mã số thuế bên mua', 32);
+        record.invoiceNo = sale ? optionalText(value.invoiceNo, 'Số hóa đơn', 30) : '';
+        record.invoiceSymbol = sale ? optionalText(value.invoiceSymbol, 'Ký hiệu hóa đơn', 30) : '';
+        record.invoiceDate = sale ? (value.invoiceDate ? requiredIsoDate(value.invoiceDate, 'Ngày hóa đơn') : record.disposalDate) : '';
+        record.vatRate = sale ? optionalAmount(value.vatRate ?? 10, 'Thuế suất GTGT') : 0;
+        const finalProblem = disposalFinalProblem({
+          method: record.disposalMethod, disposalDate: record.disposalDate, proposalDate, today: todayInVietnam(),
+          assetStartDate: asset.inUseDate || asset.purchaseDate || '', vatRate: record.vatRate, invoiceNo: record.invoiceNo,
+          invoiceDate: record.invoiceDate, buyerTaxCode: record.buyerTaxCode,
+        });
+        if (finalProblem) throw new HttpError(422, finalProblem);
+        const figures = disposalFigures({ originalCost: record.originalCost, accumulatedDepreciation: record.accumulatedDepreciation, price: record.actualDisposalPrice, vatRate: record.vatRate, cost: record.disposalCost, method: record.disposalMethod });
+        record.netBookValue = figures.netBookValue;
+        record.vatAmount = figures.vatAmount;
+        record.totalReceived = figures.totalReceived;
+        record.netGainLoss = figures.netGainLoss;
         if (!Number.isSafeInteger(record.netGainLoss)) throw new HttpError(422, 'Kết quả lãi/lỗ vượt giới hạn tính toán.');
+        record.journal = disposalJournal({ method: record.disposalMethod, originalCost: record.originalCost, accumulatedDepreciation: record.accumulatedDepreciation, netBookValue: record.netBookValue, price: record.actualDisposalPrice, vatAmount: record.vatAmount, cost: record.disposalCost, intangible: asset.assetClass === 'Tài sản cố định vô hình', paymentMethod: record.paymentMethod });
+        record.disposalWarnings = disposalWarnings({ method: record.disposalMethod, councilDecisionNo: record.councilDecisionNo, price: record.actualDisposalPrice, netBookValue: record.netBookValue, invoiceDate: record.invoiceDate, disposalDate: record.disposalDate });
         record.completedBy = actor.name; record.completedById = actor.id; record.completedAt = now();
       } else {
         throw new HttpError(422, 'Hồ sơ đã được xử lý hoặc trạng thái chuyển tiếp không hợp lệ.');
@@ -10378,8 +10408,9 @@ async function handleRequest(request, response) {
       }
       if (scope === 'asset_disposals') {
         const fields = Object.keys(patch).filter((field) => field !== 'key');
-        const allowed = new Set(['status', 'actualDisposalPrice', 'disposalCost', 'disposalDate', 'buyerName', 'buyerPhone', 'securityDataWipeCertified', 'dataWipeOfficer']);
-        const finalFields = new Set(['status', 'actualDisposalPrice', 'disposalCost', 'disposalDate', 'buyerName', 'buyerPhone', 'securityDataWipeCertified', 'dataWipeOfficer']);
+        const finalFields = new Set(['status', 'actualDisposalPrice', 'disposalCost', 'disposalDate', 'buyerName', 'buyerPhone', 'securityDataWipeCertified', 'dataWipeOfficer',
+          'councilDecisionNo', 'councilDecisionDate', 'paymentMethod', 'buyerTaxCode', 'invoiceNo', 'invoiceSymbol', 'invoiceDate', 'vatRate']);
+        const allowed = finalFields;
         const isApproval = fields.length === 1 && fields[0] === 'status' && patch.status === 'Đang thực hiện xử lý';
         const isFinalization = fields.includes('status') && ['actualDisposalPrice', 'disposalCost', 'disposalDate'].every((field) => fields.includes(field))
           && fields.every((field) => finalFields.has(field));

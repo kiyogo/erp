@@ -2,6 +2,8 @@ import { dataService } from '../../services/dataService';
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { vatRateOptions } from '../finance/vatRateRules';
+import { PAYMENT_METHOD_OPTIONS, vatOf } from '../finance/tradeTerms';
 import { assetDisposalMethodLabel, assetDisposalOutcome, assetDisposalSnapshot, disposalMoney, disposalNeedsDataWipe } from './assetDisposalRules';
 import {
   PlusOutlined,
@@ -51,6 +53,18 @@ export interface DisposalItem {
   approvedAt?: string;
   completedBy?: string;
   completedAt?: string;
+  vatRate?: number;
+  vatAmount?: number;
+  totalReceived?: number;
+  invoiceNo?: string;
+  invoiceSymbol?: string;
+  invoiceDate?: string;
+  buyerTaxCode?: string;
+  paymentMethod?: string;
+  councilDecisionNo?: string;
+  councilDecisionDate?: string;
+  journal?: Array<{ account: string; debit: number; credit: number; note: string }>;
+  disposalWarnings?: string[];
 }
 
 const INITIAL_DISPOSALS: DisposalItem[] = [];
@@ -113,6 +127,9 @@ export const AssetDisposalModule: React.FC = () => {
   const [finalizeModalOpen, setFinalizeModalOpen] = useState(false);
   const [finalizeSaving, setFinalizeSaving] = useState(false);
   const [finalizeWipeChecked, setFinalizeWipeChecked] = useState(false);
+  const [finalPrice, setFinalPrice] = useState(0);
+  const [finalVatRate, setFinalVatRate] = useState(10);
+  const [finalInvoiceDate, setFinalInvoiceDate] = useState('');
 
   const [form] = Form.useForm();
   const [finalizeForm] = Form.useForm();
@@ -194,7 +211,10 @@ export const AssetDisposalModule: React.FC = () => {
   const openFinalizeModal = (record: DisposalItem) => {
     setFinalizeTarget(record);
     setFinalizeWipeChecked(false);
-    finalizeForm.setFieldsValue({ actualDisposalPrice: '0', disposalCost: '0', buyerName: '', buyerPhone: '', disposalDate: localDate(), dataWipeOfficer: '' });
+    setFinalPrice(0);
+    setFinalVatRate(10);
+    setFinalInvoiceDate(localDate());
+    finalizeForm.setFieldsValue({ actualDisposalPrice: '0', disposalCost: '0', buyerName: '', buyerPhone: '', disposalDate: localDate(), dataWipeOfficer: '', vatRate: 10, invoiceDate: localDate() });
     setFinalizeModalOpen(true);
   };
 
@@ -222,6 +242,16 @@ export const AssetDisposalModule: React.FC = () => {
         buyerPhone: String(values.buyerPhone || '').trim(),
         securityDataWipeCertified: finalizeWipeChecked,
         dataWipeOfficer,
+        councilDecisionNo: String(values.councilDecisionNo || '').trim(),
+        councilDecisionDate: values.councilDecisionDate || '',
+        paymentMethod: values.paymentMethod || '',
+        buyerTaxCode: String(values.buyerTaxCode || '').trim(),
+        ...(finalizeTarget.disposalMethod.startsWith('Bán') ? {
+          invoiceNo: String(values.invoiceNo || '').trim(),
+          invoiceSymbol: String(values.invoiceSymbol || '').trim(),
+          invoiceDate: values.invoiceDate || values.disposalDate,
+          vatRate: Number(values.vatRate) || 0,
+        } : {}),
       }) as DisposalItem;
       if (detailItem?.key === saved.key) setDetailItem(saved);
       message.success(`Đã lưu hoàn tất xử lý ${saved.disposalCode} và cập nhật trạng thái tài sản.`);
@@ -638,6 +668,32 @@ export const AssetDisposalModule: React.FC = () => {
               </table>
             </div>
 
+            {['Đã thanh lý & Hoàn tất sổ sách', 'Đã tiêu hủy an toàn', 'Đã xử lý mất'].includes(detailItem.status) && (
+              <div style={{ background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
+                <strong style={{ color: '#0F172A' }}>Thuế, hóa đơn và bút toán gợi ý:</strong>
+                {detailItem.councilDecisionNo && <div style={{ marginTop: 4 }}>Quyết định thanh lý {detailItem.councilDecisionNo}{detailItem.councilDecisionDate ? ` ngày ${detailItem.councilDecisionDate}` : ''}</div>}
+                {detailItem.invoiceNo && <div style={{ marginTop: 4 }}>Hóa đơn {detailItem.invoiceNo}{detailItem.invoiceSymbol ? `, ký hiệu ${detailItem.invoiceSymbol}` : ''}{detailItem.invoiceDate ? `, ngày ${detailItem.invoiceDate}` : ''}</div>}
+                {detailItem.disposalMethod.startsWith('Bán') && <div style={{ marginTop: 4 }}>Thuế GTGT {Number(detailItem.vatAmount || 0).toLocaleString('vi-VN')} ₫ ({detailItem.vatRate}%), tổng thu {Number(detailItem.totalReceived || 0).toLocaleString('vi-VN')} ₫</div>}
+                {(detailItem.disposalWarnings || []).map((warning) => <div key={warning} style={{ marginTop: 4, color: '#D97706' }}>{warning}</div>)}
+                {(detailItem.journal || []).length > 0 && (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
+                    <thead><tr style={{ color: '#64748B', textAlign: 'left' }}><th>TK</th><th>Nợ</th><th>Có</th><th>Nội dung</th></tr></thead>
+                    <tbody>
+                      {(detailItem.journal || []).map((line, index) => (
+                        <tr key={`${line.account}-${index}`}>
+                          <td>{line.account}</td>
+                          <td>{line.debit ? line.debit.toLocaleString('vi-VN') : ''}</td>
+                          <td>{line.credit ? line.credit.toLocaleString('vi-VN') : ''}</td>
+                          <td style={{ color: '#64748B' }}>{line.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 6 }}>Bút toán chỉ là gợi ý; ghi sổ cái theo tài khoản chi tiết của danh mục đang dùng.</div>
+              </div>
+            )}
+
             {/* Security Data Wipe */}
             <div style={{ background: '#F8FAFC', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
               <strong style={{ color: '#0F172A' }}>III. GHI NHẬN THAO TÁC XÓA DỮ LIỆU:</strong>
@@ -714,10 +770,10 @@ export const AssetDisposalModule: React.FC = () => {
       <Modal title={`Ghi nhận kết quả xử lý ${finalizeTarget?.disposalCode || ''}`} open={finalizeModalOpen} onCancel={() => setFinalizeModalOpen(false)} footer={null} width={620}>
         {finalizeTarget && (
           <Form form={finalizeForm} layout="vertical" onFinish={handleFinalize} style={{ marginTop: 14 }}>
-            <Alert type="info" showIcon message={`Tài sản ${finalizeTarget.assetCode} · Giá trị còn lại ${Number(finalizeTarget.netBookValue || 0).toLocaleString('vi-VN')} ₫`} description="Chỉ nhập số tiền, bên nhận và thao tác thực tế đã có bằng chứng. Kết quả chỉ được ghi trong hồ sơ nội bộ; chưa tự tạo bút toán hoặc xác nhận dòng tiền." />
+            <Alert type="info" showIcon message={`Tài sản ${finalizeTarget.assetCode} · Giá trị còn lại ${Number(finalizeTarget.netBookValue || 0).toLocaleString('vi-VN')} ₫`} description="Chỉ nhập số tiền, bên nhận và thao tác thực tế đã có bằng chứng. Kết quả chỉ được ghi trong hồ sơ nội bộ; chưa tự tạo bút toán, hóa đơn hoặc xác nhận dòng tiền (có bút toán gợi ý ở phần chi tiết)." />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
-              <Form.Item name="actualDisposalPrice" label="Số tiền thu thực tế (VNĐ)" rules={[{ required: true }]}>
-                <Input type="number" min={0} step={1} />
+              <Form.Item name="actualDisposalPrice" label={finalizeTarget.disposalMethod.startsWith('Bán') ? 'Giá bán chưa thuế (VNĐ)' : 'Số tiền thu thực tế (VNĐ)'} rules={[{ required: true }]}>
+                <Input type="number" min={0} step={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFinalPrice(Number(event.target.value) || 0)} />
               </Form.Item>
               <Form.Item name="disposalCost" label="Chi phí xử lý (VNĐ)" rules={[{ required: true }]}>
                 <Input type="number" min={0} step={1} />
@@ -731,12 +787,29 @@ export const AssetDisposalModule: React.FC = () => {
               <Form.Item name="buyerPhone" label="Số điện thoại liên hệ">
                 <Input />
               </Form.Item>
+              <Form.Item name="councilDecisionNo" label="Số quyết định thanh lý"><Input /></Form.Item>
+              <Form.Item name="councilDecisionDate" label="Ngày quyết định thanh lý"><Input type="date" /></Form.Item>
+              <Form.Item name="buyerTaxCode" label="Mã số thuế hoặc số định danh bên mua"><Input placeholder="10 số, 13 số hoặc 12 số" /></Form.Item>
+              <Form.Item name="paymentMethod" label="Hình thức thanh toán"><Select allowClear options={PAYMENT_METHOD_OPTIONS} /></Form.Item>
+              {finalizeTarget.disposalMethod.startsWith('Bán') && (<>
+                <Form.Item name="invoiceNo" label="Số hóa đơn bán thanh lý" rules={[{ required: true, whitespace: true, message: 'Bán tài sản phải lập hóa đơn.' }]}><Input /></Form.Item>
+                <Form.Item name="invoiceSymbol" label="Ký hiệu hóa đơn"><Input /></Form.Item>
+                <Form.Item name="invoiceDate" label="Ngày hóa đơn" rules={[{ required: true }]}>
+                  <Input type="date" onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFinalInvoiceDate(event.target.value)} />
+                </Form.Item>
+                <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
+                  <Select options={vatRateOptions(finalInvoiceDate || localDate())} onChange={(value: number) => setFinalVatRate(Number(value) || 0)} />
+                </Form.Item>
+              </>)}
               {(disposalNeedsDataWipe(finalizeTarget.category, finalizeTarget.disposalMethod) || finalizeWipeChecked) && (
                 <Form.Item name="dataWipeOfficer" label="Người ghi nhận thao tác xóa dữ liệu" rules={[{ required: finalizeWipeChecked, message: 'Nhập người ghi nhận thao tác.' }]}>
                   <Input />
                 </Form.Item>
               )}
             </div>
+            {finalizeTarget.disposalMethod.startsWith('Bán') && <div style={{ marginBottom: 12, color: '#64748B' }}>
+              Thuế GTGT {vatOf(finalPrice, finalVatRate).toLocaleString('vi-VN')} ₫, tổng thu {(finalPrice + vatOf(finalPrice, finalVatRate)).toLocaleString('vi-VN')} ₫. Hóa đơn đầu ra cần được ghi riêng ở Tài chính, Hóa đơn.
+            </div>}
             <div style={{ background: '#F8FAFC', padding: 10, borderRadius: 6, border: '1px solid #E2E8F0', marginBottom: 12 }}>
               <Checkbox checked={finalizeWipeChecked} onChange={(e) => setFinalizeWipeChecked(Boolean(e.target.checked))}>
                 <span style={{ fontSize: 12.5 }}>Tôi ghi nhận đã thực hiện xóa dữ liệu. Đây là khai báo của người dùng, hệ thống không kiểm chứng kỹ thuật.</span>
