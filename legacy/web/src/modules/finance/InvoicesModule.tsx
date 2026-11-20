@@ -14,6 +14,8 @@ import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
 import { vatRateOptions } from './vatRateRules';
 import { PaymentMethodField } from './TradeTermsFields';
 import { termsFromValues } from './tradeTerms';
+import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import type { LedgerSourceKind } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const outputSubtype = 'Đầu ra';
@@ -29,6 +31,8 @@ export const InvoicesModule: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<FinanceDocument | null>(null);
   const [form] = Form.useForm();
+  const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
+  const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -141,6 +145,7 @@ export const InvoicesModule: React.FC = () => {
         </Button>
       ),
     },
+    ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
   return (
@@ -212,6 +217,7 @@ export const InvoicesModule: React.FC = () => {
         <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} locale={{ emptyText: 'Chưa có hóa đơn tài chính.' }} />
       </div>
 
+      <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title="Thêm hóa đơn tài chính" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={660}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

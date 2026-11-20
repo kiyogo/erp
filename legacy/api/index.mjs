@@ -22,6 +22,7 @@ import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, 
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
+import { applyAccountMap, documentLedgerLines, documentPostingProblem } from './ledgerPostingRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
@@ -6048,6 +6049,21 @@ async function validateLedgerAccountLines(profile, lines) {
   }
 }
 
+// Tài khoản mặc định có thể là tài khoản tổng hợp (ví dụ 3331, 214); đổi sang tài khoản chi tiết đầu tiên còn dùng trong danh mục,
+// kèm danh sách các tài khoản chi tiết khác để người dùng chọn lại. Không có danh mục thì giữ nguyên mã.
+async function resolveLedgerLeafAccounts(profile, lines) {
+  const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_chart_of_accounts'").all();
+  const chart = rows.map((row) => parseJsonObject(row.payload_json)).filter((item) => item.accountingRegime === profile.accountingRegime && item.status === 'Đang sử dụng');
+  if (!chart.length) return lines.map((line) => ({ ...line, alternatives: [] }));
+  const children = new Map();
+  for (const item of chart) if (item.parentCode) children.set(item.parentCode, [...(children.get(item.parentCode) || []), item]);
+  const leaves = (code) => (children.get(code) || []).flatMap((child) => (children.has(child.code) ? leaves(child.code) : [child.code])).sort();
+  return lines.map((line) => {
+    const alternatives = children.has(line.account) ? leaves(line.account) : [];
+    return { ...line, account: alternatives[0] || line.account, alternatives };
+  });
+}
+
 async function importChartOfAccountsTemplate(profile, actor) {
   const template = getChartOfAccountsTemplate(profile.accountingRegime);
   if (!template) throw new HttpError(422, 'Chưa có mẫu tài khoản đã đối chiếu cho chế độ kế toán đang áp dụng.');
@@ -9838,6 +9854,70 @@ async function handleRequest(request, response) {
     }
     const preview = buildTT132ToTT58BalancePreview(records, { openingDate, vatMethod: profile.vatMethod, citMethod: profile.citMethod });
     sendJson(response, 200, { preview });
+    return;
+  }
+
+  // Ghi sổ cái từ chứng từ mua, bán, hóa đơn, hàng trả lại, giảm giá và từ hồ sơ thanh lý tài sản. Body: { preview?: boolean, accountMap?: { mã mặc định: mã chi tiết } }.
+  const ledgerSourceMatch = /^\/finance\/(documents|asset-disposals)\/([^/]+)\/ledger-entry$/.exec(resource);
+  if (request.method === 'POST' && ledgerSourceMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const payload = await readJson(request, 64 * 1024);
+    const isDocument = ledgerSourceMatch[1] === 'documents';
+    const sourceKey = requiredText(decodeURIComponent(ledgerSourceMatch[2]), 'Mã nguồn', 160);
+    let source;
+    if (isDocument) {
+      const row = await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(sourceKey);
+      if (!row) throw new HttpError(404, 'Không tìm thấy chứng từ.');
+      const document = publicFinanceDocument(row);
+      const problem = documentPostingProblem(document);
+      if (problem) throw new HttpError(422, problem);
+      source = { sourceModule: 'finance_document', sourceReference: `document:${sourceKey}`, voucherCode: document.code, entryDate: document.documentDate, description: `${document.subtype} ${document.code} - ${document.partnerName}`, lines: documentLedgerLines(document) };
+    } else {
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'asset_disposals' AND record_key = ? ORDER BY updated_at DESC LIMIT 1").get(sourceKey);
+      const disposal = row && publicCollectionRecord(row);
+      if (!disposal) throw new HttpError(404, 'Không tìm thấy hồ sơ thanh lý.');
+      if (!['Đã thanh lý & Hoàn tất sổ sách', 'Đã tiêu hủy an toàn', 'Đã xử lý mất'].includes(disposal.status) || !Array.isArray(disposal.journal) || !disposal.journal.length) {
+        throw new HttpError(422, 'Chỉ ghi sổ hồ sơ thanh lý đã hoàn tất và có bút toán gợi ý.');
+      }
+      source = { sourceModule: 'asset_disposal', sourceReference: `asset-disposal:${sourceKey}`, voucherCode: disposal.disposalCode, entryDate: disposal.disposalDate, description: `Thanh lý ${disposal.assetCode} - ${disposal.assetName}`, lines: disposal.journal };
+    }
+    let lines;
+    try { lines = applyAccountMap(source.lines.map((line) => ({ ...line, defaultAccount: line.account })), payload.accountMap); } catch (error) { throw new HttpError(422, error.message); }
+    lines = await resolveLedgerLeafAccounts(profile, lines);
+    const amount = lines.reduce((sum, line) => sum + line.debit, 0);
+    if (amount <= 0 || amount !== lines.reduce((sum, line) => sum + line.credit, 0)) throw new HttpError(422, 'Bút toán không cân Nợ Có.');
+    const posted = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND json_extract(payload_json, '$.sourceReference') = ? LIMIT 1").get(source.sourceReference);
+    if (payload.preview === true) {
+      sendJson(response, 200, { preview: { voucherCode: source.voucherCode, entryDate: source.entryDate, description: source.description, amount, lines }, posted: !!posted });
+      return;
+    }
+    await validateLedgerAccountLines(profile, lines);
+    const timestamp = now();
+    const record = {
+      key: source.sourceReference, voucherCode: source.voucherCode, entryDate: source.entryDate, description: source.description, amount,
+      lines: lines.map(({ account, debit, credit }) => ({ account, debit, credit })),
+      author: actor.name, authorId: actor.id, status: 'Đã ghi sổ cái', sourceModule: source.sourceModule, sourceReference: source.sourceReference,
+      accountingRegime: profile.accountingRegime, createdAt: timestamp,
+    };
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND (record_key = ? OR json_extract(payload_json, '$.sourceReference') = ? OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?)) LIMIT 1").get(record.key, source.sourceReference, source.voucherCode);
+      if (duplicate) throw new HttpError(409, 'Chứng từ đã được ghi sổ cái hoặc số chứng từ đã tồn tại trong Sổ Cái.');
+      await requireOpenLedgerPeriod(source.entryDate, profile);
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'post_source_ledger_entry', 'finance_general_ledger', record.key, { sourceModule: source.sourceModule, voucherCode: source.voucherCode, amount });
+    });
+    sendJson(response, 201, { record });
+    return;
+  }
+
+  // Các chứng từ, hồ sơ thanh lý đã ghi sổ cái (để màn hình ẩn nút ghi sổ).
+  if (request.method === 'GET' && resource === '/finance/ledger-postings') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger' AND (json_extract(payload_json, '$.sourceModule') = 'finance_document' OR json_extract(payload_json, '$.sourceModule') = 'asset_disposal')").all();
+    sendJson(response, 200, { data: rows.map(row => parseJsonObject(row.payload_json)).map(item => ({ sourceReference: item.sourceReference, voucherCode: item.voucherCode, entryDate: item.entryDate, amount: item.amount })) });
     return;
   }
 

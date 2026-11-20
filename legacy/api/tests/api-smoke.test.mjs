@@ -2632,3 +2632,50 @@ test('returns and discounts adjust the original document, debts, sales totals, c
   await request('/finance/documents', 'POST', { documentType: 'invoice', subtype: 'Giảm giá hàng bán', partnerName: 'x', description: 'Điều chỉnh giảm', amount: 1_100_000, paidAmount: 0, documentDate: '2026-03-20', dueDate: '', status: 'Đã ghi nhận', taxCode: '', vatRate: 10, vatAmount: 100_000, adjustsDocumentId: invoice.key, terms: { reason: 'Chiết khấu thương mại', invoiceNo: 'DC-03' } }, 201);
   assert.equal(await estimate(), 900_000);
 });
+
+test('ledger entries are built from documents and disposals with leaf accounts and cannot be posted twice', async () => {
+  await request('/finance/chart-of-accounts/templates/import', 'POST', {}, 201).catch(() => request('/finance/chart-of-accounts/templates/import', 'POST', {}, 200));
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const sale = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách ghi sổ', description: 'Bán', amount: 1_100_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 10, vatAmount: 100_000 };
+  const delivered = (await request('/finance/documents', 'POST', sale, 201)).document;
+  const preview = (await request(`/finance/documents/${delivered.key}/ledger-entry`, 'POST', { preview: true })).preview;
+  assert.equal(preview.amount, 1_100_000);
+  assert.equal(preview.lines.reduce((sum, line) => sum + line.debit, 0), preview.lines.reduce((sum, line) => sum + line.credit, 0));
+  assert.ok(preview.lines.find((line) => line.defaultAccount === '3331').account.startsWith('3331'));
+  assert.equal((await request(`/finance/documents/${delivered.key}/ledger-entry`, 'POST', { accountMap: { 511: 'abc' } }, 422)).message.includes('511'), true);
+  const posted = (await request(`/finance/documents/${delivered.key}/ledger-entry`, 'POST', {}, 201)).record;
+  assert.equal(posted.sourceReference, `document:${delivered.key}`);
+  assert.equal(posted.amount, 1_100_000);
+  await request(`/finance/documents/${delivered.key}/ledger-entry`, 'POST', {}, 409);
+  assert.ok((await request('/finance/ledger-postings')).data.some((item) => item.sourceReference === `document:${delivered.key}`));
+  const ledger = (await request('/collections/finance_general_ledger')).data;
+  assert.ok(ledger.some((item) => item.sourceReference === `document:${delivered.key}`));
+
+  const pending = (await request('/finance/documents', 'POST', { ...sale, status: 'Đang triển khai' }, 201)).document;
+  await request(`/finance/documents/${pending.key}/ledger-entry`, 'POST', {}, 422);
+  const quote = (await request('/finance/documents', 'POST', { ...sale, subtype: 'Báo giá', status: 'Báo giá' }, 201)).document;
+  await request(`/finance/documents/${quote.key}/ledger-entry`, 'POST', {}, 422);
+  const order = (await request('/finance/documents', 'POST', { documentType: 'purchase', subtype: 'Đơn mua hàng', partnerName: 'NCC ghi sổ', description: 'Mua', amount: 550_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Chờ xử lý', taxCode: '', vatRate: 10, vatAmount: 50_000 }, 201)).document;
+  await request(`/finance/documents/${order.key}/ledger-entry`, 'POST', {}, 422);
+  const received = (await request('/finance/documents', 'POST', { documentType: 'purchase', subtype: 'Đơn mua hàng', partnerName: 'NCC ghi sổ', description: 'Mua', amount: 550_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã nhận hàng', taxCode: '', vatRate: 10, vatAmount: 50_000 }, 201)).document;
+  const purchasePreview = (await request(`/finance/documents/${received.key}/ledger-entry`, 'POST', { preview: true })).preview;
+  assert.deepEqual(purchasePreview.lines.map((line) => [line.defaultAccount, line.debit, line.credit]), [['156', 500_000, 0], ['1331', 50_000, 0], ['331', 0, 550_000]]);
+  await request(`/finance/documents/${received.key}/ledger-entry`, 'POST', {}, 201);
+
+  const returned = (await request('/finance/documents', 'POST', { ...sale, subtype: 'Hàng bán bị trả lại', status: 'Đã ghi nhận', amount: 110_000, vatAmount: 10_000, adjustsDocumentId: delivered.key, terms: { reason: 'Trả hàng' } }, 201)).document;
+  const missing = await request(`/finance/documents/${returned.key}/ledger-entry`, 'POST', {}, 422);
+  assert.match(missing.message, /521/);
+  assert.equal((await request(`/finance/documents/${returned.key}/ledger-entry`, 'POST', { accountMap: { 521: '511' } }, 201)).record.amount, 110_000);
+
+  await request('/collections/asset_items', 'POST', { record: { key: 'ledger-asset', code: 'AST-LEDGER', name: 'Thiết bị ghi sổ', category: 'Máy móc', originalPrice: 10_000_000, accumulatedDepreciation: 4_000_000, netBookValue: 6_000_000, status: 'Đang sử dụng', history: [] } }, 201);
+  await request('/collections/asset_disposals', 'POST', { record: { key: 'ledger-disposal', disposalCode: 'TL-LEDGER', assetKey: 'ledger-asset', disposalMethod: 'Báo mất / Thất lạc do rủi ro', reason: 'Mất', disposalDate: '2026-10-27', councilLeader: 'A', councilMembers: 'B' } }, 201);
+  await request('/finance/asset-disposals/ledger-disposal/ledger-entry', 'POST', {}, 422);
+  await request('/collections/asset_disposals/ledger-disposal', 'PATCH', { patch: { status: 'Đang thực hiện xử lý' } });
+  await request('/collections/asset_disposals/ledger-disposal', 'PATCH', { patch: { status: 'Đã xử lý mất', actualDisposalPrice: 0, disposalCost: 0, disposalDate: '2026-10-28', buyerName: '' } });
+  const lost = (await request('/finance/asset-disposals/ledger-disposal/ledger-entry', 'POST', { preview: true })).preview;
+  assert.equal(lost.amount, 10_000_000);
+  assert.ok(lost.lines.find((line) => line.defaultAccount === '214').account.startsWith('214'));
+  assert.equal((await request('/finance/asset-disposals/ledger-disposal/ledger-entry', 'POST', {}, 201)).record.sourceReference, 'asset-disposal:ledger-disposal');
+  await request('/finance/asset-disposals/ledger-disposal/ledger-entry', 'POST', {}, 409);
+  await request('/finance/asset-disposals/missing/ledger-entry', 'POST', {}, 404);
+});

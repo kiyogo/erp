@@ -706,6 +706,14 @@ export const financeDocumentsApi = {
   linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
 };
 
+export type LedgerPreviewLine = { account: string; defaultAccount: string; debit: number; credit: number; note: string; alternatives: string[] };
+export type LedgerSourceKind = 'documents' | 'asset-disposals';
+export const financeLedgerPostingApi = {
+  preview: (kind: LedgerSourceKind, key: string, accountMap?: Record<string, string>) => api.post<{ preview: { voucherCode: string; entryDate: string; description: string; amount: number; lines: LedgerPreviewLine[] }; posted: boolean }>(`/finance/${kind}/${encodeURIComponent(key)}/ledger-entry`, { preview: true, accountMap }),
+  post: (kind: LedgerSourceKind, key: string, accountMap?: Record<string, string>) => api.post<{ record: { key: string; voucherCode: string } }>(`/finance/${kind}/${encodeURIComponent(key)}/ledger-entry`, { accountMap }),
+  list: () => api.get<{ data: Array<{ sourceReference: string; voucherCode: string; entryDate: string; amount: number }> }>('/finance/ledger-postings'),
+};
+
 export type FinanceBankAccount = {
   key: string;
   bankName: string;

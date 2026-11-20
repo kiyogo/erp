@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { vatRateOptions } from '../finance/vatRateRules';
+import { LedgerPostingModal, ledgerReference, useLedgerPostings } from '../finance/LedgerPostingModal';
 import { PAYMENT_METHOD_OPTIONS, vatOf } from '../finance/tradeTerms';
 import { assetDisposalMethodLabel, assetDisposalOutcome, assetDisposalSnapshot, disposalMoney, disposalNeedsDataWipe } from './assetDisposalRules';
 import {
@@ -128,6 +129,8 @@ export const AssetDisposalModule: React.FC = () => {
   const [finalizeSaving, setFinalizeSaving] = useState(false);
   const [finalizeWipeChecked, setFinalizeWipeChecked] = useState(false);
   const [finalPrice, setFinalPrice] = useState(0);
+  const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
+  const [ledgerTarget, setLedgerTarget] = useState<{ kind: 'asset-disposals'; key: string; title: string } | null>(null);
   const [finalVatRate, setFinalVatRate] = useState(10);
   const [finalInvoiceDate, setFinalInvoiceDate] = useState('');
 
@@ -690,7 +693,10 @@ export const AssetDisposalModule: React.FC = () => {
                     </tbody>
                   </table>
                 )}
-                <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 6 }}>Bút toán chỉ là gợi ý; ghi sổ cái theo tài khoản chi tiết của danh mục đang dùng.</div>
+                <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 6 }}>Bút toán dựng sẵn; đổi mã tài khoản chi tiết theo danh mục đang dùng khi ghi sổ.</div>
+                {(detailItem.journal || []).length > 0 && (ledgerPosted.has(ledgerReference('asset-disposals', detailItem.key))
+                  ? <div style={{ marginTop: 8, color: '#16A34A' }}>Đã ghi sổ cái</div>
+                  : <Button style={{ marginTop: 8 }} onClick={() => setLedgerTarget({ kind: 'asset-disposals', key: detailItem.key, title: detailItem.disposalCode })}>Ghi sổ cái</Button>)}
               </div>
             )}
 
@@ -767,10 +773,11 @@ export const AssetDisposalModule: React.FC = () => {
         )}
       </Modal>
 
+      <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title={`Ghi nhận kết quả xử lý ${finalizeTarget?.disposalCode || ''}`} open={finalizeModalOpen} onCancel={() => setFinalizeModalOpen(false)} footer={null} width={620}>
         {finalizeTarget && (
           <Form form={finalizeForm} layout="vertical" onFinish={handleFinalize} style={{ marginTop: 14 }}>
-            <Alert type="info" showIcon message={`Tài sản ${finalizeTarget.assetCode} · Giá trị còn lại ${Number(finalizeTarget.netBookValue || 0).toLocaleString('vi-VN')} ₫`} description="Chỉ nhập số tiền, bên nhận và thao tác thực tế đã có bằng chứng. Kết quả chỉ được ghi trong hồ sơ nội bộ; chưa tự tạo bút toán, hóa đơn hoặc xác nhận dòng tiền (có bút toán gợi ý ở phần chi tiết)." />
+            <Alert type="info" showIcon message={`Tài sản ${finalizeTarget.assetCode} · Giá trị còn lại ${Number(finalizeTarget.netBookValue || 0).toLocaleString('vi-VN')} ₫`} description="Chỉ nhập số tiền, bên nhận và thao tác thực tế đã có bằng chứng. Kết quả chỉ được ghi trong hồ sơ nội bộ; chưa tự tạo hóa đơn hoặc xác nhận dòng tiền; bút toán sổ cái được ghi riêng ở phần chi tiết." />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
               <Form.Item name="actualDisposalPrice" label={finalizeTarget.disposalMethod.startsWith('Bán') ? 'Giá bán chưa thuế (VNĐ)' : 'Số tiền thu thực tế (VNĐ)'} rules={[{ required: true }]}>
                 <Input type="number" min={0} step={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFinalPrice(Number(event.target.value) || 0)} />

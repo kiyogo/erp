@@ -1,0 +1,70 @@
+// Dựng bút toán sổ cái từ chứng từ mua, bán, hóa đơn, hàng trả lại và giảm giá (tài khoản mặc định theo Thông tư 99/2025/TT-BTC):
+//  - Bán hàng, hóa đơn đầu ra: Nợ 131 (tổng), Có 511 (tiền hàng chưa thuế), Có 3331 (thuế GTGT đầu ra).
+//  - Mua hàng, hóa đơn đầu vào: Nợ 156 (tiền hàng chưa thuế), Nợ 1331 (thuế GTGT được khấu trừ), Có 331 (tổng).
+//  - Hàng bán bị trả lại, giảm giá hàng bán: Nợ 521, Nợ 3331, Có 131.
+//  - Hàng mua trả lại, giảm giá hàng mua: Nợ 331, Có 156, Có 1331.
+// Tài khoản chi tiết phụ thuộc danh mục đang dùng nên người dùng được đổi mã tài khoản trước khi ghi (accountMap); máy chủ kiểm tra
+// tài khoản có trong danh mục. Chưa ghi nhận giá vốn, nhập hoặc xuất kho, và thanh toán (phiếu thu chi ghi sổ riêng).
+
+import { adjustmentSide, isAdjustmentSubtype } from './tradeRules.mjs';
+
+const SALE_RECOGNIZED_STATUS = 'Đã bàn giao';
+const PURCHASE_RECEIVED_STATUS = 'Đã nhận hàng';
+const ISSUED_INVOICE_STATUSES = ['Đã phát hành', 'Đã thanh toán'];
+
+function kindOf(document) {
+  if (isAdjustmentSubtype(document.subtype)) return adjustmentSide(document.subtype) === 'sale' ? 'saleAdjustment' : 'purchaseAdjustment';
+  if (document.documentType === 'sale' || (document.documentType === 'invoice' && /đầu ra/i.test(document.subtype))) return 'sale';
+  if (document.documentType === 'purchase' || (document.documentType === 'invoice' && /đầu vào/i.test(document.subtype))) return 'purchase';
+  return '';
+}
+
+// Trả về thông báo lỗi hoặc chuỗi rỗng: chỉ ghi sổ khi đã ghi nhận doanh thu hoặc hàng đã về, hóa đơn đã phát hành.
+export function documentPostingProblem(document) {
+  if (document.status === 'Đã hủy') return 'Chứng từ đã hủy không ghi sổ.';
+  const kind = kindOf(document);
+  if (!kind) return 'Loại chứng từ này chưa có quy tắc ghi sổ.';
+  if (kind.endsWith('Adjustment')) return '';
+  if (document.documentType === 'invoice') return ISSUED_INVOICE_STATUSES.includes(document.status) ? '' : 'Chỉ ghi sổ hóa đơn đã phát hành.';
+  if (kind === 'sale') {
+    if (document.subtype === 'Báo giá') return 'Báo giá chưa phát sinh doanh thu.';
+    return document.status === SALE_RECOGNIZED_STATUS ? '' : 'Chỉ ghi sổ chứng từ bán đã bàn giao (doanh thu được ghi nhận khi chuyển giao hàng hóa, dịch vụ).';
+  }
+  if (document.subtype === 'Hóa đơn đầu vào') return '';
+  return document.status === PURCHASE_RECEIVED_STATUS ? '' : 'Chỉ ghi sổ chứng từ mua đã nhận hàng hoặc hóa đơn đầu vào.';
+}
+
+export function documentLedgerLines(document) {
+  const kind = kindOf(document);
+  const vat = document.vatAmount;
+  const net = document.amount - vat;
+  const lines = [];
+  const add = (account, debit, credit, note) => { if (debit > 0 || credit > 0) lines.push({ account, debit, credit, note }); };
+  if (kind === 'sale') {
+    add('131', document.amount, 0, 'Phải thu khách hàng');
+    add('511', 0, net, 'Doanh thu bán hàng chưa thuế');
+    add('3331', 0, vat, 'Thuế GTGT đầu ra');
+  } else if (kind === 'purchase') {
+    add('156', net, 0, 'Giá trị hàng mua chưa thuế (đổi sang 152, 153, 211, 642... theo mục đích mua)');
+    add('1331', vat, 0, 'Thuế GTGT được khấu trừ');
+    add('331', 0, document.amount, 'Phải trả nhà cung cấp');
+  } else if (kind === 'saleAdjustment') {
+    add('521', net, 0, 'Giảm trừ doanh thu (hàng bán bị trả lại, giảm giá)');
+    add('3331', vat, 0, 'Giảm thuế GTGT đầu ra');
+    add('131', 0, document.amount, 'Giảm phải thu khách hàng');
+  } else if (kind === 'purchaseAdjustment') {
+    add('331', document.amount, 0, 'Giảm phải trả nhà cung cấp');
+    add('156', 0, net, 'Giảm giá trị hàng mua');
+    add('1331', 0, vat, 'Giảm thuế GTGT được khấu trừ');
+  }
+  return lines;
+}
+
+// Đổi mã tài khoản mặc định sang mã chi tiết người dùng chọn. Ném Error tiếng Việt khi mã không hợp lệ.
+export function applyAccountMap(lines, accountMap) {
+  const map = accountMap && typeof accountMap === 'object' && !Array.isArray(accountMap) ? accountMap : {};
+  for (const [from, to] of Object.entries(map)) {
+    if (!/^\d{3,6}$/.test(String(to || '').trim())) throw new Error(`Mã tài khoản thay cho ${from} không hợp lệ (3 đến 6 chữ số).`);
+  }
+  return lines.map((line) => ({ ...line, account: map[line.account] ? String(map[line.account]).trim() : line.account }));
+}

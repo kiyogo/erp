@@ -5,6 +5,8 @@ import { Button, Form, Input, Modal, Select, Tag, message } from '../../custom-u
 import { financeDocumentsApi, type FinanceDocument } from '../../api/endpoints';
 import { adjustableOriginals, adjustmentSubtype, type AdjustmentKind, type AdjustmentSide } from './tradeAdjustments';
 import { termsFromValues, vatOf } from './tradeTerms';
+import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import type { LedgerSourceKind } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const currentBusinessDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -32,6 +34,8 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
   const [originalKey, setOriginalKey] = useState('');
   const [net, setNet] = useState(0);
   const [form] = Form.useForm();
+  const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
+  const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -122,6 +126,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
     { title: 'Tổng điều chỉnh', dataIndex: 'amount', key: 'amount', width: 150, render: (value: number) => <strong>{formatMoney(value)}</strong> },
     { title: label.refundLabel, dataIndex: 'paidAmount', key: 'paidAmount', width: 170, render: (value: number) => formatMoney(value) },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 120, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : 'success'}>{value}</Tag> },
+    ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
   return (
@@ -145,6 +150,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         </div>
       </div>
 
+      <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title={`Thêm ${label.title.toLocaleLowerCase('vi-VN')}`} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={640}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
           <Form.Item name="originalKey" label="Chứng từ gốc" rules={[{ required: true, message: 'Chọn chứng từ gốc' }]}>

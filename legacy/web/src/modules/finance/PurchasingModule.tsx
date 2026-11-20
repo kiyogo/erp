@@ -17,6 +17,8 @@ import { vatRateOptions } from './vatRateRules';
 import { PurchaseRequestsModule } from './PurchaseRequestsModule';
 import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
 import { isAdjustment, netTradeTotals } from './tradeAdjustments';
+import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import type { LedgerSourceKind } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const currentBusinessDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -42,6 +44,8 @@ const PurchasingDocumentsModule: React.FC = () => {
   const [vatRate, setVatRate] = useState(10);
   const [documentDate, setDocumentDate] = useState(currentBusinessDate());
   const [form] = Form.useForm();
+  const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
+  const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
 
   const isCharts = currentPath === '/finance/purchasing/charts';
   const isContracts = currentPath === '/finance/purchasing/contracts';
@@ -157,6 +161,7 @@ const PurchasingDocumentsModule: React.FC = () => {
     { title: 'Đã trả', dataIndex: 'paidAmount', key: 'paidAmount', width: 150, render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{formatMoney(value)}</span> },
     { title: 'Còn phải trả', dataIndex: 'remainingAmount', key: 'remainingAmount', width: 150, render: (value: number) => <strong style={{ color: value > 0 ? '#DC2626' : '#16A34A' }}>{formatMoney(value)}</strong> },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 140, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : value === 'Đã nhận hàng' ? 'success' : 'warning'}>{value}</Tag> },
+    ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
   return (
@@ -230,6 +235,7 @@ const PurchasingDocumentsModule: React.FC = () => {
         </div>
       )}
 
+      <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title="Thêm chứng từ mua hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSupplierId(''); }} footer={null} width={680}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
           <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
