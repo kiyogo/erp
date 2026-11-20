@@ -2745,3 +2745,49 @@ test('stock count differences and inventory write-down provisions post to the le
   await request(`/finance/inventory-provisions/${created.key}/ledger-entry`, 'POST', {}, 409);
 });
 
+test('document payments create posted receipts and payments, update debts and respect returns', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const bank = (await request('/finance/bank-accounts', 'POST', { bankName: 'Ngân hàng thanh toán', accountNumber: '9988776655', accountHolder: 'Công ty thanh toán', balance: 50_000_000, status: 'Đang hoạt động' }, 201)).account;
+  const balanceOf = async () => (await request('/finance/payment-accounts')).accounts.find((item) => item.key === bank.key).balance;
+  const sale = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách thanh toán', description: 'Bán', amount: 1_100_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 10, vatAmount: 100_000 };
+  const delivered = (await request('/finance/documents', 'POST', sale, 201)).document;
+  const pay = (id, body, expected = 201) => request(`/finance/documents/${id}/payments`, 'POST', { sourceAccountId: bank.key, date: today, ...body }, expected);
+  await pay(delivered.key, { amount: 1_200_000 }, 422);
+  await pay(delivered.key, { amount: 0 }, 422);
+  await pay(delivered.key, { amount: 1000, date: '2099-01-01' }, 422);
+  await pay(delivered.key, { amount: 1000, date: '2000-01-01' }, 422);
+  await pay(delivered.key, { amount: 1000, sourceAccountId: 'missing' }, 422);
+  await pay('missing', { amount: 1000 }, 404);
+  const before = await balanceOf();
+  const first = await pay(delivered.key, { amount: 600_000, reference: 'UNC-001' });
+  assert.equal(first.document.paidAmount, 600_000);
+  assert.equal(first.document.remainingAmount, 500_000);
+  assert.equal(first.transaction.type, 'Thu');
+  assert.equal(first.transaction.status, 'Đã hoàn thành');
+  assert.equal(first.transaction.sourceDocument, delivered.code);
+  assert.equal(await balanceOf(), before + 600_000);
+  const ledger = (await request('/collections/finance_general_ledger')).data.filter((item) => item.voucherCode === first.transaction.code);
+  assert.equal(ledger.length, 1);
+  assert.match(ledger[0].debitAccount, /^112/);
+  assert.match(ledger[0].creditAccount, /^131/);
+
+  const returned = (await request('/finance/documents', 'POST', { ...sale, subtype: 'Hàng bán bị trả lại', status: 'Đã ghi nhận', amount: 110_000, vatAmount: 10_000, adjustsDocumentId: delivered.key, terms: { reason: 'Trả hàng' } }, 201)).document;
+  await pay(delivered.key, { amount: 400_000 }, 422);
+  assert.equal((await pay(delivered.key, { amount: 390_000 })).document.remainingAmount, 0);
+  const refund = await pay(returned.key, { amount: 50_000 });
+  assert.equal(refund.transaction.type, 'Chi');
+  assert.equal(refund.document.paidAmount, 50_000);
+  await pay(returned.key, { amount: 60_001 }, 422);
+
+  const purchase = (await request('/finance/documents', 'POST', { documentType: 'purchase', subtype: 'Hóa đơn đầu vào', partnerName: 'NCC thanh toán', description: 'Mua', amount: 550_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã nhận hàng', taxCode: '', vatRate: 10, vatAmount: 50_000 }, 201)).document;
+  const paid = await pay(purchase.key, { amount: 550_000 });
+  assert.equal(paid.transaction.type, 'Chi');
+  assert.equal(paid.document.remainingAmount, 0);
+  await pay(purchase.key, { amount: 1 }, 422);
+
+  const invoice = (await request('/finance/documents', 'POST', { documentType: 'invoice', subtype: 'Đầu ra', partnerName: 'Khách hóa đơn', description: 'HĐ', amount: 2_200_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã phát hành', taxCode: '', vatRate: 10, vatAmount: 200_000 }, 201)).document;
+  assert.equal((await pay(invoice.key, { amount: 2_200_000 })).document.status, 'Đã thanh toán');
+  const quote = (await request('/finance/documents', 'POST', { ...sale, subtype: 'Báo giá', status: 'Báo giá' }, 201)).document;
+  await pay(quote.key, { amount: 1000 }, 422);
+});
+

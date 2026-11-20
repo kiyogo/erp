@@ -12,7 +12,7 @@ const SALE_RECOGNIZED_STATUS = 'Đã bàn giao';
 const PURCHASE_RECEIVED_STATUS = 'Đã nhận hàng';
 const ISSUED_INVOICE_STATUSES = ['Đã phát hành', 'Đã thanh toán'];
 
-function kindOf(document) {
+export function documentKind(document) {
   if (isAdjustmentSubtype(document.subtype)) return adjustmentSide(document.subtype) === 'sale' ? 'saleAdjustment' : 'purchaseAdjustment';
   if (document.documentType === 'sale' || (document.documentType === 'invoice' && /đầu ra/i.test(document.subtype))) return 'sale';
   if (document.documentType === 'purchase' || (document.documentType === 'invoice' && /đầu vào/i.test(document.subtype))) return 'purchase';
@@ -22,7 +22,7 @@ function kindOf(document) {
 // Trả về thông báo lỗi hoặc chuỗi rỗng: chỉ ghi sổ khi đã ghi nhận doanh thu hoặc hàng đã về, hóa đơn đã phát hành.
 export function documentPostingProblem(document) {
   if (document.status === 'Đã hủy') return 'Chứng từ đã hủy không ghi sổ.';
-  const kind = kindOf(document);
+  const kind = documentKind(document);
   if (!kind) return 'Loại chứng từ này chưa có quy tắc ghi sổ.';
   if (kind.endsWith('Adjustment')) return '';
   if (document.documentType === 'invoice') return ISSUED_INVOICE_STATUSES.includes(document.status) ? '' : 'Chỉ ghi sổ hóa đơn đã phát hành.';
@@ -35,7 +35,7 @@ export function documentPostingProblem(document) {
 }
 
 export function documentLedgerLines(document) {
-  const kind = kindOf(document);
+  const kind = documentKind(document);
   const vat = document.vatAmount;
   const net = document.amount - vat;
   const lines = [];

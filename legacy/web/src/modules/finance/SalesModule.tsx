@@ -16,6 +16,8 @@ import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
 import { TradeTermsFields } from './TradeTermsFields';
 import { isAdjustment, netTradeTotals } from './tradeAdjustments';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
+import type { FinanceDocument as PayableDocument } from '../../api/endpoints';
 import type { LedgerSourceKind } from '../../api/endpoints';
 import { termsFromValues, vatOf } from './tradeTerms';
 import { vatRateOptions } from './vatRateRules';
@@ -54,6 +56,7 @@ const SalesDocumentsModule: React.FC = () => {
   const [form] = Form.useForm();
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
+  const [payTarget, setPayTarget] = useState<PayableDocument | null>(null);
   const [linkForm] = Form.useForm();
 
   const isCharts = currentPath === '/finance/sales/charts';
@@ -249,6 +252,7 @@ const SalesDocumentsModule: React.FC = () => {
     { title: 'Còn phải thu', dataIndex: 'remainingAmount', key: 'remainingAmount', width: 150, render: (value: number) => <strong style={{ color: value > 0 ? '#DC2626' : '#16A34A' }}>{formatMoney(value)}</strong> },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 140, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : value === 'Đã bàn giao' ? 'success' : 'processing'}>{value}</Tag> },
     { title: 'Khách hàng CRM', key: 'customerLink', width: 150, render: (_: unknown, record: FinanceDocument) => record.customerId ? 'Đã liên kết' : record.status !== 'Đã hủy' ? <Button size="small" onClick={() => { linkForm.resetFields(); setLinkTarget(record); }}>Liên kết</Button> : '—' },
+    documentPaymentColumn((record) => setPayTarget(record)),
     ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
@@ -336,6 +340,7 @@ const SalesDocumentsModule: React.FC = () => {
         </div>
       )}
 
+      <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title="Thêm chứng từ bán hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSelectedCustomerId(''); }} footer={null} width={620}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>

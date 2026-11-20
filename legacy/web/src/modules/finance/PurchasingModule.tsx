@@ -18,6 +18,8 @@ import { PurchaseRequestsModule } from './PurchaseRequestsModule';
 import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
 import { isAdjustment, netTradeTotals } from './tradeAdjustments';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
+import type { FinanceDocument as PayableDocument } from '../../api/endpoints';
 import type { LedgerSourceKind } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
@@ -46,6 +48,7 @@ const PurchasingDocumentsModule: React.FC = () => {
   const [form] = Form.useForm();
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
+  const [payTarget, setPayTarget] = useState<PayableDocument | null>(null);
 
   const isCharts = currentPath === '/finance/purchasing/charts';
   const isContracts = currentPath === '/finance/purchasing/contracts';
@@ -161,6 +164,7 @@ const PurchasingDocumentsModule: React.FC = () => {
     { title: 'Đã trả', dataIndex: 'paidAmount', key: 'paidAmount', width: 150, render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{formatMoney(value)}</span> },
     { title: 'Còn phải trả', dataIndex: 'remainingAmount', key: 'remainingAmount', width: 150, render: (value: number) => <strong style={{ color: value > 0 ? '#DC2626' : '#16A34A' }}>{formatMoney(value)}</strong> },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 140, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : value === 'Đã nhận hàng' ? 'success' : 'warning'}>{value}</Tag> },
+    documentPaymentColumn((record) => setPayTarget(record)),
     ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
@@ -235,6 +239,7 @@ const PurchasingDocumentsModule: React.FC = () => {
         </div>
       )}
 
+      <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title="Thêm chứng từ mua hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSupplierId(''); }} footer={null} width={680}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>

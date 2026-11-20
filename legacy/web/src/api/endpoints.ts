@@ -703,6 +703,7 @@ export const financeDocumentsApi = {
   create: (data: CreateFinanceDocument) => api.post<{ document: FinanceDocument; replayed?: boolean }>('/finance/documents', data),
   previewSalePromotions: (data: { customerId: string; promotionKeys: string[]; subtype: string; status: string; amount: number; documentDate: string; vatRate: number; vatAmount: number }) =>
     api.post<SalePromotionPreview>('/finance/sales/promotion-preview', data),
+  pay: (key: string, data: { amount: number; date: string; sourceAccountId: string; reference?: string; note?: string }) => api.post<{ document: FinanceDocument; transaction: { code: string; type: 'Thu' | 'Chi' } }>(`/finance/documents/${encodeURIComponent(key)}/payments`, data),
   linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
 };
 

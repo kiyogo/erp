@@ -15,6 +15,8 @@ import { vatRateOptions } from './vatRateRules';
 import { PaymentMethodField } from './TradeTermsFields';
 import { termsFromValues } from './tradeTerms';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
+import type { FinanceDocument as PayableDocument } from '../../api/endpoints';
 import type { LedgerSourceKind } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
@@ -33,6 +35,7 @@ export const InvoicesModule: React.FC = () => {
   const [form] = Form.useForm();
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
+  const [payTarget, setPayTarget] = useState<PayableDocument | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -145,6 +148,7 @@ export const InvoicesModule: React.FC = () => {
         </Button>
       ),
     },
+    documentPaymentColumn((record) => setPayTarget(record)),
     ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
@@ -217,6 +221,7 @@ export const InvoicesModule: React.FC = () => {
         <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} locale={{ emptyText: 'Chưa có hóa đơn tài chính.' }} />
       </div>
 
+      <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title="Thêm hóa đơn tài chính" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={660}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>

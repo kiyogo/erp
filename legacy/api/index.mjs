@@ -24,6 +24,7 @@ import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
 import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryCountLedgerLines, inventoryCountPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem, provisionLedgerLines, provisionPostingProblem } from './ledgerPostingRules.mjs';
 import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
+import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
@@ -5978,6 +5979,22 @@ function validateCashCategory(input) {
     type: oneOf(input.type, 'Loại phiếu', ['Thu', 'Chi']),
     name: requiredText(input.name, 'Tên loại phiếu', 100),
   };
+}
+
+// Ghi dòng phiếu thu chi ở trạng thái chờ duyệt; gọi trong giao dịch cơ sở dữ liệu của route.
+async function insertCashTransactionRow(transaction, id, actor, timestamp) {
+  await db.prepare(`INSERT INTO finance_cash_transactions (
+    id, code, transaction_type, source, category, amount, transaction_date, counterparty,
+    account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
+    counterparty_contact_id, created_by, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      id, transaction.code, transaction.type, transaction.source, transaction.category,
+      transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
+      transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.staffEmployeeCode, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, transaction.department || null, transaction.employeeCode || null,
+      transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
+      actor.id, timestamp, timestamp,
+    );
 }
 
 function validateCashTransaction(input) {
@@ -12347,24 +12364,72 @@ async function handleRequest(request, response) {
           .get(transaction.category, transaction.reference);
         if (duplicateReference) throw new HttpError(409, 'Mã chứng từ này đã được dùng cho một phiếu nộp bảo hiểm khác.');
       }
-      await db.prepare(`INSERT INTO finance_cash_transactions (
-        id, code, transaction_type, source, category, amount, transaction_date, counterparty,
-        account_name, status, note, journal_lines_json, attachments_json, voucher_date, currency, reference, staff_employee_code, payer_name, counterparty_address, attachment_count, source_document, department, employee_code, source_account_id, counterparty_type,
-        counterparty_contact_id, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(
-          id, transaction.code, transaction.type, transaction.source, transaction.category,
-          transaction.amount, transaction.date, transaction.recipientOrPayer, transaction.account,
-          transaction.note, JSON.stringify(transaction.journalLines), JSON.stringify(transaction.attachments), transaction.voucherDate, transaction.currency, transaction.reference, transaction.staffEmployeeCode, transaction.payerName, transaction.counterpartyAddress, transaction.attachmentCount, transaction.sourceDocument, transaction.department || null, transaction.employeeCode || null,
-          transaction.sourceAccountId || null, transaction.counterpartyType, transaction.counterpartyContactId || null,
-          actor.id, timestamp, timestamp,
-        );
+      await insertCashTransactionRow(transaction, id, actor, timestamp);
       if (transaction.status === 'Đã hoàn thành') await postCashTransactionToLedger(transaction, id, actor, profile);
       await recordAuditEvent(actor.id, 'create_cash_transaction', 'finance_cash_transactions', id, {
         code: transaction.code, type: transaction.type, amount: transaction.amount, source: transaction.source,
       });
     });
     sendJson(response, 201, { transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
+  // Thanh toán theo chứng từ công nợ: lập phiếu thu hoặc chi thật, ghi sổ cái và cộng vào số đã thanh toán của chứng từ.
+  const documentPaymentMatch = /^\/finance\/documents\/([^/]+)\/payments$/.exec(resource);
+  if (request.method === 'POST' && documentPaymentMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const payload = await readJson(request, 64 * 1024);
+    const documentId = requiredText(decodeURIComponent(documentPaymentMatch[1]), 'Chứng từ', 160);
+    const amount = requiredAmount(payload.amount, 'Số tiền thanh toán');
+    const date = requiredIsoDate(payload.date, 'Ngày thanh toán');
+    const sourceAccountId = requiredText(payload.sourceAccountId, 'Tài khoản tiền', 160);
+    const reference = optionalText(payload.reference, 'Số chứng từ ngân hàng hoặc tham chiếu', 200);
+    const note = optionalText(payload.note, 'Ghi chú', 1_000);
+    if (date > todayInVietnam()) throw new HttpError(422, 'Ngày thanh toán không được ở tương lai.');
+    await requireSecurityPin(request, actor);
+    const id = randomUUID();
+    const timestamp = now();
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_document_payments'))");
+      }
+      const row = await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(documentId);
+      if (!row) throw new HttpError(404, 'Không tìm thấy chứng từ.');
+      const document = publicFinanceDocument(row);
+      const credit = (await adjustedAmounts()).get(document.key) || 0;
+      const plan = documentPaymentPlan(document, credit);
+      if (plan.problem) throw new HttpError(422, plan.problem);
+      if (date < document.documentDate) throw new HttpError(422, 'Ngày thanh toán không được trước ngày chứng từ.');
+      if (amount > plan.remaining) throw new HttpError(422, `Số tiền ${amount.toLocaleString('vi-VN')} đồng vượt số còn thanh toán được ${plan.remaining.toLocaleString('vi-VN')} đồng.`);
+      const account = (await internalTransferAccounts()).find(item => item.key === sourceAccountId);
+      if (!account || account.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản tiền không tồn tại hoặc đã ngừng hoạt động.');
+      const bank = account.source === 'bank' ? await db.prepare('SELECT ledger_account_code FROM finance_bank_accounts WHERE id = ?').get(account.key) : null;
+      const defaultCash = account.source === 'petty' ? '111' : '112';
+      const configuredCash = String(bank?.ledger_account_code || '').replace(/^TK\s*/i, '').trim();
+      const cashAccount = configuredCash.startsWith(defaultCash) ? configuredCash : defaultCash;
+      const description = `${plan.note} ${document.code}`;
+      const resolved = await resolveLedgerLeafAccounts(profile, [{ account: plan.partnerAccount }, { account: cashAccount }]);
+      const journalLines = paymentJournalLines({ ...plan, partnerAccount: resolved[0].account }, resolved[1].account, amount, description);
+      const transaction = validateCashTransaction({
+        type: plan.type, source: account.source, category: plan.category, amount, journalLines, date, voucherDate: date, currency: account.currency || 'VND',
+        reference, sourceDocument: document.code, recipientOrPayer: document.partnerName, account: account.name, status: 'Chờ duyệt', note: note || description,
+        sourceAccountId: account.key, counterpartyType: 'other',
+      });
+      transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
+      await insertCashTransactionRow(transaction, id, actor, timestamp);
+      await postCashTransactionToLedger(transaction, id, actor, profile);
+      const update = await db.prepare('UPDATE finance_documents SET paid_amount = paid_amount + ?, updated_at = ? WHERE id = ? AND paid_amount + ? <= ?').run(amount, timestamp, documentId, amount, plan.limit);
+      if (!update.changes) throw new HttpError(409, 'Chứng từ vừa được thanh toán ở nơi khác; hãy tải lại.');
+      if (document.documentType === 'invoice' && document.status === 'Đã phát hành' && plan.remaining === amount) {
+        await db.prepare("UPDATE finance_documents SET status = 'Đã thanh toán' WHERE id = ?").run(documentId);
+      }
+      await recordAuditEvent(actor.id, 'document_payment', 'finance_documents', documentId, { code: transaction.code, type: transaction.type, amount });
+    });
+    const saved = withAdjustmentCredit(publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(documentId)), await adjustedAmounts());
+    sendJson(response, 201, { document: saved, transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
     return;
   }
 

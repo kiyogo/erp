@@ -27,6 +27,19 @@ export function adjustableOriginals(side: AdjustmentSide, documents: FinanceDocu
     .filter((item) => item.room > 0);
 }
 
+/** Hướng thanh toán và số còn thanh toán được của chứng từ: thu từ khách, trả nhà cung cấp, hoàn tiền khách hoặc nhà cung cấp hoàn. */
+export function documentPaymentInfo(document: FinanceDocument): { type: 'Thu' | 'Chi'; title: string; remaining: number } | null {
+  if (document.status === 'Đã hủy' || document.subtype === 'Báo giá') return null;
+  const adjustmentSide = ADJUSTMENT_SUBTYPES[document.subtype];
+  if (adjustmentSide) {
+    return { type: adjustmentSide === 'sale' ? 'Chi' : 'Thu', title: adjustmentSide === 'sale' ? 'Hoàn tiền cho khách hàng' : 'Nhà cung cấp hoàn tiền', remaining: Math.max(0, document.amount - document.paidAmount) };
+  }
+  const isSale = document.documentType === 'sale' || (document.documentType === 'invoice' && /đầu ra/i.test(document.subtype));
+  const isPurchase = document.documentType === 'purchase' || (document.documentType === 'invoice' && /đầu vào/i.test(document.subtype));
+  if (!isSale && !isPurchase) return null;
+  return { type: isSale ? 'Thu' : 'Chi', title: isSale ? 'Thu tiền khách hàng' : 'Trả tiền nhà cung cấp', remaining: document.remainingAmount };
+}
+
 /** Tổng giá trị đơn đã trừ hàng trả lại, giảm giá, và tổng công nợ còn lại; bỏ chứng từ điều chỉnh khỏi phép cộng. */
 export function netTradeTotals(documents: FinanceDocument[]) {
   const originals = documents.filter((document) => !isAdjustment(document) && document.status !== 'Đã hủy');

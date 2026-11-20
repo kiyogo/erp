@@ -37,3 +37,16 @@ test('chứng từ gốc còn điều chỉnh được và tổng đã trừ đi
   assert.deepEqual(adjustableOriginals('purchase', list).map((item) => item.document.key), ['f']);
   assert.deepEqual(netTradeTotals(list.filter((item) => item.documentType === 'sale' && item.subtype !== 'Báo giá')), { total: 600, paid: 0, remaining: 600 });
 });
+
+import { documentPaymentInfo } from '../src/modules/finance/tradeAdjustments.ts';
+
+test('hướng thanh toán và số còn thanh toán được của chứng từ', () => {
+  const doc = (over) => ({ documentType: 'sale', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 1000, paidAmount: 300, remainingAmount: 500, ...over });
+  assert.deepEqual(documentPaymentInfo(doc()), { type: 'Thu', title: 'Thu tiền khách hàng', remaining: 500 });
+  assert.equal(documentPaymentInfo(doc({ documentType: 'purchase', subtype: 'Đơn mua hàng' })).type, 'Chi');
+  assert.equal(documentPaymentInfo(doc({ documentType: 'invoice', subtype: 'Hóa đơn đầu vào' })).type, 'Chi');
+  assert.deepEqual(documentPaymentInfo(doc({ subtype: 'Hàng bán bị trả lại', remainingAmount: 0 })), { type: 'Chi', title: 'Hoàn tiền cho khách hàng', remaining: 700 });
+  assert.equal(documentPaymentInfo(doc({ documentType: 'purchase', subtype: 'Giảm giá hàng mua' })).type, 'Thu');
+  assert.equal(documentPaymentInfo(doc({ status: 'Đã hủy' })), null);
+  assert.equal(documentPaymentInfo(doc({ subtype: 'Báo giá' })), null);
+});

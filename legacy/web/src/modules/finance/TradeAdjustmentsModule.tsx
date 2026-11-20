@@ -6,6 +6,8 @@ import { financeDocumentsApi, type FinanceDocument } from '../../api/endpoints';
 import { adjustableOriginals, adjustmentSubtype, type AdjustmentKind, type AdjustmentSide } from './tradeAdjustments';
 import { termsFromValues, vatOf } from './tradeTerms';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
+import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
+import type { FinanceDocument as PayableDocument } from '../../api/endpoints';
 import type { LedgerSourceKind } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
@@ -36,6 +38,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
   const [form] = Form.useForm();
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
+  const [payTarget, setPayTarget] = useState<PayableDocument | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -126,6 +129,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
     { title: 'Tổng điều chỉnh', dataIndex: 'amount', key: 'amount', width: 150, render: (value: number) => <strong>{formatMoney(value)}</strong> },
     { title: label.refundLabel, dataIndex: 'paidAmount', key: 'paidAmount', width: 170, render: (value: number) => formatMoney(value) },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 120, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : 'success'}>{value}</Tag> },
+    documentPaymentColumn((record) => setPayTarget(record)),
     ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
   ];
 
@@ -150,6 +154,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         </div>
       </div>
 
+      <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
       <Modal title={`Thêm ${label.title.toLocaleLowerCase('vi-VN')}`} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={640}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
