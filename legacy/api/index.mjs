@@ -25,6 +25,7 @@ import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem
 import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryCountLedgerLines, inventoryCountPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem, provisionLedgerLines, provisionPostingProblem } from './ledgerPostingRules.mjs';
 import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
 import { calculateCosting } from './costingRules.mjs';
+import { normalizeBreach } from './incidentRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -3038,6 +3039,23 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.createdAt = now();
     record.createdBy = actor.name;
     record.createdById = actor.id;
+  }
+  if (scope === 'ticket_incidents') {
+    // Sự cố lộ, mất dữ liệu cá nhân: hạn thông báo 72 giờ do máy chủ tính; không gỡ cờ, không đổi thời điểm phát hiện hay thời điểm đã thông báo.
+    if (current?.personalDataBreach === true && record.personalDataBreach !== true) throw new HttpError(422, 'Sự cố đã ghi nhận lộ, mất dữ liệu cá nhân, không được bỏ cờ này.');
+    if (record.personalDataBreach === true) {
+      try { record.breach = normalizeBreach(record.breach); } catch (error) { throw new HttpError(422, error.message); }
+      const before = current?.breach;
+      if (before) {
+        if (record.breach.discoveredAt !== before.discoveredAt) throw new HttpError(422, 'Không đổi thời điểm phát hiện vi phạm đã ghi nhận.');
+        for (const field of ['authorityNotifiedAt', 'subjectsNotifiedAt']) {
+          if (before[field] && record.breach[field] !== before[field]) throw new HttpError(422, 'Không đổi thời điểm thông báo đã ghi nhận.');
+        }
+      }
+    } else {
+      record.personalDataBreach = false;
+      delete record.breach;
+    }
   }
   if (scope === 'tickets') {
     const at = now();
@@ -7466,6 +7484,22 @@ async function processExpiryReminders() {
         kind: 'software_license', entityKey: row.record_key, expiry: license.expireDate, bucket, recipients: await reminderRecipients('assets'),
         title: days < 0 ? 'Bản quyền phần mềm đã hết hạn' : 'Bản quyền phần mềm sắp hết hạn', link: '/admin/assets/licenses',
         message: `Bản quyền ${license.softwareName} (${license.licenseCode}) hết hạn ngày ${license.expireDate}, ${describeDays(days)}.`,
+      });
+    }
+
+    // 5. Sự cố lộ, mất dữ liệu cá nhân chưa thông báo cho cơ quan có thẩm quyền: hạn 72 giờ (nhắc từ 1 ngày trước hạn và khi đã quá hạn).
+    const vietnamDate = (isoTime) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(isoTime));
+    for (const row of await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'ticket_incidents'").all()) {
+      const incident = parseJsonObject(row.payload_json);
+      if (incident.personalDataBreach !== true || !incident.breach?.notificationDeadline || incident.breach.authorityNotifiedAt) continue;
+      const deadlineDate = vietnamDate(incident.breach.notificationDeadline);
+      const days = daysBetween(today, deadlineDate);
+      const bucket = days <= 1 ? reminderBucket(days) : null;
+      if (bucket === null) continue;
+      created += await sendReminder({
+        kind: 'data_breach', entityKey: row.record_key, expiry: deadlineDate, bucket, recipients: await reminderRecipients('security'),
+        title: days < 0 ? 'Quá hạn thông báo vi phạm dữ liệu cá nhân' : 'Sắp hết hạn thông báo vi phạm dữ liệu cá nhân', link: '/admin/tickets/incidents',
+        message: `Sự cố ${incident.code} lộ, mất dữ liệu cá nhân phải thông báo cho cơ quan có thẩm quyền trong 72 giờ kể từ khi phát hiện (hạn ${deadlineDate}), ${describeDays(days)}.`,
       });
     }
   } catch (error) {

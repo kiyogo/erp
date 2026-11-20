@@ -7,6 +7,9 @@ import {
   formatIncidentTimestamp,
   getIncidentMetrics,
   incidentExportRows,
+  breachHoursLeft,
+  breachNotificationState,
+  type DataBreach,
 } from './incidentRules';
 import {
   PlusOutlined,
@@ -41,7 +44,16 @@ export interface EnterpriseIncidentRecord {
   timeline: { time: string; action: string }[];
   actionItems: { task: string; owner: string; deadline?: string; status: 'Hoàn tất' | 'Đang triển khai' }[];
   status: 'Đã xử lý & Hoàn tất RCA' | 'Đang xử lý khẩn cấp';
+  personalDataBreach?: boolean;
+  breach?: DataBreach;
 }
+
+const BREACH_STATE_LABEL: Record<DataBreach['notificationState'], { text: string; color: string }> = {
+  pending: { text: 'Còn hạn thông báo', color: 'warning' },
+  overdue: { text: 'Quá hạn thông báo', color: 'error' },
+  on_time: { text: 'Đã thông báo đúng hạn', color: 'success' },
+  late: { text: 'Đã thông báo trễ hạn', color: 'orange' },
+};
 
 const INITIAL_INCIDENTS: EnterpriseIncidentRecord[] = [];
 
@@ -77,6 +89,9 @@ export const IncidentsModule: React.FC = () => {
   const [severityFilter, setSeverityFilter] = useState('all');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [breachChecked, setBreachChecked] = useState(false);
+  const [notifyTarget, setNotifyTarget] = useState<'authorityNotifiedAt' | 'subjectsNotifiedAt' | null>(null);
+  const [notifyAt, setNotifyAt] = useState('');
   const [form] = Form.useForm();
   const [resolutionForm] = Form.useForm();
   const [resolutionModalOpen, setResolutionModalOpen] = useState(false);
@@ -126,11 +141,21 @@ export const IncidentsModule: React.FC = () => {
         reportedBy: user?.name || '',
         reportedById: user?.id || '',
         status: 'Đang xử lý khẩn cấp' as const,
+        ...(breachChecked ? {
+          personalDataBreach: true,
+          breach: {
+            discoveredAt: new Date(values.breachDiscoveredAt || values.occurredAt).toISOString(),
+            dataSubjectsCount: Number(values.breachSubjects ?? 0),
+            dataCategories: String(values.breachCategories || '').trim(),
+            sensitive: values.breachSensitive === true,
+          },
+        } : {}),
       };
       const saved = await dataService.createGenericRecord('ticket_incidents', record) as EnterpriseIncidentRecord;
       setSelectedIncident(saved);
       message.success(`Đã ghi nhận sự cố ${saved.code}.`);
       setModalOpen(false);
+      setBreachChecked(false);
       form.resetFields();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể lưu sự cố. Vui lòng thử lại.');
@@ -182,6 +207,28 @@ export const IncidentsModule: React.FC = () => {
       if (selectedIncident?.key === saved.key) setSelectedIncident(saved);
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể cập nhật kế hoạch hành động.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openNotify = (target: 'authorityNotifiedAt' | 'subjectsNotifiedAt') => {
+    setNotifyTarget(target);
+    setNotifyAt(new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
+  };
+
+  const submitNotify = async () => {
+    if (!selectedIncident?.breach || !notifyTarget || saving) return;
+    const time = new Date(notifyAt);
+    if (!Number.isFinite(time.getTime())) { message.error('Thời điểm thông báo không hợp lệ.'); return; }
+    setSaving(true);
+    try {
+      const saved = await dataService.updateGenericRecord('ticket_incidents', { ...selectedIncident, breach: { ...selectedIncident.breach, [notifyTarget]: time.toISOString() } }) as EnterpriseIncidentRecord;
+      setSelectedIncident(saved);
+      setNotifyTarget(null);
+      message.success('Đã ghi nhận thời điểm thông báo vi phạm dữ liệu cá nhân.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không ghi nhận được thời điểm thông báo.');
     } finally {
       setSaving(false);
     }
@@ -241,6 +288,7 @@ export const IncidentsModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#DC2626', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
             <AlertOutlined /> {record.code}
+            {record.personalDataBreach && record.breach && <Tag color={BREACH_STATE_LABEL[breachNotificationState(record.breach, nowMs)].color}>Dữ liệu cá nhân</Tag>}
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>{formatIncidentTimestamp(record.occurredAt)}</div>
         </div>
@@ -479,6 +527,17 @@ export const IncidentsModule: React.FC = () => {
             <Input.TextArea rows={2} maxLength={2000} placeholder="Nhập nguyên nhân đã xác minh sơ bộ" />
           </Form.Item>
 
+          <Checkbox checked={breachChecked} onChange={(event) => setBreachChecked(Boolean(event.target.checked))}>
+            Sự cố làm lộ hoặc mất dữ liệu cá nhân (phải thông báo cơ quan có thẩm quyền trong 72 giờ kể từ khi phát hiện)
+          </Checkbox>
+          {breachChecked && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+              <Form.Item name="breachDiscoveredAt" label="Thời điểm phát hiện vi phạm" rules={[{ required: true, message: 'Nhập thời điểm phát hiện.' }]}><Input type="datetime-local" /></Form.Item>
+              <Form.Item name="breachSubjects" label="Số chủ thể dữ liệu bị ảnh hưởng (0 nếu chưa rõ)" rules={[{ required: true, message: 'Nhập số chủ thể.' }]}><Input type="number" min={0} /></Form.Item>
+              <Form.Item name="breachCategories" label="Loại dữ liệu cá nhân bị ảnh hưởng" rules={[{ required: true, whitespace: true, message: 'Nhập loại dữ liệu.' }]}><Input maxLength={500} placeholder="Ví dụ: họ tên, số điện thoại, địa chỉ" /></Form.Item>
+              <Form.Item name="breachSensitive" valuePropName="checked" label=" "><Checkbox>Có dữ liệu cá nhân nhạy cảm</Checkbox></Form.Item>
+            </div>
+          )}
           <Form.Item name="actionPlan" label="Kế hoạch hành động" extra="Mỗi dòng là một việc; không nhập việc mẫu nếu chưa xác định.">
             <Input.TextArea rows={3} maxLength={4000} placeholder={'Ví dụ:\nKhôi phục dịch vụ bị ảnh hưởng\nRà soát nguyên nhân và bổ sung biện pháp phòng ngừa'} />
           </Form.Item>
@@ -490,6 +549,16 @@ export const IncidentsModule: React.FC = () => {
             </Button>
           </div>
         </Form>
+      </Modal>
+
+      <Modal title="Ghi nhận thời điểm thông báo" open={!!notifyTarget} onCancel={() => setNotifyTarget(null)} footer={null} width={420}>
+        <div style={{ marginTop: 14 }}>
+          <Input type="datetime-local" value={notifyAt} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setNotifyAt(event.target.value)} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+            <Button onClick={() => setNotifyTarget(null)}>Hủy</Button>
+            <Button type="primary" loading={saving} onClick={() => void submitNotify()}>Lưu</Button>
+          </div>
+        </div>
       </Modal>
 
       {/* DRAWER: Chi Tiết Sự Cố & Báo Cáo Post-Mortem RCA */}
@@ -530,6 +599,30 @@ export const IncidentsModule: React.FC = () => {
                 <div>Chỉ huy xử lý: <strong style={{ color: '#009688' }}>{selectedIncident.handler}</strong></div>
               </div>
             </div>
+
+            {selectedIncident.personalDataBreach && selectedIncident.breach && (() => {
+              const breach = selectedIncident.breach as DataBreach;
+              const state = breachNotificationState(breach, nowMs);
+              const left = breachHoursLeft(breach, nowMs);
+              return (
+                <div style={{ border: '1px solid #FED7AA', borderRadius: 8, padding: 14, background: '#FFFBEB' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Thông báo vi phạm dữ liệu cá nhân <Tag color={BREACH_STATE_LABEL[state].color}>{BREACH_STATE_LABEL[state].text}</Tag>
+                  </div>
+                  <div style={{ fontSize: 12.5, display: 'grid', gap: 4 }}>
+                    <div>Phát hiện: <strong>{formatIncidentTimestamp(breach.discoveredAt)}</strong>; hạn thông báo cơ quan có thẩm quyền: <strong>{formatIncidentTimestamp(breach.notificationDeadline)}</strong>{state === 'pending' ? ` (còn khoảng ${Math.max(left, 0)} giờ)` : ''}</div>
+                    <div>Dữ liệu: {breach.dataCategories}; {breach.dataSubjectsCount.toLocaleString('vi-VN')} chủ thể{breach.sensitive ? '; có dữ liệu nhạy cảm' : ''}</div>
+                    <div>Đã thông báo cơ quan: <strong>{formatIncidentTimestamp(breach.authorityNotifiedAt, 'Chưa thông báo')}</strong></div>
+                    <div>Đã thông báo chủ thể dữ liệu: <strong>{formatIncidentTimestamp(breach.subjectsNotifiedAt, 'Chưa thông báo')}</strong></div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                    {!breach.authorityNotifiedAt && <Button onClick={() => openNotify('authorityNotifiedAt')}>Ghi nhận đã thông báo cơ quan</Button>}
+                    {!breach.subjectsNotifiedAt && <Button onClick={() => openNotify('subjectsNotifiedAt')}>Ghi nhận đã thông báo chủ thể dữ liệu</Button>}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 8 }}>Hệ thống chỉ nhắc hạn và ghi nhận thời điểm; việc gửi thông báo (Mẫu số 08) do bạn thực hiện với cơ quan có thẩm quyền.</div>
+                </div>
+              );
+            })()}
 
             {/* Root Cause Analysis */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>

@@ -140,3 +140,44 @@ test('chỉ quản trị viên chạy được nhắc việc và nhật ký nh�
   assert.equal((await call(staff, '/collections/reminder_log')).status, 403);
   assert.equal((await call(admin, '/collections/reminder_log')).status, 403);
 });
+
+test('sự cố lộ dữ liệu cá nhân: máy chủ tính hạn 72 giờ, khóa thời điểm đã ghi và nhắc trước hạn, khi quá hạn', async () => {
+  const hoursAgo = (hours) => new Date(Date.now() - hours * 3_600_000).toISOString();
+  const incident = (key, extra) => ({ key, code: key.toUpperCase(), severity: 'P1 - Khẩn cấp', incidentTitle: 'Lộ dữ liệu', affectedSystem: 'CRM', occurredAt: hoursAgo(1), resolvedAt: '', handler: 'Người xử lý', downtimeMinutes: 0, rootCause: '', timeline: [], actionItems: [], status: 'Đang xử lý khẩn cấp', ...extra });
+  const breach = (hours, extra = {}) => ({ discoveredAt: hoursAgo(hours), dataSubjectsCount: 50, dataCategories: 'Họ tên, số điện thoại', sensitive: false, ...extra });
+  const post = (record, expected = 201) => call(admin, '/collections/ticket_incidents', 'POST', { record }).then((response) => { assert.equal(response.status, expected, JSON.stringify(response.body)); return response.body; });
+
+  await post(incident('sc-bad-future', { personalDataBreach: true, breach: breach(-5) }), 422);
+  await post(incident('sc-bad-count', { personalDataBreach: true, breach: breach(1, { dataSubjectsCount: -1 }) }), 422);
+  await post(incident('sc-bad-category', { personalDataBreach: true, breach: breach(1, { dataCategories: '' }) }), 422);
+  await post(incident('sc-bad-notified', { personalDataBreach: true, breach: breach(10, { authorityNotifiedAt: hoursAgo(20) }) }), 422);
+  const plain = (await post(incident('sc-plain', { breach: breach(5) }))).record;
+  assert.equal(plain.personalDataBreach, false);
+  assert.equal(plain.breach, undefined, 'sự cố không liên quan dữ liệu cá nhân không giữ khối vi phạm');
+
+  const soon = (await post(incident('sc-soon', { personalDataBreach: true, breach: breach(50, { notificationDeadline: 'forged', notificationState: 'on_time' }) }))).record;
+  assert.equal(soon.breach.notificationState, 'pending');
+  assert.equal(Date.parse(soon.breach.notificationDeadline) - Date.parse(soon.breach.discoveredAt), 72 * 3_600_000);
+  await post(incident('sc-fresh', { personalDataBreach: true, breach: breach(2) }));
+  await post(incident('sc-late', { personalDataBreach: true, breach: breach(100) }));
+  const notified = (await post(incident('sc-done', { personalDataBreach: true, breach: breach(100, { authorityNotifiedAt: hoursAgo(60) }) }))).record;
+  assert.equal(notified.breach.notificationState, 'on_time');
+
+  const run = await call(admin, '/admin/reminders/run', 'POST', {});
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  const messages = (await notificationsOf(admin)).filter((item) => /vi phạm dữ liệu cá nhân/.test(item.title));
+  const text = messages.map((item) => `${item.title}: ${item.message}`).join('\n');
+  assert.ok(text.includes('Sắp hết hạn thông báo') && text.includes('SC-SOON'));
+  assert.ok(text.includes('Quá hạn thông báo') && text.includes('SC-LATE'));
+  assert.ok(!text.includes('SC-FRESH'), 'còn hơn 1 ngày thì chưa nhắc');
+  assert.ok(!text.includes('SC-DONE'), 'đã thông báo thì không nhắc');
+  assert.ok(!text.includes('SC-PLAIN'));
+  assert.equal((await call(admin, '/admin/reminders/run', 'POST', {})).body.created, 0);
+
+  const patch = (key, body, expected) => call(admin, `/collections/ticket_incidents/${key}`, 'PATCH', { patch: body }).then((response) => { assert.equal(response.status, expected, JSON.stringify(response.body)); return response.body; });
+  await patch('sc-soon', { personalDataBreach: false }, 422);
+  await patch('sc-soon', { breach: { ...soon.breach, discoveredAt: hoursAgo(10) } }, 422);
+  const closed = await patch('sc-soon', { breach: { ...soon.breach, authorityNotifiedAt: hoursAgo(5) } }, 200);
+  assert.equal(closed.record.breach.notificationState, 'on_time');
+  await patch('sc-soon', { breach: { ...closed.record.breach, authorityNotifiedAt: hoursAgo(1) } }, 422);
+});

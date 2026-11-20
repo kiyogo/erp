@@ -109,3 +109,25 @@ export function incidentExportRows(records: IncidentExportRecord[]) {
     ]),
   ];
 }
+
+// Sự cố lộ, mất dữ liệu cá nhân phải thông báo cho cơ quan có thẩm quyền trong 72 giờ kể từ khi phát hiện (Nghị định 356/2025/NĐ-CP Điều 28).
+// Hạn và trạng thái do máy chủ tính khi lưu; bản này tính lại trạng thái theo giờ hiện tại. Giữ khớp với legacy/api/incidentRules.mjs (test so khớp).
+export const BREACH_NOTIFICATION_HOURS = 72;
+export type DataBreach = {
+  discoveredAt: string; dataSubjectsCount: number; dataCategories: string; sensitive: boolean;
+  authorityNotifiedAt?: string; subjectsNotifiedAt?: string; notificationDeadline: string; notificationState: 'pending' | 'overdue' | 'on_time' | 'late';
+};
+
+export function breachDeadlineMs(discoveredAt: string): number {
+  return Date.parse(discoveredAt) + BREACH_NOTIFICATION_HOURS * 3_600_000;
+}
+
+export function breachNotificationState(breach: Pick<DataBreach, 'discoveredAt' | 'authorityNotifiedAt'>, nowMs = Date.now()): DataBreach['notificationState'] {
+  const deadline = breachDeadlineMs(breach.discoveredAt);
+  if (breach.authorityNotifiedAt) return Date.parse(breach.authorityNotifiedAt) <= deadline ? 'on_time' : 'late';
+  return nowMs > deadline ? 'overdue' : 'pending';
+}
+
+export function breachHoursLeft(breach: Pick<DataBreach, 'discoveredAt'>, nowMs = Date.now()): number {
+  return Math.floor((breachDeadlineMs(breach.discoveredAt) - nowMs) / 3_600_000);
+}
