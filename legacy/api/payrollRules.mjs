@@ -122,12 +122,30 @@ function readAmount(value, label) {
   return Math.round(number);
 }
 
-// Lương theo ngày công và làm thêm giờ.
-// Làm thêm giờ: Bộ luật Lao động 2019 Điều 98 (ít nhất 150% ngày thường, 200% ngày nghỉ hằng tuần) và Nghị định 145/2020/NĐ-CP Điều 55
-// (tiền lương giờ lấy lương thực trả chia cho số giờ làm việc bình thường của tháng). Phần trả cao hơn lương giờ bình thường được miễn thuế TNCN.
+// Lương theo ngày công, làm thêm giờ và làm đêm: Bộ luật Lao động 2019 Điều 98, 106, 107 và Nghị định 145/2020/NĐ-CP Điều 55, 56, 57
+// (tiền lương giờ lấy lương thực trả chia cho số giờ làm việc bình thường của tháng).
+// - Làm thêm giờ ban ngày: ít nhất 150% ngày thường, 200% ngày nghỉ hằng tuần, 300% ngày lễ, tết, ngày nghỉ có hưởng lương.
+// - Làm việc ban đêm (22 giờ đến 6 giờ sáng) trong giờ làm việc bình thường: trả thêm ít nhất 30% lương giờ.
+// - Làm thêm giờ ban đêm: mức làm thêm + 30% + 20% lương giờ của công việc làm ban ngày hôm đó. Ngày thường không làm thêm ban ngày thì
+//   20% tính trên 100% (tổng 200%), có làm thêm ban ngày thì tính trên 150% (tổng 210%); ngày nghỉ hằng tuần 270%; ngày lễ, tết 390%.
+// Phần trả cao hơn lương giờ bình thường được miễn thuế TNCN. Làm thêm không quá 40 giờ một tháng (Điều 107).
+// Các tỷ lệ lấy từ các bài đăng trích dẫn văn bản; chưa đối chiếu được văn bản gốc, cần kiểm tra trước khi quyết toán thật.
 export const STANDARD_DAILY_HOURS = 8;
-export const OVERTIME_RATES = { weekday: 1.5, weekend: 2 };
-export const OVERTIME_LEGAL_BASIS = ['Bộ luật Lao động 2019 Điều 98', 'Nghị định 145/2020/NĐ-CP Điều 55'];
+export const OVERTIME_RATES = { weekday: 1.5, weekend: 2, holiday: 3 };
+export const MONTHLY_OVERTIME_LIMIT_HOURS = 40;
+export const OVERTIME_LEGAL_BASIS = ['Bộ luật Lao động 2019 Điều 98, 106 và 107', 'Nghị định 145/2020/NĐ-CP Điều 55, 56 và 57'];
+// Từng loại giờ do bảng công ghi nhận: tỷ lệ trả (phần trăm lương giờ, số nguyên để không sai số) và loại giờ chỉ trả phần cộng thêm.
+const HOUR_KINDS = [
+  { field: 'otHoursWeekday', label: 'Giờ làm thêm ngày thường', percent: 150 },
+  { field: 'otHoursWeekend', label: 'Giờ làm thêm ngày nghỉ hằng tuần', percent: 200 },
+  { field: 'otHoursHoliday', label: 'Giờ làm thêm ngày lễ, tết', percent: 300 },
+  { field: 'nightHours', label: 'Giờ làm việc ban đêm', percent: 30, premiumOnly: true },
+  { field: 'otNightHoursWeekday', label: 'Giờ làm thêm ban đêm ngày thường', percent: 150 + 30 + 20 },
+  { field: 'otNightHoursWeekdayAfterOt', label: 'Giờ làm thêm ban đêm ngày thường sau làm thêm ban ngày', percent: 150 + 30 + 30 },
+  { field: 'otNightHoursWeekend', label: 'Giờ làm thêm ban đêm ngày nghỉ hằng tuần', percent: 200 + 30 + 40 },
+  { field: 'otNightHoursHoliday', label: 'Giờ làm thêm ban đêm ngày lễ, tết', percent: 300 + 30 + 60 },
+];
+export const OVERTIME_HOUR_FIELDS = HOUR_KINDS.map((kind) => kind.field);
 
 function readQuantity(value, label, { positive = false, max = Infinity } = {}) {
   const number = value === undefined || value === null || value === '' ? 0 : Number(value);
@@ -139,28 +157,40 @@ function readQuantity(value, label, { positive = false, max = Infinity } = {}) {
  * Lương cơ bản theo ngày công thực tế và tiền làm thêm giờ của một tháng.
  * - Lương tính theo ngày công = lương cơ bản x ngày hưởng lương / ngày công chuẩn; ngày hưởng lương vượt ngày công chuẩn không
  *   làm tăng lương cơ bản (phần làm thêm phải ghi vào giờ làm thêm).
- * - Tiền làm thêm = lương giờ x số giờ x hệ số; lương giờ = lương cơ bản của hợp đồng / ngày công chuẩn / 8 giờ.
+ * - Tiền làm thêm và làm đêm = lương giờ x số giờ x tỷ lệ của từng loại giờ (xem HOUR_KINDS); lương giờ = lương cơ bản của hợp đồng /
+ *   ngày công chuẩn / 8 giờ. Các giờ này nhập theo từng trường của OVERTIME_HOUR_FIELDS, thiếu thì coi là 0.
+ * - Miễn thuế TNCN phần trả cao hơn lương giờ bình thường: với giờ làm đêm trong giờ chuẩn là toàn bộ phần cộng thêm.
  */
-export function workdayPay({ baseSalary, standardDays, payDays, otHoursWeekday, otHoursWeekend }) {
+export function workdayPay({ baseSalary, standardDays, payDays, ...hoursByField }) {
   const base = readAmount(baseSalary, 'Lương cơ bản');
   const standard = readQuantity(standardDays, 'Ngày công chuẩn', { positive: true, max: 31 });
   const paid = readQuantity(payDays, 'Ngày công hưởng lương', { max: 31 });
-  const weekdayHours = readQuantity(otHoursWeekday, 'Giờ làm thêm ngày thường', { max: 744 });
-  const weekendHours = readQuantity(otHoursWeekend, 'Giờ làm thêm ngày nghỉ', { max: 744 });
   const warnings = [];
   const counted = Math.min(paid, standard);
   if (paid > standard) warnings.push(`Ngày hưởng lương ${paid} vượt ngày công chuẩn ${standard}; chỉ tính ${standard} ngày, phần còn lại cần ghi nhận là giờ làm thêm.`);
   const proratedBase = Math.round(base * counted / standard);
   const hourly = base / standard / STANDARD_DAILY_HOURS;
-  const normalWeekday = Math.round(hourly * weekdayHours);
-  const normalWeekend = Math.round(hourly * weekendHours);
-  const weekdayPay = Math.round(hourly * weekdayHours * OVERTIME_RATES.weekday);
-  const weekendPay = Math.round(hourly * weekendHours * OVERTIME_RATES.weekend);
+  const lines = {};
+  let pay = 0, exempt = 0, overtimeHours = 0;
+  for (const kind of HOUR_KINDS) {
+    const hours = readQuantity(hoursByField[kind.field], kind.label, { max: 744 });
+    const amount = Math.round(hourly * hours * kind.percent / 100);
+    lines[kind.field] = { hours, pay: amount };
+    pay += amount;
+    exempt += amount - (kind.premiumOnly ? 0 : Math.round(hourly * hours));
+    if (!kind.premiumOnly) overtimeHours += hours;
+  }
+  if (overtimeHours > MONTHLY_OVERTIME_LIMIT_HOURS) warnings.push(`Giờ làm thêm trong tháng ${overtimeHours} vượt giới hạn ${MONTHLY_OVERTIME_LIMIT_HOURS} giờ (Bộ luật Lao động 2019 Điều 107).`);
+  const sum = (fields, key) => fields.reduce((total, field) => total + lines[field][key], 0);
+  const nightOvertime = HOUR_KINDS.filter((kind) => kind.field.startsWith('otNightHours')).map((kind) => kind.field);
   return {
     standardDays: standard, payDays: counted, proratedBase, hourlyWage: Math.round(hourly),
     overtime: {
-      weekdayHours, weekendHours, weekdayPay, weekendPay, pay: weekdayPay + weekendPay,
-      exempt: (weekdayPay - normalWeekday) + (weekendPay - normalWeekend),
+      weekdayHours: lines.otHoursWeekday.hours, weekendHours: lines.otHoursWeekend.hours, holidayHours: lines.otHoursHoliday.hours,
+      nightHours: lines.nightHours.hours, nightOvertimeHours: sum(nightOvertime, 'hours'),
+      weekdayPay: lines.otHoursWeekday.pay, weekendPay: lines.otHoursWeekend.pay, holidayPay: lines.otHoursHoliday.pay,
+      nightPay: lines.nightHours.pay, nightOvertimePay: sum(nightOvertime, 'pay'),
+      pay, exempt, totalHours: overtimeHours, lines,
       legalBasis: OVERTIME_LEGAL_BASIS,
     },
     warnings,

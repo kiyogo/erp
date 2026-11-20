@@ -106,6 +106,32 @@ test('làm thêm giờ: 150% ngày thường, 200% ngày nghỉ, phần cao hơn
   assert.equal(slip.taxableIncome, Math.max(0, slip.gross - absent.overtime.exempt - slip.employeeInsurance.total - 15_500_000));
 });
 
+test('làm thêm ngày lễ 300%, làm đêm cộng 30%, làm thêm ban đêm 200%, 210%, 270% và 390% lương giờ', () => {
+  const pay = workdayPay({
+    baseSalary: 22_000_000, standardDays: 22, payDays: 22,
+    otHoursHoliday: 2, nightHours: 8, otNightHoursWeekday: 2, otNightHoursWeekdayAfterOt: 2, otNightHoursWeekend: 2, otNightHoursHoliday: 2,
+  });
+  assert.equal(pay.hourlyWage, 125_000);
+  assert.equal(pay.overtime.holidayPay, 750_000, '125.000 x 2 giờ x 300%');
+  assert.equal(pay.overtime.nightPay, 300_000, '125.000 x 8 giờ x 30%');
+  assert.equal(pay.overtime.lines.otNightHoursWeekday.pay, 500_000, '200%');
+  assert.equal(pay.overtime.lines.otNightHoursWeekdayAfterOt.pay, 525_000, '210%');
+  assert.equal(pay.overtime.lines.otNightHoursWeekend.pay, 675_000, '270%');
+  assert.equal(pay.overtime.lines.otNightHoursHoliday.pay, 975_000, '390%');
+  assert.equal(pay.overtime.nightOvertimePay, 500_000 + 525_000 + 675_000 + 975_000);
+  assert.equal(pay.overtime.pay, 750_000 + 300_000 + 2_675_000);
+  // Miễn thuế phần cao hơn lương giờ bình thường; giờ làm đêm trong giờ chuẩn được miễn toàn bộ phần cộng thêm.
+  assert.equal(pay.overtime.exempt, (750_000 - 250_000) + 300_000 + (500_000 - 250_000) + (525_000 - 250_000) + (675_000 - 250_000) + (975_000 - 250_000));
+  assert.equal(pay.overtime.totalHours, 10, 'giờ làm đêm trong giờ chuẩn không tính vào giới hạn làm thêm');
+  assert.deepEqual(pay.warnings, []);
+});
+
+test('cảnh báo khi giờ làm thêm trong tháng vượt 40 giờ', () => {
+  const over = workdayPay({ baseSalary: 22_000_000, standardDays: 22, payDays: 22, otHoursWeekday: 30, otNightHoursHoliday: 11 });
+  assert.match(over.warnings.at(-1), /vượt giới hạn 40 giờ/);
+  assert.deepEqual(workdayPay({ baseSalary: 22_000_000, standardDays: 22, payDays: 22, otHoursWeekday: 30, otNightHoursHoliday: 10 }).warnings, []);
+});
+
 test('lương theo ngày công từ chối số liệu không hợp lệ', () => {
   assert.throws(() => workdayPay({ baseSalary: 1_000_000, standardDays: 0, payDays: 1 }), /Ngày công chuẩn/);
   assert.throws(() => workdayPay({ baseSalary: 1_000_000, standardDays: 26, payDays: -1 }), /Ngày công hưởng lương/);

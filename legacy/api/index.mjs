@@ -17,7 +17,7 @@ import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
-import { REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
+import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
   maskPhone,
   maskEmail,
@@ -5287,9 +5287,9 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(record.month)) throw new HttpError(422, 'Kỳ công phải theo YYYY-MM.');
     const [year, month] = record.month.split('-').map(Number);
     const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    for (const field of ['standardDays', 'actualDays', 'paidLeaveDays', 'unpaidLeaveDays', 'otHoursWeekday', 'otHoursWeekend']) {
+    for (const field of ['standardDays', 'actualDays', 'paidLeaveDays', 'unpaidLeaveDays', ...OVERTIME_HOUR_FIELDS]) {
       record[field] = Number(record[field] ?? 0);
-      if (!Number.isFinite(record[field]) || record[field] < 0 || record[field] > (field.startsWith('otHours') ? days * 24 : days)) throw new HttpError(422, 'Số ngày hoặc giờ công không hợp lệ.');
+      if (!Number.isFinite(record[field]) || record[field] < 0 || record[field] > (OVERTIME_HOUR_FIELDS.includes(field) ? days * 24 : days)) throw new HttpError(422, 'Số ngày hoặc giờ công không hợp lệ.');
     }
     if (!record.standardDays || record.actualDays + record.paidLeaveDays + record.unpaidLeaveDays > days) throw new HttpError(422, 'Tổng ngày công/nghỉ không hợp lệ trong tháng.');
     if (current?.status === 'Đã khóa công') throw new HttpError(422, 'Bảng công đã khóa không thể thay đổi.');
@@ -13053,7 +13053,7 @@ async function handleRequest(request, response) {
           if (timesheet.status !== 'Đã khóa công') { skipped.push({ employeeCode: code, employeeName: employee.name, reason: `Bảng công kỳ ${period} chưa khóa công.` }); continue; }
           attendance = workdayPay({
             baseSalary, standardDays: timesheet.standardDays, payDays: timesheet.totalPayDays ?? (Number(timesheet.actualDays) || 0) + (Number(timesheet.paidLeaveDays) || 0),
-            otHoursWeekday: timesheet.otHoursWeekday, otHoursWeekend: timesheet.otHoursWeekend,
+            ...Object.fromEntries(OVERTIME_HOUR_FIELDS.map((field) => [field, timesheet[field]])),
           });
         }
         const slip = calculatePayslip({

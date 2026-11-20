@@ -39,12 +39,29 @@ export interface EnterpriseTimesheetSummaryItem {
   unpaidLeaveDays: number;
   otHoursWeekday: number;
   otHoursWeekend: number;
+  otHoursHoliday?: number;
+  nightHours?: number;
+  otNightHoursWeekday?: number;
+  otNightHoursWeekdayAfterOt?: number;
+  otNightHoursWeekend?: number;
+  otNightHoursHoliday?: number;
   totalPayDays: number;
   attendanceRate: number;
   status: 'Đã khóa công' | 'Chờ đối soát';
 }
 
 const INITIAL_SUMMARY: EnterpriseTimesheetSummaryItem[] = [];
+
+/** Giờ làm thêm ngày lễ và giờ làm đêm theo Điều 98 Bộ luật Lao động 2019 và Nghị định 145/2020/NĐ-CP; máy chủ tính lương từ các trường này. */
+const EXTRA_HOUR_FIELDS = [
+  { name: 'otHoursHoliday', label: 'Giờ OT ngày lễ, tết (300%)' },
+  { name: 'nightHours', label: 'Giờ làm đêm trong giờ chuẩn (cộng 30%)' },
+  { name: 'otNightHoursWeekday', label: 'OT đêm ngày thường (200%)' },
+  { name: 'otNightHoursWeekdayAfterOt', label: 'OT đêm ngày thường, đã OT ban ngày (210%)' },
+  { name: 'otNightHoursWeekend', label: 'OT đêm ngày nghỉ hằng tuần (270%)' },
+  { name: 'otNightHoursHoliday', label: 'OT đêm ngày lễ, tết (390%)' },
+] as const;
+const extraHoursOf = (record: EnterpriseTimesheetSummaryItem) => EXTRA_HOUR_FIELDS.reduce((sum, { name }) => sum + (Number(record[name]) || 0), 0);
 
 export const TimesheetSummaryModule: React.FC = () => {
   const [data, setData] = useState<EnterpriseTimesheetSummaryItem[]>(INITIAL_SUMMARY);
@@ -92,7 +109,7 @@ export const TimesheetSummaryModule: React.FC = () => {
       if (actualDays + paidLeaveDays + unpaidLeaveDays > monthDays) throw new Error(`Tổng ngày công và nghỉ không được vượt quá ${monthDays} ngày của tháng.`);
       const existing = data.find((item) => item.employeeCode === employee.employeeCode && item.month === values.month);
       if (existing?.status === 'Đã khóa công') throw new Error('Bảng công đã khóa. Không thể điều chỉnh.');
-      const record = { ...values, ...employee, key: existing?.key || crypto.randomUUID(), standardDays, actualDays, paidLeaveDays, unpaidLeaveDays, otHoursWeekday: attendanceNumber(values.otHoursWeekday ?? 0, 'Giờ OT thường', 0, 744), otHoursWeekend: attendanceNumber(values.otHoursWeekend ?? 0, 'Giờ OT cuối tuần', 0, 744), totalPayDays: actualDays + paidLeaveDays, attendanceRate: Math.round((actualDays + paidLeaveDays) / standardDays * 100), status: 'Chờ đối soát' };
+      const record = { ...values, ...employee, key: existing?.key || crypto.randomUUID(), standardDays, actualDays, paidLeaveDays, unpaidLeaveDays, otHoursWeekday: attendanceNumber(values.otHoursWeekday ?? 0, 'Giờ OT thường', 0, 744), otHoursWeekend: attendanceNumber(values.otHoursWeekend ?? 0, 'Giờ OT cuối tuần', 0, 744), ...Object.fromEntries(EXTRA_HOUR_FIELDS.map(({ name, label }) => [name, attendanceNumber(values[name] ?? 0, label, 0, 744)])), totalPayDays: actualDays + paidLeaveDays, attendanceRate: Math.round((actualDays + paidLeaveDays) / standardDays * 100), status: 'Chờ đối soát' };
       if (existing) await collectionsApi.update('attendance_timesheet_summary', existing.key, record);
       else await collectionsApi.create('attendance_timesheet_summary', record);
       await dataService.refreshGenericData('attendance_timesheet_summary');
@@ -175,6 +192,7 @@ export const TimesheetSummaryModule: React.FC = () => {
         <div>
           <span style={{ color: '#2563EB', fontWeight: 700 }}>{record.otHoursWeekday}h ngày thường</span>
           <div style={{ color: '#D97706', fontSize: 11.5 }}>{record.otHoursWeekend}h cuối tuần</div>
+          {extraHoursOf(record) > 0 && <div style={{ color: '#7C3AED', fontSize: 11.5 }}>{extraHoursOf(record)}h lễ và đêm</div>}
         </div>
       ),
     },
@@ -291,7 +309,7 @@ export const TimesheetSummaryModule: React.FC = () => {
           />
 
           <TimesheetBoardDialog summary />
-          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_hop_cong.xlsx', generateValidXlsxBlob([['Tháng', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Công chuẩn', 'Công thực tế', 'Phép hưởng lương', 'Không lương', 'OT thường', 'OT cuối tuần', 'Ngày tính lương', 'Trạng thái'], ...filteredData.map((item) => [item.month || '', item.employeeCode, item.employeeName, item.department, item.standardDays, item.actualDays, item.paidLeaveDays, item.unpaidLeaveDays, item.otHoursWeekday, item.otHoursWeekend, item.totalPayDays, item.status])]))}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_hop_cong.xlsx', generateValidXlsxBlob([['Tháng', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Công chuẩn', 'Công thực tế', 'Phép hưởng lương', 'Không lương', 'OT thường', 'OT cuối tuần', ...EXTRA_HOUR_FIELDS.map(({ label }) => label), 'Ngày tính lương', 'Trạng thái'], ...filteredData.map((item) => [item.month || '', item.employeeCode, item.employeeName, item.department, item.standardDays, item.actualDays, item.paidLeaveDays, item.unpaidLeaveDays, item.otHoursWeekday, item.otHoursWeekend, ...EXTRA_HOUR_FIELDS.map(({ name }) => item[name] ?? 0), item.totalPayDays, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -308,6 +326,7 @@ export const TimesheetSummaryModule: React.FC = () => {
                 unpaidLeaveDays: 0,
                 otHoursWeekday: 0,
                 otHoursWeekend: 0,
+                ...Object.fromEntries(EXTRA_HOUR_FIELDS.map(({ name }) => [name, 0])),
               });
               setModalOpen(true);
             }}
@@ -325,7 +344,7 @@ export const TimesheetSummaryModule: React.FC = () => {
 
       {/* MODAL: Điều Chỉnh Ngày Công */}
       <Modal
-        title="Thêm Hoặc Điều Chỉnh Ngày Công &amp; Giờ Tăng Ca"
+        title="Thêm Hoặc Điều Chỉnh Ngày Công Và Giờ Tăng Ca"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         footer={null}
@@ -376,6 +395,14 @@ export const TimesheetSummaryModule: React.FC = () => {
             </Form.Item>
           </div>
 
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {EXTRA_HOUR_FIELDS.map(({ name, label }) => (
+              <Form.Item key={name} name={name} label={label}>
+                <Input type="number" min={0} step={0.5} />
+              </Form.Item>
+            ))}
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
             <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
@@ -387,7 +414,7 @@ export const TimesheetSummaryModule: React.FC = () => {
 
       {/* DRAWER: Chi Tiết Cấu Thành Công & Chuyển Tính Lương */}
       <Drawer
-        title="Chi Tiết Bảng Công Tổng Hợp &amp; Cấu Thành Lương"
+        title="Chi Tiết Bảng Công Tổng Hợp Và Cấu Thành Lương"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={580}
@@ -452,6 +479,12 @@ export const TimesheetSummaryModule: React.FC = () => {
                   <span>OT Cuối tuần:</span>
                   <strong>{selectedSummary.otHoursWeekend} Giờ</strong>
                 </div>
+                {EXTRA_HOUR_FIELDS.filter(({ name }) => Number(selectedSummary[name]) > 0).map(({ name, label }) => (
+                  <div key={name} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{label}:</span>
+                    <span>{selectedSummary[name]} Giờ</span>
+                  </div>
+                ))}
               </div>
             </div>
 

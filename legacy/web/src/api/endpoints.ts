@@ -1261,7 +1261,7 @@ export type PayrollCalculationRow = {
   basis: 'fixed' | 'attendance';
   contractBaseSalary: number;
   workdays: { standardDays: number; payDays: number; actualDays: number; paidLeaveDays: number; unpaidLeaveDays: number } | null;
-  overtime: { weekdayHours: number; weekendHours: number; weekdayPay: number; weekendPay: number; pay: number; exempt: number; hourlyWage: number } | null;
+  overtime: { weekdayHours: number; weekendHours: number; holidayHours: number; nightHours: number; nightOvertimeHours: number; weekdayPay: number; weekendPay: number; holidayPay: number; nightPay: number; nightOvertimePay: number; pay: number; exempt: number; totalHours: number; hourlyWage: number } | null;
 };
 export type PayrollCalculationResult = {
   period: string; region: string; basis: 'fixed' | 'attendance';

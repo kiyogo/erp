@@ -493,7 +493,19 @@ export const PayrollModule: React.FC = () => {
               ...(calcResult.basis === 'attendance' ? [
                 { title: 'Ngày công', key: 'workdays', render: (_: unknown, row: any) => `${row.workdays?.payDays ?? 0} / ${row.workdays?.standardDays ?? 0}` },
                 { title: 'Lương theo ngày công', dataIndex: 'baseSalary', key: 'baseSalary', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
-                { title: 'Làm thêm giờ', dataIndex: 'overtimePay', key: 'overtimePay', render: (v: number) => `${(v || 0).toLocaleString('vi-VN')} ₫` },
+                {
+                  title: 'Làm thêm giờ', dataIndex: 'overtimePay', key: 'overtimePay',
+                  render: (v: number, row: any) => {
+                    const parts = [['ngày lễ', row.overtime?.holidayPay], ['làm đêm', row.overtime?.nightPay], ['OT đêm', row.overtime?.nightOvertimePay]]
+                      .filter(([, amount]) => Number(amount) > 0).map(([label, amount]) => `${label} ${Number(amount).toLocaleString('vi-VN')} ₫`);
+                    return (
+                      <div>
+                        <div>{(v || 0).toLocaleString('vi-VN')} ₫</div>
+                        {parts.length > 0 && <div style={{ fontSize: 11.5, color: '#64748B' }}>Gồm {parts.join(', ')}</div>}
+                      </div>
+                    );
+                  },
+                },
               ] : []),
               { title: 'Tổng thu nhập', dataIndex: 'gross', key: 'gross', render: (v: number) => `${v.toLocaleString('vi-VN')} ₫` },
               { title: 'Phụ thuộc', dataIndex: 'dependents', key: 'dependents' },

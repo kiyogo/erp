@@ -146,7 +146,7 @@ async function lockTimesheet(record) {
 
 test('lương theo ngày công dùng bảng công đã khóa, tính làm thêm giờ và giữ nguyên lương đóng bảo hiểm', async () => {
   await createEmployee('PAY-3', 26_000_000);
-  await lockTimesheet({ month: '2026-03', empCode: 'PAY-1', standardDays: 26, actualDays: 10, paidLeaveDays: 3, unpaidLeaveDays: 13, otHoursWeekday: 10, otHoursWeekend: 8 });
+  await lockTimesheet({ month: '2026-03', empCode: 'PAY-1', standardDays: 26, actualDays: 10, paidLeaveDays: 3, unpaidLeaveDays: 13, otHoursWeekday: 10, otHoursWeekend: 8, otHoursHoliday: 4, nightHours: 16, otNightHoursWeekend: 2 });
   await lockTimesheet({ month: '2026-03', empCode: 'PAY-3', standardDays: 26, actualDays: 26, paidLeaveDays: 0, unpaidLeaveDays: 0, otHoursWeekday: 0, otHoursWeekend: 0, lock: false });
 
   const result = await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', basis: 'attendance' });
@@ -159,6 +159,10 @@ test('lương theo ngày công dùng bảng công đã khóa, tính làm thêm g
   const hourly = 30_000_000 / 26 / 8;
   assert.equal(first.overtime.weekdayPay, Math.round(hourly * 10 * 1.5));
   assert.equal(first.overtime.weekendPay, Math.round(hourly * 8 * 2));
+  assert.equal(first.overtime.holidayPay, Math.round(hourly * 4 * 3), 'ngày lễ, tết 300%');
+  assert.equal(first.overtime.nightPay, Math.round(hourly * 16 * 0.3), 'làm đêm trong giờ chuẩn cộng 30%');
+  assert.equal(first.overtime.nightOvertimePay, Math.round(hourly * 2 * 2.7), 'làm thêm ban đêm ngày nghỉ hằng tuần 270%');
+  assert.equal(first.overtime.pay, first.overtime.weekdayPay + first.overtime.weekendPay + first.overtime.holidayPay + first.overtime.nightPay + first.overtime.nightOvertimePay);
   assert.equal(first.overtimePay, first.overtime.pay);
   assert.equal(first.gross, 15_000_000 + first.overtime.pay);
   assert.equal(first.insuranceSalary, 30_000_000, 'bảo hiểm tính theo lương hợp đồng');
