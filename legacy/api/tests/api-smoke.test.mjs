@@ -2812,3 +2812,32 @@ test('costing runs are recalculated by the server, previewed without saving and 
   await request('/collections/finance_costing_runs', 'POST', { record: { key: 'forged' } }, 409);
 });
 
+test('software licenses keep purchase documents, VAT and the accounting treatment computed by the server', async () => {
+  const license = { licenseCode: 'LIC-LEGAL-01', softwareName: 'Phần mềm kế toán', vendor: 'Nhà cung cấp phần mềm', category: 'Văn phòng & Cộng tác', licenseType: 'Thuê bao', productKey: 'KEY-LEGAL-1', seatsTotal: 5, seatsAllocated: 0,
+    annualCost: 12_000_000, billingCycle: 'Hàng năm', purchaseDate: '2026-10-01', expireDate: '2027-09-30', assignedDepartment: 'Kế toán', assignedAdmin: 'Quản trị',
+    vendorOrigin: 'domestic', vendorTaxCode: '0100109106', contractNo: 'HĐ-LIC-01', invoiceNo: '0000321', invoiceSymbol: '1C26TAA', invoiceDate: '2026-10-02', purchaseCost: 12_000_000, vatRate: 10, paymentMethod: 'Chuyển khoản' };
+  await request('/assets/licenses', 'POST', { ...license, licenseCode: 'LIC-LEGAL-BAD-TAX', vendorTaxCode: '0100109107' }, 422);
+  await request('/assets/licenses', 'POST', { ...license, licenseCode: 'LIC-LEGAL-BAD-VAT', vatRate: 7 }, 422);
+  await request('/assets/licenses', 'POST', { ...license, licenseCode: 'LIC-LEGAL-BAD-DATE', invoiceDate: '2099-01-01' }, 422);
+  await request('/assets/licenses', 'POST', { ...license, licenseCode: 'LIC-LEGAL-BAD-COST', purchaseCost: -1 }, 422);
+  const saved = (await request('/assets/licenses', 'POST', { ...license, vatAmount: 1, totalPayable: 1, accounting: { treatment: 'none' }, warnings: [] }, 201)).record;
+  assert.equal(saved.vatAmount, 1_200_000);
+  assert.equal(saved.totalPayable, 13_200_000);
+  assert.equal(saved.accounting.treatment, 'prepaid');
+  assert.equal(saved.accounting.amortizationMonths, 12);
+  assert.equal(saved.accounting.monthlyAmortization, 1_000_000);
+  assert.deepEqual(saved.warnings, []);
+  assert.equal(saved.invoiceNo, '0000321');
+  const perpetual = (await request('/assets/licenses', 'POST', { ...license, licenseCode: 'LIC-LEGAL-02', licenseType: 'Vĩnh viễn', billingCycle: 'Vĩnh viễn', purchaseCost: 40_000_000, invoiceNo: '', paymentMethod: 'Tiền mặt' }, 201)).record;
+  assert.equal(perpetual.accounting.treatment, 'intangible_asset');
+  assert.equal(perpetual.warnings.length, 2);
+  const foreign = (await request('/assets/licenses', 'POST', { ...license, licenseCode: 'LIC-LEGAL-03', vendorOrigin: 'foreign', vendorTaxCode: 'abc', vatRate: 10 }, 201)).record;
+  assert.equal(foreign.vatAmount, 0);
+  assert.equal(foreign.vendorTaxCode, '');
+  assert.match(foreign.warnings.join(' '), /nhà thầu nước ngoài/);
+  const listed = (await request('/assets/licenses')).data.find((item) => item.licenseCode === 'LIC-LEGAL-01');
+  assert.equal(listed.productKey, 'KEY-LEGAL-1');
+  assert.equal(listed.accounting.monthlyAmortization, 1_000_000);
+  await request('/assets/licenses', 'POST', { ...license }, 409);
+});
+

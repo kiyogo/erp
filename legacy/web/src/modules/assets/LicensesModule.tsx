@@ -25,6 +25,10 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
+import { ContactSelect } from '../crm/ContactSelect';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
+import { vatRateOptions } from '../finance/vatRateRules';
+import { PAYMENT_METHOD_OPTIONS, vatOf } from '../finance/tradeTerms';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Progress, Tooltip } from '../../custom-ui';
 
 export interface LicenseUserAllocation {
@@ -55,6 +59,19 @@ export interface SoftwareLicense {
   status: 'Đang kích hoạt' | 'Sắp hết hạn' | 'Hết hạn';
   allocatedUsers: LicenseUserAllocation[];
   notes: string;
+  vendorOrigin?: 'domestic' | 'foreign';
+  vendorTaxCode?: string;
+  contractNo?: string;
+  invoiceNo?: string;
+  invoiceSymbol?: string;
+  invoiceDate?: string;
+  purchaseCost?: number;
+  vatRate?: number;
+  vatAmount?: number;
+  totalPayable?: number;
+  paymentMethod?: string;
+  accounting?: { treatment: 'none' | 'intangible_asset' | 'prepaid' | 'monthly_expense'; note: string; amortizationMonths: number; monthlyAmortization: number };
+  warnings?: string[];
 }
 
 const INITIAL_LICENSES: SoftwareLicense[] = [];
@@ -93,6 +110,11 @@ export const LicensesModule: React.FC = () => {
   const [seatName, setSeatName] = useState('');
   const [seatEmail, setSeatEmail] = useState('');
   const [seatDevice, setSeatDevice] = useState('');
+  const [seatEmployeeCode, setSeatEmployeeCode] = useState('');
+  const [costNet, setCostNet] = useState(0);
+  const [costVatRate, setCostVatRate] = useState(10);
+  const [costDate, setCostDate] = useState(new Date().toISOString().substring(0, 10));
+  const [vendorOrigin, setVendorOrigin] = useState<'domestic' | 'foreign'>('domestic');
 
   const [form] = Form.useForm();
 
@@ -117,7 +139,11 @@ export const LicensesModule: React.FC = () => {
       annualCost: 0,
       assignedDepartment: '',
       assignedAdmin: '',
+      vendorOrigin: 'domestic',
+      vatRate: 10,
+      purchaseCost: 0,
     });
+    setCostNet(0); setCostVatRate(10); setVendorOrigin('domestic'); setCostDate(new Date().toISOString().substring(0, 10));
     setModalOpen(true);
   };
 
@@ -143,7 +169,7 @@ export const LicensesModule: React.FC = () => {
       setDetailItem(updated);
       message.success('Đã ghi nhận cấp ghế.');
       setSeatModalOpen(false);
-      setSeatName(''); setSeatEmail(''); setSeatDevice('');
+      setSeatName(''); setSeatEmail(''); setSeatDevice(''); setSeatEmployeeCode('');
     } catch (error: any) { message.error(error?.response?.data?.error || error?.response?.data?.message || 'Không cấp được ghế.'); }
     finally { setSaving(false); }
   };
@@ -418,9 +444,16 @@ export const LicensesModule: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="vendor" label="Hãng phát triển / Nhà cung cấp" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Datadog Inc / Microsoft / Oracle" />
-            </Form.Item>
+            <div>
+              {vendorOrigin === 'domestic' && (
+                <Form.Item name="vendorContactId" label="Chọn nhà cung cấp trong danh bạ">
+                  <ContactSelect type="supplier" allowClear onSelectContact={(contact) => { if (contact) form.setFieldsValue({ vendor: contact.name, vendorTaxCode: contact.taxCode || '' }); }} />
+                </Form.Item>
+              )}
+              <Form.Item name="vendor" label="Hãng phát triển / Nhà cung cấp" rules={[{ required: true }]}>
+                <Input placeholder="Ví dụ: Datadog Inc / Microsoft / Oracle" />
+              </Form.Item>
+            </div>
             <Form.Item name="productKey" label="Product Key / Token Kích Hoạt" rules={[{ required: true }]}>
               <Input placeholder="Ví dụ: DD-KEY-ENTERPRISE-2026-XXXX" />
             </Form.Item>
@@ -459,7 +492,24 @@ export const LicensesModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="assignedAdmin" label="Người quản trị" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="assignedAdmin" label="Người quản trị" rules={[{ required: true }]}><EmployeeSelect valueKey="name" /></Form.Item>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <Form.Item name="vendorOrigin" label="Nhà cung cấp">
+              <Select options={[{ label: 'Trong nước', value: 'domestic' }, { label: 'Nước ngoài', value: 'foreign' }]} onChange={(value: 'domestic' | 'foreign') => setVendorOrigin(value)} />
+            </Form.Item>
+            <Form.Item name="vendorTaxCode" label="Mã số thuế nhà cung cấp"><Input disabled={vendorOrigin === 'foreign'} placeholder="10 số, 13 số hoặc 12 số" /></Form.Item>
+            <Form.Item name="contractNo" label="Số hợp đồng"><Input /></Form.Item>
+            <Form.Item name="invoiceNo" label="Số hóa đơn"><Input /></Form.Item>
+            <Form.Item name="invoiceSymbol" label="Ký hiệu hóa đơn"><Input /></Form.Item>
+            <Form.Item name="invoiceDate" label="Ngày hóa đơn"><Input type="date" onChange={(event: React.ChangeEvent<HTMLInputElement>) => setCostDate(event.target.value || form.getFieldValue('purchaseDate'))} /></Form.Item>
+            <Form.Item name="purchaseCost" label="Giá mua lần này chưa thuế (VNĐ)"><Input type="number" min={0} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setCostNet(Number(event.target.value) || 0)} /></Form.Item>
+            <Form.Item name="vatRate" label="Thuế suất GTGT"><Select disabled={vendorOrigin === 'foreign'} options={vatRateOptions(costDate)} onChange={(value: number) => setCostVatRate(Number(value) || 0)} /></Form.Item>
+            <Form.Item name="paymentMethod" label="Hình thức thanh toán"><Select allowClear options={PAYMENT_METHOD_OPTIONS} /></Form.Item>
+          </div>
+          <div style={{ marginBottom: 14, color: '#64748B' }}>
+            {vendorOrigin === 'foreign' ? 'Nhà cung cấp nước ngoài không có hóa đơn GTGT; kiểm tra thuế nhà thầu nước ngoài.' : `Thuế GTGT ${vatOf(costNet, costVatRate).toLocaleString('vi-VN')} ₫, tổng thanh toán ${(costNet + vatOf(costNet, costVatRate)).toLocaleString('vi-VN')} ₫.`} Cách hạch toán do hệ thống xác định sau khi lưu.
+          </div>
 
           <Form.Item name="notes" label="Ghi chú điều khoản hợp đồng & Bảo mật">
             <Input.TextArea rows={2} placeholder="Nhập các điều khoản gia hạn hoặc tài khoản quản trị..." />
@@ -554,6 +604,19 @@ export const LicensesModule: React.FC = () => {
                 <div style={{ fontSize: 11, color: '#64748B' }}>Từ: {detailItem.purchaseDate}</div>
               </div>
             </div>
+
+            {detailItem.accounting && (
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Chứng từ mua và hạch toán</div>
+                <div style={{ fontSize: 12.5, display: 'grid', gap: 4 }}>
+                  <div>{detailItem.vendorOrigin === 'foreign' ? 'Nhà cung cấp nước ngoài' : `Nhà cung cấp trong nước${detailItem.vendorTaxCode ? `, MST ${detailItem.vendorTaxCode}` : ''}`}{detailItem.contractNo ? `; hợp đồng ${detailItem.contractNo}` : ''}</div>
+                  <div>Hóa đơn: {detailItem.invoiceNo ? `${detailItem.invoiceNo}${detailItem.invoiceSymbol ? `, ký hiệu ${detailItem.invoiceSymbol}` : ''}${detailItem.invoiceDate ? `, ngày ${detailItem.invoiceDate}` : ''}` : 'Chưa ghi'}</div>
+                  <div>Giá mua {Number(detailItem.purchaseCost || 0).toLocaleString('vi-VN')} ₫, thuế GTGT {Number(detailItem.vatAmount || 0).toLocaleString('vi-VN')} ₫ ({detailItem.vatRate || 0}%), tổng {Number(detailItem.totalPayable || 0).toLocaleString('vi-VN')} ₫{detailItem.paymentMethod ? `, thanh toán ${detailItem.paymentMethod}` : ''}</div>
+                  <div style={{ color: '#334155' }}>{detailItem.accounting.note}{detailItem.accounting.monthlyAmortization > 0 ? ` Phân bổ khoảng ${detailItem.accounting.monthlyAmortization.toLocaleString('vi-VN')} ₫ mỗi tháng.` : ''}</div>
+                  {(detailItem.warnings || []).map((warning) => <div key={warning} style={{ color: '#D97706' }}>{warning}</div>)}
+                </div>
+              </div>
+            )}
 
             {/* Seat Allocation User List */}
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>
@@ -655,10 +718,9 @@ export const LicensesModule: React.FC = () => {
             <label style={{ fontSize: 12.5, fontWeight: 600, color: '#0F172A', display: 'block', marginBottom: 4 }}>
               Họ và tên nhân sự:
             </label>
-            <Input
-              placeholder="Ví dụ: Lê Minh Trọng"
-              value={seatName}
-              onChange={(e) => setSeatName(e.target.value)}
+            <EmployeeSelect
+              value={seatEmployeeCode}
+              onSelectEmployee={(employee) => { setSeatEmployeeCode(employee?.employeeCode || employee?.code || ''); setSeatName(employee?.name || ''); setSeatEmail(employee?.email || ''); }}
             />
           </div>
 

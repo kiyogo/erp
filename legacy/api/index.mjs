@@ -26,6 +26,7 @@ import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingPr
 import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
 import { calculateCosting } from './costingRules.mjs';
 import { normalizeBreach } from './incidentRules.mjs';
+import { normalizeLicenseLegal } from './licenseRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -13127,7 +13128,14 @@ async function handleRequest(request, response) {
           const expireDate = requiredIsoDate(input.expireDate, 'Ngày hết hạn');
           if (expireDate < purchaseDate) throw new HttpError(422, 'Ngày hết hạn không được trước ngày mua.');
           const productKey = requiredText(input.productKey, 'Mã kích hoạt', 4000);
+          const licenseTypeValue = requiredText(input.licenseType, 'Hình thức cấp phép', 120);
+          const billingCycleValue = requiredText(input.billingCycle, 'Kỳ thanh toán', 120);
+          let legalInfo;
+          try {
+            legalInfo = normalizeLicenseLegal(input, { purchaseDate, expireDate, licenseType: licenseTypeValue, billingCycle: billingCycleValue, today: todayInVietnam() });
+          } catch (error) { throw new HttpError(422, error.message); }
           result = {
+            ...legalInfo.legal, accounting: legalInfo.accounting, warnings: legalInfo.warnings,
             key: randomUUID(), licenseCode, softwareName: requiredText(input.softwareName, 'Tên phần mềm', 255),
             vendor: requiredText(input.vendor, 'Nhà cung cấp', 255), category: requiredText(input.category, 'Nhóm phần mềm', 120),
             licenseType: requiredText(input.licenseType, 'Hình thức cấp phép', 120), productKey: encryptField(productKey, 'system'),
