@@ -52,7 +52,7 @@ function readTriple(value, full) {
   return words.join(' ');
 }
 
-// Số tiền đồng Việt Nam bằng chữ, ví dụ 1.234.567 là "Một triệu hai trăm ba mươi bốn nghìn năm trăm sáu mươi bảy đồng chẵn".
+// Số tiền đồng Việt Nam bằng chữ, ví dụ 1.234.567 là "Một triệu hai trăm ba mươi tư nghìn năm trăm sáu mươi bảy đồng chẵn".
 export function vndInWords(amount) {
   if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('Số tiền không hợp lệ.');
   if (amount === 0) return 'Không đồng';

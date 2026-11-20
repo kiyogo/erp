@@ -12,6 +12,7 @@ import {
   ClockCircleOutlined,
   PaperClipOutlined,
   CheckOutlined,
+  PrinterOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
@@ -33,6 +34,7 @@ import {
 import { dataService } from '../../services/dataService';
 import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { CRMContactsModule } from '../crm/CRMContactsModule';
+import { printCashVoucher } from './cashVoucherPrint';
 
 export type EnterpriseCashTransaction = FinanceCashTransaction;
 type FinanceReferenceRow = {
@@ -453,6 +455,15 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
         }
       },
     });
+  };
+
+  const handlePrint = async (trx: EnterpriseCashTransaction) => {
+    try {
+      const profile = (await systemApi.getCompanyProfile()).data.profile;
+      if (!printCashVoucher(trx, profile)) message.warning('Trình duyệt đã chặn cửa sổ in; hãy cho phép cửa sổ bật lên rồi thử lại.');
+    } catch {
+      message.error('Không tải được thông tin doanh nghiệp để in phiếu.');
+    }
   };
 
   const handleApprove = (trx: EnterpriseCashTransaction) => {
@@ -928,6 +939,11 @@ export const CashTransactionsModule: React.FC<{ typeFilterDefault?: 'Thu' | 'Chi
               {selectedTransaction.status === 'Chờ duyệt' && !selectedTransaction.code.startsWith('AUTO-') && !selectedTransaction.code.startsWith('TRF-') && (
                 <Button icon={<EditOutlined />} onClick={() => openEditForm(selectedTransaction)}>
                   Sửa phiếu
+                </Button>
+              )}
+              {selectedTransaction.status !== 'Đã hủy' && (
+                <Button icon={<PrinterOutlined />} onClick={() => void handlePrint(selectedTransaction)}>
+                  In phiếu
                 </Button>
               )}
               {selectedTransaction.status !== 'Đã hủy' && (
