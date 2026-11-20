@@ -740,6 +740,9 @@ export type TerminationSettlement = {
   noticeRequiredDays: number; noticeUnit: string; noticeGivenDays: number; shortNoticeDays: number; dailySalary: number; shortNoticeAmount: number;
   allowanceType: 'none' | 'severance' | 'job_loss'; allowance: number; leavePayout: number; employerPays: number; employeeOwes: number; settlementDueDate: string; settlementOverdue: boolean; notes: string[];
 };
+export const leaveEntitlementApi = {
+  get: (employeeId: string, year: number) => api.get<{ baseDays: number; seniorityDays: number; monthsWorked: number; standardQuota: number; seniorityQuota: number; entitled: number; joinDate: string }>('/attendance/leave-entitlement', { params: { employeeId, year } }),
+};
 export const terminationApi = {
   settle: (data: Record<string, unknown>) => api.post<{ settlement: TerminationSettlement; defaults: { workStartDate: string; contractKind: 'indefinite' | 'fixed'; termMonths: number; averageSalary: number } }>('/contracts/termination-settlement', data),
 };

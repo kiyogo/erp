@@ -29,6 +29,7 @@ import { normalizeBreach } from './incidentRules.mjs';
 import { normalizeLicenseLegal } from './licenseRules.mjs';
 import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
+import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -2429,6 +2430,59 @@ async function requireCollectionActor(request, scope) {
     throw new HttpError(405, 'Vui lòng tạo hoặc cập nhật từng bản ghi để giữ lịch sử và quyền phê duyệt.');
   }
   return actor;
+}
+
+// Hạn mức phép năm theo luật cho một nhân viên và năm: số ngày cơ bản lấy từ hợp đồng lao động đang hiệu lực, thâm niên tính từ ngày vào làm.
+async function leaveEntitlementFor(employeeId, year) {
+  const employee = await db.prepare('SELECT id, employee_code FROM users WHERE id = ?').get(employeeId);
+  if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại.');
+  const defaults = await terminationDefaults(employee);
+  const contract = await db.prepare("SELECT annual_leave_days FROM contracts WHERE (employee_user_id = ? OR employee_code = ?) AND contract_category = 'labor' AND status = 'Còn hiệu lực' ORDER BY start_date DESC LIMIT 1").get(employee.id, employee.employee_code);
+  try { return { ...annualLeaveEntitlement({ baseDays: contract?.annual_leave_days || 12, joinDate: defaults.workStartDate, year }), joinDate: defaults.workStartDate }; } catch (error) { throw new HttpError(422, error.message); }
+}
+
+function deriveLeaveSummary(record) {
+  record.totalEntitled = record.standardQuota + record.seniorityQuota + record.carriedOver;
+  record.remainingLeaves = record.totalEntitled - record.usedLeaves;
+  record.leaveUsagePct = record.totalEntitled ? Math.round(record.usedLeaves / record.totalEntitled * 1000) / 10 : 0;
+  record.status = record.remainingLeaves <= 0 ? 'Đã hết phép' : record.remainingLeaves <= 3 ? 'Sắp hết phép' : 'Còn nhiều phép';
+}
+
+async function leaveSummaryRow(employeeId, year) {
+  const rows = await db.prepare("SELECT id, record_key, payload_json FROM collection_records WHERE scope = 'attendance_leave_summary' AND owner_id = ?").all(employeeId);
+  return rows.find((row) => Number(parseJsonObject(row.payload_json).year) === year) || null;
+}
+
+// Số ngày phép năm còn lại: sổ phép của nhân viên nếu đã có, ngược lại tính theo luật từ hợp đồng và ngày vào làm.
+async function annualLeaveRemaining(employeeId, year) {
+  const row = await leaveSummaryRow(employeeId, year);
+  if (row) { const summary = parseJsonObject(row.payload_json); return { row, summary, remaining: Number(summary.remainingLeaves) || 0, entitled: Number(summary.totalEntitled) || 0 }; }
+  const entitlement = await leaveEntitlementFor(employeeId, year);
+  return { row: null, summary: null, entitlement, remaining: entitlement.entitled, entitled: entitlement.entitled };
+}
+
+// Duyệt đơn nghỉ phép năm: trừ vào sổ phép của năm bắt đầu nghỉ, tạo sổ theo luật nếu chưa có; không cho vượt số phép còn lại.
+async function consumeAnnualLeave(leave) {
+  const year = Number(String(leave.startDate).slice(0, 4));
+  const balance = await annualLeaveRemaining(leave.employeeId, year);
+  if (leave.daysCount > balance.remaining + 0.001) throw new HttpError(422, `Nhân viên chỉ còn ${balance.remaining} ngày phép năm ${year}, không đủ cho đơn ${leave.daysCount} ngày.`);
+  const timestamp = now();
+  if (balance.row) {
+    const summary = { ...balance.summary, usedLeaves: (Number(balance.summary.usedLeaves) || 0) + leave.daysCount };
+    deriveLeaveSummary(summary);
+    await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(summary), timestamp, balance.row.id);
+    return;
+  }
+  const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ?').get(leave.employeeId);
+  const summary = { key: randomUUID(), employeeId: employee.id, employeeName: employee.name, empCode: employee.employee_code, employeeCode: employee.employee_code, department: employee.department || '', year, standardQuota: balance.entitlement.standardQuota, seniorityQuota: balance.entitlement.seniorityQuota, carriedOver: 0, usedLeaves: leave.daysCount, createdAt: timestamp };
+  deriveLeaveSummary(summary);
+  await db.prepare('INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), 'attendance_leave_summary', summary.key, employee.id, JSON.stringify(summary), timestamp, timestamp);
+}
+
+async function employeeBirthDate(employeeId) {
+  const row = await db.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(employeeId);
+  return parseJsonObject(row?.details_json).birthDate || '';
 }
 
 async function normalizeCollectionRecord(value, scope, actor, current = null) {
@@ -5479,7 +5533,14 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       const pauseEnd = Number(pause[3]) * 60 + Number(pause[4]);
       const pauseLength = (pauseEnd - pauseStart + 1440) % 1440;
       if (!pauseLength || (pauseStart - minutes(record.startTime) + 1440) % 1440 + pauseLength > hours * 60 || record.workingHours > hours - pauseLength / 60 + 0.001) throw new HttpError(422, 'Giờ làm và giờ nghỉ phải nằm trong ca.');
-    }
+      record.breakMinutes = pauseLength;
+    } else record.breakMinutes = 0;
+    const legal = shiftLegalProblems({ startTime: record.startTime, endTime: record.endTime, workingHours: record.workingHours, breakMinutes: record.breakMinutes, nightAllowancePct: record.nightAllowancePct });
+    record.nightHours = legal.nightHours;
+    // Ca đang lưu từ trước không bị chặn lại khi sửa trường khác: chỉ kiểm khi tạo mới hoặc khi đổi giờ, nghỉ, phụ cấp.
+    const changed = !current || ['startTime', 'endTime', 'workingHours', 'breakTime', 'nightAllowancePct'].some((field) => String(current[field] ?? '') !== String(record[field] ?? ''));
+    record.legalIssues = legal.problems;
+    if (changed && legal.problems.length) throw new HttpError(422, legal.problems[0]);
   }
   if (scope === 'attendance_shift_assignments') {
     record.effectiveFrom = requiredIsoDate(record.effectiveFrom, 'Ngày áp dụng');
@@ -5490,6 +5551,21 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     const shift = parseJsonObject(shiftRow?.payload_json);
     if (!shiftRow || shift.status !== 'Đang áp dụng') throw new HttpError(422, 'Ca làm việc không tồn tại hoặc đã ngừng áp dụng.');
     record.shiftName = shift.shiftName; record.shiftCode = shift.shiftCode; record.workHours = shift.timeRange;
+    if (!current || current.shiftKey !== record.shiftKey || current.effectiveFrom !== record.effectiveFrom || current.effectiveTo !== record.effectiveTo) {
+      const nightHours = shift.nightHours ?? nightHoursOfShift(shift.startTime, shift.endTime);
+      if (nightHours > 0 && isMinor(await employeeBirthDate(record.employeeId), record.effectiveFrom)) throw new HttpError(422, 'Không được phân ca có giờ làm việc ban đêm cho người chưa đủ 18 tuổi (Điều 146 Bộ luật Lao động 2019).');
+      const siblings = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_shift_assignments'").all()).map((row) => parseJsonObject(row.payload_json))
+        .filter((item) => item.employeeId === record.employeeId && item.key !== recordKey && item.status !== 'Đã kết thúc' && item.shiftKey !== record.shiftKey);
+      for (const other of siblings) {
+        const previous = other.effectiveTo === addDaysIsoDate(record.effectiveFrom, -1) ? other : null;
+        const following = other.effectiveFrom === addDaysIsoDate(record.effectiveTo, 1) ? other : null;
+        for (const [first, second] of [[previous, record], [record, following]]) {
+          if (!first || !second) continue;
+          const shifts = await Promise.all([first, second].map(async (item) => parseJsonObject((await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_shifts' AND record_key = ?").get(item.shiftKey))?.payload_json)));
+          if (shifts.every((item) => item.startTime && item.endTime) && restBetweenShiftsHours(shifts[0], shifts[1]) < MIN_REST_BETWEEN_SHIFTS_HOURS) throw new HttpError(422, `Chuyển ca phải nghỉ ít nhất ${MIN_REST_BETWEEN_SHIFTS_HOURS} giờ giữa hai ca (Điều 110 Bộ luật Lao động 2019).`);
+        }
+      }
+    }
     record.status = oneOf(record.status || 'Đang áp dụng', 'Trạng thái phân ca', ['Đang áp dụng', 'Chờ duyệt đổi ca', 'Đã kết thúc']);
     if (record.status === 'Chờ duyệt đổi ca') {
       record.swapTargetKey = requiredText(record.swapTargetKey, 'Phân ca đối ứng', 160);
@@ -5504,10 +5580,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record[field] = Number(record[field] ?? 0);
       if (!Number.isFinite(record[field]) || record[field] < 0) throw new HttpError(422, 'Số ngày phép không hợp lệ.');
     }
-    record.totalEntitled = record.standardQuota + record.seniorityQuota + record.carriedOver;
-    record.remainingLeaves = record.totalEntitled - record.usedLeaves;
-    record.leaveUsagePct = record.totalEntitled ? Math.round(record.usedLeaves / record.totalEntitled * 1000) / 10 : 0;
-    record.status = record.remainingLeaves <= 0 ? 'Đã hết phép' : record.remainingLeaves <= 3 ? 'Sắp hết phép' : 'Còn nhiều phép';
+    deriveLeaveSummary(record);
     const summaries = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'attendance_leave_summary'").all();
     if (summaries.some(row => { const item = parseJsonObject(row.payload_json); return row.record_key !== recordKey && item.employeeId === record.employeeId && Number(item.year) === record.year; })) throw new HttpError(409, 'Nhân viên đã có số dư phép cho năm này.');
   }
@@ -5520,6 +5593,19 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.reason = requiredText(record.reason, 'Lý do nghỉ', 4000);
     record.leaveType = requiredText(record.leaveType, 'Loại nghỉ', 160);
     record.status = oneOf(record.status || 'Chờ duyệt', 'Trạng thái đơn nghỉ', ['Chờ duyệt', 'Đã duyệt', 'Từ chối']);
+    // Loại nghỉ và số ngày tối đa theo luật chỉ kiểm khi tạo đơn hoặc khi đổi loại, số ngày (đơn cũ có loại nghỉ tự do không bị chặn lại).
+    if (!current || current.leaveType !== record.leaveType || Number(current.daysCount) !== record.daysCount) {
+      const leaveType = normalizeLeaveType(record.leaveType);
+      if (!leaveType) throw new HttpError(422, `Loại nghỉ không hợp lệ; chọn một trong: ${LEAVE_TYPES.map((type) => type.label).join(', ')}.`);
+      record.leaveType = leaveType;
+      const problem = leaveDaysProblem(leaveType, record.daysCount);
+      if (problem) throw new HttpError(422, problem);
+      if (!current && leaveType === annualLeaveLabel) {
+        const year = Number(record.startDate.slice(0, 4));
+        const balance = await annualLeaveRemaining(record.employeeId, year);
+        if (record.daysCount > balance.remaining + 0.001) throw new HttpError(422, `Nhân viên chỉ còn ${balance.remaining} ngày phép năm ${year}, không đủ cho đơn ${record.daysCount} ngày.`);
+      }
+    }
   }
   if (scope === 'attendance_overtime') {
     record.otDate = requiredIsoDate(record.otDate, 'Ngày làm thêm');
@@ -5545,12 +5631,16 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (sumHours(record.otDate.slice(0, 4)) + hours > 200 + 0.001) throw new HttpError(422, 'Tổng số giờ làm thêm của nhân viên trong năm không quá 200 giờ theo Điều 107 Bộ luật Lao động 2019.');
     }
     record.reason = requiredText(record.reason, 'Lý do làm thêm', 4000);
+    if (!current && isMinor(await employeeBirthDate(record.employeeId), record.otDate)) throw new HttpError(422, 'Không được sử dụng người chưa đủ 18 tuổi làm thêm giờ (Điều 146 Bộ luật Lao động 2019).');
     if (actor.role !== 'ADMIN') { record.multiplier = current?.multiplier ?? 1; record.baseHourlyRate = current?.baseHourlyRate ?? 0; }
     record.multiplier = Number(record.multiplier ?? 1);
     record.baseHourlyRate = Number(record.baseHourlyRate ?? 0);
     if (!Number.isFinite(record.multiplier) || record.multiplier <= 0 || record.multiplier > 10 || !Number.isFinite(record.baseHourlyRate) || record.baseHourlyRate < 0) throw new HttpError(422, 'Hệ số hoặc đơn giá làm thêm không hợp lệ.');
     record.totalAmount = Math.round(record.totalHours * record.multiplier * record.baseHourlyRate);
     record.status = oneOf(record.status || 'Chờ phê duyệt', 'Trạng thái làm thêm', ['Chờ phê duyệt', 'Chờ duyệt', 'Đã duyệt OT', 'Từ chối']);
+    // Điều 98: làm thêm được trả ít nhất 150% ngày thường, 200% ngày nghỉ hằng tuần (chủ nhật), 300% ngày lễ, tết (ngày lễ dương lịch cố định).
+    record.minMultiplier = overtimeMinMultiplier(record.otDate);
+    if (record.status === 'Đã duyệt OT' && record.multiplier < record.minMultiplier) throw new HttpError(422, `Hệ số làm thêm ngày ${record.otDate} tối thiểu ${record.minMultiplier * 100}% theo Điều 98 Bộ luật Lao động 2019.`);
   }
   if (['leave_requests', 'attendance_overtime'].includes(scope)) {
     const pending = scope === 'leave_requests' ? 'Chờ duyệt' : 'Chờ phê duyệt';
@@ -10854,6 +10944,7 @@ async function handleRequest(request, response) {
           await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?')
             .run(JSON.stringify(updatedAsset), timestamp, assetRow.id);
         }
+        if (scope === 'leave_requests' && item.record.status === 'Đã duyệt' && current.status !== 'Đã duyệt' && item.record.leaveType === annualLeaveLabel) await consumeAnnualLeave(item.record);
         if (scope === 'attendance_shift_assignments' && current.status === 'Chờ duyệt đổi ca' && patch.swapDecision) {
           if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được duyệt đổi ca.');
           if (!['Đã duyệt', 'Từ chối'].includes(patch.swapDecision)) throw new HttpError(422, 'Quyết định đổi ca không hợp lệ.');
@@ -14408,6 +14499,14 @@ async function handleRequest(request, response) {
           ORDER BY created_at DESC
         `).all(actor.id, actor.employee_code || actor.id, actor.name, actor.name);
     sendJson(response, 200, { data: rows.map(r => publicContract(r, actor)) });
+    return;
+  }
+
+  if (request.method === 'GET' && resource === '/attendance/leave-entitlement') {
+    await requireAdmin(request);
+    const params = new URL(request.url, 'http://localhost').searchParams;
+    const year = Number(params.get('year') || todayInVietnam().slice(0, 4));
+    sendJson(response, 200, await leaveEntitlementFor(requiredText(params.get('employeeId'), 'Nhân viên', 160), year));
     return;
   }
 

@@ -21,6 +21,7 @@ import { dataService, LeaveRequest } from '../../services/dataService';
 import { collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceDate, employeeAttendanceFields, leaveDays } from './attendanceRules';
+import { LEAVE_TYPE_OPTIONS } from './leaveTypes';
 
 export interface EnterpriseLeaveRequest extends LeaveRequest {
   empCode?: string;
@@ -333,15 +334,7 @@ export const LeaveRequestsModule: React.FC = () => {
               <Input />
             </Form.Item>
             <Form.Item name="leaveType" label="Loại hình nghỉ phép" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: 'Nghỉ phép năm', value: 'Nghỉ phép năm' },
-                  { label: 'Nghỉ ốm đau', value: 'Nghỉ ốm' },
-                  { label: 'Nghỉ kết hôn', value: 'Nghỉ kết hôn' },
-                  { label: 'Nghỉ thai sản', value: 'Nghỉ thai sản' },
-                  { label: 'Nghỉ không hưởng lương', value: 'Nghỉ việc riêng không lương' },
-                ]}
-              />
+              <Select options={LEAVE_TYPE_OPTIONS} />
             </Form.Item>
           </div>
 

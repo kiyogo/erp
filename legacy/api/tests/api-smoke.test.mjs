@@ -2310,8 +2310,8 @@ test('overtime hours and compensation derive from validated values', async () =>
 
 test('shift approval swaps both assignments atomically', async () => {
   const employee = (await request('/users', 'POST', { email: 'shift@example.test', name: 'Shift User', password: 'Shift-Test-26!Secure', employeeCode: 'TEST-SHIFT', role: 'USER' }, 201)).user;
-  for (const [key, startTime, endTime] of [['day', '08:00', '16:00'], ['night', '22:00', '06:00']]) {
-    await request('/collections/attendance_shifts', 'POST', { record: { key, shiftCode: key, shiftName: key, startTime, endTime, timeRange: `${startTime} - ${endTime}`, workingHours: 8, workUnits: 1, status: 'Đang áp dụng' } }, 201);
+  for (const [key, startTime, endTime, breakTime, nightAllowancePct] of [['day', '08:00', '17:00', '12:00 - 13:00', 0], ['night', '22:00', '07:00', '02:00 - 03:00', 30]]) {
+    await request('/collections/attendance_shifts', 'POST', { record: { key, shiftCode: key, shiftName: key, startTime, endTime, breakTime, nightAllowancePct, timeRange: `${startTime} - ${endTime}`, workingHours: 8, workUnits: 1, status: 'Đang áp dụng' } }, 201);
   }
   const baseAssignment = { code: 'PC', effectiveFrom: '2026-10-26', effectiveTo: '2026-10-31', status: 'Đang áp dụng' };
   await request('/collections/attendance_shift_assignments', 'POST', { record: { ...baseAssignment, key: 'assign-a', employeeId: session.user.id, shiftKey: 'day' } }, 201);
@@ -2892,3 +2892,47 @@ test('resignation records settle notice, severance and leave pay on the server',
   assert.equal(plain.settlement, undefined);
 });
 
+
+test('leave requests follow legal types, caps and the annual leave balance', async () => {
+  const employee = (await request('/users', 'POST', { email: 'leave-law@example.test', name: 'Leave Law', password: 'Leave-Test-26!Secure', employeeCode: 'TEST-LEAVE-LAW', role: 'USER' }, 201)).user;
+  const base = { code: 'NP-LAW', employeeId: employee.id, startDate: '2027-03-01', endDate: '2027-03-31', daysCount: 1, reason: 'Test', leaveType: 'Nghỉ phép năm', status: 'Chờ duyệt' };
+  const create = (key, extra, expected = 201) => request('/collections/leave_requests', 'POST', { record: { ...base, key, ...extra } }, expected);
+  await create('law-type', { leaveType: 'Du lịch' }, 422);
+  await create('law-marriage', { leaveType: 'Nghỉ kết hôn', daysCount: 4 }, 422);
+  await create('law-over', { daysCount: 13 }, 422);
+  assert.equal((await create('law-alias', { leaveType: 'Nghỉ ốm', daysCount: 2 })).record.leaveType, 'Nghỉ ốm BHXH');
+  assert.equal((await request(`/attendance/leave-entitlement?employeeId=${employee.id}&year=2027`)).entitled, 12);
+  await create('law-ten', { daysCount: 10 });
+  await request('/collections/leave_requests/law-ten', 'PATCH', { patch: { status: 'Đã duyệt' } });
+  const summary = (await request('/collections/attendance_leave_summary')).data.find(item => item.employeeId === employee.id && item.year === 2027);
+  assert.equal(summary.standardQuota, 12);
+  assert.equal(summary.usedLeaves, 10);
+  assert.equal(summary.remainingLeaves, 2);
+  await create('law-three', { daysCount: 3 }, 422);
+  await create('law-two', { daysCount: 2 });
+  await request('/collections/leave_requests/law-two', 'PATCH', { patch: { status: 'Đã duyệt' } });
+  assert.equal((await request('/collections/attendance_leave_summary')).data.find(item => item.employeeId === employee.id && item.year === 2027).remainingLeaves, 0);
+});
+
+test('shifts need a legal break and night pay, and consecutive shifts need 12 hours of rest', async () => {
+  const employee = (await request('/users', 'POST', { email: 'rest-law@example.test', name: 'Rest Law', password: 'Rest-Test-26!Secure', employeeCode: 'TEST-REST-LAW', role: 'USER' }, 201)).user;
+  const shift = (key, startTime, endTime, extra = {}) => ({ key, shiftCode: key, shiftName: key, startTime, endTime, timeRange: `${startTime} - ${endTime}`, workingHours: 8, workUnits: 1, status: 'Đang áp dụng', ...extra });
+  await request('/collections/attendance_shifts', 'POST', { record: shift('law-nobreak', '08:00', '16:00') }, 422);
+  await request('/collections/attendance_shifts', 'POST', { record: shift('law-night-pay', '22:00', '07:00', { breakTime: '02:00 - 03:00', nightAllowancePct: 10 }) }, 422);
+  await request('/collections/attendance_shifts', 'POST', { record: shift('law-early', '06:00', '15:00', { breakTime: '10:00 - 11:00' }) }, 201);
+  await request('/collections/attendance_shifts', 'POST', { record: shift('law-late', '14:00', '23:00', { breakTime: '18:00 - 19:00', nightAllowancePct: 30 }) }, 201);
+  const assignment = (key, shiftKey, effectiveFrom, effectiveTo) => ({ key, code: key, employeeId: employee.id, shiftKey, effectiveFrom, effectiveTo, status: 'Đang áp dụng' });
+  await request('/collections/attendance_shift_assignments', 'POST', { record: assignment('law-a1', 'law-late', '2027-01-04', '2027-01-10') }, 201);
+  await request('/collections/attendance_shift_assignments', 'POST', { record: assignment('law-a2', 'law-early', '2027-01-11', '2027-01-17') }, 422);
+  await request('/collections/attendance_shift_assignments', 'POST', { record: assignment('law-a3', 'law-early', '2027-01-12', '2027-01-17') }, 201);
+});
+
+test('overtime approval enforces the legal minimum pay multiplier for the day type', async () => {
+  const overtime = (key, otDate, extra = {}) => ({ key, code: key, employeeId: session.user.id, otDate, timeRange: '18:00 - 20:00', totalHours: 2, reason: 'Test', multiplier: 1, baseHourlyRate: 100000, status: 'Chờ phê duyệt', ...extra });
+  await request('/collections/attendance_overtime', 'POST', { record: overtime('law-ot-weekday', '2027-02-02') }, 201);
+  await request('/collections/attendance_overtime/law-ot-weekday', 'PATCH', { patch: { status: 'Đã duyệt OT' } }, 422);
+  await request('/collections/attendance_overtime/law-ot-weekday', 'PATCH', { patch: { status: 'Đã duyệt OT', multiplier: 1.5 } });
+  await request('/collections/attendance_overtime', 'POST', { record: overtime('law-ot-sunday', '2027-02-07', { multiplier: 1.5 }) }, 201);
+  await request('/collections/attendance_overtime/law-ot-sunday', 'PATCH', { patch: { status: 'Đã duyệt OT' } }, 422);
+  await request('/collections/attendance_overtime/law-ot-sunday', 'PATCH', { patch: { status: 'Đã duyệt OT', multiplier: 2 } });
+});

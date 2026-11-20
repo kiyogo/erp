@@ -1,5 +1,5 @@
 import { dataService } from '../../services/dataService';
-import { collectionsApi } from '../../api/endpoints';
+import { collectionsApi, leaveEntitlementApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceNumber, employeeAttendanceFields, leaveBalance } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
@@ -104,6 +104,18 @@ export const LeaveSummaryModule: React.FC = () => {
       setModalOpen(false); form.resetFields();
     } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu quỹ phép.'); }
     finally { setSaving(false); }
+  };
+
+  // Điền phép chuẩn và phép thâm niên theo hợp đồng và ngày vào làm (Điều 113, 114 Bộ luật Lao động 2019).
+  const fillLegalEntitlement = async () => {
+    try {
+      const values = form.getFieldsValue();
+      if (!values.employeeName) throw new Error('Vui lòng chọn nhân sự trước.');
+      const year = attendanceNumber(values.year, 'Năm theo dõi', 2000, 2200);
+      const { data: result } = await leaveEntitlementApi.get(values.employeeName, year);
+      form.setFieldsValue({ standardQuota: result.standardQuota, seniorityQuota: result.seniorityQuota });
+      message.success(`Theo luật: ${result.standardQuota} ngày phép chuẩn và ${result.seniorityQuota} ngày thâm niên (làm ${result.monthsWorked} tháng trong năm).`);
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không tính được hạn mức phép.'); }
   };
 
   const filteredData = data.filter((item) => {
@@ -352,6 +364,7 @@ export const LeaveSummaryModule: React.FC = () => {
           <Form.Item name="year" label="Năm theo dõi" rules={[{ required: true }]}>
             <Input type="number" min={2000} max={2200} />
           </Form.Item>
+          <Button onClick={fillLegalEntitlement} style={{ marginBottom: 12 }}>Tính hạn mức theo luật</Button>
           <Form.Item name="usedLeaves" label="Phép đã sử dụng">
             <Input type="number" min={0} max={366} step={0.5} />
           </Form.Item>

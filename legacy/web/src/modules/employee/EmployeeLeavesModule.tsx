@@ -20,6 +20,7 @@ import { dataService } from '../../services/dataService';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob } from '../../utils/fileExporter';
 import { leaveDays } from '../attendance/attendanceRules';
+import { LEAVE_TYPE_OPTIONS } from '../attendance/leaveTypes';
 
 export const EmployeeLeavesModule: React.FC = () => {
   const { user } = useAuth();
@@ -288,15 +289,7 @@ export const EmployeeLeavesModule: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <Form.Item name="type" label="Loại nghỉ phép" rules={[{ required: true, message: 'Vui lòng chọn loại nghỉ phép' }]}>
-            <Select
-              options={[
-                { label: 'Nghỉ phép năm hưởng nguyên lương', value: 'Nghỉ phép năm' },
-                { label: 'Nghỉ ốm đau có giấy chứng nhận y tế', value: 'Nghỉ ốm BHXH' },
-                { label: 'Nghỉ việc riêng hưởng nguyên lương', value: 'Nghỉ việc riêng có lương' },
-                { label: 'Nghỉ không hưởng lương', value: 'Nghỉ không lương' },
-                { label: 'Nghỉ chế độ thai sản / Khám thai', value: 'Nghỉ thai sản' },
-              ]}
-            />
+            <Select options={LEAVE_TYPE_OPTIONS} />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="fromDate" label="Từ ngày" rules={[{ required: true }]}>
