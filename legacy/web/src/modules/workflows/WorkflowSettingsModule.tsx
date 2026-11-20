@@ -476,7 +476,7 @@ export const WorkflowSettingsModule: React.FC = () => {
             </Button>
           </div>
 
-          <Form form={securityForm} layout="vertical" initialValues={{ caProvider: 'not_configured', encryptionStandard: 'rsa_2048', sessionTimeout: 15, autoEscalate: 'no', slackWebhook: '', dailyDigestTime: '08:00', requireOtpForLargeBudget: 'no' }}>
+          <Form form={securityForm} layout="vertical" initialValues={{ caProvider: 'not_configured', encryptionStandard: 'rsa_2048', sessionTimeout: 15, autoEscalate: 'no', slackWebhook: '', dailyDigestTime: '08:00', requireOtpForLargeBudget: 'no', blockSelfApproval: 'no' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, background: '#F8FAFC' }}>
                 <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -536,6 +536,18 @@ export const WorkflowSettingsModule: React.FC = () => {
                     options={[
                       { label: 'Bắt buộc Google Authenticator OTP', value: 'yes' },
                       { label: 'Không yêu cầu OTP', value: 'no' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="blockSelfApproval"
+                  label="Người lập hồ sơ tự xử lý hồ sơ của mình"
+                  extra="Khi chặn, kể cả quản trị viên cũng không được duyệt, từ chối hoặc yêu cầu bổ sung hồ sơ do chính mình lập (kiểm soát nội bộ: người lập và người duyệt tách biệt)."
+                >
+                  <Select
+                    options={[
+                      { label: 'Chặn', value: 'yes' },
+                      { label: 'Cho phép', value: 'no' },
                     ]}
                   />
                 </Form.Item>

@@ -501,3 +501,13 @@ test('assigned approvers and active delegates can see and decide only their curr
   }, 200, nextApprover.headers)).record;
   assert.equal(directFinal.status, 'Đã phê duyệt');
 });
+
+test('blocking self approval stops even an administrator from deciding their own request', async () => {
+  await request('/collections/workflow_security_settings/security', 'PATCH', { patch: { blockSelfApproval: 'yes' } });
+  await request('/collections/workflow_requests', 'POST', { record: createRequest('self-approval', { code: 'REQ-self-approval', budgetAmount: 1000, totalLevels: 1 }) }, 201);
+  const route = '/collections/workflow_requests/self-approval';
+  const blocked = await request(route, 'PATCH', { patch: { decision: 'Đã phê duyệt' } }, 403);
+  assert.match(blocked.message, /không được tự xử lý/);
+  await request('/collections/workflow_security_settings/security', 'PATCH', { patch: { blockSelfApproval: 'no' } });
+  assert.equal((await request(route, 'PATCH', { patch: { decision: 'Đã phê duyệt' } })).record.status, 'Đã phê duyệt');
+});

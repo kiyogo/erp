@@ -29,6 +29,7 @@ import { normalizeBreach } from './incidentRules.mjs';
 import { normalizeLicenseLegal } from './licenseRules.mjs';
 import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
+import { validatePlanRecord } from './planRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
@@ -2306,7 +2307,7 @@ const accountingOperationScopes = new Set([
 ]);
 
 // Phạm vi dữ liệu mà nhân viên thường không có nghiệp vụ nào cần ghi: chỉ quản trị viên được tạo, sửa, xóa.
-const ADMIN_WRITE_ONLY_SCOPES = new Set(['payroll', 'business_org_units', 'contract_templates', 'enterprise_contracts', 'enterprise_services', 'digital_signature_audit_trail']);
+const ADMIN_WRITE_ONLY_SCOPES = new Set(['plan_items', 'plan_milestones', 'plan_progress', 'plan_okrs', 'plan_reports', 'payroll', 'business_org_units', 'contract_templates', 'enterprise_contracts', 'enterprise_services', 'digital_signature_audit_trail']);
 function isAdminWriteOnlyScope(scope) {
   return /^(finance_|hr_|crm_|admin_|address_)/.test(scope)
     || (scope.startsWith('asset_') && scope !== 'asset_todos')
@@ -4809,6 +4810,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         throw new HttpError(403, 'Chỉ người được giao phê duyệt hoặc người được ủy quyền đang hiệu lực mới được xử lý hồ sơ.');
       }
       const decision = oneOf(record.decision, 'Quyết định', ['Đã phê duyệt', 'Từ chối', 'Yêu cầu bổ sung']);
+      if (current.requesterId === actor.id) {
+        const securityRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'workflow_security_settings' AND record_key = 'security' LIMIT 1").get();
+        if (parseJsonObject(securityRow?.payload_json).blockSelfApproval === 'yes') throw new HttpError(403, 'Người lập hồ sơ không được tự xử lý hồ sơ của mình; hãy giao cho người duyệt khác hoặc người được ủy quyền.');
+      }
       if (decision !== 'Đã phê duyệt' && current.approvalCanRejectLevels?.[currentLevel - 1] === false) {
         throw new HttpError(422, 'Cấp phê duyệt này chỉ được phê duyệt, không được từ chối hoặc yêu cầu bổ sung.');
       }
@@ -4865,6 +4870,13 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       delete record.decision;
       delete record.approvalNote;
     }
+  }
+  if (['plan_items', 'plan_milestones', 'plan_progress'].includes(scope)) {
+    try { record = validatePlanRecord(scope, record, todayInVietnam()); } catch (error) { throw new HttpError(422, error.message); }
+    const planKey = String(current?.key ?? record.key ?? record.code);
+    const duplicate = (await db.prepare('SELECT record_key, payload_json FROM collection_records WHERE scope = ?').all(scope))
+      .find((row) => row.record_key !== planKey && String(parseJsonObject(row.payload_json).code || '').toLowerCase() === record.code.toLowerCase());
+    if (duplicate) throw new HttpError(409, 'Mã đã tồn tại.');
   }
   if (scope === 'workflow_blueprints') {
     record.workflowCode = requiredText(record.workflowCode, 'Mã quy trình', 80).toUpperCase();
@@ -4995,6 +5007,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (record.sessionTimeout < 5 || record.sessionTimeout > 60) throw new HttpError(422, 'Thời gian khóa phiên phải từ 5 đến 60 phút.');
     record.autoEscalate = oneOf(record.autoEscalate || 'no', 'Tự động leo thang', ['yes', 'no']);
     record.requireOtpForLargeBudget = oneOf(record.requireOtpForLargeBudget || 'no', 'Yêu cầu OTP', ['yes', 'no']);
+    record.blockSelfApproval = oneOf(record.blockSelfApproval || 'no', 'Chặn người lập tự phê duyệt', ['yes', 'no']);
     record.dailyDigestTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(record.dailyDigestTime || '')) ? record.dailyDigestTime : '08:00';
     record.slackWebhookEncrypted = suppliedWebhook ? encryptSetting(suppliedWebhook) : stored.slackWebhookEncrypted || '';
     record.slackWebhookConfigured = Boolean(record.slackWebhookEncrypted);

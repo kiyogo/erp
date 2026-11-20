@@ -2936,3 +2936,17 @@ test('overtime approval enforces the legal minimum pay multiplier for the day ty
   await request('/collections/attendance_overtime/law-ot-sunday', 'PATCH', { patch: { status: 'Đã duyệt OT' } }, 422);
   await request('/collections/attendance_overtime/law-ot-sunday', 'PATCH', { patch: { status: 'Đã duyệt OT', multiplier: 2 } });
 });
+
+test('strategic plans are validated on the server and only administrators can write them', async () => {
+  const staff = (await request('/users', 'POST', { email: 'plan-staff@example.test', name: 'Plan Staff', password: 'Plan-Test-26!Secure', employeeCode: 'TEST-PLAN', role: 'USER' }, 201)).user;
+  const staffSession = await request('/auth/login', 'POST', { email: 'plan-staff@example.test', password: 'Plan-Test-26!Secure' });
+  const staffHeaders = { ...headers, Authorization: `Bearer ${staffSession.access_token || staffSession.token}` };
+  const plan = { key: 'KH-LAW-1', code: 'KH-LAW-1', name: 'Kế hoạch thử', department: 'Kinh doanh', manager: 'An', startDate: '2027-01-01', endDate: '2027-12-31', budget: 5000000, priority: 'Thường xuyên' };
+  assert.ok(staff.id);
+  await request('/collections/plan_items', 'POST', { record: plan }, 403, staffHeaders);
+  await request('/collections/plan_items', 'POST', { record: { ...plan, key: 'KH-LAW-2', code: 'KH-LAW-2', endDate: '2026-12-31' } }, 422);
+  assert.equal((await request('/collections/plan_items', 'POST', { record: plan }, 201)).record.status, 'Đang triển khai');
+  await request('/collections/plan_items', 'POST', { record: { ...plan, key: 'KH-LAW-3', code: 'kh-law-1' } }, 409);
+  const progress = { key: 'T-LAW-1', code: 'T-LAW-1', planName: 'Kế hoạch thử', taskTitle: 'Thiết kế', assignee: 'An', dueDate: '2020-01-01', progressPercent: 30, weightPercent: 20, status: 'Hoàn thành' };
+  assert.equal((await request('/collections/plan_progress', 'POST', { record: progress }, 201)).record.status, 'Chậm tiến độ');
+});
