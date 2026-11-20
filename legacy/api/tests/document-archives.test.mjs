@@ -109,3 +109,20 @@ test('archive writes require an authenticated administrator', async () => {
   const response = await fetch(`${base}/collections/doc_archives`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staff.access_token || staff.token}` }, body: JSON.stringify({ record: record('unauthorized') }) });
   assert.equal(response.status, 403);
 });
+
+test('archive enforces legal confidentiality and urgency levels, date order and warns on number format and state secrets', async () => {
+  const create = (key, patch, expected = 201) => request('/collections/doc_archives', 'POST', { record: record(key, patch) }, expected);
+  assert.equal((await create('law-urgent', { urgency: 'Khẩn' })).record.urgency, 'Khẩn');
+  assert.equal((await create('law-secret', { securityLevel: 'Tối mật', originalCode: '12/QĐ-ABC' })).record.securityLevel, 'Tối mật');
+  const secret = (await request('/collections/doc_archives/law-secret')).record;
+  assert.ok(secret.warnings.some(item => /bí mật nhà nước/.test(item)));
+  await create('law-level', { securityLevel: 'Tuyệt mật (BOD Only)' }, 422);
+  await create('law-order', { docDate: '2026-10-26', dateReceivedOrIssued: '2026-10-25' }, 422);
+  await create('law-future', { docDate: '2026-10-25', dateReceivedOrIssued: '2999-01-01' }, 422);
+  const badFormat = (await create('law-format', { originalCode: 'abc 12' })).record;
+  assert.ok(badFormat.warnings.some(item => /Nghị định 30\/2020/.test(item)));
+  const outgoing = (await create('law-outgoing', { dispatchType: 'Văn bản đi', docType: 'Quyết định', originalCode: '15/CV-ABC', docDate: '2026-10-25', dateReceivedOrIssued: '2026-10-26' })).record;
+  assert.ok(outgoing.warnings.some(item => /QĐ/.test(item)));
+  assert.ok(outgoing.warnings.some(item => /ngày vào sổ đang khác nhau/.test(item)));
+  assert.deepEqual((await create('law-clean', { originalCode: '31/UBND-VP' })).record.warnings, []);
+});

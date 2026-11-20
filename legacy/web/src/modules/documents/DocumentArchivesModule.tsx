@@ -39,8 +39,9 @@ export interface EnterpriseArchiveRecord {
   receiverOrAuthor: string;
   dateReceivedOrIssued: string;
   docDate: string;
-  urgency: 'Hỏa tốc' | 'Thượng khẩn' | 'Bình thường';
-  securityLevel: 'Tuyệt mật' | 'Mật' | 'Nội bộ' | 'Thường';
+  urgency: 'Hỏa tốc' | 'Thượng khẩn' | 'Khẩn' | 'Bình thường';
+  securityLevel: 'Tuyệt mật' | 'Tối mật' | 'Mật' | 'Nội bộ' | 'Thường';
+  warnings?: string[];
   pageCount?: number;
   fileNodeId?: string;
   fileSizeBytes?: number;
@@ -89,7 +90,7 @@ export const DocumentArchivesModule: React.FC = () => {
   const incomingCount = data.filter((d) => d.dispatchType === 'Văn bản đến').length;
   const outgoingCount = data.filter((d) => d.dispatchType === 'Văn bản đi').length;
   const totalRecords = data.length;
-  const urgentCount = data.filter((d) => d.urgency === 'Hỏa tốc' || d.urgency === 'Thượng khẩn').length;
+  const urgentCount = data.filter((d) => d.urgency === 'Hỏa tốc' || d.urgency === 'Thượng khẩn' || d.urgency === 'Khẩn').length;
 
   const refreshRecords = () => dataService.refreshGenericData('doc_archives').catch(() => message.warning('Hồ sơ đã lưu nhưng chưa tải lại được danh sách.'));
   const displayStatus = (record: EnterpriseArchiveRecord) => ['Đang xử lý đúng hạn', 'Cảnh báo quá hạn'].includes(record.status) && record.slaDeadline && record.slaDeadline < new Date().toLocaleDateString('en-CA') ? 'Cảnh báo quá hạn' : record.status;
@@ -130,6 +131,7 @@ export const DocumentArchivesModule: React.FC = () => {
       setData((previous) => [response.data.record, ...previous.filter((item) => item.key !== response.data.record.key)]);
       setModalOpen(false); setDrawerOpen(false); setScanFile(null); setUploadedScan(null); form.resetFields();
       message.success(`Đã lưu sổ văn thư: ${response.data.record.bookNumber}`);
+      (response.data.record.warnings || []).forEach((warning) => message.warning(warning, 8));
       void refreshRecords();
     } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể lưu hồ sơ văn thư.'); }
     finally { setSaving(false); }
@@ -161,7 +163,7 @@ export const DocumentArchivesModule: React.FC = () => {
     let matchTab = true;
     if (activeTab === 'Văn bản đến') matchTab = item.dispatchType === 'Văn bản đến';
     if (activeTab === 'Văn bản đi') matchTab = item.dispatchType === 'Văn bản đi';
-    if (activeTab === 'urgent') matchTab = item.urgency === 'Hỏa tốc' || item.urgency === 'Thượng khẩn';
+    if (activeTab === 'urgent') matchTab = item.urgency === 'Hỏa tốc' || item.urgency === 'Thượng khẩn' || item.urgency === 'Khẩn';
     if (activeTab === 'pending') matchTab = ['Đang xử lý đúng hạn', 'Cảnh báo quá hạn'].includes(item.status);
 
     const matchDocType = docTypeFilter === 'all' || item.docType === docTypeFilter;
@@ -493,6 +495,7 @@ export const DocumentArchivesModule: React.FC = () => {
                 options={[
                   { label: 'Hỏa tốc', value: 'Hỏa tốc' },
                   { label: 'Thượng khẩn', value: 'Thượng khẩn' },
+                  { label: 'Khẩn', value: 'Khẩn' },
                   { label: 'Bình thường', value: 'Bình thường' },
                 ]}
               />
@@ -501,6 +504,7 @@ export const DocumentArchivesModule: React.FC = () => {
               <Select
                 options={[
                   { label: 'Tuyệt mật', value: 'Tuyệt mật' },
+                  { label: 'Tối mật', value: 'Tối mật' },
                   { label: 'Mật', value: 'Mật' },
                   { label: 'Nội bộ', value: 'Nội bộ' },
                   { label: 'Thường', value: 'Thường' },

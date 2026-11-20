@@ -30,6 +30,7 @@ import { normalizeLicenseLegal } from './licenseRules.mjs';
 import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
 import { validatePlanRecord } from './planRules.mjs';
+import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
@@ -5310,8 +5311,12 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record.dateReceivedOrIssued = requiredIsoDate(record.dateReceivedOrIssued, 'Ngày vào sổ');
       record.slaDeadline = record.slaDeadline ? requiredIsoDate(record.slaDeadline, 'Hạn xử lý') : '';
       if (record.slaDeadline && record.slaDeadline < record.dateReceivedOrIssued) throw new HttpError(422, 'Hạn xử lý phải từ ngày vào sổ.');
-      record.securityLevel = oneOf(record.securityLevel || 'Thường', 'Độ mật', ['Tuyệt mật', 'Mật', 'Nội bộ', 'Thường']);
-      record.urgency = oneOf(record.urgency || 'Bình thường', 'Độ khẩn', ['Hỏa tốc', 'Thượng khẩn', 'Bình thường']);
+      // Ngày vào sổ và ngày văn bản chỉ kiểm khi tạo mới hoặc khi đổi (hồ sơ cũ không bị chặn lại khi sửa trường khác).
+      const dateIssues = archiveDateIssues(record, todayInVietnam());
+      if ((!current || current.docDate !== record.docDate || current.dateReceivedOrIssued !== record.dateReceivedOrIssued || current.dispatchType !== record.dispatchType) && dateIssues.errors.length) throw new HttpError(422, dateIssues.errors[0]);
+      record.warnings = [...dateIssues.warnings, ...docNumberWarnings(record.originalCode, { outgoingDocType: record.dispatchType === 'Văn bản đi' ? record.docType : '' })];
+      record.securityLevel = oneOf(record.securityLevel || 'Thường', 'Độ mật', ARCHIVE_SECURITY_LEVELS);
+      record.urgency = oneOf(record.urgency || 'Bình thường', 'Độ khẩn', ARCHIVE_URGENCY_LEVELS);
       for (const field of ['originalCode', 'signer', 'signerPosition', 'receiverOrAuthor', 'forwardNote']) record[field] = optionalText(record[field], 'Thông tin văn bản', 4000);
       if (record.pageCount !== undefined && record.pageCount !== '' && record.pageCount !== null) record.pageCount = requiredAmount(record.pageCount, 'Số trang');
       else delete record.pageCount;
@@ -5348,6 +5353,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (rows.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).docCode || '').toLowerCase() === record.docCode.toLowerCase())) throw new HttpError(409, 'Số / ký hiệu văn bản đã tồn tại.');
       record.caSigned = false;
       delete record.caVerifiedAt;
+      if (record.issuedDate > todayInVietnam() && (!current || current.issuedDate !== record.issuedDate)) throw new HttpError(422, 'Ngày ban hành không được ở tương lai.');
+      record.warnings = record.docCategory === 'Hợp đồng & Pháp lý' ? [] : docNumberWarnings(record.docCode);
     }
     for (const field of ['fileNodeId', ...(!archived ? ['wordFileNodeId'] : [])]) {
       record[field] = optionalText(record[field], 'Tệp đính kèm', 160);
@@ -5369,6 +5376,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       } else if (prefix) { record.wordFileName = ''; record.wordFileSizeBytes = 0; record.wordSha256Hash = ''; }
       else { record[archived ? 'fileScan' : 'fileName'] = ''; record.fileSizeBytes = 0; record.fileSize = ''; record.sha256Hash = ''; if (!archived) record.fileFormat = ''; }
     }
+    if (archived) record.warnings = [...record.warnings, ...secretDocumentWarnings(record.securityLevel, Boolean(record.fileNodeId))];
     record.createdAt = current?.createdAt || now(); record.createdBy = current?.createdBy || actor.name;
     record.updatedAt = now(); record.updatedBy = actor.name;
     record.history = Array.isArray(current?.history) ? [...current.history] : [];

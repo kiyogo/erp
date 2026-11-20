@@ -213,8 +213,9 @@ export const DocumentsModule: React.FC = () => {
       caSigned: false,
       tags: String(values.tags || '').split(',').map((t: string) => t.trim()).filter(Boolean),
     };
-    await persist(newDoc);
+    const saved = await persist(newDoc);
     message.success(`Đã lưu hồ sơ văn bản: ${values.title} (${values.docCode})`);
+    ((saved as { warnings?: string[] }).warnings || []).forEach((warning) => message.warning(warning, 8));
     setModalOpen(false);
     form.resetFields();
     setAttachment(null); setUploadedFile(null);
