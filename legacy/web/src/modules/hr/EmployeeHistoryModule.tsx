@@ -32,6 +32,9 @@ import { dataService, Employee } from '../../services/dataService';
 import { employeesApi, collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
+import { terminationApi, type TerminationSettlement } from '../../api/endpoints';
+import { TERMINATION_TYPE_OPTIONS } from './terminationTypes';
+
 export interface HistoryRecord {
   key: string;
   code: string;
@@ -49,6 +52,8 @@ export interface HistoryRecord {
   createdBy?: string;
   updatedAt?: string;
   updatedBy?: string;
+  termination?: Record<string, any>;
+  settlement?: TerminationSettlement;
 }
 
 const INITIAL_HISTORY_DATA: HistoryRecord[] = [];
@@ -421,6 +426,9 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
   const [modalOpen, setModalOpen] = useState(false);
   const [editingHistory, setEditingHistory] = useState<HistoryRecord | null>(null);
   const [viewingHistory, setViewingHistory] = useState<HistoryRecord | null>(null);
+  const [resignForm, setResignForm] = useState(false);
+  const [terminationPreview, setTerminationPreview] = useState<TerminationSettlement | null>(null);
+  const [terminationChecking, setTerminationChecking] = useState(false);
   const [historyEmployees, setHistoryEmployees] = useState<Array<{ key: string; name: string; code: string }>>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historySaving, setHistorySaving] = useState(false);
@@ -606,11 +614,44 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
   const openHistory = (record?: HistoryRecord) => {
     setEditingHistory(record || null);
     form.resetFields();
-    form.setFieldsValue(record || { type: generalHistoryTypes.includes(typeFilter as HistoryRecord['type']) ? typeFilter : 'Chức vụ', eventDate: new Date().toISOString().slice(0, 10) });
+    const initialType = record?.type || (generalHistoryTypes.includes(typeFilter as HistoryRecord['type']) ? typeFilter : 'Chức vụ');
+    const termination = record?.termination || {};
+    form.setFieldsValue(record
+      ? { ...record, terminationType: termination.type, workStartDate: termination.workStartDate, contractKind: termination.contractKind, termMonths: termination.termMonths, noticeGivenDate: termination.noticeGivenDate, exemptFromNotice: termination.exemptFromNotice, averageSalary: termination.averageSalary, unemploymentInsuredMonths: termination.unemploymentInsuredMonths, paidSeveranceMonths: termination.paidSeveranceMonths, unusedLeaveDays: termination.unusedLeaveDays }
+      : { type: initialType, eventDate: new Date().toISOString().slice(0, 10), contractKind: 'indefinite', unemploymentInsuredMonths: 0, paidSeveranceMonths: 0, unusedLeaveDays: 0 });
+    setResignForm(initialType === 'Nghỉ việc');
+    setTerminationPreview(record?.settlement || null);
     setModalOpen(true);
   };
 
   // Handle Create General History
+  const terminationPayload = (values: any) => ({
+    employeeId: values.employeeId, type: values.terminationType, lastWorkingDate: values.eventDate, workStartDate: values.workStartDate || undefined,
+    contractKind: values.contractKind, termMonths: values.contractKind === 'fixed' ? Number(values.termMonths) : undefined, noticeGivenDate: values.noticeGivenDate || undefined,
+    exemptFromNotice: values.exemptFromNotice === true, averageSalary: values.averageSalary === undefined || values.averageSalary === '' ? undefined : Number(values.averageSalary),
+    unemploymentInsuredMonths: Number(values.unemploymentInsuredMonths) || 0, paidSeveranceMonths: Number(values.paidSeveranceMonths) || 0, unusedLeaveDays: Number(values.unusedLeaveDays) || 0,
+  });
+
+  const calculateTermination = async () => {
+    const values = form.getFieldsValue();
+    if (!values.employeeId || !values.terminationType || !values.eventDate) { message.error('Chọn nhân viên, hình thức chấm dứt và ngày hiệu lực.'); return; }
+    setTerminationChecking(true);
+    try {
+      const response = await terminationApi.settle(terminationPayload(values));
+      setTerminationPreview(response.data.settlement);
+      const defaults = response.data.defaults;
+      form.setFieldsValue({
+        workStartDate: values.workStartDate || defaults.workStartDate || response.data.settlement.workStartDate,
+        averageSalary: values.averageSalary === undefined || values.averageSalary === '' ? response.data.settlement.averageSalary : values.averageSalary,
+      });
+    } catch (error: any) {
+      setTerminationPreview(null);
+      message.error(error?.response?.data?.message || 'Không tính được trợ cấp chấm dứt hợp đồng.');
+    } finally {
+      setTerminationChecking(false);
+    }
+  };
+
   const handleCreateHistory = async (values: any) => {
     if (historySaving) return;
     const employee = historyEmployees.find(item => item.key === values.employeeId);
@@ -628,6 +669,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       decisionNumber: String(values.decisionNumber || '').trim(),
       signer: String(values.signer || '').trim(),
       note: String(values.note || '').trim(),
+      ...(values.type === 'Nghỉ việc' && values.terminationType ? { termination: terminationPayload(values) } : {}),
     };
     const validation = validateEmployeeHistory(newRec);
     if (validation) { message.error(validation); return; }
@@ -1681,6 +1723,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="type" label="Loại biến động" rules={[{ required: true }]}>
               <Select
+                onChange={(value: string) => { setResignForm(value === 'Nghỉ việc'); if (value !== 'Nghỉ việc') setTerminationPreview(null); }}
                 options={[
                   { value: 'Chức vụ', label: 'Chức vụ / Bổ nhiệm' },
                   { value: 'Thuyên chuyển', label: 'Thuyên chuyển phòng ban' },
@@ -1717,6 +1760,32 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             <Input.TextArea rows={2} placeholder="Nội dung chi tiết quyết định..." maxLength={4000} />
           </Form.Item>
 
+          {resignForm && (
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 8 }}>Chấm dứt hợp đồng lao động (ngày hiệu lực ở trên là ngày chấm dứt)</div>
+              <Form.Item name="terminationType" label="Hình thức chấm dứt"><Select allowClear options={TERMINATION_TYPE_OPTIONS} placeholder="Chọn để tính trợ cấp và báo trước" /></Form.Item>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Form.Item name="workStartDate" label="Ngày bắt đầu làm việc"><Input type="date" /></Form.Item>
+                <Form.Item name="averageSalary" label="Lương bình quân 6 tháng liền kề (₫)"><Input type="number" min={0} /></Form.Item>
+                <Form.Item name="contractKind" label="Loại hợp đồng"><Select options={[{ value: 'indefinite', label: 'Không xác định thời hạn' }, { value: 'fixed', label: 'Xác định thời hạn' }]} /></Form.Item>
+                <Form.Item name="termMonths" label="Thời hạn hợp đồng (tháng)"><Input type="number" min={0} /></Form.Item>
+                <Form.Item name="noticeGivenDate" label="Ngày báo trước"><Input type="date" /></Form.Item>
+                <Form.Item name="unusedLeaveDays" label="Ngày phép năm chưa nghỉ"><Input type="number" min={0} step="0.5" /></Form.Item>
+                <Form.Item name="unemploymentInsuredMonths" label="Tháng đã đóng bảo hiểm thất nghiệp"><Input type="number" min={0} /></Form.Item>
+                <Form.Item name="paidSeveranceMonths" label="Tháng đã được trả trợ cấp trước đó"><Input type="number" min={0} /></Form.Item>
+              </div>
+              <Form.Item name="exemptFromNotice" valuePropName="checked"><Checkbox>Thuộc trường hợp không cần báo trước (Điều 35 khoản 2)</Checkbox></Form.Item>
+              <Button loading={terminationChecking} onClick={() => void calculateTermination()}>Tính trợ cấp và hạn thanh toán</Button>
+              {terminationPreview && <div style={{ marginTop: 12, display: 'grid', gap: 4, fontSize: 12.5 }}>
+                <div>Thời gian làm việc {terminationPreview.monthsWorked} tháng; tính trợ cấp {terminationPreview.effectiveMonths} tháng (tròn {terminationPreview.severanceYears} năm)</div>
+                <div>Báo trước tối thiểu {terminationPreview.noticeRequiredDays} {terminationPreview.noticeUnit}, đã báo {terminationPreview.noticeGivenDays}{terminationPreview.shortNoticeDays > 0 ? `, thiếu ${terminationPreview.shortNoticeDays}` : ''}</div>
+                <div>{terminationPreview.allowanceType === 'job_loss' ? 'Trợ cấp mất việc làm' : 'Trợ cấp thôi việc'}: <strong>{terminationPreview.allowance.toLocaleString('vi-VN')} ₫</strong>; tiền phép chưa nghỉ {terminationPreview.leavePayout.toLocaleString('vi-VN')} ₫</div>
+                <div>Công ty phải trả khoảng <strong>{terminationPreview.employerPays.toLocaleString('vi-VN')} ₫</strong>{terminationPreview.employeeOwes > 0 ? `; người lao động phải bồi thường ${terminationPreview.employeeOwes.toLocaleString('vi-VN')} ₫` : ''}; hạn thanh toán <strong>{terminationPreview.settlementDueDate}</strong> (14 ngày làm việc, Điều 48)</div>
+                {terminationPreview.notes.map((note) => <div key={note} style={{ color: '#D97706' }}>{note}</div>)}
+              </div>}
+            </div>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
             <Button type="primary" htmlType="submit" loading={historySaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
@@ -1731,6 +1800,16 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
           ['Mã hồ sơ', viewingHistory.code], ['Nhân viên', `${viewingHistory.employeeCode} · ${viewingHistory.employeeName}`], ['Loại biến động', viewingHistory.type], ['Ngày hiệu lực', viewingHistory.eventDate],
           ['Giá trị cũ', viewingHistory.oldValue], ['Giá trị mới', viewingHistory.newValue], ['Số quyết định', viewingHistory.decisionNumber], ['Người ký quyết định', viewingHistory.signer], ['Ghi chú', viewingHistory.note],
         ].map(([label, value]) => <div key={label}><span style={{ color: '#64748B', fontSize: 12 }}>{label}</span><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value || '—'}</div></div>)}</div>}
+        {viewingHistory && viewingHistory.settlement && (
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, fontSize: 12.5, display: 'grid', gap: 4 }}>
+            <strong>Chấm dứt hợp đồng: {viewingHistory.settlement.typeLabel}</strong>
+            <div>Làm việc {viewingHistory.settlement.monthsWorked} tháng (tính trợ cấp {viewingHistory.settlement.effectiveMonths} tháng, tròn {viewingHistory.settlement.severanceYears} năm); lương bình quân {viewingHistory.settlement.averageSalary.toLocaleString('vi-VN')} ₫</div>
+            <div>Báo trước tối thiểu {viewingHistory.settlement.noticeRequiredDays} {viewingHistory.settlement.noticeUnit}, đã báo {viewingHistory.settlement.noticeGivenDays}{viewingHistory.settlement.shortNoticeDays > 0 ? `, thiếu ${viewingHistory.settlement.shortNoticeDays}` : ''}</div>
+            <div>{viewingHistory.settlement.allowanceType === 'job_loss' ? 'Trợ cấp mất việc làm' : 'Trợ cấp thôi việc'} {viewingHistory.settlement.allowance.toLocaleString('vi-VN')} ₫; tiền phép {viewingHistory.settlement.leavePayout.toLocaleString('vi-VN')} ₫</div>
+            <div>Công ty trả {viewingHistory.settlement.employerPays.toLocaleString('vi-VN')} ₫{viewingHistory.settlement.employeeOwes > 0 ? `; người lao động bồi thường ${viewingHistory.settlement.employeeOwes.toLocaleString('vi-VN')} ₫` : ''}; hạn thanh toán {viewingHistory.settlement.settlementDueDate}</div>
+            {viewingHistory.settlement.notes.map((note) => <div key={note} style={{ color: '#D97706' }}>{note}</div>)}
+          </div>
+        )}
       </Modal>
     </div>
   );

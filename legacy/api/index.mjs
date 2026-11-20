@@ -28,6 +28,7 @@ import { calculateCosting } from './costingRules.mjs';
 import { normalizeBreach } from './incidentRules.mjs';
 import { normalizeLicenseLegal } from './licenseRules.mjs';
 import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
+import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -4556,6 +4557,16 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.eventDate = requiredIsoDate(record.eventDate, 'Ngày hiệu lực');
     record.newValue = requiredText(record.newValue, 'Nội dung mới', 4000);
     for (const field of ['oldValue', 'decisionNumber', 'signer', 'note']) record[field] = optionalText(record[field], 'Thông tin biến động', 4000);
+    // Nghỉ việc kèm thông tin chấm dứt hợp đồng: máy chủ tính trợ cấp, báo trước và hạn thanh toán, bỏ qua kết quả client gửi.
+    if (record.type === 'Nghỉ việc' && record.termination && typeof record.termination === 'object') {
+      const { settlement } = await settleTerminationFor(employee.id, record.termination);
+      record.termination = Object.fromEntries(['type', 'contractKind', 'termMonths', 'workStartDate', 'lastWorkingDate', 'noticeGivenDate', 'exemptFromNotice', 'averageSalary', 'unemploymentInsuredMonths', 'paidSeveranceMonths', 'unusedLeaveDays'].map(field => [field, settlement[field]]));
+      record.settlement = settlement;
+      record.eventDate = settlement.lastWorkingDate;
+    } else {
+      delete record.termination;
+      delete record.settlement;
+    }
     record.code = current?.code || requiredText(record.code, 'Mã lịch sử', 160);
     record.createdAt = current?.createdAt || now(); record.createdBy = current?.createdBy || actor.name;
     record.updatedAt = now(); record.updatedBy = actor.name;
@@ -6639,6 +6650,15 @@ async function assertSingleProbation(contract, excludeId) {
   if (earlier) throw new HttpError(409, `Nhân sự này đã thử việc vị trí "${contract.position}" ở hợp đồng ${earlier.code}; chỉ được thử việc một lần đối với một công việc (Điều 25 Bộ luật Lao động 2019).`);
 }
 
+// Điều 20 khoản 2: chỉ được ký tối đa hai hợp đồng lao động xác định thời hạn liên tiếp; hợp đồng thứ ba phải không xác định thời hạn.
+// Không tính hợp đồng thử việc hoặc đã hủy; các trường hợp ngoại lệ (Điều 149, 151, 152) chưa được phân biệt.
+async function assertSuccessiveFixedTerm(contract, excludeId) {
+  if (contract.contractCategory !== 'labor' || !contract.employeeCode || !contract.endDate || isProbationContract(contract)) return;
+  const others = await db.prepare("SELECT code, end_date, contract_type, contract_template, status FROM contracts WHERE contract_category = 'labor' AND employee_code = ? AND id <> ? AND status <> 'Đã hủy' AND status <> 'Dự thảo'").all(contract.employeeCode, excludeId);
+  const fixed = others.filter((row) => row.end_date && !/thử việc/i.test(`${row.contract_type} ${row.contract_template}`));
+  if (fixed.length >= 2) throw new HttpError(409, `Nhân sự này đã có ${fixed.length} hợp đồng lao động xác định thời hạn (${fixed.map((row) => row.code).join(', ')}); hợp đồng tiếp theo phải là hợp đồng không xác định thời hạn, hãy bỏ ngày kết thúc (Điều 20 Bộ luật Lao động 2019).`);
+}
+
 // Giới hạn của Bộ luật Lao động 2019 áp dụng cho hợp đồng lao động: thử việc (Điều 25), thời hạn hợp đồng xác định thời hạn (Điều 20), ngày phép năm (Điều 113).
 function enforceLaborContractLimits(contract) {
   if (contract.probationCategory && !PROBATION_LIMITS[contract.probationCategory]) throw new HttpError(422, 'Loại công việc thử việc không hợp lệ.');
@@ -6659,6 +6679,33 @@ function enforceLaborContractLimits(contract) {
     }
   }
   return contract;
+}
+
+// Giá trị mặc định cho tính trợ cấp chấm dứt hợp đồng: ngày vào làm theo hồ sơ hoặc hợp đồng sớm nhất, loại và thời hạn hợp đồng lao động đang hiệu lực, lương hợp đồng.
+async function terminationDefaults(employee) {
+  const profile = await db.prepare('SELECT join_date FROM employee_profiles WHERE user_id = ?').get(employee.id);
+  const contracts = await db.prepare("SELECT start_date, end_date, salary, status, contract_category, contract_template FROM contracts WHERE (employee_user_id = ? OR employee_code = ?) AND contract_category = 'labor' ORDER BY start_date").all(employee.id, employee.employee_code);
+  const starts = contracts.map(row => row.start_date).filter(Boolean).sort();
+  const current = [...contracts].reverse().find(row => row.status === 'Còn hiệu lực' && !/thử việc/i.test(row.contract_template || ''));
+  const defaults = {
+    workStartDate: /^\d{4}-\d{2}-\d{2}$/.test(profile?.join_date || '') ? profile.join_date : starts[0] || '',
+    contractKind: current?.end_date ? 'fixed' : 'indefinite',
+    // Thời hạn tính cả ngày cuối: cộng một ngày vào ngày kết thúc rồi đếm tháng tròn.
+    termMonths: current?.end_date && current.start_date ? wholeMonthsBetween(current.start_date, addDaysIso(current.end_date, 1)) : 0,
+    averageSalary: Number(current?.salary) || 0,
+  };
+  return defaults;
+}
+
+async function settleTerminationFor(employeeId, input) {
+  const employee = await getUserById(requiredText(employeeId, 'Nhân viên', 160));
+  if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại.');
+  const defaults = await terminationDefaults(employee);
+  const merged = { ...input };
+  for (const field of ['workStartDate', 'contractKind', 'termMonths', 'averageSalary']) {
+    if (merged[field] === undefined || merged[field] === '' || merged[field] === null) merged[field] = defaults[field];
+  }
+  try { return { settlement: settleTermination(merged, { today: todayInVietnam() }), defaults }; } catch (error) { throw new HttpError(422, error.message); }
 }
 
 function validateContract(input) {
@@ -14364,6 +14411,13 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'POST' && resource === '/contracts/termination-settlement') {
+    await requireAdmin(request);
+    const payload = await readJson(request, 64 * 1024);
+    sendJson(response, 200, await settleTerminationFor(payload.employeeId, payload));
+    return;
+  }
+
   if (request.method === 'POST' && resource === '/contracts') {
     const actor = await requireAdmin(request);
     const payload = await readJson(request);
@@ -14376,6 +14430,7 @@ async function handleRequest(request, response) {
     const code = validated.code || await nextUniqueCode('HD', 'contracts');
     if (await db.prepare('SELECT id FROM contracts WHERE code = ?').get(code)) throw new HttpError(409, 'Mã hợp đồng đã tồn tại.');
     await assertSingleProbation(validated, '');
+    await assertSuccessiveFixedTerm(validated, '');
 
     await db.prepare(`INSERT INTO contracts (
       id, code, name, contract_category, contract_template, party_b_type, party_b_name,
@@ -14494,6 +14549,7 @@ async function handleRequest(request, response) {
       await db.transaction(async () => {
       if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('contracts-lifecycle'))").get();
       await assertSingleProbation(validated, contractId);
+      if (validated.endDate && validated.endDate !== row.end_date) await assertSuccessiveFixedTerm(validated, contractId);
       await db.prepare(`UPDATE contracts SET
         name = ?, contract_category = ?, contract_template = ?, party_b_type = ?, party_b_name = ?,
         party_b_tax_code = ?, party_b_representative = ?, party_b_position = ?, party_b_id_number = ?,

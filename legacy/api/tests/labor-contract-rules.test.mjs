@@ -122,3 +122,15 @@ test('ngày phép năm tối thiểu 12 ngày và hợp đồng không phải la
   await request('/contracts', 'POST', { ...base0, code: 'HD-LABOR-8', annualLeaveDays: 14 }, 201);
   await request('/contracts', 'POST', { ...base0, code: 'HD-SERVICE-1', contractCategory: 'service', employeeCode: '', employeeName: '', partyBType: 'organization', partyBName: 'Đối tác', probationMonths: 9, annualLeaveDays: 0 }, 201);
 });
+
+test('chỉ được ký tối đa hai hợp đồng xác định thời hạn liên tiếp, hợp đồng thứ ba phải không xác định thời hạn (Điều 20)', async () => {
+  const worker = { ...base0, employeeCode: 'LABOR-SUCCESSIVE', employeeName: 'Nhân viên ký nhiều lần' };
+  await request('/contracts', 'POST', { ...worker, code: 'HD-SUC-1', startDate: '2024-01-01', endDate: '2024-12-31' }, 201);
+  await request('/contracts', 'POST', { ...worker, code: 'HD-SUC-2', startDate: '2025-01-01', endDate: '2025-12-31' }, 201);
+  const third = await request('/contracts', 'POST', { ...worker, code: 'HD-SUC-3', startDate: '2026-01-01', endDate: '2026-12-31' }, 409);
+  assert.match(third.message, /Điều 20/);
+  assert.match(third.message, /HD-SUC-1/);
+  await request('/contracts', 'POST', { ...worker, code: 'HD-SUC-4', startDate: '2026-01-01' }, 201);
+  await request('/contracts', 'POST', { ...worker, code: 'HD-SUC-5', startDate: '2026-01-01', endDate: '2026-02-28', contractTemplate: 'Hợp đồng thử việc', probationDays: 60, probationCategory: 'college', probationSalary: 8_500_000 }, 201);
+  await request('/contracts', 'POST', { ...worker, employeeCode: 'LABOR-OTHER', code: 'HD-SUC-6', startDate: '2026-01-01', endDate: '2026-12-31' }, 201);
+});

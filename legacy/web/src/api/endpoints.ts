@@ -734,6 +734,16 @@ export type CostingRunResult = {
   journal: Array<{ account: string; debit: number; credit: number; note: string }>;
 };
 export type CostingRun = CostingRunResult & { key: string; code: string; createdBy: string; createdAt: string };
+export type TerminationSettlement = {
+  type: string; typeLabel: string; contractKind: 'indefinite' | 'fixed'; termMonths: number; workStartDate: string; lastWorkingDate: string; noticeGivenDate: string; exemptFromNotice: boolean;
+  averageSalary: number; unemploymentInsuredMonths: number; paidSeveranceMonths: number; unusedLeaveDays: number; monthsWorked: number; effectiveMonths: number; severanceYears: number;
+  noticeRequiredDays: number; noticeUnit: string; noticeGivenDays: number; shortNoticeDays: number; dailySalary: number; shortNoticeAmount: number;
+  allowanceType: 'none' | 'severance' | 'job_loss'; allowance: number; leavePayout: number; employerPays: number; employeeOwes: number; settlementDueDate: string; settlementOverdue: boolean; notes: string[];
+};
+export const terminationApi = {
+  settle: (data: Record<string, unknown>) => api.post<{ settlement: TerminationSettlement; defaults: { workStartDate: string; contractKind: 'indefinite' | 'fixed'; termMonths: number; averageSalary: number } }>('/contracts/termination-settlement', data),
+};
+
 export const costingRunApi = {
   list: () => api.get<{ data: CostingRun[] }>('/finance/costing/runs'),
   preview: (data: Record<string, unknown>) => api.post<{ result: CostingRunResult }>('/finance/costing/runs', { ...data, preview: true }),

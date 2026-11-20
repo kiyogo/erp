@@ -2867,3 +2867,28 @@ test('digital certificates enforce the 3-year limit, tax code, authorization and
   await patch(saved.key, { revokeReason: 'Sửa' }, 422);
 });
 
+test('resignation records settle notice, severance and leave pay on the server', async () => {
+  const base = { employeeId: session.user.id, type: 'mutual', workStartDate: '2022-01-15', lastWorkingDate: '2026-09-30', averageSalary: 20_000_000, contractKind: 'indefinite' };
+  const preview = await request('/contracts/termination-settlement', 'POST', base);
+  assert.equal(preview.settlement.severanceYears, 5);
+  assert.equal(preview.settlement.allowance, 50_000_000);
+  assert.equal(preview.settlement.settlementDueDate, '2026-10-20');
+  await request('/contracts/termination-settlement', 'POST', { ...base, type: 'x' }, 422);
+  await request('/contracts/termination-settlement', 'POST', { ...base, averageSalary: 0 }, 422);
+  await request('/contracts/termination-settlement', 'POST', { ...base, employeeId: 'missing' }, 422);
+  await request('/contracts/termination-settlement', 'POST', { employeeId: session.user.id, type: 'mutual', lastWorkingDate: '2026-09-30' }, 422);
+  const quit = (await request('/contracts/termination-settlement', 'POST', { ...base, type: 'employee_unilateral', noticeGivenDate: '2026-09-20', unusedLeaveDays: 2 })).settlement;
+  assert.equal(quit.allowance, 0);
+  assert.equal(quit.shortNoticeDays, 35);
+  assert.ok(quit.employeeOwes > 10_000_000);
+
+  const history = { key: 'resign-api-1', code: 'LS-RESIGN-1', employeeId: session.user.id, type: 'Nghỉ việc', eventDate: '2020-01-01', newValue: 'Nghỉ việc theo thỏa thuận', termination: { ...base, employeeId: undefined }, settlement: { allowance: 1 } };
+  const saved = (await request('/collections/hr_employee_history', 'POST', { record: history }, 201)).record;
+  assert.equal(saved.settlement.allowance, 50_000_000);
+  assert.equal(saved.eventDate, '2026-09-30');
+  assert.equal(saved.termination.type, 'mutual');
+  await request('/collections/hr_employee_history', 'POST', { record: { ...history, key: 'resign-api-2', code: 'LS-RESIGN-2', termination: { ...base, lastWorkingDate: '2021-01-01' } } }, 422);
+  const plain = (await request('/collections/hr_employee_history', 'POST', { record: { key: 'resign-api-3', code: 'LS-RESIGN-3', employeeId: session.user.id, type: 'Nghỉ việc', eventDate: '2026-10-01', newValue: 'Nghỉ việc', settlement: { allowance: 9 } } }, 201)).record;
+  assert.equal(plain.settlement, undefined);
+});
+

@@ -8,7 +8,7 @@ const { outputText } = ts.transpileModule(source, { compilerOptions: { target: t
 const imports = {
   react: 'globalThis.__historyTest.react', '@ant-design/icons': 'globalThis.__historyTest.icons',
   '../../components/KTable': 'globalThis.__historyTest.ui', '../../custom-ui': 'globalThis.__historyTest.ui', './EmployeeSelect': 'globalThis.__historyTest.ui',
-  '../../api/endpoints': 'globalThis.__historyTest.api', '../../services/dataService': 'globalThis.__historyTest.services', '../../utils/fileExporter': 'globalThis.__historyTest.exporter',
+  '../../api/endpoints': 'globalThis.__historyTest.api', './terminationTypes': 'globalThis.__historyTest.termination', '../../services/dataService': 'globalThis.__historyTest.services', '../../utils/fileExporter': 'globalThis.__historyTest.exporter',
 };
 const executable = outputText.replace(/import\s+([^;]+?)\s+from\s+['"]([^'"]+)['"];?/g, (_, names, path) => {
   assert.ok(imports[path], `Unmocked import: ${path}`);
@@ -16,7 +16,7 @@ const executable = outputText.replace(/import\s+([^;]+?)\s+from\s+['"]([^'"]+)['
 });
 
 test('employee history validates real identities and dates and filters all record details', async () => {
-  globalThis.__historyTest = { react: {}, icons: {}, ui: {}, api: {}, services: {}, exporter: {} };
+  globalThis.__historyTest = { react: {}, icons: {}, ui: {}, api: {}, services: {}, exporter: {}, termination: { TERMINATION_TYPE_OPTIONS: [] } };
   const { validateEmployeeHistory: validate, filterEmployeeHistory: filter } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString('base64')}#logic`);
   const record = { key: 'history-1', code: 'LS-1', employeeId: 'employee-1', employeeCode: 'NV-1', employeeName: 'Người thật', type: 'Chức vụ', eventDate: '2026-10-25', oldValue: 'Engineer', newValue: 'Lead', decisionNumber: '', signer: 'Actual Signer', note: 'Nội dung quyết định' };
   assert.equal(validate(record), '');
@@ -59,7 +59,7 @@ test('history CRUD persists before UI success, includes former employees, export
   const bank = { id: 'bank-1', employeeCode: 'NV-1', employeeName: 'Existing Employee', bankName: 'Actual Bank', accountNumber: '001', status: 'Đã duyệt' };
   const staff = [{ id: 'employee-1', name: 'Existing Employee', employeeCode: 'NV-1', role: 'USER', status: 'Chính thức' }, { id: 'former-employee', name: 'Former Employee', employeeCode: 'NV-OLD', role: 'USER', status: 'Đã nghỉ việc' }];
   globalThis.__historyTest = {
-    react, ui, icons,
+    react, ui, icons, termination: { TERMINATION_TYPE_OPTIONS: [] },
     services: { dataService: { getEmployees: () => [], getEmployeeBankAccounts: () => [bank], getDropdownOptions: () => [], refreshGenericData: async scope => { requests.push({ action: 'read', scope }); if (fail) throw new Error('offline'); return structuredClone(stored); } } },
     api: {
       employeesApi: { getAll: async () => ({ data: { data: staff } }) },
