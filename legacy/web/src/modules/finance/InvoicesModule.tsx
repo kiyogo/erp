@@ -12,6 +12,8 @@ import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
 import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
 import { vatRateOptions } from './vatRateRules';
+import { PaymentMethodField } from './TradeTermsFields';
+import { termsFromValues } from './tradeTerms';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const outputSubtype = 'Đầu ra';
@@ -75,7 +77,6 @@ export const InvoicesModule: React.FC = () => {
     try {
       await financeDocumentsApi.create({
         documentType: 'invoice',
-        code: values.code,
         subtype: values.subtype,
         partnerName: values.partnerName,
         description: values.description || '',
@@ -87,6 +88,7 @@ export const InvoicesModule: React.FC = () => {
         taxCode: values.taxCode || '',
         vatRate,
         vatAmount,
+        terms: termsFromValues(values),
       });
       message.success('Đã lưu hóa đơn và đồng bộ công nợ, dòng tiền theo số tiền đã thanh toán.');
       setModalOpen(false);
@@ -108,6 +110,8 @@ export const InvoicesModule: React.FC = () => {
             <FileTextOutlined /> {code}
           </div>
           <div style={{ fontSize: 11.5, color: '#64748B' }}>{record.documentDate}</div>
+          {record.terms?.invoiceNo && <div style={{ fontSize: 11.5, color: '#64748B' }}>Số hóa đơn {record.terms.invoiceNo}{record.terms.invoiceSymbol ? `, ký hiệu ${record.terms.invoiceSymbol}` : ''}</div>}
+          {(record.termWarnings || []).map((warning) => <div key={warning} style={{ fontSize: 11.5, color: '#D97706' }}>{warning}</div>)}
         </div>
       ),
     },
@@ -211,12 +215,18 @@ export const InvoicesModule: React.FC = () => {
       <Modal title="Thêm hóa đơn tài chính" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={660}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Số hóa đơn" rules={[{ required: true, whitespace: true }]}>
+            <Form.Item name="terms_invoiceNo" label="Số hóa đơn" rules={[{ required: true, whitespace: true }]}>
               <Input placeholder="Nhập số hóa đơn thật" />
             </Form.Item>
             <Form.Item name="subtype" label="Loại hóa đơn" rules={[{ required: true }]}>
               <Select options={[{ label: 'Hóa đơn đầu ra', value: outputSubtype }, { label: 'Hóa đơn đầu vào', value: inputSubtype }]} />
             </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="terms_invoiceSymbol" label="Ký hiệu hóa đơn">
+              <Input />
+            </Form.Item>
+            <PaymentMethodField />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="partnerName" label="Đối tác" rules={[{ required: true, whitespace: true }]}>

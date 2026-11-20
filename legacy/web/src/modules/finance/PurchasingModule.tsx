@@ -11,9 +11,14 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
 import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
+import { ContactSelect } from '../crm/ContactSelect';
+import { TradeTermsFields } from './TradeTermsFields';
+import { termsFromValues, vatOf } from './tradeTerms';
+import { vatRateOptions } from './vatRateRules';
 import { PurchaseRequestsModule } from './PurchaseRequestsModule';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
+const currentBusinessDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
 const purchaseStatusOptions = [
   { label: 'Chờ xử lý', value: 'Chờ xử lý' },
@@ -30,6 +35,11 @@ const PurchasingDocumentsModule: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [supplierId, setSupplierId] = useState('');
+  const [subTotal, setSubTotal] = useState(0);
+  const [vatRate, setVatRate] = useState(10);
+  const [documentDate, setDocumentDate] = useState(currentBusinessDate());
   const [form] = Form.useForm();
 
   const isCharts = currentPath === '/finance/purchasing/charts';
@@ -79,31 +89,42 @@ const PurchasingDocumentsModule: React.FC = () => {
     return Array.from(totals, ([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
   }, [validData]);
 
+  const vatAmount = vatOf(subTotal, vatRate);
+
   const handleCreate = async (values: any) => {
-    const amount = Number(values.amount) || 0;
+    if (saving) return;
+    const net = Number(values.subTotal) || 0;
+    const rate = Number(values.vatRate) || 0;
+    const vat = vatOf(net, rate);
+    const amount = net + vat;
     const paidAmount = Number(values.paidAmount) || 0;
+    setSaving(true);
     try {
       await financeDocumentsApi.create({
         documentType: 'purchase',
-        code: values.code,
         subtype: values.subtype || 'Đơn mua hàng',
         partnerName: values.partnerName,
         description: values.description || '',
         amount,
         paidAmount,
-        documentDate: values.documentDate || new Date().toISOString().substring(0, 10),
+        documentDate: values.documentDate || currentBusinessDate(),
         dueDate: values.dueDate || '',
         status: values.status || 'Chờ xử lý',
         taxCode: values.taxCode || '',
-        vatRate: 0,
-        vatAmount: 0,
+        vatRate: rate,
+        vatAmount: vat,
+        ...(values.supplierId ? { supplierId: values.supplierId } : {}),
+        terms: termsFromValues(values),
       });
       message.success('Đã lưu chứng từ mua hàng và đồng bộ sang dòng tiền nếu có khoản đã trả.');
       setModalOpen(false);
+      setSupplierId('');
       form.resetFields();
       await loadData();
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể lưu chứng từ mua hàng.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -125,11 +146,14 @@ const PurchasingDocumentsModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>{record.description || 'Không có diễn giải'}</div>
+          {record.terms?.contractNo && <div style={{ fontSize: 12, color: '#64748B' }}>Hợp đồng {record.terms.contractNo}</div>}
+          {(record.termWarnings || []).map((warning) => <div key={warning} style={{ fontSize: 12, color: '#D97706' }}>{warning}</div>)}
         </div>
       ),
     },
     { title: 'Phân loại', dataIndex: 'subtype', key: 'subtype', render: (value: string) => <Tag color={value === 'Hợp đồng mua' ? 'processing' : 'purple'}>{value}</Tag> },
     { title: 'Ngày', dataIndex: 'documentDate', key: 'documentDate', width: 120 },
+    { title: 'Thuế GTGT', dataIndex: 'vatAmount', key: 'vatAmount', width: 140, render: (value: number, record: FinanceDocument) => <span>{formatMoney(value)} ({record.vatRate}%)</span> },
     { title: 'Tổng tiền', dataIndex: 'amount', key: 'amount', width: 150, render: (value: number) => <strong>{formatMoney(value)}</strong> },
     { title: 'Đã trả', dataIndex: 'paidAmount', key: 'paidAmount', width: 150, render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{formatMoney(value)}</span> },
     { title: 'Còn phải trả', dataIndex: 'remainingAmount', key: 'remainingAmount', width: 150, render: (value: number) => <strong style={{ color: value > 0 ? '#DC2626' : '#16A34A' }}>{formatMoney(value)}</strong> },
@@ -191,7 +215,11 @@ const PurchasingDocumentsModule: React.FC = () => {
                 icon={<PlusOutlined />}
                 onClick={() => {
                   form.resetFields();
-                  form.setFieldsValue({ subtype: isContracts ? 'Hợp đồng mua' : isInputInvoices ? 'Hóa đơn đầu vào' : 'Đơn mua hàng', documentDate: new Date().toISOString().substring(0, 10), paidAmount: 0 });
+                  setSupplierId('');
+                  setSubTotal(0);
+                  setVatRate(10);
+                  setDocumentDate(currentBusinessDate());
+                  form.setFieldsValue({ subtype: isContracts ? 'Hợp đồng mua' : isInputInvoices ? 'Hóa đơn đầu vào' : 'Đơn mua hàng', documentDate: currentBusinessDate(), paidAmount: 0, vatRate: 10 });
                   setModalOpen(true);
                 }}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -207,44 +235,58 @@ const PurchasingDocumentsModule: React.FC = () => {
         </div>
       )}
 
-      <Modal title="Thêm chứng từ mua hàng" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={620}>
-        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
+      <Modal title="Thêm chứng từ mua hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSupplierId(''); }} footer={null} width={680}>
+        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
+          <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
+            <Select options={[{ label: 'Đơn mua hàng', value: 'Đơn mua hàng' }, { label: 'Hợp đồng mua', value: 'Hợp đồng mua' }, { label: 'Hóa đơn đầu vào', value: 'Hóa đơn đầu vào' }]} />
+          </Form.Item>
+          <Form.Item name="supplierId" label="Nhà cung cấp trong danh bạ">
+            <ContactSelect type="supplier" allowClear
+              onSelectContact={(selected) => {
+                setSupplierId(selected?.key || '');
+                if (selected) form.setFieldsValue({ partnerName: selected.name, taxCode: selected.taxCode || '' });
+              }} />
+          </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="code" label="Mã chứng từ" rules={[{ required: true, whitespace: true }]}>
-              <Input placeholder="Ví dụ: PO-2026-001" />
+            <Form.Item name="partnerName" label="Tên nhà cung cấp" rules={[{ required: true, whitespace: true }]}>
+              <Input disabled={!!supplierId} />
             </Form.Item>
-            <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
-              <Select options={[{ label: 'Đơn mua hàng', value: 'Đơn mua hàng' }, { label: 'Hợp đồng mua', value: 'Hợp đồng mua' }, { label: 'Hóa đơn đầu vào', value: 'Hóa đơn đầu vào' }]} />
+            <Form.Item name="taxCode" label="Mã số thuế nhà cung cấp">
+              <Input placeholder="10 số, 13 số hoặc số định danh 12 số" />
             </Form.Item>
           </div>
-          <Form.Item name="partnerName" label="Nhà cung cấp" rules={[{ required: true, whitespace: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="Nội dung hàng hóa / dịch vụ">
+          <Form.Item name="description" label="Nội dung hàng hóa, dịch vụ">
             <Input.TextArea rows={2} />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="amount" label="Tổng tiền" rules={[{ required: true }]}>
-              <Input type="number" min={1} />
-            </Form.Item>
-            <Form.Item name="paidAmount" label="Đã trả">
-              <Input type="number" min={0} />
-            </Form.Item>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="documentDate" label="Ngày chứng từ" rules={[{ required: true }]}>
-              <Input type="date" />
+              <Input type="date" onChange={(event: React.ChangeEvent<HTMLInputElement>) => setDocumentDate(event.target.value)} />
             </Form.Item>
             <Form.Item name="dueDate" label="Hạn thanh toán">
               <Input type="date" />
             </Form.Item>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="subTotal" label="Tiền hàng chưa thuế" rules={[{ required: true }]}>
+              <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setSubTotal(Number(event.target.value) || 0)} />
+            </Form.Item>
+            <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
+              <Select options={vatRateOptions(documentDate)} onChange={(value: number) => setVatRate(Number(value) || 0)} />
+            </Form.Item>
+            <Form.Item name="paidAmount" label="Đã trả">
+              <Input type="number" min={0} />
+            </Form.Item>
+          </div>
+          <div style={{ marginBottom: 14, color: '#64748B' }}>
+            Thuế GTGT {formatMoney(vatAmount)}, tổng thanh toán <strong style={{ color: '#0F172A' }}>{formatMoney(subTotal + vatAmount)}</strong>
+          </div>
           <Form.Item name="status" label="Trạng thái" initialValue="Chờ xử lý">
             <Select options={purchaseStatusOptions} />
           </Form.Item>
+          <TradeTermsFields withInvoice />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            <Button type="primary" htmlType="submit" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
               Lưu chứng từ
             </Button>
           </div>

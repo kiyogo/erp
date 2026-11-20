@@ -20,7 +20,8 @@ import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from 
 import { vatRateProblem } from './vatRules.mjs';
 import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, assetTaxWarnings, costBreakdownProblem, taxDeductibleCost } from './assetRules.mjs';
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
-import { buyerTaxCodeProblem, invoiceContentIssues, vatBreakdown, vndInWords } from './invoiceRules.mjs';
+import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
+import { isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
@@ -5659,6 +5660,23 @@ async function salePromotionSnapshots() {
   return rows.map(publicCollectionRecord).filter(Boolean);
 }
 
+// Điều khoản thương mại và nhà cung cấp của chứng từ, lưu ở phạm vi do máy chủ quản lý (khóa = mã chứng từ).
+async function financeDocumentTerms() {
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_document_terms'").all();
+  return new Map(rows.map(publicCollectionRecord).filter(Boolean).map(record => [record.key, record]));
+}
+
+function withDocumentTerms(document, record) {
+  const terms = record?.terms || {};
+  return {
+    ...document,
+    terms,
+    ...(record?.supplierId ? { supplierId: record.supplierId } : {}),
+    paymentMethod: terms.paymentMethod || '',
+    termWarnings: tradeWarnings(document, terms),
+  };
+}
+
 function publicSalePromotion(snapshot) {
   return snapshot ? { grossAmount: snapshot.grossAmount, discountAmount: snapshot.discountAmount, appliedPromotions: snapshot.applications } : {};
 }
@@ -6174,6 +6192,11 @@ function validateFinanceDocument(input) {
   const vatProblem = vatRateProblem(vatRate, documentDate, 'Thuế suất VAT');
   if (vatProblem) throw new HttpError(422, vatProblem);
   const vatAmount = optionalAmount(input.vatAmount, 'Tiền VAT');
+  const consistencyProblem = vatConsistencyProblem({ amount, vatRate, vatAmount });
+  if (consistencyProblem) throw new HttpError(422, consistencyProblem);
+  const taxCode = optionalText(input.taxCode, 'Mã số thuế', 32);
+  const taxCodeProblem = partnerTaxCodeProblem(taxCode, isValidTaxCode);
+  if (taxCodeProblem) throw new HttpError(422, taxCodeProblem);
 
   return {
     documentType,
@@ -6186,7 +6209,7 @@ function validateFinanceDocument(input) {
     documentDate,
     dueDate,
     status: requiredText(input.status || 'Chưa thanh toán', 'Trạng thái', 80),
-    taxCode: optionalText(input.taxCode, 'Mã số thuế', 32),
+    taxCode,
     vatRate,
     vatAmount,
   };
@@ -9713,9 +9736,13 @@ async function handleRequest(request, response) {
     if (taxType === TAX_FILING_TYPES.vat) {
       if (profile.vatMethod && profile.vatMethod !== 'deduction') throw new HttpError(409, 'Hồ sơ kế toán dùng phương pháp tính thuế GTGT trực tiếp; hệ thống mới tính được phương pháp khấu trừ.');
       const rows = await db.prepare("SELECT * FROM finance_documents WHERE document_type IN ('invoice', 'purchase') AND document_date >= ? AND document_date <= ?").all(periodStart, periodEnd);
-      const summary = vatSummary(rows.map(publicFinanceDocument), periodStart, periodEnd);
+      const termsByDocument = await financeDocumentTerms();
+      const summary = vatSummary(rows.map(row => {
+        const document = publicFinanceDocument(row);
+        return { ...document, paymentProof: isNonCashPayment(termsByDocument.get(row.id)?.terms?.paymentMethod) };
+      }), periodStart, periodEnd);
       Object.assign(result, { vat: summary, amountPayable: summary.amountPayable });
-      if (summary.inputVatNeedingProof > 0) result.notes.push(`Có ${summary.needsProof.length} nhóm hóa đơn đầu vào từ ngưỡng thanh toán không dùng tiền mặt, thuế ${summary.inputVatNeedingProof.toLocaleString('vi-VN')} đồng chưa tính vào số khấu trừ; cộng lại nếu đã có chứng từ chuyển khoản.`);
+      if (summary.inputVatNeedingProof > 0) result.notes.push(`Có ${summary.needsProof.length} nhóm hóa đơn đầu vào từ ngưỡng thanh toán không dùng tiền mặt, thuế ${summary.inputVatNeedingProof.toLocaleString('vi-VN')} đồng chưa tính vào số khấu trừ; cộng lại nếu đã có chứng từ chuyển khoản, hoặc ghi hình thức thanh toán không dùng tiền mặt trên chứng từ.`);
       if (summary.carriedForward > 0) result.notes.push(`Thuế đầu vào lớn hơn đầu ra ${summary.carriedForward.toLocaleString('vi-VN')} đồng: không phải nộp, số này được khấu trừ kỳ sau hoặc xét hoàn thuế. Số dư khấu trừ chuyển từ kỳ trước chưa được cộng vào.`);
     } else if (taxType === TAX_FILING_TYPES.citProvisional || taxType === TAX_FILING_TYPES.citFinalization) {
       const fiscalStart = accountingFiscalYearStartDate(profile, periodEnd) || `${periodEnd.slice(0, 4)}-01-01`;
@@ -9920,9 +9947,9 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
-    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng phải được ghi qua chức năng bán hàng.');
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }
 
   if ((collectionMatch || collectionRecordMatch) && ['finance_payroll_postings', 'finance_payroll_adjustments'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
@@ -13124,8 +13151,9 @@ async function handleRequest(request, response) {
     const promotions = hasSales ? await salePromotionSnapshots() : [];
     const linksBySale = new Map(links.map((link) => [link.key, link]));
     const promotionsBySale = new Map(promotions.map((snapshot) => [snapshot.key, snapshot]));
+    const termsByDocument = await financeDocumentTerms();
     sendJson(response, 200, { data: rows.map((row) => {
-      const document = publicFinanceDocument(row);
+      const document = withDocumentTerms(publicFinanceDocument(row), termsByDocument.get(row.id));
       const link = linksBySale.get(row.id);
       return { ...document, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(promotionsBySale.get(row.id)) };
     }) });
@@ -13140,6 +13168,10 @@ async function handleRequest(request, response) {
     if (customerId && input.documentType !== 'sale') throw new HttpError(422, 'Liên kết khách hàng chỉ áp dụng cho chứng từ bán hàng.');
     const promotionKeys = salePromotionKeys(input.promotionKeys);
     if (promotionKeys.length && (!customerId || input.documentType !== 'sale')) throw new HttpError(422, 'Chọn khách hàng CRM cho chứng từ bán có khuyến mại.');
+    const supplierId = optionalText(input.supplierId, 'Nhà cung cấp', 160);
+    if (supplierId && input.documentType !== 'purchase') throw new HttpError(422, 'Liên kết nhà cung cấp chỉ áp dụng cho chứng từ mua hàng.');
+    let terms;
+    try { terms = normalizeTradeTerms(input.terms); } catch (error) { throw new HttpError(422, error.message); }
     const requestId = promotionKeys.length ? requiredText(input.requestId, 'Mã yêu cầu', 160) : '';
     const fingerprint = promotionKeys.length ? requiredText(input.promotionFingerprint, 'Kết quả tính khuyến mại', 64) : '';
     let document;
@@ -13162,7 +13194,19 @@ async function handleRequest(request, response) {
         customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
         if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
       }
-      document = validateFinanceDocument({ ...input, partnerName: customer ? customer.name : input.partnerName });
+      let supplier;
+      if (supplierId) {
+        supplier = await db.prepare("SELECT id, code, name, status, tax_code FROM crm_contacts WHERE id = ? AND contact_type = 'supplier'").get(supplierId);
+        if (!supplier || String(supplier.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Nhà cung cấp không tồn tại hoặc đang tạm dừng.');
+      }
+      document = validateFinanceDocument({
+        ...input,
+        partnerName: customer ? customer.name : supplier ? supplier.name : input.partnerName,
+        taxCode: supplier && !String(input.taxCode || '').trim() ? supplier.tax_code : input.taxCode,
+      });
+      if (terms.deliveryDate && terms.deliveryDate < document.documentDate && /^Đơn|^Hợp đồng/.test(document.subtype)) {
+        throw new HttpError(422, 'Ngày giao hàng không được trước ngày chứng từ.');
+      }
       if (promotionKeys.length) {
         const requestHash = createHash('sha256').update(JSON.stringify({ actorId: actor.id, customerId, promotionKeys, fingerprint, document })).digest('hex');
         const existing = (await salePromotionSnapshots()).find((item) => item.requestId === requestId);
@@ -13201,6 +13245,11 @@ async function handleRequest(request, response) {
         timestamp,
       );
       if (customer) link = await insertSaleCustomerLink(id, document.code, customer, actor, timestamp);
+      if (supplier || Object.keys(terms).length) {
+        await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, 'finance_document_terms', ?, ?, ?, ?, ?)`)
+          .run(randomUUID(), id, actor.id, JSON.stringify({ key: id, documentCode: document.code, terms, ...(supplier ? { supplierId: supplier.id, supplierCode: supplier.code } : {}) }), timestamp, timestamp);
+      }
       if (snapshot) {
         await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
           VALUES (?, 'finance_sale_promotions', ?, ?, ?, ?, ?)`)
@@ -13209,7 +13258,7 @@ async function handleRequest(request, response) {
       }
       await insertAutomaticCashTransaction(document, actor.id, timestamp);
     });
-    const saved = publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id));
+    const saved = withDocumentTerms(publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id)), (await financeDocumentTerms()).get(id));
     const result = { ...saved, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(snapshot) };
     sendJson(response, replayed ? 200 : 201, promotionKeys.length ? { document: result, replayed } : { document: result });
     return;

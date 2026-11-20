@@ -12,6 +12,9 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
 import { ContactSelect } from '../crm/ContactSelect';
+import { TradeTermsFields } from './TradeTermsFields';
+import { termsFromValues, vatOf } from './tradeTerms';
+import { vatRateOptions } from './vatRateRules';
 import { crmContactsApi, crmPromotionsApi, financeDocumentsApi, type CrmContact, type CrmPromotion, type FinanceDocument, type SalePromotionPreview } from '../../api/endpoints';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
@@ -38,6 +41,9 @@ export const SalesModule: React.FC = () => {
   const [promotionPreview, setPromotionPreview] = useState<(SalePromotionPreview & { context: string }) | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [requestId, setRequestId] = useState('');
+  const [subTotal, setSubTotal] = useState(0);
+  const [vatRate, setVatRate] = useState(10);
+  const [documentDate, setDocumentDate] = useState(currentBusinessDate());
   const [linkTarget, setLinkTarget] = useState<FinanceDocument | null>(null);
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -110,16 +116,22 @@ export const SalesModule: React.FC = () => {
     return Array.from(totals, ([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
   }, [data]);
 
-  const promotionContext = (values: any) => ({
-    customerId: String(values.customerId || ''), promotionKeys: Array.isArray(values.promotionKeys) ? values.promotionKeys : [],
-    subtype: String(values.subtype || ''), status: String(values.status || ''), amount: Number(values.amount),
-    documentDate: String(values.documentDate || ''), vatRate: 0, vatAmount: 0,
-  });
+  const vatAmount = vatOf(subTotal, vatRate);
+
+  const promotionContext = (values: any) => {
+    const rate = Number(values.vatRate) || 0;
+    const vat = vatOf(Number(values.subTotal) || 0, rate);
+    return {
+      customerId: String(values.customerId || ''), promotionKeys: Array.isArray(values.promotionKeys) ? values.promotionKeys : [],
+      subtype: String(values.subtype || ''), status: String(values.status || ''), amount: (Number(values.subTotal) || 0) + vat,
+      documentDate: String(values.documentDate || ''), vatRate: rate, vatAmount: vat,
+    };
+  };
 
   const calculatePromotions = async () => {
     if (previewing) return;
     try {
-      const values = await form.validateFields(['subtype', 'amount', 'documentDate', 'status']);
+      const values = await form.validateFields(['subtype', 'subTotal', 'vatRate', 'documentDate', 'status']);
       const context = promotionContext(values);
       if (!context.customerId || !context.promotionKeys.length) {
         message.error('Chọn khách hàng trong danh bạ và chương trình khuyến mại.');
@@ -147,13 +159,12 @@ export const SalesModule: React.FC = () => {
       message.error('Vui lòng tính lại khuyến mại trước khi lưu chứng từ.');
       return;
     }
-    const amount = Number(values.amount) || 0;
+    const amount = context.amount;
     const paidAmount = Number(values.paidAmount) || 0;
     setSaving(true);
     try {
       await financeDocumentsApi.create({
         documentType: 'sale',
-        code: values.code,
         subtype: values.subtype || 'Đơn bán hàng',
         partnerName: values.partnerName,
         description: values.description || '',
@@ -163,8 +174,9 @@ export const SalesModule: React.FC = () => {
         dueDate: values.dueDate || '',
         status: values.status || (paidAmount >= amount ? 'Đã bàn giao' : 'Đang triển khai'),
         taxCode: values.taxCode || '',
-        vatRate: 0,
-        vatAmount: 0,
+        vatRate: context.vatRate,
+        vatAmount: context.vatAmount,
+        terms: termsFromValues(values),
         ...(values.customerId ? { customerId: values.customerId } : {}),
         ...(context.promotionKeys.length && promotionPreview ? { promotionKeys: context.promotionKeys, promotionFingerprint: promotionPreview.fingerprint, requestId } : {}),
       });
@@ -218,11 +230,14 @@ export const SalesModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}{record.customerCode ? ` · ${record.customerCode}` : ''}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>{record.description || 'Không có diễn giải'}</div>
+          {record.terms?.contractNo && <div style={{ fontSize: 12, color: '#64748B' }}>Hợp đồng {record.terms.contractNo}</div>}
+          {(record.termWarnings || []).map((warning) => <div key={warning} style={{ fontSize: 12, color: '#D97706' }}>{warning}</div>)}
         </div>
       ),
     },
     { title: 'Phân loại', dataIndex: 'subtype', key: 'subtype', render: (value: string) => <Tag color={value === 'Báo giá' ? 'warning' : 'processing'}>{value}</Tag> },
     { title: 'Ngày', dataIndex: 'documentDate', key: 'documentDate', width: 120 },
+    { title: 'Thuế GTGT', dataIndex: 'vatAmount', key: 'vatAmount', width: 140, render: (value: number, record: FinanceDocument) => <span>{formatMoney(value)} ({record.vatRate}%)</span> },
     { title: 'Tổng tiền', dataIndex: 'amount', key: 'amount', width: 150, render: (value: number) => <strong>{formatMoney(value)}</strong> },
     { title: 'Khuyến mại', key: 'promotion', width: 180, render: (_: unknown, record: FinanceDocument) => record.appliedPromotions?.length ? <span>{record.appliedPromotions.map((item) => item.code).join(', ')}<br /><strong style={{ color: '#16A34A' }}>−{formatMoney(record.discountAmount || 0)}</strong></span> : '—' },
     { title: 'Đã thu', dataIndex: 'paidAmount', key: 'paidAmount', width: 150, render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{formatMoney(value)}</span> },
@@ -289,7 +304,10 @@ export const SalesModule: React.FC = () => {
                     setSelectedPromotions([]);
                     setPromotionPreview(null);
                     setRequestId(crypto.randomUUID());
-                    form.setFieldsValue({ subtype: isQuotes ? 'Báo giá' : 'Đơn bán hàng', documentDate: currentBusinessDate(), paidAmount: 0, promotionKeys: [] });
+                    setSubTotal(0);
+                    setVatRate(10);
+                    setDocumentDate(currentBusinessDate());
+                    form.setFieldsValue({ subtype: isQuotes ? 'Báo giá' : 'Đơn bán hàng', documentDate: currentBusinessDate(), paidAmount: 0, vatRate: 10, promotionKeys: [] });
                     setModalOpen(true);
                   }}
                   style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -314,44 +332,50 @@ export const SalesModule: React.FC = () => {
 
       <Modal title="Thêm chứng từ bán hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSelectedCustomerId(''); }} footer={null} width={620}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="code" label="Mã chứng từ" rules={[{ required: true, whitespace: true }]}>
-              <Input placeholder="Ví dụ: SO-2026-001" />
-            </Form.Item>
-            <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
-              <Select options={[{ label: 'Báo giá', value: 'Báo giá' }, { label: 'Đơn bán hàng', value: 'Đơn bán hàng' }, { label: 'Hợp đồng bán', value: 'Hợp đồng bán' }]} onChange={() => setPromotionPreview(null)} />
-            </Form.Item>
-          </div>
+          <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
+            <Select options={[{ label: 'Báo giá', value: 'Báo giá' }, { label: 'Đơn bán hàng', value: 'Đơn bán hàng' }, { label: 'Hợp đồng bán', value: 'Hợp đồng bán' }]} onChange={() => setPromotionPreview(null)} />
+          </Form.Item>
           <Form.Item name="customerId" label="Khách hàng trong danh bạ">
             <ContactSelect type="customer" allowClear
               onCreated={(created) => setCustomers((current) => [...current.filter((item) => item.key !== created.key), created])}
               onSelectContact={(selected) => {
                 setSelectedCustomerId(selected?.key || '');
                 setPromotionPreview(null);
-                if (selected) form.setFieldsValue({ partnerName: selected.name });
+                if (selected) form.setFieldsValue({ partnerName: selected.name, taxCode: selected.taxCode || '' });
               }} />
           </Form.Item>
-          <Form.Item name="partnerName" label="Tên khách hàng" rules={[{ required: true, whitespace: true }]}>
-            <Input disabled={!!selectedCustomerId} />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="partnerName" label="Tên khách hàng" rules={[{ required: true, whitespace: true }]}>
+              <Input disabled={!!selectedCustomerId} />
+            </Form.Item>
+            <Form.Item name="taxCode" label="Mã số thuế khách hàng">
+              <Input placeholder="10 số, 13 số hoặc số định danh 12 số" />
+            </Form.Item>
+          </div>
           <Form.Item name="description" label="Nội dung hàng hóa / dịch vụ">
             <Input.TextArea rows={2} />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="amount" label="Tổng tiền trước khuyến mại" rules={[{ required: true }]}>
-              <Input type="number" min={1} onChange={() => setPromotionPreview(null)} />
+            <Form.Item name="documentDate" label="Ngày chứng từ" rules={[{ required: true }]}>
+              <Input type="date" onChange={(event: React.ChangeEvent<HTMLInputElement>) => { setDocumentDate(event.target.value); setPromotionPreview(null); }} />
+            </Form.Item>
+            <Form.Item name="dueDate" label="Hạn thanh toán">
+              <Input type="date" />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <Form.Item name="subTotal" label="Tiền hàng chưa thuế, trước khuyến mại" rules={[{ required: true }]}>
+              <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => { setSubTotal(Number(event.target.value) || 0); setPromotionPreview(null); }} />
+            </Form.Item>
+            <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
+              <Select options={vatRateOptions(documentDate)} onChange={(value: number) => { setVatRate(Number(value) || 0); setPromotionPreview(null); }} />
             </Form.Item>
             <Form.Item name="paidAmount" label="Đã thu">
               <Input type="number" min={0} />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="documentDate" label="Ngày chứng từ" rules={[{ required: true }]}>
-              <Input type="date" onChange={() => setPromotionPreview(null)} />
-            </Form.Item>
-            <Form.Item name="dueDate" label="Hạn thanh toán">
-              <Input type="date" />
-            </Form.Item>
+          <div style={{ marginBottom: 14, color: '#64748B' }}>
+            Thuế GTGT {formatMoney(vatAmount)}, tổng thanh toán <strong style={{ color: '#0F172A' }}>{formatMoney(subTotal + vatAmount)}</strong>. Khuyến mại chỉ áp dụng cho chứng từ thuế suất 0%.
           </div>
           <Form.Item name="status" label="Trạng thái" initialValue="Đang triển khai">
             <Select options={salesStatusOptions} onChange={() => setPromotionPreview(null)} />
@@ -359,6 +383,7 @@ export const SalesModule: React.FC = () => {
           <Form.Item name="promotionKeys" label="Chương trình khuyến mại">
             <Select mode="multiple" placeholder="Chọn chương trình" options={promotions.filter((item) => item.enabled && item.promotionType === 'Chiết khấu').map((item) => ({ value: item.key, label: `${item.code} · ${item.name}` }))} onChange={(value) => { setSelectedPromotions(Array.isArray(value) ? value : []); setPromotionPreview(null); }} />
           </Form.Item>
+          <TradeTermsFields />
           {selectedPromotions.length > 0 && <div style={{ marginBottom: 14 }}>
             <Button onClick={() => void calculatePromotions()} loading={previewing}>Tính khuyến mại</Button>
             {promotionPreview && <div style={{ marginTop: 14, border: '1px solid #E2E8F0', borderRadius: 8, padding: 14 }}>

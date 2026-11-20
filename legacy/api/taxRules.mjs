@@ -117,7 +117,9 @@ export function vatNonCashThreshold(isoDate) {
 // Thuế GTGT phương pháp khấu trừ của một kỳ từ hóa đơn đầu ra và đầu vào (chứng từ loại hóa đơn, đã loại bản đã hủy).
 // Hóa đơn đầu vào từ ngưỡng trở lên (đã gồm thuế) phải có chứng từ thanh toán không dùng tiền mặt mới được khấu trừ
 // (Luật 48/2024 Điều 14, Nghị định 181/2025 Điều 26); cùng một ngày, cùng một đối tác thì cộng gộp các hóa đơn để so với ngưỡng.
-// Hệ thống chưa lưu hình thức thanh toán nên phần từ ngưỡng trở lên được tách riêng, không tính vào số khấu trừ.
+// Chứng từ có paymentProof (hình thức thanh toán không dùng tiền mặt đã ghi) được khấu trừ luôn; phần còn lại cộng gộp theo
+// ngày và đối tác, từ ngưỡng trở lên được tách riêng, không tính vào số khấu trừ. Chưa cộng gộp chứng từ có chứng từ chuyển khoản
+// vào tổng so ngưỡng, và chưa kiểm tra chứng từ chuyển khoản có thật.
 export function vatSummary(documents, startDate, endDate) {
   const inPeriod = documents.filter(doc => doc.status !== 'Đã hủy' && doc.documentDate >= startDate && doc.documentDate <= endDate);
   const output = inPeriod.filter(doc => doc.subtype === 'Đầu ra');
@@ -131,8 +133,13 @@ export function vatSummary(documents, startDate, endDate) {
     byRate.set(rate, row);
   }
   const groups = new Map();
+  let deductibleInputVat = 0;
   for (const doc of input) {
     if (!(Number(doc.vatAmount) > 0)) continue;
+    if (doc.paymentProof === true) {
+      deductibleInputVat += Number(doc.vatAmount) || 0;
+      continue;
+    }
     const key = `${String(doc.partnerName || '').trim().toLowerCase()}|${doc.documentDate}`;
     const group = groups.get(key) || { total: 0, vat: 0, date: doc.documentDate, partnerName: doc.partnerName, count: 0 };
     group.total += Number(doc.amount) || 0;
@@ -140,7 +147,6 @@ export function vatSummary(documents, startDate, endDate) {
     group.count += 1;
     groups.set(key, group);
   }
-  let deductibleInputVat = 0;
   let inputVatNeedingProof = 0;
   const needsProof = [];
   for (const group of groups.values()) {

@@ -832,6 +832,34 @@ test('loyalty points can reference only completed sales linked to the same CRM c
   await request('/finance/documents', 'POST', { ...saleInput, customerId: customer.key }, 403, userHeaders);
 });
 
+test('purchase documents keep VAT consistent and store supplier and contract terms', async () => {
+  const supplier = (await request('/crm/contacts', 'POST', { name: 'Nhà cung cấp điều khoản', type: 'supplier', taxCode: '0100109106' }, 201)).contact;
+  const customer = (await request('/crm/contacts', 'POST', { name: 'Khách không phải nhà cung cấp', type: 'customer' }, 201)).contact;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const input = { documentType: 'purchase', subtype: 'Hợp đồng mua', partnerName: 'Tên giả', description: 'Mua theo hợp đồng', amount: 11_000_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Chờ xử lý', taxCode: '', vatRate: 10, vatAmount: 1_000_000, supplierId: supplier.key };
+  const terms = { contractNo: 'HD-MUA-01', signedDate: today, deliveryDate: today, deliveryAddress: 'Kho trung tâm', paymentMethod: 'Chuyển khoản', paymentTermDays: 30, penaltyRate: 8, lateInterestRate: 10, warrantyMonths: 12 };
+  const before = (await request('/finance/documents?documentType=purchase')).data.length;
+  await request('/finance/documents', 'POST', { ...input, vatAmount: 500_000, terms }, 422);
+  await request('/finance/documents', 'POST', { ...input, terms: { ...terms, penaltyRate: 9 } }, 422);
+  await request('/finance/documents', 'POST', { ...input, terms: { ...terms, paymentMethod: 'Bitcoin' } }, 422);
+  await request('/finance/documents', 'POST', { ...input, taxCode: '0100109107', terms }, 422);
+  await request('/finance/documents', 'POST', { ...input, supplierId: customer.key, terms }, 422);
+  await request('/finance/documents', 'POST', { ...input, documentType: 'sale', customerId: undefined, terms }, 422);
+  assert.equal((await request('/finance/documents?documentType=purchase')).data.length, before);
+  const saved = (await request('/finance/documents', 'POST', { ...input, terms }, 201)).document;
+  assert.equal(saved.partnerName, supplier.name);
+  assert.equal(saved.taxCode, '0100109106');
+  assert.equal(saved.supplierId, supplier.key);
+  assert.equal(saved.paymentMethod, 'Chuyển khoản');
+  assert.equal(saved.terms.penaltyRate, 8);
+  assert.deepEqual(saved.termWarnings, []);
+  const listed = (await request('/finance/documents?documentType=purchase')).data.find((item) => item.key === saved.key);
+  assert.equal(listed.terms.contractNo, 'HD-MUA-01');
+  const cash = (await request('/finance/documents', 'POST', { ...input, subtype: 'Đơn mua hàng', terms: { paymentMethod: 'Tiền mặt' } }, 201)).document;
+  assert.match(cash.termWarnings.join(' '), /không được khấu trừ/);
+  await request('/collections/finance_document_terms', 'PUT', { records: [] }, 409);
+});
+
 test('sales apply eligible order discounts atomically and preserve the reviewed amount', async () => {
   const customer = (await request('/crm/contacts', 'POST', { name: 'Khách kiểm thử chiết khấu', type: 'customer' }, 201)).contact;
   const other = (await request('/crm/contacts', 'POST', { name: 'Khách ngoài phạm vi', type: 'customer' }, 201)).contact;
