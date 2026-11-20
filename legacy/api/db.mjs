@@ -723,6 +723,9 @@ export async function initDatabaseSchema() {
       start_date TEXT NOT NULL DEFAULT '',
       end_date TEXT NOT NULL DEFAULT '',
       probation_months INTEGER NOT NULL DEFAULT 0,
+      probation_days INTEGER NOT NULL DEFAULT 0,
+      probation_category TEXT NOT NULL DEFAULT '',
+      probation_salary BIGINT NOT NULL DEFAULT 0,
       contract_value BIGINT NOT NULL DEFAULT 0,
       salary BIGINT NOT NULL DEFAULT 0,
       allowance BIGINT NOT NULL DEFAULT 0,
@@ -807,6 +810,14 @@ export async function initDatabaseSchema() {
     ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND table_schema = current_schema()")).map(row => row.column_name)
     : (await queryAll('PRAGMA table_info(users)')).map(row => row.name));
   if (!userColumnNames.has('role_code')) await exec("ALTER TABLE users ADD COLUMN role_code TEXT NOT NULL DEFAULT ''");
+
+  // Thử việc theo Bộ luật Lao động 2019 Điều 25 và 26: số ngày, loại công việc quyết định giới hạn, và lương thử việc.
+  const contractColumnNames = new Set(isPg
+    ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'contracts' AND table_schema = current_schema()")).map(row => row.column_name)
+    : (await queryAll('PRAGMA table_info(contracts)')).map(row => row.name));
+  for (const [name, definition] of [['probation_days', 'INTEGER NOT NULL DEFAULT 0'], ['probation_category', "TEXT NOT NULL DEFAULT ''"], ['probation_salary', 'BIGINT NOT NULL DEFAULT 0']]) {
+    if (!contractColumnNames.has(name)) await exec(`ALTER TABLE contracts ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}${name} ${definition}`);
+  }
 
   const bankAccountColumnNames = new Set(isPg
     ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'finance_bank_accounts' AND table_schema = current_schema()")).map(row => row.column_name)

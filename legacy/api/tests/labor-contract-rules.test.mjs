@@ -57,9 +57,57 @@ async function request(route, method = 'GET', payload, expected = 200, headerOve
 
 const base0 = { name: 'Hợp đồng lao động kiểm thử', contractTemplate: 'Mẫu thử', partyBType: 'employee', employeeCode: 'LABOR-1', employeeName: 'Nhân viên', salary: 10000000, signerName: 'Người đại diện' };
 
-test('thời gian thử việc tối đa 6 tháng theo Bộ luật Lao động', async () => {
-  await request('/contracts', 'POST', { ...base0, code: 'HD-LABOR-1', probationMonths: 7 }, 422);
-  await request('/contracts', 'POST', { ...base0, code: 'HD-LABOR-2', probationMonths: 2 }, 201);
+const probation = { ...base0, probationSalary: 8_500_000 };
+
+test('thử việc theo Điều 25: phải chọn loại công việc và không vượt giới hạn ngày của loại đó', async () => {
+  await request('/contracts', 'POST', { ...probation, code: 'HD-LABOR-1', probationMonths: 7 }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-1', probationDays: 30 }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-2', probationCategory: 'manager', probationDays: 181 }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-3', probationCategory: 'college', probationDays: 61 }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-4', probationCategory: 'intermediate', probationDays: 31 }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-5', probationCategory: 'other', probationDays: 7 }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-X', probationCategory: 'bogus', probationDays: 5 }, 422);
+  const manager = await request('/contracts', 'POST', { ...probation, code: 'HD-TV-6', employeeCode: 'TV-6', probationCategory: 'manager', probationDays: 180 }, 201);
+  assert.equal(manager.contract.probationCategory, 'manager');
+  assert.equal(manager.contract.probationDays, 180);
+  assert.equal(manager.contract.probationSalary, 8_500_000);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-7', employeeCode: 'TV-7', probationCategory: 'other', probationDays: 6 }, 201);
+  // Số tháng cũ quy đổi theo lịch: 2 tháng từ 01/07 là 62 ngày, vượt 60 ngày; từ 01/01 là 59 ngày.
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-8', employeeCode: 'TV-8', probationCategory: 'college', probationMonths: 2, startDate: '2026-07-01' }, 422);
+  await request('/contracts', 'POST', { ...probation, code: 'HD-TV-9', employeeCode: 'TV-9', probationCategory: 'college', probationMonths: 2, startDate: '2026-01-01' }, 201);
+  // Hợp đồng không phải lao động không bị áp giới hạn thử việc.
+  await request('/contracts', 'POST', { ...base0, code: 'HD-TV-10', contractCategory: 'service', employeeCode: '', employeeName: '', partyBType: 'organization', partyBName: 'Đối tác', probationDays: 400 }, 201);
+});
+
+test('lương thử việc ít nhất 85% mức lương của công việc theo Điều 26', async () => {
+  const terms = { ...base0, probationCategory: 'college', probationDays: 60 };
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-11', employeeCode: 'TV-11' }, 422);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-12', employeeCode: 'TV-12', probationSalary: 8_499_999 }, 422);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-13', employeeCode: 'TV-13', probationSalary: 8_500_000 }, 201);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-14', employeeCode: 'TV-14', salary: 0, probationSalary: 8_500_000 }, 422);
+});
+
+test('hợp đồng lao động dưới 1 tháng không được thử việc theo Điều 24', async () => {
+  const terms = { ...probation, probationCategory: 'other', probationDays: 3, startDate: '2026-01-01' };
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-15', employeeCode: 'TV-15', endDate: '2026-01-20' }, 422);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-16', employeeCode: 'TV-16', endDate: '2026-01-31' }, 201);
+});
+
+test('hợp đồng thử việc riêng tính thời gian theo ngày bắt đầu đến ngày kết thúc', async () => {
+  const terms = { ...probation, contractTemplate: 'Hợp đồng thử việc', contractType: 'Hợp đồng thử việc', probationCategory: 'college', startDate: '2026-01-01' };
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-17', employeeCode: 'TV-17' }, 422);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-18', employeeCode: 'TV-18', endDate: '2026-03-02' }, 422);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-19', employeeCode: 'TV-19', endDate: '2026-03-01' }, 201);
+});
+
+test('chỉ được thử việc một lần đối với một công việc', async () => {
+  const terms = { ...probation, employeeCode: 'TV-20', position: 'Kế toán', probationCategory: 'college', probationDays: 60 };
+  const first = await request('/contracts', 'POST', { ...terms, code: 'HD-TV-20' }, 201);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-21', position: 'kế toán' }, 409);
+  await request('/contracts', 'POST', { ...terms, code: 'HD-TV-22', position: 'Nhân sự' }, 201);
+  await request(`/contracts/${first.contract.id}`, 'PATCH', { ...terms, code: 'HD-TV-20', note: 'Cập nhật' }, 200);
+  // Hợp đồng chính thức không có điều khoản thử việc cho cùng vị trí vẫn được ký.
+  await request('/contracts', 'POST', { ...base0, code: 'HD-TV-23', employeeCode: 'TV-20', position: 'Kế toán' }, 201);
 });
 
 test('hợp đồng xác định thời hạn không quá 36 tháng và ngày kết thúc không trước ngày bắt đầu', async () => {

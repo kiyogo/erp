@@ -1023,6 +1023,9 @@ export type ContractPayload = {
   startDate?: string;
   endDate?: string;
   probationMonths?: number;
+  probationDays?: number;
+  probationCategory?: string;
+  probationSalary?: number;
   contractValue?: number;
   salary?: number;
   allowance?: number;

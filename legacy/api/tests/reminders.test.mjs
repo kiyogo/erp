@@ -72,6 +72,8 @@ test('nhắc việc theo hạn gửi đúng người, đúng mốc và không g�
   addContract('c3', 'Chờ ký', dayFromToday(3));
   addContract('c4', 'Còn hiệu lực', dayFromToday(-5));
   addContract('c5', 'Còn hiệu lực', '', { start: dayFromToday(-57), probation: 2 }); // thử việc 2 tháng kết thúc sau khoảng 4 ngày
+  addContract('c6', 'Còn hiệu lực', '', { start: dayFromToday(-55) }); // điều khoản thử việc 60 ngày: ngày cuối là ngày thứ 60 tính cả ngày bắt đầu
+  db.prepare("UPDATE contracts SET probation_days = 60, probation_category = 'college' WHERE id = 'c6'").run();
   const probationEnd = new Date(Date.parse(`${dayFromToday(-57)}T00:00:00Z`));
   probationEnd.setUTCMonth(probationEnd.getUTCMonth() + 2);
   const probationDays = Math.round((probationEnd.getTime() - Date.parse(`${dayFromToday(0)}T00:00:00Z`)) / 86_400_000);
@@ -93,7 +95,7 @@ test('nhắc việc theo hạn gửi đúng người, đúng mốc và không g�
   assert.ok(titles.includes('Chứng thư số sắp hết hạn'));
   assert.ok(titles.includes('Chứng chỉ sắp hết hiệu lực'));
   const joined = adminNotes.map(item => item.message).join('\n');
-  assert.ok(joined.includes('HD-c1') && joined.includes('HD-c4') && joined.includes('HD-c5'));
+  assert.ok(joined.includes('HD-c1') && joined.includes('HD-c4') && joined.includes('HD-c5') && joined.includes('HD-c6'));
   assert.ok(!joined.includes('HD-c2'), 'còn hơn 30 ngày thì chưa nhắc');
   assert.ok(!joined.includes('HD-c3'), 'hợp đồng chưa có hiệu lực không nhắc');
   assert.ok(joined.includes('Điều 20 Bộ luật Lao động 2019') && joined.includes('Điều 27 Bộ luật Lao động 2019'));

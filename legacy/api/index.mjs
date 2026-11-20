@@ -6314,6 +6314,9 @@ function publicContract(row, actor = null) {
     startDate: row.start_date || '',
     endDate: row.end_date || '',
     probationMonths: row.probation_months || 0,
+    probationDays: row.probation_days || 0,
+    probationCategory: row.probation_category || '',
+    probationSalary: isFull ? (row.probation_salary || 0) : 0,
     contractValue: isFull ? (row.contract_value || 0) : 0,
     salary: isFull ? (row.salary || 0) : 0,
     allowance: isFull ? (row.allowance || 0) : 0,
@@ -6346,12 +6349,80 @@ function publicContract(row, actor = null) {
   };
 }
 
+// Thử việc theo Bộ luật Lao động 2019: chỉ thử việc một lần cho một công việc (Điều 25); thời gian tối đa theo loại công việc (Điều 25);
+// lương thử việc ít nhất 85% mức lương của công việc (Điều 26); không thử việc với hợp đồng lao động dưới 1 tháng (Điều 24 khoản 3).
+// Hợp đồng thử việc riêng tính thời gian từ ngày bắt đầu đến ngày kết thúc; điều khoản thử việc trong hợp đồng lao động tính theo số ngày nhập
+// (hoặc số tháng cũ quy đổi theo lịch). Loại "công việc khác" tính bằng ngày làm việc (bỏ thứ bảy, chủ nhật; chưa trừ ngày lễ).
+const PROBATION_LIMITS = {
+  manager: { days: 180, label: 'người quản lý doanh nghiệp' },
+  college: { days: 60, label: 'công việc cần trình độ chuyên môn, kỹ thuật từ cao đẳng trở lên' },
+  intermediate: { days: 30, label: 'công việc cần trình độ trung cấp, công nhân kỹ thuật, nhân viên nghiệp vụ' },
+  other: { days: 6, workingDays: true, label: 'công việc khác' },
+};
+const DAY_MS = 86_400_000;
+const isoUtcMs = (iso) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+};
+const countWorkingDays = (fromMs, toMs) => {
+  let total = 0;
+  for (let time = fromMs; time <= toMs; time += DAY_MS) { const day = new Date(time).getUTCDay(); if (day !== 0 && day !== 6) total += 1; }
+  return total;
+};
+const isProbationContract = (contract) => /thử việc/i.test(`${contract.contractType || ''} ${contract.contractTemplate || ''}`);
+
+/** Số ngày thử việc của hợp đồng (ngày làm việc với loại "công việc khác"); 0 nếu không có thử việc. */
+function probationPeriod(contract) {
+  const start = isoUtcMs(contract.startDate);
+  const end = isoUtcMs(contract.endDate);
+  if (isProbationContract(contract)) {
+    if (start === null || end === null || end < start) return 0;
+    return contract.probationCategory === 'other' ? countWorkingDays(start, end) : (end - start) / DAY_MS + 1;
+  }
+  if (contract.probationDays > 0) return contract.probationDays;
+  if (contract.probationMonths > 0) {
+    return start === null ? contract.probationMonths * 30 : Math.round((isoUtcMs(addMonthsIso(contract.startDate.slice(0, 10), contract.probationMonths)) - start) / DAY_MS);
+  }
+  return 0;
+}
+
+function enforceProbationRules(contract) {
+  const probationContract = isProbationContract(contract);
+  if (probationContract && (isoUtcMs(contract.startDate) === null || isoUtcMs(contract.endDate) === null)) {
+    throw new HttpError(422, 'Hợp đồng thử việc cần ngày bắt đầu và ngày kết thúc (YYYY-MM-DD) để kiểm tra thời gian thử việc theo Điều 25 Bộ luật Lao động 2019.');
+  }
+  const days = probationPeriod(contract);
+  if (!probationContract && !(days > 0)) return;
+  const limit = PROBATION_LIMITS[contract.probationCategory];
+  if (!limit) throw new HttpError(422, 'Chọn loại công việc thử việc để áp giới hạn thời gian thử việc theo Điều 25 Bộ luật Lao động 2019.');
+  const unit = limit.workingDays ? 'ngày làm việc' : 'ngày';
+  if (days > limit.days) throw new HttpError(422, `Thời gian thử việc ${days} ${unit} vượt giới hạn ${limit.days} ${unit} đối với ${limit.label} (Điều 25 Bộ luật Lao động 2019).`);
+  if (!(contract.salary > 0)) throw new HttpError(422, 'Nhập mức lương của công việc để kiểm tra lương thử việc theo Điều 26 Bộ luật Lao động 2019.');
+  if (contract.probationSalary * 100 < contract.salary * 85) throw new HttpError(422, 'Lương thử việc phải ít nhất bằng 85% mức lương của công việc (Điều 26 Bộ luật Lao động 2019).');
+  const start = isoUtcMs(contract.startDate);
+  const end = isoUtcMs(contract.endDate);
+  if (!probationContract && start !== null && end !== null && end + DAY_MS < isoUtcMs(addMonthsIso(contract.startDate.slice(0, 10), 1))) {
+    throw new HttpError(422, 'Hợp đồng lao động dưới 1 tháng không được thử việc (Điều 24 khoản 3 Bộ luật Lao động 2019).');
+  }
+}
+
+/** Chỉ được thử việc một lần đối với một công việc: không cho nhân sự có hai hợp đồng thử việc cùng vị trí. */
+async function assertSingleProbation(contract, excludeId) {
+  if (contract.contractCategory !== 'labor' || !contract.employeeCode || !contract.position) return;
+  if (!isProbationContract(contract) && !(probationPeriod(contract) > 0)) return;
+  const others = await db.prepare("SELECT code, position, contract_type, contract_template, probation_days, probation_months FROM contracts WHERE contract_category = 'labor' AND employee_code = ? AND id <> ? AND status <> 'Đã hủy'").all(contract.employeeCode, excludeId);
+  const wanted = contract.position.trim().toLowerCase();
+  const earlier = others.find((row) => String(row.position || '').trim().toLowerCase() === wanted
+    && (/thử việc/i.test(`${row.contract_type} ${row.contract_template}`) || row.probation_days > 0 || row.probation_months > 0));
+  if (earlier) throw new HttpError(409, `Nhân sự này đã thử việc vị trí "${contract.position}" ở hợp đồng ${earlier.code}; chỉ được thử việc một lần đối với một công việc (Điều 25 Bộ luật Lao động 2019).`);
+}
+
 // Giới hạn của Bộ luật Lao động 2019 áp dụng cho hợp đồng lao động: thử việc (Điều 25), thời hạn hợp đồng xác định thời hạn (Điều 20), ngày phép năm (Điều 113).
 function enforceLaborContractLimits(contract) {
+  if (contract.probationCategory && !PROBATION_LIMITS[contract.probationCategory]) throw new HttpError(422, 'Loại công việc thử việc không hợp lệ.');
   if (contract.contractCategory !== 'labor') return contract;
-  if (!(contract.probationMonths >= 0) || contract.probationMonths > 6) {
-    throw new HttpError(422, 'Thời gian thử việc tối đa 6 tháng (180 ngày) theo Điều 25 Bộ luật Lao động 2019.');
-  }
+  if (!(contract.probationMonths >= 0)) throw new HttpError(422, 'Thời gian thử việc không hợp lệ.');
+  enforceProbationRules(contract);
   if (contract.annualLeaveDays < 12) throw new HttpError(422, 'Số ngày phép năm tối thiểu là 12 ngày theo Điều 113 Bộ luật Lao động 2019.');
   const iso = /^(\d{4})-(\d{2})-(\d{2})/;
   const from = iso.exec(contract.startDate);
@@ -6398,6 +6469,9 @@ function validateContract(input) {
     startDate: optionalText(input.startDate, 'Ngày bắt đầu', 40) || '',
     endDate: optionalText(input.endDate, 'Ngày kết thúc', 40) || '',
     probationMonths: optionalAmount(input.probationMonths, 'Thời gian thử việc') || 0,
+    probationDays: optionalAmount(input.probationDays, 'Số ngày thử việc') || 0,
+    probationCategory: optionalText(input.probationCategory, 'Loại công việc thử việc', 40) || '',
+    probationSalary: optionalAmount(input.probationSalary, 'Lương thử việc') || 0,
     contractValue: optionalAmount(input.contractValue, 'Giá trị hợp đồng') || 0,
     salary: optionalAmount(input.salary, 'Mức lương') || 0,
     allowance: optionalAmount(input.allowance, 'Phụ cấp') || 0,
@@ -7075,6 +7149,22 @@ function daysBetween(fromIso, toIso) {
   return Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86_400_000);
 }
 
+function addDaysIso(iso, days) {
+  return new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Ngày làm việc thứ `count` tính từ ngày bắt đầu (ngày bắt đầu là ngày 1 nếu không phải thứ bảy, chủ nhật). */
+function addWorkingDaysIso(iso, count) {
+  let current = iso;
+  let seen = 0;
+  for (let guard = 0; guard < 400; guard++) {
+    const day = new Date(`${current}T00:00:00Z`).getUTCDay();
+    if (day !== 0 && day !== 6 && ++seen === count) return current;
+    current = addDaysIso(current, 1);
+  }
+  return current;
+}
+
 function addMonthsIso(iso, months) {
   const [year, month, day] = iso.split('-').map(Number);
   const target = new Date(Date.UTC(year, month - 1 + months, 1));
@@ -7134,14 +7224,16 @@ async function processExpiryReminders() {
   let created = 0;
   try {
     // 1. Hợp đồng lao động và thử việc.
-    const contracts = await db.prepare("SELECT id, code, employee_name, employee_user_id, contract_type, start_date, end_date, probation_months FROM contracts WHERE status = 'Còn hiệu lực'").all();
+    const contracts = await db.prepare("SELECT id, code, employee_name, employee_user_id, contract_type, contract_template, start_date, end_date, probation_months, probation_days, probation_category FROM contracts WHERE status = 'Còn hiệu lực'").all();
     for (const contract of contracts) {
       const person = contract.employee_name || contract.code;
       const employeeId = contract.employee_user_id;
-      const probationOnly = /thử việc/i.test(String(contract.contract_type || ''));
+      const probationOnly = /thử việc/i.test(`${contract.contract_type || ''} ${contract.contract_template || ''}`);
       let probationEnd = '';
       if (probationOnly && isIsoDate(contract.end_date)) probationEnd = contract.end_date;
-      else if (Number(contract.probation_months) > 0 && isIsoDate(contract.start_date)) probationEnd = addMonthsIso(contract.start_date, Number(contract.probation_months));
+      else if (Number(contract.probation_days) > 0 && isIsoDate(contract.start_date)) {
+        probationEnd = contract.probation_category === 'other' ? addWorkingDaysIso(contract.start_date, Number(contract.probation_days)) : addDaysIso(contract.start_date, Number(contract.probation_days) - 1);
+      } else if (Number(contract.probation_months) > 0 && isIsoDate(contract.start_date)) probationEnd = addMonthsIso(contract.start_date, Number(contract.probation_months));
       if (probationEnd) {
         const days = daysBetween(today, probationEnd);
         const bucket = days >= 0 && days <= 7 ? reminderBucket(days) : null;
@@ -7149,7 +7241,7 @@ async function processExpiryReminders() {
           created += await sendReminder({
             kind: 'probation', entityKey: contract.id, expiry: probationEnd, bucket, recipients: await reminderRecipients('hr', employeeId),
             title: 'Sắp hết thời gian thử việc', link: '/admin/hr/contracts',
-            message: `Thử việc của ${person} (hợp đồng ${contract.code}) kết thúc ngày ${probationEnd}, ${describeDays(days)}. ${PROBATION_RESULT_NOTE}`,
+            message: `Thử việc của ${person} (hợp đồng ${contract.code}) kết thúc ngày ${probationEnd}, ${describeDays(days)}. ${PROBATION_RESULT_NOTE}${probationOnly ? ' Nếu thử việc đạt yêu cầu, phải giao kết hợp đồng lao động (Điều 27 khoản 1).' : ''}`,
           });
         }
       }
@@ -13704,6 +13796,7 @@ async function handleRequest(request, response) {
     if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('contracts-lifecycle'))").get();
     const code = validated.code || await nextUniqueCode('HD', 'contracts');
     if (await db.prepare('SELECT id FROM contracts WHERE code = ?').get(code)) throw new HttpError(409, 'Mã hợp đồng đã tồn tại.');
+    await assertSingleProbation(validated, '');
 
     await db.prepare(`INSERT INTO contracts (
       id, code, name, contract_category, contract_template, party_b_type, party_b_name,
@@ -13782,6 +13875,7 @@ async function handleRequest(request, response) {
       timestamp,
     );
 
+    await db.prepare('UPDATE contracts SET probation_days = ?, probation_category = ?, probation_salary = ? WHERE id = ?').run(validated.probationDays, validated.probationCategory, validated.probationSalary, id);
     const savedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(id);
     await syncContractToFileNodes(savedRow);
     syncedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(id);
@@ -13820,6 +13914,7 @@ async function handleRequest(request, response) {
       let updatedRow;
       await db.transaction(async () => {
       if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('contracts-lifecycle'))").get();
+      await assertSingleProbation(validated, contractId);
       await db.prepare(`UPDATE contracts SET
         name = ?, contract_category = ?, contract_template = ?, party_b_type = ?, party_b_name = ?,
         party_b_tax_code = ?, party_b_representative = ?, party_b_position = ?, party_b_id_number = ?,
@@ -13892,6 +13987,7 @@ async function handleRequest(request, response) {
         contractId,
       );
 
+      await db.prepare('UPDATE contracts SET probation_days = ?, probation_category = ?, probation_salary = ? WHERE id = ?').run(validated.probationDays, validated.probationCategory, validated.probationSalary, contractId);
       updatedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(contractId);
       await syncContractToFileNodes(updatedRow);
       updatedRow = await db.prepare('SELECT * FROM contracts WHERE id = ?').get(contractId);

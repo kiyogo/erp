@@ -59,6 +59,9 @@ export interface EnterpriseContractItem {
   startDate: string;
   endDate: string;
   probationMonths?: number;
+  probationDays?: number;
+  probationCategory?: string;
+  probationSalary?: number;
   contractValue?: number;
   salary: number;
   allowance?: number;
@@ -616,6 +619,9 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
         position: values.position || values.partyBPosition || (laborOnly ? 'Nhân sự' : 'Đại diện đối tác'),
         department: values.department || (laborOnly ? 'Nhân sự' : 'Khối Phát Triển Kinh Doanh'),
         jobLevel: values.jobLevel,
+        probationCategory: values.probationCategory || '',
+        probationDays: Number(values.probationDays) || 0,
+        probationSalary: Number(values.probationSalary) || 0,
         workLocation: values.workLocation || 'Toàn quốc',
         startDate: values.startDate,
         endDate: values.endDate,
@@ -1594,6 +1600,29 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
                   ]}
                 />
               </Form.Item>}
+
+              {(laborOnly || form.getFieldValue('contractCategory') === 'labor') && (
+                <>
+                  <Form.Item name="probationCategory" label="Loại công việc thử việc (Điều 25)">
+                    <Select
+                      placeholder="Không thử việc"
+                      options={[
+                        { value: '', label: 'Không thử việc' },
+                        { value: 'manager', label: 'Người quản lý doanh nghiệp (tối đa 180 ngày)' },
+                        { value: 'college', label: 'Từ cao đẳng trở lên (tối đa 60 ngày)' },
+                        { value: 'intermediate', label: 'Trung cấp, công nhân kỹ thuật, nhân viên nghiệp vụ (tối đa 30 ngày)' },
+                        { value: 'other', label: 'Công việc khác (tối đa 6 ngày làm việc)' },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item name="probationDays" label="Số ngày thử việc trong hợp đồng">
+                    <Input type="number" min={0} placeholder="Bỏ trống nếu là hợp đồng thử việc riêng" />
+                  </Form.Item>
+                  <Form.Item name="probationSalary" label="Lương thử việc (VNĐ, ít nhất 85% lương công việc)">
+                    <Input type="number" min={0} placeholder="Nhập lương thử việc..." />
+                  </Form.Item>
+                </>
+              )}
 
               {visibleCustomFields.map((field) => (
                 <Form.Item
