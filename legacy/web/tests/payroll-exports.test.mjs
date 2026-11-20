@@ -48,3 +48,21 @@ test('bank transfer export includes only unpaid staff with approved real bank ac
   assert.equal(result.rows.length, 3);
   assert.equal(result.skipped, 1);
 });
+
+test('insurance report prints the stored insurance salary and contributions, not the prorated pay', () => {
+  // Lương theo ngày công: lương cơ bản của phiếu đã chia theo ngày, còn bảo hiểm đóng theo lương hợp đồng.
+  const prorated = payroll({
+    baseSalary: 10_000_000, insuranceSalary: 20_000_000, insuranceDeduction: 2_100_000,
+    employeeSocial: 1_600_000, employeeHealth: 300_000, employeeUnemployment: 200_000,
+    employerSocial: 3_500_000, employerHealth: 600_000, employerUnemployment: 200_000,
+  });
+  assert.deepEqual(exports.payrollReportRows([prorated], 'insurance', '08/2026').at(-1), ['E-01', 'Nguyễn An', 20_000_000, 1_600_000, 300_000, 200_000, 2_100_000, 4_300_000]);
+
+  // Số đã lưu được in nguyên, không nhân tỷ lệ cố định với toàn bộ lương.
+  const stored = payroll({
+    baseSalary: 80_000_000, insuranceSalary: 80_000_000, insuranceDeduction: 1_300_000,
+    employeeSocial: 1_000_000, employeeHealth: 200_000, employeeUnemployment: 100_000,
+    employerSocial: 2_000_000, employerHealth: 400_000, employerUnemployment: 100_000,
+  });
+  assert.deepEqual(exports.payrollReportRows([stored], 'insurance', '08/2026').at(-1), ['E-01', 'Nguyễn An', 80_000_000, 1_000_000, 200_000, 100_000, 1_300_000, 2_500_000]);
+});

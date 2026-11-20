@@ -115,6 +115,21 @@ test('nhắc việc theo hạn gửi đúng người, đúng mốc và không g�
   assert.ok(next.body.created >= 2, 'quản trị viên và nhân viên nhận thêm nhắc ở mốc 7 ngày');
   assert.equal((await call(admin, '/admin/reminders/run', 'POST', {})).body.created, 0);
   assert.equal((await notificationsOf(admin)).filter(item => item.message.includes('HD-c1')).length, 2);
+
+  // Gia hạn chứng thư số: cùng bản ghi nhưng ngày hết hạn mới thì kỳ sau được nhắc lại; chạy lại trong cùng kỳ thì không gửi trùng.
+  const certNotices = async () => (await notificationsOf(admin)).filter(item => item.title.startsWith('Chứng thư số')).length;
+  const setCertExpiry = (validTo) => {
+    const handle = new DatabaseSync(env.KIYOVN_DB_PATH);
+    handle.prepare("UPDATE collection_records SET payload_json = json_set(payload_json, '$.validTo', ?) WHERE scope = 'finance_digital_signatures'").run(validTo);
+    handle.close();
+  };
+  assert.equal(await certNotices(), 1);
+  setCertExpiry(dayFromToday(400));
+  assert.equal((await call(admin, '/admin/reminders/run', 'POST', {})).body.created, 0, 'đã gia hạn, chưa tới hạn mới');
+  setCertExpiry(dayFromToday(26));
+  assert.ok((await call(admin, '/admin/reminders/run', 'POST', {})).body.created >= 1);
+  assert.equal(await certNotices(), 2, 'chu kỳ hết hạn sau của cùng chứng thư được nhắc lại');
+  assert.equal((await call(admin, '/admin/reminders/run', 'POST', {})).body.created, 0);
 });
 
 test('chỉ quản trị viên chạy được nhắc việc và nhật ký nhắc việc do máy chủ quản lý', async () => {

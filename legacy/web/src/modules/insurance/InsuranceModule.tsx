@@ -186,7 +186,7 @@ export const InsuranceModule: React.FC = () => {
 
         const computedContributions = Array.from(payrollMap.entries())
           .map(([period, rows]) => {
-            const totalSalaryFund = rows.reduce((sum, row) => sum + Number(row.baseSalary || 0), 0);
+            const totalSalaryFund = rows.reduce((sum, row) => sum + Number(row.insuranceSalary ?? row.baseSalary ?? 0), 0);
             // Phiếu lương do hệ thống tính đã có số bảo hiểm theo trần đóng; dùng số đó thay vì nhân tỷ lệ với toàn bộ lương.
             const stored = ['employerSocial', 'employerHealth', 'employerUnemployment', 'employeeSocial', 'employeeHealth', 'employeeUnemployment'];
             const hasStored = rows.length > 0 && rows.every((row: any) => stored.every((field) => Number.isSafeInteger(row[field])));

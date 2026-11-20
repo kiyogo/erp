@@ -260,13 +260,17 @@ async function ensureEmployeeProfile(user, input = {}) {
   return await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
 }
 
-async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges = false, delegated = false } = {}) {
+// Các trường do quản trị viên quyết định; nhân viên tự cập nhật hồ sơ không được đổi chúng.
+const EMPLOYEE_MANAGED_FIELDS = ['department', 'position', 'status', 'joinDate', 'salaryBase'];
+
+async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges = false, delegated = false, onPasswordChanged = null } = {}) {
   const current = await employeeProfileRowByUserId(userId);
   if (!current) throw new HttpError(404, 'Không tìm thấy nhân sự.');
   const realUserId = current.id;
   await ensureEmployeeProfile(current);
   const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(realUserId);
-  const changes = input || {};
+  const changes = { ...(input || {}) };
+  if (!allowIdentityChanges) for (const field of EMPLOYEE_MANAGED_FIELDS) delete changes[field];
   if (delegated) {
     // Vai trò ủy quyền được sửa hồ sơ nhưng không được đặt lại mật khẩu, đổi email đăng nhập hay mã nhân sự của ai khác.
     const requestedCode = changes.code ?? changes.employeeCode;
@@ -345,6 +349,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
     }
   }
   const timestamp = now();
+  let passwordChanged = false;
 
   await db.transaction(async () => {
     if (allowIdentityChanges && (changes.password || changes.newPassword)) {
@@ -352,6 +357,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
       if (rawPass) {
         const passwordHash = await hashPassword(validatePassword(rawPass));
         await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, realUserId);
+        passwordChanged = true;
       }
     }
     await db.prepare('UPDATE users SET name = ?, email = ?, employee_code = ?, updated_at = ? WHERE id = ?')
@@ -367,6 +373,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
       await ensureEmployeeWorkspace(await getUserById(realUserId));
     }
   });
+  if (passwordChanged && onPasswordChanged) await onPasswordChanged(realUserId);
   const updatedRow = await employeeProfileRowByUserId(realUserId);
   return serializeEmployeeDetail(updatedRow, updatedRow, { role: 'ADMIN' });
 }
@@ -1872,6 +1879,22 @@ async function revokeAuthSession(row, actorId, reason) {
     if (!row) throw new HttpError(404, 'Không tìm thấy phiên đăng nhập.');
   }
   throw new HttpError(409, 'Phiên đang được cập nhật, vui lòng thử thu hồi lại.');
+}
+
+/**
+ * Sau khi mật khẩu bị đặt lại, thu hồi mọi phiên còn hiệu lực (trừ phiên được giữ lại). Khi quản trị viên đặt lại mật khẩu của người khác,
+ * xóa luôn khóa truy cập: nếu không, kẻ đã lấy được phiên rồi tự đăng ký khóa vẫn vào lại được sau khi đổi mật khẩu.
+ */
+async function revokeAccountAccess(userId, actorId, { keepSessionKey = '', removePasskeys = false } = {}) {
+  for (const row of await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND owner_id = ?").all(userId)) {
+    const session = publicCollectionRecord(row);
+    if (row.record_key === keepSessionKey || session.revokedAt || Date.parse(session.expiresAt) <= Date.now()) continue;
+    await revokeAuthSession(row, actorId, 'Mật khẩu đã được đặt lại');
+  }
+  if (removePasskeys) {
+    await db.prepare("DELETE FROM collection_records WHERE scope = 'user_passkeys' AND owner_id = ?").run(userId);
+    await savePasskeyPolicy(userId, { requireForSigning: false });
+  }
 }
 
 function verifyToken(token) {
@@ -7084,14 +7107,17 @@ async function reminderRecipients(moduleKey, ...extraUserIds) {
   return [...ids].filter(id => active.has(id));
 }
 
-/** Gửi một nhắc việc cho từng người nhận, mỗi người một lần cho mỗi mốc. Trả về số thông báo mới. */
-async function sendReminder({ kind, entityKey, bucket, recipients, title, message, link }) {
+/**
+ * Gửi một nhắc việc cho từng người nhận, mỗi người một lần cho mỗi mốc của mỗi ngày hết hạn. Ngày hết hạn nằm trong khóa nhật ký
+ * để khi gia hạn (cùng bản ghi, ngày mới) kỳ sau được nhắc lại. Trả về số thông báo mới.
+ */
+async function sendReminder({ kind, entityKey, expiry, bucket, recipients, title, message, link }) {
   let created = 0;
   for (const userId of recipients) {
     await db.transaction(async () => {
       const timestamp = now();
       const logged = await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'reminder_log', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO NOTHING")
-        .run(randomUUID(), `${kind}:${entityKey}:${bucket}`.slice(0, 160), userId, JSON.stringify({ kind, entityKey, bucket, sentAt: timestamp }), timestamp, timestamp);
+        .run(randomUUID(), `${kind}:${expiry}:${bucket}:${entityKey}`.slice(0, 160), userId, JSON.stringify({ kind, entityKey, expiry, bucket, sentAt: timestamp }), timestamp, timestamp);
       if (!logged.changes) return;
       await db.prepare('INSERT INTO notifications (id, user_id, title, message, type, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)')
         .run(randomUUID(), userId, title, message, 'expiry_reminder', link, timestamp);
@@ -7121,7 +7147,7 @@ async function processExpiryReminders() {
         const bucket = days >= 0 && days <= 7 ? reminderBucket(days) : null;
         if (bucket !== null) {
           created += await sendReminder({
-            kind: 'probation', entityKey: contract.id, bucket, recipients: await reminderRecipients('hr', employeeId),
+            kind: 'probation', entityKey: contract.id, expiry: probationEnd, bucket, recipients: await reminderRecipients('hr', employeeId),
             title: 'Sắp hết thời gian thử việc', link: '/admin/hr/contracts',
             message: `Thử việc của ${person} (hợp đồng ${contract.code}) kết thúc ngày ${probationEnd}, ${describeDays(days)}. ${PROBATION_RESULT_NOTE}`,
           });
@@ -7132,7 +7158,7 @@ async function processExpiryReminders() {
         const bucket = reminderBucket(days);
         if (bucket !== null) {
           created += await sendReminder({
-            kind: 'contract', entityKey: contract.id, bucket, recipients: await reminderRecipients('hr', employeeId),
+            kind: 'contract', entityKey: contract.id, expiry: contract.end_date, bucket, recipients: await reminderRecipients('hr', employeeId),
             title: days < 0 ? 'Hợp đồng đã hết hạn' : 'Hợp đồng sắp hết hạn', link: '/admin/hr/contracts',
             message: `Hợp đồng ${contract.code} của ${person} hết hạn ngày ${contract.end_date}, ${describeDays(days)}. ${LABOR_RENEWAL_NOTE}`,
           });
@@ -7148,7 +7174,7 @@ async function processExpiryReminders() {
       const bucket = reminderBucket(days);
       if (bucket === null) continue;
       created += await sendReminder({
-        kind: 'digital_certificate', entityKey: row.record_key, bucket, recipients: await reminderRecipients('finance'),
+        kind: 'digital_certificate', entityKey: row.record_key, expiry: cert.validTo, bucket, recipients: await reminderRecipients('finance'),
         title: days < 0 ? 'Chứng thư số đã hết hạn' : 'Chứng thư số sắp hết hạn', link: '/admin/digital-signature/alerts',
         message: `Chứng thư số ${cert.certNumber} của ${cert.provider} hết hạn ngày ${cert.validTo}, ${describeDays(days)}. Gia hạn với nhà cung cấp để không gián đoạn việc ký số và phát hành hóa đơn.`,
       });
@@ -7163,7 +7189,7 @@ async function processExpiryReminders() {
       if (bucket === null) continue;
       const owner = cert.empCode ? await db.prepare('SELECT id FROM users WHERE employee_code = ? LIMIT 1').get(String(cert.empCode).toUpperCase()) : null;
       created += await sendReminder({
-        kind: 'certificate', entityKey: row.record_key, bucket, recipients: await reminderRecipients('hr', owner?.id),
+        kind: 'certificate', entityKey: row.record_key, expiry: cert.expireDate, bucket, recipients: await reminderRecipients('hr', owner?.id),
         title: days < 0 ? 'Chứng chỉ đã hết hiệu lực' : 'Chứng chỉ sắp hết hiệu lực', link: '/admin/hr/certificates',
         message: `Chứng chỉ ${cert.certName} của ${cert.employeeName || cert.empCode} hết hiệu lực ngày ${cert.expireDate}, ${describeDays(days)}.`,
       });
@@ -7177,7 +7203,7 @@ async function processExpiryReminders() {
       const bucket = reminderBucket(days);
       if (bucket === null) continue;
       created += await sendReminder({
-        kind: 'software_license', entityKey: row.record_key, bucket, recipients: await reminderRecipients('assets'),
+        kind: 'software_license', entityKey: row.record_key, expiry: license.expireDate, bucket, recipients: await reminderRecipients('assets'),
         title: days < 0 ? 'Bản quyền phần mềm đã hết hạn' : 'Bản quyền phần mềm sắp hết hạn', link: '/admin/assets/licenses',
         message: `Bản quyền ${license.softwareName} (${license.licenseCode}) hết hạn ngày ${license.expireDate}, ${describeDays(days)}.`,
       });
@@ -7271,7 +7297,10 @@ const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60_000;
 const PASSKEY_PROOF_TTL_MS = 2 * 60_000;
 const MAX_PASSKEYS_PER_USER = 10;
 const PASSKEY_TRANSPORTS = new Set(['usb', 'nfc', 'ble', 'internal', 'hybrid']);
+const WEBAUTHN_MAX_CHALLENGES = 5000;
 const webauthnChallenges = new Map();
+// Thử thách đăng nhập do người chưa đăng nhập tạo ra nên giữ riêng: không để họ làm hết chỗ của người đã đăng nhập.
+const loginChallenges = new Map();
 const passkeyProofs = new Map();
 
 function sweepExpired(map) {
@@ -7288,18 +7317,24 @@ function webauthnContext(request) {
 }
 
 function issueWebauthnChallenge(userId, purpose, context) {
-  sweepExpired(webauthnChallenges);
-  if (webauthnChallenges.size >= 5000) throw new HttpError(429, 'Hệ thống đang bận, vui lòng thử lại sau.');
+  const store = purpose === 'login' ? loginChallenges : webauthnChallenges;
+  sweepExpired(store);
+  if (store.size >= WEBAUTHN_MAX_CHALLENGES) {
+    // Người chưa đăng nhập gọi được route đăng nhập nên bỏ thử thách cũ nhất thay vì từ chối tất cả mọi người.
+    if (purpose !== 'login') throw new HttpError(429, 'Hệ thống đang bận, vui lòng thử lại sau.');
+    store.delete(store.keys().next().value);
+  }
   const id = randomBytes(18).toString('base64url');
   const challenge = randomBytes(32).toString('base64url');
-  webauthnChallenges.set(id, { challenge, userId, purpose, origin: context.origin, rpId: context.rpId, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
+  store.set(id, { challenge, userId, purpose, origin: context.origin, rpId: context.rpId, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
   return { id, challenge };
 }
 
 function takeWebauthnChallenge(id, userId, purpose, context) {
   const key = String(id || '');
-  const entry = webauthnChallenges.get(key);
-  webauthnChallenges.delete(key); // mỗi thử thách chỉ dùng một lần, kể cả khi xác minh thất bại
+  const store = purpose === 'login' ? loginChallenges : webauthnChallenges;
+  const entry = store.get(key);
+  store.delete(key); // mỗi thử thách chỉ dùng một lần, kể cả khi xác minh thất bại
   if (!entry || entry.expiresAt <= Date.now() || entry.purpose !== purpose || entry.userId !== userId || entry.origin !== context.origin) {
     throw new HttpError(400, 'Phiên xác thực khóa truy cập đã hết hạn hoặc không hợp lệ. Vui lòng thử lại.');
   }
@@ -7325,6 +7360,22 @@ async function savePasskeyPolicy(userId, policy) {
   const timestamp = now();
   await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'user_passkey_policy', ?, ?, ?, ?, ?) ON CONFLICT(scope, record_key, owner_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at")
     .run(randomUUID(), userId, userId, JSON.stringify({ requireForSigning: Boolean(policy.requireForSigning), updatedAt: timestamp }), timestamp, timestamp);
+}
+
+/**
+ * Đăng ký khóa truy cập cấp quyền đăng nhập lâu dài nên phải xác thực lại, không chỉ dựa vào token đang dùng:
+ * nhập đúng mật khẩu hiện tại, hoặc phiên Google hay passkey vừa đăng nhập chưa tới 5 phút (giống bước đặt PIN).
+ */
+async function requireRecentAuthentication(request, actor, payload) {
+  const session = request.authSession?.session;
+  if (['google', 'passkey'].includes(session?.method) && Date.parse(session.loginTime) > Date.now() - 5 * 60_000) return;
+  const attemptKey = 'passkey-reauth:' + loginKey(request, actor.id);
+  enforceLoginRateLimit(attemptKey, 'Đã thử xác minh mật khẩu quá nhiều lần. Vui lòng thử lại sau.');
+  if (!await verifyPassword(String(payload?.currentPassword || ''), actor.password_hash)) {
+    recordLoginFailure(attemptKey);
+    throw new HttpError(403, 'Nhập đúng mật khẩu hiện tại (hoặc đăng nhập lại bằng Google hay passkey) để đăng ký khóa truy cập mới.', 'REAUTH_REQUIRED');
+  }
+  clearLoginFailures(attemptKey);
 }
 
 function issuePasskeyProof(actor, request) {
@@ -7422,7 +7473,7 @@ function delegatedActionFor(method, resource) {
   if (method === 'GET' || method === 'HEAD') return 'read';
   if (method === 'DELETE') return 'delete';
   // Duyệt, từ chối, ghi sổ... đổi trạng thái hồ sơ đã có nên thuộc quyền sửa dù được gọi bằng POST.
-  const changesExisting = /\/(approve|reject|confirm|execute|post|close|transition|complete|receive|cancel|determine|pay|disburse|lock|unlock|sign|reverse|void)(\/|$)/.test(resource);
+  const changesExisting = /\/(approve|reject|confirm|execute|post|close|transition|complete|receive|cancel|determine|pay|disburse|lock|unlock|sign|reverse|void|fulfill|renew|allocate|shipment-status)(\/|$)/.test(resource);
   return method === 'POST' && !changesExisting ? 'create' : 'edit';
 }
 
@@ -8618,6 +8669,7 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && resource === '/auth/passkeys/registration/options') {
     const actor = await requireUser(request);
     const context = webauthnContext(request);
+    await requireRecentAuthentication(request, actor, await readJson(request, 4 * 1024));
     const existing = await userPasskeys(actor.id);
     if (existing.length >= MAX_PASSKEYS_PER_USER) throw new HttpError(422, `Mỗi tài khoản chỉ đăng ký tối đa ${MAX_PASSKEYS_PER_USER} khóa truy cập.`);
     const { id, challenge } = issueWebauthnChallenge(actor.id, 'register', context);
@@ -8744,7 +8796,8 @@ async function handleRequest(request, response) {
     if ((await getGoogleConfig()).enforceGoogleLogin === '100') throw new HttpError(403, 'Hệ thống yêu cầu đăng nhập bằng Google.');
     const context = webauthnContext(request);
     const payload = await readJson(request, 64 * 1024);
-    const attemptKey = 'passkey-login:' + loginKey(request, 'passkey');
+    // Khóa giới hạn theo từng khóa truy cập: sau proxy mọi người có thể chung một địa chỉ, nên không để vài lần thử sai khóa mọi người.
+    const attemptKey = 'passkey-login:' + loginKey(request, String(payload.credential?.id || 'unknown').slice(0, 120));
     enforceLoginRateLimit(attemptKey);
     const fail = () => { recordLoginFailure(attemptKey); return new HttpError(401, 'Khóa truy cập không hợp lệ hoặc chưa được đăng ký.'); };
     const entry = takeWebauthnChallenge(payload.challengeId, null, 'login', context);
@@ -9097,6 +9150,7 @@ async function handleRequest(request, response) {
     const timestamp = now();
     await db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
       .run(newHash, timestamp, actor.id);
+    await revokeAccountAccess(actor.id, actor.id, { keepSessionKey: request.authSession?.key });
 
     sendJson(response, 200, {
       success: true,
@@ -14245,7 +14299,10 @@ async function handleRequest(request, response) {
     if (request.method === 'PATCH') {
       const actor = await requireUser(request);
       if (actor.role !== 'ADMIN' && actor.id !== employeeId) throw new HttpError(403, 'Bạn không có quyền cập nhật hồ sơ nhân sự này.');
-      const employee = await updateEmployeeProfileRecord(employeeId, await readJson(request), { allowIdentityChanges: actor.role === 'ADMIN', delegated: Boolean(actor.delegatedRoleCode) });
+      const employee = await updateEmployeeProfileRecord(employeeId, await readJson(request), {
+        allowIdentityChanges: actor.role === 'ADMIN', delegated: Boolean(actor.delegatedRoleCode),
+        onPasswordChanged: (targetId) => revokeAccountAccess(targetId, actor.id, { keepSessionKey: actor.id === targetId ? request.authSession?.key : '', removePasskeys: actor.id !== targetId }),
+      });
       sendJson(response, 200, { employee });
       return;
     }
@@ -14322,6 +14379,7 @@ async function handleRequest(request, response) {
     const newHash = await hashPassword(newPassword);
     const timestamp = now();
     await db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(newHash, timestamp, user.id);
+    await revokeAccountAccess(user.id, actor.id, { keepSessionKey: actor.id === user.id ? request.authSession?.key : '', removePasskeys: actor.id !== user.id });
 
     sendJson(response, 200, {
       success: true,
@@ -14400,6 +14458,7 @@ async function handleRequest(request, response) {
         if (updatedUser.is_active) await ensureEmployeeWorkspace(updatedUser);
         else await cleanupEmptyEmployeeWorkspace(id);
       });
+      if (suppliedHash !== undefined) await revokeAccountAccess(id, actor.id, { keepSessionKey: actor.id === id ? request.authSession?.key : '', removePasskeys: actor.id !== id });
       if (roleChange) await recordAuditEvent(actor.id, 'assign_user_role', 'admin_users', id, roleChange);
       sendJson(response, 200, { user: publicUser(updatedUser, await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(id)) });
       return;

@@ -83,6 +83,7 @@ export const TwoStepVerificationModule: React.FC = () => {
   const [tempPhone, setTempPhone] = useState(phoneNumber);
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [newPasskeyName, setNewPasskeyName] = useState('');
+  const [passkeyPassword, setPasskeyPassword] = useState('');
   const [isAddPasskeyModalOpen, setIsAddPasskeyModalOpen] = useState(false);
   const [disableOtp, setDisableOtp] = useState('');
   const [recoveryOtp, setRecoveryOtp] = useState('');
@@ -295,9 +296,10 @@ export const TwoStepVerificationModule: React.FC = () => {
     }
     setPasskeySaving(true);
     try {
-      const created = await registerPasskey(name);
+      const created = await registerPasskey(name, passkeyPassword);
       setPasskeys((current) => [...current, created]);
       setNewPasskeyName('');
+      setPasskeyPassword('');
       setIsAddPasskeyModalOpen(false);
       message.success('Đã đăng ký khóa truy cập mới.');
     } catch (error: any) {
@@ -577,6 +579,7 @@ export const TwoStepVerificationModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               setNewPasskeyName('');
+              setPasskeyPassword('');
               setIsAddPasskeyModalOpen(true);
             }}
             style={{ borderRadius: 8, fontWeight: 500 }}
@@ -590,6 +593,7 @@ export const TwoStepVerificationModule: React.FC = () => {
             onCancel={() => {
               setIsAddPasskeyModalOpen(false);
               setNewPasskeyName('');
+              setPasskeyPassword('');
             }}
             onOk={handleAddPasskey}
             confirmLoading={passkeySaving}
@@ -611,6 +615,19 @@ export const TwoStepVerificationModule: React.FC = () => {
                 style={{ borderRadius: 8 }}
                 autoFocus
               />
+              <label style={{ fontSize: 13, color: '#0F172A', display: 'block', margin: '12px 0 6px' }}>
+                Mật khẩu hiện tại
+              </label>
+              <Input.Password
+                placeholder="Nhập mật khẩu để xác nhận"
+                value={passkeyPassword}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPasskeyPassword(e.target.value)}
+                onPressEnter={handleAddPasskey}
+                style={{ borderRadius: 8 }}
+              />
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>
+                Bỏ trống nếu bạn vừa đăng nhập bằng Google hoặc khóa truy cập trong 5 phút qua.
+              </div>
             </div>
           </Modal>
         </div>

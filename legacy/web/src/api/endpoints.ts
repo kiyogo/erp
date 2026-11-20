@@ -1226,7 +1226,7 @@ export type PasskeyItem = { id: string; name: string; createdAt: string; lastUse
 /** Khóa truy cập (WebAuthn): máy chủ cấp thử thách, xác minh chữ ký và giữ khóa công khai. */
 export const passkeysApi = {
   list: () => api.get<{ passkeys: PasskeyItem[]; policy: { requireForSigning: boolean } }>('/auth/passkeys'),
-  registrationOptions: () => api.post('/auth/passkeys/registration/options', {}),
+  registrationOptions: (currentPassword: string) => api.post('/auth/passkeys/registration/options', { currentPassword }),
   registrationVerify: (payload: { challengeId: string; name: string; credential: unknown }) => api.post<{ passkey: PasskeyItem }>('/auth/passkeys/registration/verify', payload),
   remove: (id: string) => api.delete<{ deleted: boolean }>(`/auth/passkeys/${encodeURIComponent(id)}`),
   setSigningPolicy: (requireForSigning: boolean) => api.put<{ policy: { requireForSigning: boolean } }>('/auth/passkeys/policy', { requireForSigning }),
@@ -1252,6 +1252,7 @@ export const adminRolesApi = {
 export type PayrollCalculationRow = {
   employeeCode: string; employeeName: string; department: string; period: string;
   gross: number; baseSalary: number; allowance: number; bonus: number; dependents: number; taxableIncome: number;
+  insuranceSalary: number;
   insuranceDeduction: number; taxDeduction: number; netSalary: number;
   employeeInsurance: { social: number; health: number; unemployment: number; total: number };
   employerInsurance: { social: number; health: number; unemployment: number; total: number };

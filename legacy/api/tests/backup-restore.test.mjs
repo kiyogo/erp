@@ -156,3 +156,21 @@ test('kiểm tra toàn vẹn chỉ báo lỗi thật: phát hiện tệp thiếu
   assert.ok(missing.samples.some(sample => sample.includes('mat-tich.txt')));
   assert.ok(broken.summary.errors >= 1);
 });
+
+test('khôi phục bản sao lưu kho tệp chỉ thay tệp, không đụng tới cơ sở dữ liệu', async () => {
+  mkdirSync(filesDir, { recursive: true });
+  writeFileSync(path.join(filesDir, 'doc.txt'), 'bản trong sao lưu');
+  const blob = (await call(admin, '/admin/backups', 'POST', { name: 'Chỉ kho tệp', type: 'Storage Blob' })).body.backup;
+  assert.equal(blob.restorable, true);
+
+  writeFileSync(path.join(filesDir, 'doc.txt'), 'đã bị sửa');
+  writeFileSync(path.join(filesDir, 'later.txt'), 'tệp thêm sau');
+  assert.equal((await call(admin, '/collections/hr_training_courses', 'POST', { record: { key: 'c-blob', courseCode: 'KH-9', courseName: 'Tạo sau sao lưu kho tệp' } })).status, 201);
+
+  const restored = await call(admin, `/admin/backups/${blob.key}/restore`, 'POST', { confirmation: blob.code });
+  assert.equal(restored.status, 200, JSON.stringify(restored.body));
+  assert.equal(readFileSync(path.join(filesDir, 'doc.txt'), 'utf8'), 'bản trong sao lưu');
+  assert.equal(existsSync(path.join(filesDir, 'later.txt')), false);
+  assert.ok((await courseKeys()).includes('c-blob'), 'cơ sở dữ liệu giữ nguyên');
+  assert.deepEqual(restored.body.restore.restoredTables, {}, 'không khôi phục bảng nào');
+});

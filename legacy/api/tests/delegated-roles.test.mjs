@@ -197,3 +197,14 @@ test('vai trò nhân sự không chiếm được tài khoản quản trị hay 
   await login('victim@example.test', password);
   await login(env.SEED_ADMIN_EMAIL, env.SEED_ADMIN_PASSWORD);
 });
+
+test('vai trò chỉ có quyền thêm không làm được các thao tác đổi trạng thái của bản ghi đã có', async () => {
+  await asAdmin('/collections/admin_roles', 'POST', { record: { roleCode: 'CHI_THEM', name: 'Chỉ được thêm', permissions: { crm: { create: true }, assets: { create: true }, finance: { create: true } } } }, 201);
+  const adder = await createStaff('adder@example.test', 'RL-ADD', 'CHI_THEM');
+  const statusRoutes = ['/crm/loyalty/entries/x/fulfill', '/assets/licenses/x/renew', '/assets/licenses/x/allocate', '/finance/inventory/transactions/x/shipment-status'];
+  for (const route of statusRoutes) assert.equal((await call(adder.session.headers, route, 'POST', {})).status, 403, `${route} cần quyền sửa`);
+
+  // Được cấp quyền sửa thì yêu cầu tới được bộ xử lý (không có bản ghi nên báo lỗi dữ liệu hoặc 404), không còn bị chặn quyền.
+  await asAdmin('/collections/admin_roles/CHI_THEM', 'PATCH', { patch: { permissions: { crm: { create: true, edit: true }, assets: { create: true, edit: true }, finance: { create: true, edit: true } } } });
+  for (const route of statusRoutes) assert.notEqual((await call(adder.session.headers, route, 'POST', {})).status, 403, `${route} mở khi có quyền sửa`);
+});

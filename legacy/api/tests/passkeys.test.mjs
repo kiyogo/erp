@@ -60,12 +60,12 @@ const authenticator = createAuthenticator('ES256');
 let credentialId;
 let counter = 0;
 
-async function registerKey(name = 'Máy tính văn phòng') {
-  const options = await call(staff, '/auth/passkeys/registration/options', 'POST', {});
+async function registerKey(name = 'Máy tính văn phòng', session = staff, currentPassword = password) {
+  const options = await call(session, '/auth/passkeys/registration/options', 'POST', { currentPassword });
   assert.equal(options.status, 200, JSON.stringify(options.body));
   const { challenge } = options.body.publicKey;
   const made = registrationCredential(authenticator, { challenge, origin, rpId, transports: ['internal', 'bogus'] });
-  const verified = await call(staff, '/auth/passkeys/registration/verify', 'POST', { challengeId: options.body.challengeId, name, credential: made.credential });
+  const verified = await call(session, '/auth/passkeys/registration/verify', 'POST', { challengeId: options.body.challengeId, name, credential: made.credential });
   return { options, made, verified };
 }
 
@@ -92,7 +92,7 @@ test('đăng ký khóa: máy chủ xác minh, chỉ nhận một lần và chỉ
   assert.equal(listed.body.policy.requireForSigning, false);
 
   // Chữ ký sai hoặc thử thách lạ bị từ chối ngay khi đăng ký.
-  const second = await call(staff, '/auth/passkeys/registration/options', 'POST', {});
+  const second = await call(staff, '/auth/passkeys/registration/options', 'POST', { currentPassword: password });
   const forged = registrationCredential(createAuthenticator('ES256'), { challenge: toBase64Url(Buffer.alloc(32, 7)), origin, rpId });
   assert.equal((await call(staff, '/auth/passkeys/registration/verify', 'POST', { challengeId: second.body.challengeId, name: 'Giả', credential: forged.credential })).status, 422);
   assert.equal((await call(staff, '/auth/passkeys')).body.passkeys.length, 1);
@@ -180,4 +180,52 @@ test('gỡ khóa cần bằng chứng khi đang yêu cầu passkey và tự tắ
   assert.equal(listed.body.passkeys.length, 0);
   assert.equal(listed.body.policy.requireForSigning, false);
   assert.equal((await call(staff, '/collections/employee_signing_logs', 'POST', { record: { key: 'signing-5', doc: 'Sau khi gỡ khóa' } })).status, 201);
+});
+
+test('đăng ký khóa truy cập phải xác thực lại bằng mật khẩu hiện tại và không dò được mật khẩu', async () => {
+  assert.equal((await call(staff, '/auth/passkeys/registration/options', 'POST', {})).status, 403, 'chỉ có token thì chưa đủ');
+  assert.equal((await call(staff, '/auth/passkeys/registration/options', 'POST', { currentPassword: 'Sai-mat-khau-26!' })).status, 403);
+  assert.equal((await call(staff, '/auth/passkeys/registration/options', 'POST', { currentPassword: password })).status, 200);
+
+  assert.equal((await call(admin, '/users', 'POST', { email: 'pk-lock@example.test', name: 'Nhân viên thử mật khẩu', password, employeeCode: 'PK-LOCK', role: 'USER' })).status, 201);
+  const locked = await login('pk-lock@example.test', password);
+  for (let i = 0; i < 8; i++) assert.equal((await call(locked, '/auth/passkeys/registration/options', 'POST', { currentPassword: `Sai-${i}-26!Secure` })).status, 403);
+  assert.equal((await call(locked, '/auth/passkeys/registration/options', 'POST', { currentPassword: password })).status, 429, 'quá số lần thử thì khóa tạm, kể cả khi nhập đúng');
+});
+
+test('đặt lại mật khẩu thu hồi mọi phiên và xóa khóa truy cập; tự đổi mật khẩu chỉ thu hồi phiên khác', async () => {
+  assert.equal((await call(admin, '/users', 'POST', { email: 'pk-victim@example.test', name: 'Nhân viên bị lộ token', password, employeeCode: 'PK-VICTIM', role: 'USER' })).status, 201);
+  const stolen = await login('pk-victim@example.test', password);
+  const other = await login('pk-victim@example.test', password);
+  const registered = await registerKey('Khóa của kẻ lấy token', stolen);
+  assert.equal(registered.verified.status, 201, JSON.stringify(registered.verified.body));
+
+  const newPassword = 'Victim-New-26!Secure';
+  assert.equal((await call(admin, `/employees/${stolen.id}/password`, 'POST', { password: newPassword })).status, 200);
+  assert.equal((await call(stolen, '/auth/profile')).status, 401, 'token cũ bị thu hồi');
+  assert.equal((await call(other, '/auth/profile')).status, 401);
+
+  const options = await call(null, '/auth/passkeys/login/options', 'POST', {});
+  counter += 1;
+  const assertion = assertionCredential(authenticator, registered.made.credentialId, { challenge: options.body.publicKey.challenge, origin, rpId, signCount: counter, userHandle: toBase64Url(Buffer.from(stolen.id)) });
+  assert.equal((await call(null, '/auth/passkeys/login/verify', 'POST', { challengeId: options.body.challengeId, credential: assertion })).status, 401, 'khóa đã bị xóa nên không đăng nhập lại được');
+
+  const fresh = await login('pk-victim@example.test', newPassword);
+  assert.equal((await call(fresh, '/auth/passkeys')).body.passkeys.length, 0);
+
+  // Tự đổi mật khẩu: giữ phiên đang dùng và khóa truy cập, chỉ thu hồi phiên khác.
+  const second = await login('pk-victim@example.test', newPassword);
+  assert.equal((await registerKey('Khóa hợp lệ', fresh, newPassword)).verified.status, 201);
+  const changed = await call(fresh, '/auth/change-password', 'POST', { oldPassword: newPassword, newPassword: 'Victim-Newer-26!Secure', confirmPassword: 'Victim-Newer-26!Secure' });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.equal((await call(fresh, '/auth/profile')).status, 200);
+  assert.equal((await call(second, '/auth/profile')).status, 401);
+  assert.equal((await call(fresh, '/auth/passkeys')).body.passkeys.length, 1);
+});
+
+test('làm đầy thử thách đăng nhập không chặn người đã đăng nhập', async () => {
+  for (let round = 0; round < 52; round++) await Promise.all(Array.from({ length: 100 }, () => call(null, '/auth/passkeys/login/options', 'POST', {})));
+  const options = await call(staff, '/auth/passkeys/registration/options', 'POST', { currentPassword: password });
+  assert.equal(options.status, 200, JSON.stringify(options.body));
+  assert.equal((await call(null, '/auth/passkeys/login/options', 'POST', {})).status, 200, 'người dùng mới vẫn xin được thử thách đăng nhập');
 });

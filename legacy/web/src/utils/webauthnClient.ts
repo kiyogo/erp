@@ -8,11 +8,11 @@ const requireSupport = () => {
   if (!isPasskeySupported()) throw new Error('Trình duyệt này không hỗ trợ khóa truy cập (passkey).');
 };
 
-/** Đăng ký một khóa truy cập mới cho tài khoản đang đăng nhập; máy chủ xác minh trước khi lưu. */
-export async function registerPasskey(name: string): Promise<PasskeyItem> {
+/** Đăng ký một khóa truy cập mới cho tài khoản đang đăng nhập; cần mật khẩu hiện tại (bỏ trống nếu vừa đăng nhập bằng Google hay passkey) và máy chủ xác minh trước khi lưu. */
+export async function registerPasskey(name: string, currentPassword = ''): Promise<PasskeyItem> {
   requireSupport();
   try {
-    const { data: options } = await passkeysApi.registrationOptions();
+    const { data: options } = await passkeysApi.registrationOptions(currentPassword);
     const credential = await navigator.credentials.create({ publicKey: creationOptionsFromJson(options.publicKey) }) as PublicKeyCredential | null;
     if (!credential) throw new PasskeyCancelled('Đã hủy thao tác khóa truy cập.');
     const { data } = await passkeysApi.registrationVerify({ challengeId: options.challengeId, name, credential: serializeAttestation(credential) });

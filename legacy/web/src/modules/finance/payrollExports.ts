@@ -41,7 +41,17 @@ export function payrollReportRows(records: PayrollRecord[], report: 'payroll' | 
     return [
       ['Kỳ lương', month],
       ['Mã nhân viên', 'Họ tên', 'Lương cơ sở đóng bảo hiểm', 'BHXH người lao động 8%', 'BHYT người lao động 1.5%', 'BHTN người lao động 1%', 'Tổng khấu trừ bảo hiểm', 'Khoản doanh nghiệp đóng 21.5%'],
-      ...records.map((record) => [record.employeeCode, record.employeeName, record.baseSalary, Math.round(record.baseSalary * 0.08), Math.round(record.baseSalary * 0.015), Math.round(record.baseSalary * 0.01), record.insuranceDeduction, Math.round(record.baseSalary * 0.215)]),
+      ...records.map((record) => {
+        // Phiếu do hệ thống tạo đã lưu lương đóng bảo hiểm và từng khoản theo trần đóng; chỉ phiếu cũ không có mới tính lại từ lương.
+        const base = record.insuranceSalary ?? record.baseSalary;
+        const employer = [record.employerSocial, record.employerHealth, record.employerUnemployment];
+        return [
+          record.employeeCode, record.employeeName, base,
+          record.employeeSocial ?? Math.round(base * 0.08), record.employeeHealth ?? Math.round(base * 0.015), record.employeeUnemployment ?? Math.round(base * 0.01),
+          record.insuranceDeduction,
+          employer.every(Number.isSafeInteger) ? employer.reduce((sum, item) => sum + (item as number), 0) : Math.round(base * 0.215),
+        ];
+      }),
     ];
   }
   return [

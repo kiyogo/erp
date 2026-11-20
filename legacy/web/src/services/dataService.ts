@@ -233,6 +233,15 @@ export interface PayrollRecord {
   allowance: number;
   bonus: number;
   overtimePay?: number;
+  /** Lương đóng bảo hiểm (lương hợp đồng); khác lương cơ bản khi tính theo ngày công. Phiếu cũ không có trường này. */
+  insuranceSalary?: number;
+  /** Bảo hiểm bắt buộc đã tính theo trần đóng khi hệ thống tạo phiếu; phiếu nhập tay không có. */
+  employeeSocial?: number;
+  employeeHealth?: number;
+  employeeUnemployment?: number;
+  employerSocial?: number;
+  employerHealth?: number;
+  employerUnemployment?: number;
   insuranceDeduction: number;
   taxDeduction: number;
   netSalary: number;

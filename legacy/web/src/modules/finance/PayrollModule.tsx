@@ -188,6 +188,7 @@ export const PayrollModule: React.FC = () => {
           employeeCode: row.employeeCode, employeeName: row.employeeName, department: row.department,
           month: calcPeriod, status: 'Chưa chi trả', workDays: row.workdays?.payDays ?? 0,
           baseSalary: row.baseSalary, allowance: row.allowance, bonus: row.bonus, overtimePay: row.overtimePay || 0,
+          insuranceSalary: row.insuranceSalary,
           insuranceDeduction: row.insuranceDeduction, taxDeduction: row.taxDeduction, netSalary: row.netSalary,
           employeeSocial: row.employeeInsurance.social, employeeHealth: row.employeeInsurance.health, employeeUnemployment: row.employeeInsurance.unemployment,
           employerSocial: row.employerInsurance.social, employerHealth: row.employerInsurance.health, employerUnemployment: row.employerInsurance.unemployment,
