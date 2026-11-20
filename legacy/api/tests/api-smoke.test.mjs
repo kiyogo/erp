@@ -1956,9 +1956,12 @@ test('inventory receipts, FIFO issues, transfers and counts persist batch stock 
   assert.equal(moved.stockQty, 7);
   assert.deepEqual(moved.stockByWarehouse, [{ warehouse: 'Kho A', quantity: 4 }, { warehouse: 'Kho B', quantity: 3 }]);
 
-  const audit = await request('/finance/inventory/transactions', 'POST', { type: 'Kiểm kê', transactionCode: 'KK-INV-API-01', transactionDate: today,
+  await request('/finance/inventory/transactions', 'POST', { type: 'Kiểm kê', transactionCode: 'KK-INV-API-01', transactionDate: today,
+    sourceWarehouse: 'Kho A', lines: [{ productKey: itemKey, warehouse: 'Kho A', lotCode: 'LOT-EARLY', expiryDate: '2027-04-01', actualQty: 1 }] }, 422);
+  const audit = await request('/finance/inventory/transactions', 'POST', { type: 'Kiểm kê', transactionCode: 'KK-INV-API-01', transactionDate: today, reason: 'Biên bản kiểm kê quý',
     sourceWarehouse: 'Kho A', lines: [{ productKey: itemKey, warehouse: 'Kho A', lotCode: 'LOT-EARLY', expiryDate: '2027-04-01', actualQty: 1 }] }, 201);
   assert.equal(audit.transaction.lines[0].difference, 1);
+  assert.ok(audit.transaction.surplusAmount > 0 && audit.transaction.shortageAmount === 0);
   assert.equal((await request(`/collections/finance_inventory/${itemKey}`)).record.stockQty, 8);
 
   const assemblyProduct = (await request('/collections/finance_inventory', 'POST', { record: {
@@ -2705,5 +2708,40 @@ test('inventory issues post cost of goods sold once and reconcile with the ledge
   assert.equal(typeof reconciliation.inventoryValue, 'number');
   assert.equal(reconciliation.difference, reconciliation.inventoryValue - reconciliation.ledgerBalance);
   assert.deepEqual(reconciliation.byAccount.map((row) => row.account), ['152', '153', '155', '156']);
+});
+
+test('stock count differences and inventory write-down provisions post to the ledger', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const countBody = { type: 'Kiểm kê', transactionDate: today, sourceWarehouse: 'Kho giá vốn', lines: [{ productKey: 'cogs-item', warehouse: 'Kho giá vốn', actualQty: 3 }] };
+  await request('/finance/inventory/transactions', 'POST', { ...countBody, transactionCode: 'KK-COGS-NOREASON' }, 422);
+  const count = (await request('/finance/inventory/transactions', 'POST', { ...countBody, transactionCode: 'KK-COGS-01', reason: 'Biên bản kiểm kê cuối quý' }, 201)).transaction;
+  assert.equal(count.lines[0].difference, -2);
+  assert.equal(count.shortageAmount, 2000);
+  assert.equal(count.surplusAmount, 0);
+  const preview = (await request('/finance/inventory-transactions/KK-COGS-01/ledger-entry', 'POST', { preview: true })).preview;
+  assert.deepEqual(preview.lines.map((line) => [line.defaultAccount, line.debit, line.credit]), [['1381', 2000, 0], ['156', 0, 2000]]);
+  assert.equal((await request('/finance/inventory-transactions/KK-COGS-01/ledger-entry', 'POST', { accountMap: { 1381: '632' } }, 201)).record.sourceReference, 'inventory-count:KK-COGS-01');
+  await request('/finance/inventory-transactions/KK-COGS-01/ledger-entry', 'POST', {}, 409);
+  const even = (await request('/finance/inventory/transactions', 'POST', { ...countBody, transactionCode: 'KK-COGS-02', lines: [{ productKey: 'cogs-item', warehouse: 'Kho giá vốn', actualQty: 3 }] }, 201)).transaction;
+  assert.equal(even.lines[0].difference, 0);
+  await request('/finance/inventory-transactions/KK-COGS-02/ledger-entry', 'POST', {}, 422);
+
+  const provision = { asOfDate: today, evidence: 'Báo giá thị trường ngày hôm nay', lines: [{ productKey: 'cogs-item', nrvUnit: 600 }] };
+  await request('/finance/inventory/provisions', 'POST', { ...provision, asOfDate: '2026-01-01' }, 422);
+  await request('/finance/inventory/provisions', 'POST', { ...provision, evidence: '' }, 422);
+  await request('/finance/inventory/provisions', 'POST', { ...provision, lines: [{ productKey: 'missing', nrvUnit: 1 }] }, 404);
+  await request('/finance/inventory/provisions', 'POST', { ...provision, lines: [{ productKey: 'cogs-item', nrvUnit: -1 }] }, 422);
+  const created = (await request('/finance/inventory/provisions', 'POST', provision, 201)).record;
+  assert.equal(created.lines[0].cost, 3000);
+  assert.equal(created.lines[0].nrv, 1800);
+  assert.equal(created.totalRequired, 1200);
+  assert.equal(created.totalAdjustment, 1200);
+  await request('/finance/inventory/provisions', 'POST', provision, 409);
+  await request('/collections/finance_inventory_provisions', 'POST', { record: { key: 'forged' } }, 409);
+  assert.equal((await request('/finance/inventory/provisions')).data[0].key, created.key);
+  const provisionPreview = (await request(`/finance/inventory-provisions/${created.key}/ledger-entry`, 'POST', { preview: true })).preview;
+  assert.deepEqual(provisionPreview.lines.map((line) => [line.defaultAccount, line.debit, line.credit]), [['632', 1200, 0], ['2294', 0, 1200]]);
+  assert.equal((await request(`/finance/inventory-provisions/${created.key}/ledger-entry`, 'POST', {}, 201)).record.sourceReference, `inventory-provision:${created.key}`);
+  await request(`/finance/inventory-provisions/${created.key}/ledger-entry`, 'POST', {}, 409);
 });
 

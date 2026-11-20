@@ -18,14 +18,16 @@ export function useLedgerPostings() {
   return { posted, reload };
 }
 
-export const ledgerReference = (kind: LedgerSourceKind, key: string) => (kind === 'documents' ? `document:${key}` : kind === 'asset-disposals' ? `asset-disposal:${key}` : `inventory-issue:${key}`);
+export const ledgerReference = (kind: LedgerSourceKind, key: string) => (kind === 'documents' ? `document:${key}` : kind === 'asset-disposals' ? `asset-disposal:${key}` : kind === 'inventory-provisions' ? `inventory-provision:${key}` : `inventory-issue:${key}`);
+/** Phiếu kho có thể ghi giá vốn (xuất) hoặc chênh lệch kiểm kê (kiểm kê), nên kiểm tra cả hai khóa nguồn. */
+export const isLedgerPosted = (posted: Set<string>, kind: LedgerSourceKind, key: string) => posted.has(ledgerReference(kind, key)) || (kind === 'inventory-transactions' && posted.has(`inventory-count:${key}`));
 
 /** Cột "Sổ cái" của bảng: nhãn đã ghi sổ hoặc nút mở hộp thoại ghi sổ. */
 export const ledgerPostingColumn = (kind: LedgerSourceKind, posted: Set<string>, open: (key: string, title: string) => void, titleOf: (record: any) => string) => ({
   title: 'Sổ cái',
   key: 'ledger',
   width: 120,
-  render: (_: unknown, record: any) => (record.status === 'Đã hủy' ? '—' : posted.has(ledgerReference(kind, record.key))
+  render: (_: unknown, record: any) => (record.status === 'Đã hủy' ? '—' : isLedgerPosted(posted, kind, record.key)
     ? <span style={{ color: '#16A34A' }}>Đã ghi sổ</span>
     : <Button onClick={() => open(record.key, titleOf(record))}>Ghi sổ</Button>),
 });

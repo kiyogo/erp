@@ -22,7 +22,8 @@ import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, 
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
-import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem } from './ledgerPostingRules.mjs';
+import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryCountLedgerLines, inventoryCountPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem, provisionLedgerLines, provisionPostingProblem } from './ledgerPostingRules.mjs';
+import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
@@ -8267,9 +8268,15 @@ async function createInventoryTransaction(actor, input) {
         const physicalLots = item.lots.filter((entry) => entry.warehouse === warehouse && (!item.product.lotManaged || entry.lotCode === trackedLot));
         const bookQty = physicalLots.reduce((sum, entry) => sum + entry.quantity, 0);
         const difference = Math.round((actualQty - bookQty) * 1000) / 1000;
-        if (difference > 0) addStock(item, warehouse, difference, line, optionalAmount(line.unitCost ?? item.product.unitPrice, 'Đơn giá kiểm kê'));
-        if (difference < 0) removeStock(item, warehouse, -difference, trackedLot);
-        movements.push({ itemKey: key, sku: item.product.sku, name: item.product.name, unit: item.product.unit, operation: type, warehouse, lotCode: trackedLot, bookQty, actualQty, difference });
+        let surplusAmount = 0;
+        let shortageAmount = 0;
+        if (difference > 0) {
+          const countCost = optionalAmount(line.unitCost ?? item.product.unitPrice, 'Đơn giá kiểm kê');
+          addStock(item, warehouse, difference, line, countCost);
+          surplusAmount = Math.round(difference * countCost);
+        }
+        if (difference < 0) shortageAmount = Math.round(removeStock(item, warehouse, -difference, trackedLot).reduce((sum, lot) => sum + lot.quantity * lot.unitCost, 0));
+        movements.push({ itemKey: key, sku: item.product.sku, name: item.product.name, unit: item.product.unit, operation: type, warehouse, lotCode: trackedLot, bookQty, actualQty, difference, surplusAmount, shortageAmount });
       } else {
         const quantity = inventoryQuantity(line.quantity, type === 'Điều chuyển' ? 'Số lượng điều chuyển' : 'Số lượng xuất');
         const fromWarehouse = requiredText(line.fromWarehouse || input.sourceWarehouse || warehouse, 'Kho xuất', 160);
@@ -8286,6 +8293,8 @@ async function createInventoryTransaction(actor, input) {
     }
     if (['Xuất kho', 'Giao hàng'].includes(type)) requiredText(input.reason || input.recipient, 'Lý do xuất / người nhận', 255);
     if (assemblyLines) requiredText(input.reason, 'Lý do lắp ráp / tháo dỡ', 255);
+    // Kiểm kê có chênh lệch phải ghi nguyên nhân (biên bản kiểm kê, xử lý chênh lệch).
+    if (type === 'Kiểm kê' && movements.some((line) => line.difference !== 0)) requiredText(input.reason, 'Nguyên nhân chênh lệch kiểm kê', 255);
     if (type === 'Điều chuyển' && !input.destinationWarehouse && linesInput.some((line) => !line.toWarehouse)) throw new HttpError(422, 'Chọn kho nhận cho phiếu điều chuyển.');
     if (type === 'Giao hàng') requiredText(input.deliveryAddress, 'Địa chỉ giao hàng', 500);
     for (const key of changed) {
@@ -8302,6 +8311,7 @@ async function createInventoryTransaction(actor, input) {
       deliveryAddress: optionalText(input.deliveryAddress, 'Địa chỉ giao hàng', 500), carrier: optionalText(input.carrier, 'Đơn vị vận chuyển', 160),
       trackingNumber: optionalText(input.trackingNumber, 'Mã vận đơn', 120), shipmentStatus: type === 'Giao hàng' ? 'Chờ giao' : '', shipmentHistory: [],
       lines: movements, totalQuantity, totalAmount, notes: optionalText(input.notes, 'Ghi chú', 2_000),
+      ...(type === 'Kiểm kê' ? { shortageAmount: movements.reduce((sum, line) => sum + (line.shortageAmount || 0), 0), surplusAmount: movements.reduce((sum, line) => sum + (line.surplusAmount || 0), 0) } : {}),
       requestFingerprint: fingerprint, status: 'Đã ghi nhận', createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
     };
     await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
@@ -9865,7 +9875,7 @@ async function handleRequest(request, response) {
   }
 
   // Ghi sổ cái từ chứng từ mua, bán, hóa đơn, hàng trả lại, giảm giá và từ hồ sơ thanh lý tài sản. Body: { preview?: boolean, accountMap?: { mã mặc định: mã chi tiết } }.
-  const ledgerSourceMatch = /^\/finance\/(documents|asset-disposals|inventory-transactions)\/([^/]+)\/ledger-entry$/.exec(resource);
+  const ledgerSourceMatch = /^\/finance\/(documents|asset-disposals|inventory-transactions|inventory-provisions)\/([^/]+)\/ledger-entry$/.exec(resource);
   if (request.method === 'POST' && ledgerSourceMatch) {
     const actor = await requireAdmin(request);
     const profile = await requireAccountingProfile();
@@ -9878,9 +9888,19 @@ async function handleRequest(request, response) {
       const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_transactions' AND record_key = ? ORDER BY created_at LIMIT 1").get(sourceKey.toLocaleUpperCase('vi-VN'));
       const transaction = row && publicCollectionRecord(row);
       if (!transaction) throw new HttpError(404, 'Không tìm thấy phiếu kho.');
-      const problem = inventoryIssuePostingProblem(transaction);
+      const isCount = transaction.type === 'Kiểm kê';
+      const problem = isCount ? inventoryCountPostingProblem(transaction) : inventoryIssuePostingProblem(transaction);
       if (problem) throw new HttpError(422, problem);
-      source = { sourceModule: 'inventory_issue', sourceReference: `inventory-issue:${transaction.transactionCode}`, voucherCode: transaction.transactionCode, entryDate: transaction.transactionDate, description: `Giá vốn xuất kho ${transaction.transactionCode}${transaction.reason ? ` - ${transaction.reason}` : ''}`, lines: inventoryIssueLedgerLines(transaction) };
+      source = isCount
+        ? { sourceModule: 'inventory_issue', sourceReference: `inventory-count:${transaction.transactionCode}`, voucherCode: transaction.transactionCode, entryDate: transaction.transactionDate, description: `Chênh lệch kiểm kê ${transaction.transactionCode}${transaction.reason ? ` - ${transaction.reason}` : ''}`, lines: inventoryCountLedgerLines(transaction) }
+        : { sourceModule: 'inventory_issue', sourceReference: `inventory-issue:${transaction.transactionCode}`, voucherCode: transaction.transactionCode, entryDate: transaction.transactionDate, description: `Giá vốn xuất kho ${transaction.transactionCode}${transaction.reason ? ` - ${transaction.reason}` : ''}`, lines: inventoryIssueLedgerLines(transaction) };
+    } else if (ledgerSourceMatch[1] === 'inventory-provisions') {
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_inventory_provisions' AND record_key = ? LIMIT 1").get(sourceKey);
+      const provision = row && publicCollectionRecord(row);
+      if (!provision) throw new HttpError(404, 'Không tìm thấy kỳ lập dự phòng.');
+      const problem = provisionPostingProblem(provision);
+      if (problem) throw new HttpError(422, problem);
+      source = { sourceModule: 'inventory_issue', sourceReference: `inventory-provision:${provision.key}`, voucherCode: provision.key, entryDate: provision.asOfDate, description: `Dự phòng giảm giá hàng tồn kho ${provision.asOfDate}`, lines: provisionLedgerLines(provision) };
     } else if (isDocument) {
       const row = await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(sourceKey);
       if (!row) throw new HttpError(404, 'Không tìm thấy chứng từ.');
@@ -9923,6 +9943,61 @@ async function handleRequest(request, response) {
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
         VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
       await recordAuditEvent(actor.id, 'post_source_ledger_entry', 'finance_general_ledger', record.key, { sourceModule: source.sourceModule, voucherCode: source.voucherCode, amount });
+    });
+    sendJson(response, 201, { record });
+    return;
+  }
+
+  // Dự phòng giảm giá hàng tồn kho theo kỳ: tồn kho lấy theo hiện tại nên chỉ lập cho ngày hôm nay.
+  if (resource === '/finance/inventory/provisions' && request.method === 'GET') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_provisions'").all();
+    sendJson(response, 200, { data: rows.map(row => parseJsonObject(row.payload_json)).sort((a, b) => String(b.asOfDate).localeCompare(String(a.asOfDate))) });
+    return;
+  }
+  if (resource === '/finance/inventory/provisions' && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    await requireAccountingProfile();
+    const payload = await readJson(request, 256 * 1024);
+    const asOfDate = requiredIsoDate(payload.asOfDate, 'Ngày lập dự phòng');
+    if (asOfDate !== todayInVietnam()) throw new HttpError(422, 'Chỉ lập dự phòng cho ngày hôm nay vì hệ thống chưa lưu tồn kho theo từng ngày.');
+    const evidence = requiredText(payload.evidence, 'Căn cứ giá trị thuần có thể thực hiện được', 1_000);
+    if (!Array.isArray(payload.lines) || payload.lines.length > 500) throw new HttpError(422, 'Danh sách mặt hàng không hợp lệ.');
+    let record;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_inventory_provisions'))");
+      const previousRecords = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_inventory_provisions'").all()).map(row => parseJsonObject(row.payload_json)).sort((a, b) => String(b.asOfDate).localeCompare(String(a.asOfDate)));
+      if (previousRecords.some(item => item.asOfDate >= asOfDate)) throw new HttpError(409, 'Đã có kỳ lập dự phòng cùng ngày hoặc sau ngày này.');
+      const previousByProduct = new Map((previousRecords[0]?.lines || []).map(line => [line.productKey, line.required]));
+      const products = new Map((await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_inventory'").all()).map(row => [row.record_key, parseJsonObject(row.payload_json)]));
+      const lines = [];
+      const seen = new Set();
+      for (const input of payload.lines) {
+        const productKey = requiredText(input?.productKey, 'Mặt hàng', 160);
+        if (seen.has(productKey)) throw new HttpError(422, 'Không chọn trùng mặt hàng.');
+        seen.add(productKey);
+        const product = products.get(productKey);
+        if (!product) throw new HttpError(404, `Không tìm thấy mặt hàng ${productKey}.`);
+        const quantity = Number(product.stockQty) || 0;
+        if (quantity <= 0) throw new HttpError(422, `${product.sku} không còn tồn kho để lập dự phòng.`);
+        const nrvUnit = optionalAmount(input.nrvUnit, `Giá trị thuần có thể thực hiện được của ${product.sku}`);
+        const unitCost = (Array.isArray(product.lots) ? product.lots.reduce((sum, lot) => sum + (Number(lot.quantity) || 0) * (Number(lot.unitCost) || 0), 0) : 0) / quantity;
+        const figures = provisionLine({ quantity, unitCost, nrvUnit });
+        lines.push({ productKey, sku: product.sku, name: product.name, unit: product.unit, quantity, unitCost: Math.round(unitCost), nrvUnit, ...figures, previous: previousByProduct.get(productKey) || 0 });
+      }
+      // Mặt hàng đã có dự phòng kỳ trước nhưng không còn được đánh giá: hoàn nhập toàn bộ.
+      for (const [productKey, required] of previousByProduct) {
+        if (required > 0 && !seen.has(productKey)) {
+          const product = products.get(productKey) || {};
+          lines.push({ productKey, sku: product.sku || productKey, name: product.name || '', unit: product.unit || '', quantity: Number(product.stockQty) || 0, unitCost: 0, nrvUnit: null, cost: 0, nrv: 0, required: 0, previous: required });
+        }
+      }
+      const totals = provisionTotals(lines);
+      const timestamp = now();
+      record = { key: `DP-${asOfDate}`, asOfDate, evidence, lines, ...totals, createdBy: actor.name, createdById: actor.id, createdAt: timestamp };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_inventory_provisions', ?, ?, ?, ?, ?)`).run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'inventory_provision', 'finance_inventory_provisions', record.key, { asOfDate, ...totals });
     });
     sendJson(response, 201, { record });
     return;
@@ -10105,7 +10180,7 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }

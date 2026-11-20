@@ -102,3 +102,37 @@ export function accountBalance(entries, prefixes) {
   }
   return prefixes.map(prefix => ({ account: prefix, balance: totals.get(prefix) }));
 }
+
+// Chênh lệch kiểm kê: thiếu Nợ 1381 Có 156 (tài sản thiếu chờ xử lý), thừa Nợ 156 Có 3381 (tài sản thừa chờ giải quyết). Khi đã xác định
+// nguyên nhân (hao hụt trong định mức, bồi thường, tính vào chi phí khác...) đổi mã 1381 sang 632, 1388, 811... khi ghi sổ.
+export function inventoryCountPostingProblem(transaction) {
+  if (!(Number(transaction.shortageAmount) > 0) && !(Number(transaction.surplusAmount) > 0)) return 'Phiếu kiểm kê không có chênh lệch giá trị để ghi sổ.';
+  return '';
+}
+
+export function inventoryCountLedgerLines(transaction) {
+  const shortage = Math.round(Number(transaction.shortageAmount) || 0);
+  const surplus = Math.round(Number(transaction.surplusAmount) || 0);
+  const lines = [];
+  if (shortage > 0) {
+    lines.push({ account: '1381', debit: shortage, credit: 0, note: 'Hàng thiếu khi kiểm kê chờ xử lý' });
+    lines.push({ account: '156', debit: 0, credit: shortage, note: 'Giảm hàng tồn kho do thiếu' });
+  }
+  if (surplus > 0) {
+    lines.push({ account: '156', debit: surplus, credit: 0, note: 'Tăng hàng tồn kho do thừa' });
+    lines.push({ account: '3381', debit: 0, credit: surplus, note: 'Hàng thừa khi kiểm kê chờ giải quyết' });
+  }
+  return lines;
+}
+
+// Dự phòng giảm giá hàng tồn kho: tăng Nợ 632 Có 2294, hoàn nhập Nợ 2294 Có 632 (chênh lệch so với kỳ lập trước).
+export function provisionPostingProblem(record) {
+  return Number(record.totalAdjustment) === 0 ? 'Kỳ lập dự phòng không thay đổi so với kỳ trước, không có bút toán.' : '';
+}
+
+export function provisionLedgerLines(record) {
+  const adjustment = Math.round(Number(record.totalAdjustment) || 0);
+  if (adjustment > 0) return [{ account: '632', debit: adjustment, credit: 0, note: 'Trích lập thêm dự phòng giảm giá hàng tồn kho' }, { account: '2294', debit: 0, credit: adjustment, note: 'Dự phòng giảm giá hàng tồn kho' }];
+  if (adjustment < 0) return [{ account: '2294', debit: -adjustment, credit: 0, note: 'Dự phòng giảm giá hàng tồn kho' }, { account: '632', debit: 0, credit: -adjustment, note: 'Hoàn nhập dự phòng giảm giá hàng tồn kho' }];
+  return [];
+}

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { DownloadOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { inventoryApi, inventoryReconciliationApi } from '../../api/endpoints';
+import { inventoryApi, inventoryProvisionApi, inventoryReconciliationApi, type InventoryProvision } from '../../api/endpoints';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
 import type { LedgerSourceKind } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
@@ -162,6 +162,10 @@ export const InventoryModule: React.FC = () => {
   const [draftLines, setDraftLines] = useState<DraftLine[]>([]);
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
+  const [provisions, setProvisions] = useState<InventoryProvision[]>([]);
+  const [provisionOpen, setProvisionOpen] = useState(false);
+  const [provisionNrv, setProvisionNrv] = useState<Record<string, string>>({});
+  const [provisionEvidence, setProvisionEvidence] = useState('');
   const [reconciliation, setReconciliation] = useState<{ inventoryValue: number; ledgerBalance: number; difference: number } | null>(null);
   const [returnShipment, setReturnShipment] = useState<InventoryTransaction | null>(null);
   const [returnCode, setReturnCode] = useState('');
@@ -187,6 +191,7 @@ export const InventoryModule: React.FC = () => {
       setSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) });
       setLocations(Array.isArray(warehouseLocations) ? warehouseLocations : []);
       inventoryReconciliationApi.get().then((response) => setReconciliation(response.data)).catch(() => setReconciliation(null));
+      inventoryProvisionApi.list().then((response) => setProvisions(response.data.data)).catch(() => setProvisions([]));
     } catch (error: any) {
       setLoadError(error?.response?.data?.message || error?.message || 'Không tải được dữ liệu kho.');
     } finally {
@@ -545,6 +550,29 @@ export const InventoryModule: React.FC = () => {
     { title: 'Người tạo', dataIndex: 'createdBy', key: 'createdBy' },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color="success">{status}</Tag> },
   ];
+  if (isAudit) {
+    transactionColumns.push(
+      { title: 'Thiếu / thừa', key: 'variance', render: (_: unknown, item: InventoryTransaction) => `${money((item as any).shortageAmount || 0)} / ${money((item as any).surplusAmount || 0)}` } as any,
+      ledgerPostingColumn('inventory-transactions', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'inventory-transactions', key, title }), (record) => record.transactionCode) as any,
+    );
+  }
+
+  const stockedProducts = data.filter((item) => Number(item.stockQty) > 0);
+  const submitProvision = async () => {
+    if (saving) return;
+    const lines = stockedProducts.filter((item) => String(provisionNrv[item.key] ?? '').trim() !== '').map((item) => ({ productKey: item.key, nrvUnit: Number(provisionNrv[item.key]) }));
+    setSaving(true);
+    try {
+      await inventoryProvisionApi.create({ asOfDate: localDate(), evidence: provisionEvidence, lines });
+      message.success('Đã lập dự phòng giảm giá hàng tồn kho; ghi sổ cái ở cột Sổ cái.');
+      setProvisionOpen(false);
+      await refresh();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lập được dự phòng.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const warehouseValues = settings.warehouseNames.length ? settings.warehouseNames : ['Kho chính'];
   const activeLocationsFor = (warehouse: string) => locations.filter((location) => location.status === 'Đang hoạt động' && location.warehouse.toLocaleLowerCase('vi-VN') === warehouse.toLocaleLowerCase('vi-VN'));
@@ -717,6 +745,14 @@ export const InventoryModule: React.FC = () => {
           { title: 'Giá vốn', dataIndex: 'totalAmount', key: 'amount', render: (value: number) => money(value) },
           ledgerPostingColumn('inventory-transactions', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'inventory-transactions', key, title }), (record) => record.transactionCode),
         ]} /></Card>
+        <Card title="Dự phòng giảm giá hàng tồn kho" style={cardStyle} extra={<Button type="primary" onClick={() => { setProvisionNrv({}); setProvisionEvidence(''); setProvisionOpen(true); }}>Lập dự phòng</Button>}>
+          <KTable viewKeyPrefix="legacy-inventory-provisions" dataSource={provisions} rowKey="key" pagination={{ pageSize: 5 }} locale={{ emptyText: 'Chưa lập dự phòng.' }} columns={[
+            { title: 'Ngày', dataIndex: 'asOfDate', key: 'date' },
+            { title: 'Dự phòng cần có', dataIndex: 'totalRequired', key: 'required', render: (value: number) => money(value) },
+            { title: 'Trích thêm hoặc hoàn nhập', dataIndex: 'totalAdjustment', key: 'adjustment', render: (value: number) => <span style={{ color: value >= 0 ? '#D97706' : '#16A34A' }}>{money(value)}</span> },
+            ledgerPostingColumn('inventory-provisions', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'inventory-provisions', key, title }), (record) => record.key),
+          ] as any} />
+        </Card>
         <Card title="Đối chiếu tồn kho với sổ cái" style={cardStyle}>
           {reconciliation ? <div style={{ display: 'grid', gap: 6 }}>
             <div>Giá trị tồn trong kho: <strong>{money(reconciliation.inventoryValue)}</strong></div>
@@ -814,6 +850,7 @@ export const InventoryModule: React.FC = () => {
             {(isExport || isAssembly) && <Field label="Kho sản xuất / nhận thành phẩm"><select style={fieldStyle} value={transactionDraft.destinationWarehouse} onChange={(event) => updateTransaction('destinationWarehouse', event.target.value)}>{warehouseValues.map((warehouse) => <option key={warehouse}>{warehouse}</option>)}</select></Field>}
             {(isExport || isAssembly) && <Field label="Lý do / lệnh liên quan"><input required maxLength={255} style={fieldStyle} value={transactionDraft.reason} onChange={(event) => updateTransaction('reason', event.target.value)} /></Field>}
             {isDelivery && <><Field label="Người nhận"><input required maxLength={255} style={fieldStyle} value={transactionDraft.recipient} onChange={(event) => updateTransaction('recipient', event.target.value)} /></Field><Field label="Địa chỉ giao hàng"><input required maxLength={500} style={fieldStyle} value={transactionDraft.deliveryAddress} onChange={(event) => updateTransaction('deliveryAddress', event.target.value)} /></Field><Field label="Đơn vị vận chuyển"><input style={fieldStyle} value={transactionDraft.carrier} onChange={(event) => updateTransaction('carrier', event.target.value)} /></Field><Field label="Mã vận đơn"><input style={fieldStyle} value={transactionDraft.trackingNumber} onChange={(event) => updateTransaction('trackingNumber', event.target.value)} /></Field></>}
+            {isAudit && <Field label="Nguyên nhân chênh lệch, biên bản kiểm kê"><input maxLength={255} style={fieldStyle} value={transactionDraft.reason} onChange={(event) => updateTransaction('reason', event.target.value)} /></Field>}
             {isAudit && <Field label="Ghi chú kiểm kê"><input style={fieldStyle} value={transactionDraft.notes} onChange={(event) => updateTransaction('notes', event.target.value)} /></Field>}
             {isImport && <Field label="Nhà cung cấp / tham chiếu"><input style={fieldStyle} value={transactionDraft.reason} onChange={(event) => updateTransaction('reason', event.target.value)} /></Field>}
             {isTransfer && <Field label="Lý do điều chuyển"><input style={fieldStyle} value={transactionDraft.reason} onChange={(event) => updateTransaction('reason', event.target.value)} /></Field>}
@@ -876,6 +913,26 @@ export const InventoryModule: React.FC = () => {
           <Field label="Ghi chú hàng hỏng / thiếu hoặc đối chiếu"><textarea maxLength={2000} style={{ ...fieldStyle, minHeight: 64 }} value={returnNotes} onChange={(event) => setReturnNotes(event.target.value)} /></Field>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button disabled={saving} onClick={() => setReturnShipment(null)}>Hủy</Button><Button htmlType="submit" type="primary" loading={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Ghi nhận hàng về kho</Button></div>
         </form>}
+      </Modal>
+      <Modal open={provisionOpen} onCancel={() => { if (!saving) setProvisionOpen(false); }} footer={null} width={820} title="Lập dự phòng giảm giá hàng tồn kho">
+        <div style={{ color: '#64748B', marginBottom: 12 }}>Nhập giá trị thuần có thể thực hiện được (giá bán ước tính trừ chi phí bán) trên một đơn vị cho từng mặt hàng cần đánh giá; để trống là không lập. Chỉ lập khi giá gốc cao hơn giá thuần. Tồn kho lấy theo hiện tại nên chỉ lập cho hôm nay; mặt hàng đã có dự phòng kỳ trước mà để trống sẽ được hoàn nhập.</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ color: '#64748B', textAlign: 'left' }}><th>Mặt hàng</th><th>Tồn</th><th>Giá gốc / đơn vị</th><th style={{ width: 170 }}>Giá thuần / đơn vị</th><th style={{ textAlign: 'right' }}>Dự phòng</th></tr></thead>
+          <tbody>
+            {stockedProducts.map((item) => {
+              const nrvText = String(provisionNrv[item.key] ?? '').trim();
+              const required = nrvText === '' ? 0 : Math.max(0, Math.round(Number(item.stockQty) * Number(item.unitPrice)) - Math.round(Number(item.stockQty) * Number(nrvText)));
+              return <tr key={item.key}>
+                <td>{item.sku} · {item.name}</td><td>{item.stockQty}</td><td>{money(item.unitPrice)}</td>
+                <td><input type="number" min={0} style={fieldStyle} value={provisionNrv[item.key] ?? ''} onChange={(event) => setProvisionNrv((current) => ({ ...current, [item.key]: event.target.value }))} /></td>
+                <td style={{ textAlign: 'right' }}>{money(required)}</td>
+              </tr>;
+            })}
+            {!stockedProducts.length && <tr><td colSpan={5} style={{ color: '#64748B', padding: 12 }}>Chưa có mặt hàng còn tồn.</td></tr>}
+          </tbody>
+        </table>
+        <Field label="Căn cứ giá trị thuần (báo giá, hợp đồng, bảng giá thị trường)"><input maxLength={1000} style={fieldStyle} value={provisionEvidence} onChange={(event) => setProvisionEvidence(event.target.value)} /></Field>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}><Button disabled={saving} onClick={() => setProvisionOpen(false)}>Hủy</Button><Button type="primary" loading={saving} onClick={() => void submitProvision()}>Lưu kỳ dự phòng</Button></div>
       </Modal>
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => { void reloadLedgerPostings(); void inventoryReconciliationApi.get().then((response) => setReconciliation(response.data)).catch(() => undefined); }} />
     </div>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem } from '../ledgerPostingRules.mjs';
+import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryCountLedgerLines, inventoryCountPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem, provisionLedgerLines, provisionPostingProblem } from '../ledgerPostingRules.mjs';
 
 const doc = (over) => ({ documentType: 'sale', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 1_100_000, vatAmount: 100_000, ...over });
 const totals = (lines) => [lines.reduce((s, l) => s + l.debit, 0), lines.reduce((s, l) => s + l.credit, 0)];
@@ -60,4 +60,17 @@ test('số dư tài khoản hàng tồn kho từ sổ cái gồm tài khoản co
     { status: 'Nháp', debitAccount: 'TK 156', creditAccount: 'TK 331', amount: 999 },
   ];
   assert.deepEqual(accountBalance(entries, ['152', '156']), [{ account: '152', balance: 0 }, { account: '156', balance: 300 }]);
+});
+
+test('chênh lệch kiểm kê: thiếu Nợ 1381, thừa Có 3381, cân Nợ Có', () => {
+  assert.match(inventoryCountPostingProblem({ shortageAmount: 0, surplusAmount: 0 }), /không có chênh lệch/);
+  const lines = inventoryCountLedgerLines({ shortageAmount: 2000, surplusAmount: 500 });
+  assert.deepEqual(lines.map((l) => [l.account, l.debit, l.credit]), [['1381', 2000, 0], ['156', 0, 2000], ['156', 500, 0], ['3381', 0, 500]]);
+  assert.equal(lines.reduce((s, l) => s + l.debit, 0), lines.reduce((s, l) => s + l.credit, 0));
+});
+
+test('dự phòng giảm giá hàng tồn kho: tăng Nợ 632 Có 2294, hoàn nhập ngược lại', () => {
+  assert.match(provisionPostingProblem({ totalAdjustment: 0 }), /không thay đổi/);
+  assert.deepEqual(provisionLedgerLines({ totalAdjustment: 700 }).map((l) => [l.account, l.debit, l.credit]), [['632', 700, 0], ['2294', 0, 700]]);
+  assert.deepEqual(provisionLedgerLines({ totalAdjustment: -300 }).map((l) => [l.account, l.debit, l.credit]), [['2294', 300, 0], ['632', 0, 300]]);
 });
