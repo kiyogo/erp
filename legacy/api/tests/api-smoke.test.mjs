@@ -85,10 +85,10 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
     key: productKey, sku: `INV-${Date.now()}`, name: 'Thiết bị kiểm thử', unit: 'Cái',
   } }, 201);
   const customer = (await request('/crm/contacts', 'POST', {
-    type: 'customer', name: 'Khách hàng hóa đơn thử', taxCode: '0101234567', address: 'Hà Nội', email: 'hoa-don@example.vn', status: 'Đang hoạt động',
+    type: 'customer', name: 'Khách hàng hóa đơn thử', taxCode: '0101234565', address: 'Hà Nội', email: 'hoa-don@example.vn', status: 'Đang hoạt động',
   }, 201)).contact;
   const first = (await request('/collections/finance_einvoices', 'POST', { record: {
-    key: `einvoice-edit-${Date.now()}`, invoiceNumber: firstNumber, buyerName: 'Khách hàng thử', buyerTaxCode: '0101234567',
+    key: `einvoice-edit-${Date.now()}`, invoiceNumber: firstNumber, buyerName: 'Khách hàng thử', buyerTaxCode: '0101234565',
     buyerType: 'organization', buyerCustomerKey: customer.key, buyerEntityName: customer.name, buyerAddress: customer.address, buyerEmail: customer.email,
     issueDate: '2026-11-04', totalAmount: 1, vatRate: '100%', status: 'Đã phát hành', externalStatus: 'CQT đã cấp mã',
     items: [{ key: 'line-1', productKey, sku: 'MA-GIA', name: 'Tên giả', unit: 'Sai', quantity: 2, unitPrice: 50000, discountAmount: 0, vatRate: 8, amount: 1, vatAmount: 999999, finalAmount: 1000000 }],
@@ -114,7 +114,7 @@ test('e-invoice drafts can be edited without allowing forged issue state or dupl
   assert.equal(afterValidation.invoiceNumber, firstNumber);
 
   const updated = (await request(`/collections/finance_einvoices/${first.key}`, 'PATCH', { patch: {
-    key: first.key, invoiceNumber: `${firstNumber}-SUA`, buyerName: 'Khách hàng đã cập nhật', buyerTaxCode: '0101234567',
+    key: first.key, invoiceNumber: `${firstNumber}-SUA`, buyerName: 'Khách hàng đã cập nhật', buyerTaxCode: '0101234565',
     buyerType: 'person', buyerEntityName: '', buyerCustomerKey: customer.key, buyerPhone: '0900000000',
     items: [{ key: 'line-1', productKey, quantity: 5, unitPrice: 50000, discountAmount: 0, vatRate: 0 }],
   } })).record;

@@ -18,6 +18,7 @@ import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsT
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
 import { vatRateProblem } from './vatRules.mjs';
+import { buyerTaxCodeProblem, invoiceContentIssues, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
@@ -2698,6 +2699,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     }
     record.buyerEntityName = optionalText(record.buyerEntityName, 'Tên đơn vị mua', 300);
     record.buyerTaxCode = optionalText(record.buyerTaxCode, 'Mã số thuế người mua', 32);
+    const buyerTaxProblem = buyerTaxCodeProblem(record.buyerTaxCode, record.buyerType);
+    if (buyerTaxProblem) throw new HttpError(422, buyerTaxProblem);
+    record.paymentMethod = record.paymentMethod === undefined || record.paymentMethod === '' ? '' : oneOf(record.paymentMethod, 'Hình thức thanh toán', ['Tiền mặt', 'Chuyển khoản', 'Tiền mặt hoặc chuyển khoản']);
+    record.note = optionalText(record.note, 'Ghi chú hóa đơn', 500);
     record.buyerAddress = optionalText(record.buyerAddress, 'Địa chỉ người mua', 1000);
     record.buyerEmail = optionalText(record.buyerEmail, 'Email nhận hóa đơn', 254).toLowerCase();
     if (record.buyerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(record.buyerEmail)) throw new HttpError(422, 'Email nhận hóa đơn không hợp lệ.');
@@ -2793,6 +2798,15 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record.vatAmount = Math.round(record.totalAmount * rate / 100);
       record.finalAmount = record.totalAmount + record.vatAmount;
     }
+    record.vatBreakdown = Array.isArray(record.items) && record.items.length
+      ? vatBreakdown(record.items)
+      : [{ rate: record.vatRate, base: record.totalAmount, vat: record.vatAmount }];
+    record.finalAmountInWords = vndInWords(record.finalAmount);
+    const company = await getCompanyProfile();
+    record.sellerName = company.fullName || company.companyName;
+    record.sellerTaxCode = company.taxCode;
+    record.sellerAddress = company.address;
+    record.contentIssues = invoiceContentIssues({ seller: { name: record.sellerName, taxCode: record.sellerTaxCode, address: record.sellerAddress }, invoice: record });
     record.status = 'Hóa đơn nháp';
     record.externalStatus = 'Chưa gửi nhà cung cấp';
     delete record.cqtCode;
@@ -10039,7 +10053,7 @@ async function handleRequest(request, response) {
     const scope = 'finance_einvoices';
     const actor = await requireCollectionActor(request, scope);
     const payload = await readJson(request, 256 * 1024);
-    const allowedFields = new Set(['key', 'invoiceNumber', 'templateCode', 'symbol', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'issueDate', 'totalAmount', 'vatRate', 'items']);
+    const allowedFields = new Set(['key', 'invoiceNumber', 'templateCode', 'symbol', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'issueDate', 'totalAmount', 'vatRate', 'items', 'paymentMethod', 'note']);
     if (!payload.record || typeof payload.record !== 'object' || Array.isArray(payload.record)
       || Object.keys(payload.record).some(field => !allowedFields.has(field))) {
       throw new HttpError(422, 'Thông tin kiểm tra bản nháp không hợp lệ.');
@@ -10128,7 +10142,7 @@ async function handleRequest(request, response) {
       const patch = payload.patch;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(422, 'Dữ liệu cập nhật không hợp lệ.');
       if (scope === 'finance_einvoices') {
-        const editableFields = new Set(['key', 'invoiceNumber', 'templateKey', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'totalAmount', 'vatRate', 'items']);
+        const editableFields = new Set(['key', 'invoiceNumber', 'templateKey', 'buyerName', 'buyerType', 'buyerEntityName', 'buyerCustomerKey', 'buyerTaxCode', 'buyerAddress', 'buyerEmail', 'buyerPhone', 'totalAmount', 'vatRate', 'items', 'paymentMethod', 'note']);
         if (!Object.keys(patch).length || Object.keys(patch).some(field => !editableFields.has(field))) {
           throw new HttpError(422, 'Bản nháp chỉ cho phép sửa mã bản nháp, thông tin người mua, tiền hàng và thuế suất.');
         }

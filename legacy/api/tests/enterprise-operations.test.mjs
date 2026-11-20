@@ -234,7 +234,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   ]) await request(route, 'POST', payload, 409);
   await request('/system/company-profile', 'PUT', { ...initial, companyName: '' }, 422);
   const bank = (await request('/finance/bank-accounts', 'POST', { bankName: 'Configured Bank', accountNumber: '0012345', accountHolder: 'Configured Company', balance: 0, status: 'Đang hoạt động' }, 201)).account;
-  const profile = { ...initial, companyName: 'Doanh nghiệp cấu hình', fullName: 'Tên pháp nhân đầy đủ', shortName: 'DN', companyCode: 'DN-001', taxCode: '0012345678', businessType: 'Công nghệ', establishedDate: '2020-02-29', registrationDate: '2020-03-01', registrationNo: 'DK-001', registrationIssuer: 'Nơi cấp đã nhập', representative: 'Đại diện đã nhập', representativeTitle: 'Giám đốc đã nhập', address: 'Địa chỉ đã nhập', phone: '+84900000000', fax: '0100000000', email: 'office@example.test', website: 'https://example.test/vi', domain: 'portal.example.test', timezone: 'UTC', currency: 'USD', bankAccountId: bank.key, legalForm: 'llc_single', companySize: 'small', industry: 'Công nghệ', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01', fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction', updatedBy: 'forged' };
+  const profile = { ...initial, companyName: 'Doanh nghiệp cấu hình', fullName: 'Tên pháp nhân đầy đủ', shortName: 'DN', companyCode: 'DN-001', taxCode: '0012345672', businessType: 'Công nghệ', establishedDate: '2020-02-29', registrationDate: '2020-03-01', registrationNo: 'DK-001', registrationIssuer: 'Nơi cấp đã nhập', representative: 'Đại diện đã nhập', representativeTitle: 'Giám đốc đã nhập', address: 'Địa chỉ đã nhập', phone: '+84900000000', fax: '0100000000', email: 'office@example.test', website: 'https://example.test/vi', domain: 'portal.example.test', timezone: 'UTC', currency: 'USD', bankAccountId: bank.key, legalForm: 'llc_single', companySize: 'small', industry: 'Công nghệ', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01', fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction', updatedBy: 'forged' };
   for (const invalid of [
     { establishedDate: '2026-02-30' }, { email: 'invalid' }, { website: 'javascript:alert(1)' },
     { domain: 'user:password@example.test' }, { domain: 'example.test/path' }, { timezone: 'Invented' },
@@ -262,7 +262,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT24' }, 422);
   await request('/system/company-profile', 'PUT', { ...cooperative, accountingRegime: 'TT133', cooperativeUsesTT133: true }, 422);
   const saved = (await request('/system/company-profile', 'PUT', { ...profile, updatedAt: cooperative.updatedAt, revision: cooperative.revision })).profile;
-  assert.equal(saved.taxCode, '0012345678'); assert.equal(saved.updatedBy, session.user.name); assert.equal(saved.revision, 6);
+  assert.equal(saved.taxCode, '0012345672'); assert.equal(saved.updatedBy, session.user.name); assert.equal(saved.revision, 6);
   assert.equal(saved.accountingProfileComplete, true);
   for (const key of ['fullName', 'shortName', 'companyCode', 'businessType', 'establishedDate', 'registrationDate', 'registrationNo', 'registrationIssuer', 'representative', 'representativeTitle', 'phone', 'fax', 'email', 'website', 'domain', 'timezone', 'currency', 'bankAccountId', 'legalForm', 'companySize', 'industry', 'accountingRegime', 'cooperativeUsesTT133', 'fiscalYearStartMonth', 'fiscalYearStartDay', 'vatMethod', 'citMethod']) assert.equal(saved[key], profile[key], key);
   assert.deepEqual((await request('/system/company-profile')).profile, saved);
@@ -279,12 +279,23 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/collections/finance_tax', 'POST', licenseFiling(2026), 422);
   await request('/collections/finance_tax', 'POST', licenseFiling(2025), 201);
   await request('/collections/finance_tax', 'POST', { record: { key: 'tax-invalid', code: 'TAX-INVALID', taxType: 'Thuế GTGT', period: 'Quý IV/2026', deadline: '2027-02-30', amountPayable: 1200 } }, 422);
-  const invoiceDraft = (await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-draft-profile', invoiceNumber: 'DRAFT-1', buyerName: 'Khách kiểm thử', buyerTaxCode: '0012345678', issueDate: '2026-10-10', totalAmount: 1000, vatRate: '10%', vatAmount: 5, finalAmount: 9999, status: 'Đã phát hành & Ký số', cqtCode: 'forged' } }, 201)).record;
+  const invoiceDraft = (await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-draft-profile', invoiceNumber: 'DRAFT-1', buyerName: 'Khách kiểm thử', buyerTaxCode: '0012345672', issueDate: '2026-10-10', totalAmount: 1000, vatRate: '10%', vatAmount: 5, finalAmount: 9999, status: 'Đã phát hành & Ký số', cqtCode: 'forged' } }, 201)).record;
   assert.equal(invoiceDraft.status, 'Hóa đơn nháp');
   assert.equal(invoiceDraft.externalStatus, 'Chưa gửi nhà cung cấp');
   assert.equal(invoiceDraft.vatAmount, 100);
   assert.equal(invoiceDraft.finalAmount, 1100);
   assert.equal(invoiceDraft.cqtCode, undefined);
+  // Nội dung bắt buộc của hóa đơn: số tiền bằng chữ, thuế theo từng thuế suất, thông tin người bán từ hồ sơ doanh nghiệp, danh sách nội dung còn thiếu.
+  assert.equal(invoiceDraft.finalAmountInWords, 'Một nghìn một trăm đồng chẵn');
+  assert.deepEqual(invoiceDraft.vatBreakdown, [{ rate: 10, base: 1000, vat: 100 }]);
+  assert.ok(invoiceDraft.contentIssues.some(issue => issue.includes('ký hiệu')));
+  assert.equal(typeof invoiceDraft.sellerTaxCode, 'string');
+  const invoiceWithBuyer = (key, extra) => ({ record: { key, invoiceNumber: key, buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: 10, ...extra } });
+  await request('/collections/finance_einvoices', 'POST', invoiceWithBuyer('invoice-bad-mst', { buyerType: 'organization', buyerTaxCode: '0012345679' }), 422);
+  await request('/collections/finance_einvoices', 'POST', invoiceWithBuyer('invoice-org-id', { buyerType: 'organization', buyerTaxCode: '079123456789' }), 422);
+  const personInvoice = (await request('/collections/finance_einvoices', 'POST', invoiceWithBuyer('invoice-person-id', { buyerType: 'person', buyerTaxCode: '079123456789', paymentMethod: 'Chuyển khoản' }), 201)).record;
+  assert.equal(personInvoice.paymentMethod, 'Chuyển khoản');
+  await request('/collections/finance_einvoices', 'POST', invoiceWithBuyer('invoice-bad-payment', { paymentMethod: 'Bitcoin' }), 422);
   // Thuế suất chỉ nhận 0, 5, 10; 8% chỉ trong giai đoạn giảm thuế (Nghị quyết 204/2025/QH15, đến hết 31/12/2026).
   const invoiceWithRate = (key, issueDate, vatRate) => ({ record: { key, invoiceNumber: key, buyerName: 'Khách kiểm thử', issueDate, totalAmount: 1000, vatRate } });
   await request('/collections/finance_einvoices', 'POST', invoiceWithRate('invoice-custom-rate', '2026-10-10', 7.25), 422);

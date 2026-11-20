@@ -51,6 +51,14 @@ interface EInvoice {
   buyerAddress?: string;
   buyerEmail?: string;
   buyerPhone?: string;
+  paymentMethod?: string;
+  note?: string;
+  sellerName?: string;
+  sellerTaxCode?: string;
+  sellerAddress?: string;
+  finalAmountInWords?: string;
+  vatBreakdown?: Array<{ rate: number; base: number; vat: number }>;
+  contentIssues?: string[];
   issueDate: string;
   totalAmount: number;
   vatRate?: number | string | null;
@@ -116,6 +124,8 @@ interface EInvoiceLineDraft {
 const blankInvoiceLine = (): EInvoiceLineDraft => ({
   key: crypto.randomUUID(), productKey: '', sku: '', name: '', unit: '', quantity: '1', unitPrice: '', discountAmount: '0', vatRate: '',
 });
+
+const PAYMENT_METHOD_OPTIONS = ['Tiền mặt', 'Chuyển khoản', 'Tiền mặt hoặc chuyển khoản'].map(value => ({ value, label: value }));
 
 const vietnamToday = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
@@ -383,6 +393,8 @@ export const EInvoiceModule: React.FC = () => {
           buyerAddress: String(values.buyerAddress || '').trim(),
           buyerEmail: String(values.buyerEmail || '').trim(),
           buyerPhone: String(values.buyerPhone || '').trim(),
+          paymentMethod: values.paymentMethod || '',
+          note: String(values.note || '').trim(),
           items,
         });
         message.success(`Đã cập nhật bản nháp ${values.invoiceNumber}.`);
@@ -447,6 +459,8 @@ export const EInvoiceModule: React.FC = () => {
         buyerAddress: String(values.buyerAddress || '').trim(),
         buyerEmail: String(values.buyerEmail || '').trim(),
         buyerPhone: String(values.buyerPhone || '').trim(),
+        paymentMethod: values.paymentMethod || '',
+        note: String(values.note || '').trim(),
         issueDate: current?.issueDate || new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()),
         items,
       }, current?.key);
@@ -485,6 +499,8 @@ export const EInvoiceModule: React.FC = () => {
       buyerAddress: record.buyerAddress || '',
       buyerEmail: record.buyerEmail || '',
       buyerPhone: record.buyerPhone || '',
+      paymentMethod: record.paymentMethod || '',
+      note: record.note || '',
     });
     setModalOpen(true);
   };
@@ -509,6 +525,8 @@ export const EInvoiceModule: React.FC = () => {
       buyerAddress: record.buyerAddress || '',
       buyerEmail: record.buyerEmail || '',
       buyerPhone: record.buyerPhone || '',
+      paymentMethod: record.paymentMethod || '',
+      note: record.note || '',
     });
     setModalOpen(true);
   };
@@ -742,6 +760,14 @@ export const EInvoiceModule: React.FC = () => {
             <Form.Item name="buyerEmail" label="Email nhận hóa đơn">
               <Input type="email" />
             </Form.Item>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Form.Item name="paymentMethod" label="Hình thức thanh toán">
+                <Select allowClear options={PAYMENT_METHOD_OPTIONS} />
+              </Form.Item>
+              <Form.Item name="note" label="Ghi chú trên hóa đơn">
+                <Input maxLength={500} />
+              </Form.Item>
+            </div>
             <EInvoiceItemsEditor lines={invoiceLines} products={products} issueDate={editingRecord?.issueDate || vietnamToday()} onChange={updateInvoiceLine}
               onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
               onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
@@ -1000,6 +1026,8 @@ export const EInvoiceModule: React.FC = () => {
           </Form.Item>
           <Form.Item name="buyerAddress" label="Địa chỉ người mua"><Input /></Form.Item>
           <Form.Item name="buyerEmail" label="Email nhận hóa đơn"><Input type="email" /></Form.Item>
+          <Form.Item name="paymentMethod" label="Hình thức thanh toán"><Select allowClear options={PAYMENT_METHOD_OPTIONS} /></Form.Item>
+          <Form.Item name="note" label="Ghi chú trên hóa đơn"><Input maxLength={500} /></Form.Item>
           <Form.Item name="buyerPhone" label="Số điện thoại"><Input /></Form.Item>
           <EInvoiceItemsEditor lines={invoiceLines} products={products} issueDate={editingRecord?.issueDate || vietnamToday()} onChange={updateInvoiceLine}
             onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
@@ -1023,10 +1051,21 @@ export const EInvoiceModule: React.FC = () => {
           <div><span style={{ color: '#64748B' }}>Địa chỉ:</span> {previewRecord.buyerAddress || 'Chưa khai báo'}</div>
           <div><span style={{ color: '#64748B' }}>Email:</span> {previewRecord.buyerEmail || 'Chưa khai báo'}</div>
           <div><span style={{ color: '#64748B' }}>Điện thoại:</span> {previewRecord.buyerPhone || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Người bán:</span> {previewRecord.sellerName || 'Chưa khai báo'}{previewRecord.sellerTaxCode ? ` · MST ${previewRecord.sellerTaxCode}` : ''}</div>
+          <div><span style={{ color: '#64748B' }}>Địa chỉ người bán:</span> {previewRecord.sellerAddress || 'Chưa khai báo'}</div>
+          <div><span style={{ color: '#64748B' }}>Hình thức thanh toán:</span> {previewRecord.paymentMethod || 'Chưa chọn'}</div>
+          {previewRecord.note && <div><span style={{ color: '#64748B' }}>Ghi chú:</span> {previewRecord.note}</div>}
           <div><span style={{ color: '#64748B' }}>Ngày lập nháp:</span> {previewRecord.issueDate}</div>
           <div><span style={{ color: '#64748B' }}>Tiền trước thuế:</span> {Number(previewRecord.totalAmount).toLocaleString('vi-VN')} ₫</div>
           <div><span style={{ color: '#64748B' }}>Thuế GTGT:</span> {Number(previewRecord.vatAmount).toLocaleString('vi-VN')} ₫</div>
           <div><span style={{ color: '#64748B' }}>Tổng thanh toán:</span> {Number(previewRecord.finalAmount).toLocaleString('vi-VN')} ₫</div>
+          {previewRecord.vatBreakdown?.map(row => (
+            <div key={row.rate}><span style={{ color: '#64748B' }}>Thuế suất {row.rate}%:</span> tiền hàng {row.base.toLocaleString('vi-VN')} ₫, thuế {row.vat.toLocaleString('vi-VN')} ₫</div>
+          ))}
+          {previewRecord.finalAmountInWords && <div><span style={{ color: '#64748B' }}>Số tiền viết bằng chữ:</span> {previewRecord.finalAmountInWords}</div>}
+          {previewRecord.contentIssues && previewRecord.contentIssues.length > 0 && (
+            <Alert type="warning" showIcon message="Nội dung bắt buộc còn thiếu trước khi phát hành" description={previewRecord.contentIssues.join(' ')} />
+          )}
         </div>}
       </Modal>
       <Modal title="Tạo nhanh khách hàng" open={quickCustomerOpen} onCancel={() => { setQuickCustomerOpen(false); setQuickCustomerTargetForm(null); }} footer={null} width={680}>
