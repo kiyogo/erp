@@ -274,6 +274,10 @@ test('company profile stores all legal fields, validates dates and settings, rej
   const taxDraft = (await request('/collections/finance_tax', 'POST', { record: { key: 'tax-draft-profile', code: 'TAX-TEST', taxType: 'Thuế GTGT', period: 'Quý IV/2026', deadline: '2027-01-30', amountPayable: 1200, amountPaid: 1200, status: 'Đã nộp đủ' } }, 201)).record;
   assert.equal(taxDraft.amountPaid, 0);
   assert.equal(taxDraft.status, 'Chờ nộp thuế');
+  // Lệ phí môn bài không còn thu từ 01/01/2026; kỳ trước vẫn lưu được.
+  const licenseFiling = (taxYear) => ({ record: { key: `tax-license-${taxYear}`, code: `TAX-LICENSE-${taxYear}`, taxType: 'Lệ phí Môn bài', period: String(taxYear), deadline: `${taxYear}-01-30`, amountPayable: 3_000_000, taxYear } });
+  await request('/collections/finance_tax', 'POST', licenseFiling(2026), 422);
+  await request('/collections/finance_tax', 'POST', licenseFiling(2025), 201);
   await request('/collections/finance_tax', 'POST', { record: { key: 'tax-invalid', code: 'TAX-INVALID', taxType: 'Thuế GTGT', period: 'Quý IV/2026', deadline: '2027-02-30', amountPayable: 1200 } }, 422);
   const invoiceDraft = (await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-draft-profile', invoiceNumber: 'DRAFT-1', buyerName: 'Khách kiểm thử', buyerTaxCode: '0012345678', issueDate: '2026-10-10', totalAmount: 1000, vatRate: '10%', vatAmount: 5, finalAmount: 9999, status: 'Đã phát hành & Ký số', cqtCode: 'forged' } }, 201)).record;
   assert.equal(invoiceDraft.status, 'Hóa đơn nháp');

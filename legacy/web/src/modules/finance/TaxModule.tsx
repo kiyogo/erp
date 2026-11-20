@@ -21,7 +21,7 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert, DatePicker, FileUploadDialog } from '../../custom-ui';
-import { CrmContact, FinancePaymentAccount, FinancePaymentRequest, crmContactsApi, filesApi, financePaymentAccountsApi, financePaymentsApi } from '../../api/endpoints';
+import { CrmContact, FinancePaymentAccount, FinancePaymentRequest, TaxEstimate, crmContactsApi, filesApi, financePaymentAccountsApi, financePaymentsApi, financeTaxEstimateApi } from '../../api/endpoints';
 import { hasOpenTaxPayment, isValidTaxPaymentAmount, validateTaxFiling } from './taxWorkflowRules';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile } from '../../utils/fileExporter';
@@ -305,11 +305,34 @@ export const TaxModule: React.FC = () => {
   const filingTaxTypeOptions = [
     { label: 'Thuế GTGT', value: 'Thuế GTGT' },
     { label: 'Thuế TNDN tạm tính', value: 'Thuế TNDN tạm tính' },
+    { label: 'Quyết toán thuế TNDN', value: 'Quyết toán thuế TNDN' },
     { label: 'Thuế TNCN khấu trừ', value: 'Thuế TNCN khấu trừ' },
     { label: 'Lệ phí Môn bài', value: 'Lệ phí Môn bài' },
     ...taxTypes.filter(item => item.status === 'Đang theo dõi').map(item => ({ label: `${item.taxName} · ${item.taxCode}`, value: item.taxName })),
   ];
   const deadlineRows = data.filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.deadline || '')).sort((a, b) => a.deadline.localeCompare(b.deadline));
+
+  const [estimate, setEstimate] = useState<TaxEstimate | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  const calculateFromLaw = async () => {
+    const values = form.getFieldsValue();
+    if (!values.taxType || !values.periodStart || !values.periodEnd) {
+      message.error('Chọn loại thuế và khoảng ngày của kỳ kê khai trước khi tính.');
+      return;
+    }
+    setEstimating(true);
+    try {
+      const response = await financeTaxEstimateApi.get({ taxType: String(values.taxType), filingMethod: String(values.filingMethod || ''), periodStart: String(values.periodStart), periodEnd: String(values.periodEnd) });
+      const result = response.data.data;
+      setEstimate(result);
+      form.setFieldsValue({ filingDeadline: result.deadline, deadline: result.deadline, ...(result.amountPayable !== undefined ? { amountPayable: result.amountPayable } : {}) });
+    } catch (error: any) {
+      setEstimate(null);
+      message.error(error?.response?.data?.message || 'Không tính được thuế cho kỳ này.');
+    } finally {
+      setEstimating(false);
+    }
+  };
 
   const handleCreate = async (values: any) => {
     const payable = values.amountPayable === '' || values.amountPayable === null || values.amountPayable === undefined
@@ -644,6 +667,7 @@ export const TaxModule: React.FC = () => {
               icon={<PlusOutlined />}
               onClick={() => {
                 form.resetFields();
+                setEstimate(null);
                 setModalOpen(true);
               }}
               style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -755,7 +779,7 @@ export const TaxModule: React.FC = () => {
         footer={null}
         width={780}
       >
-        <Alert message="Kỳ và hạn nộp do doanh nghiệp khai báo" description="Hệ thống lưu riêng hạn nộp hồ sơ và hạn nộp tiền. Các mốc này không được tự suy diễn theo luật và không gửi tờ khai tới cơ quan thuế." type="info" showIcon />
+        <Alert message="Tính số thuế và hạn nộp theo luật" description="Chọn loại thuế, chu kỳ và khoảng ngày của kỳ rồi bấm nút tính: hệ thống điền hạn nộp theo luật quản lý thuế và số phải nộp từ hóa đơn (GTGT) hoặc sổ cái (TNDN). Số liệu chỉ là tạm tính để đối chiếu với tờ khai, hệ thống không gửi tờ khai tới cơ quan thuế." type="info" showIcon />
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="code" label="Mã hồ sơ thuế" rules={[{ required: true }]}>
@@ -805,6 +829,15 @@ export const TaxModule: React.FC = () => {
             <Form.Item name="assignee" label="Người phụ trách"><Input maxLength={180} /></Form.Item>
           </div>
           <Form.Item name="notes" label="Ghi chú nội bộ"><Input maxLength={1000} /></Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+            <Button loading={estimating} onClick={calculateFromLaw}>Tính thuế và hạn nộp theo luật</Button>
+          </div>
+          {estimate && (
+            <Alert type="success" showIcon style={{ marginTop: 12 }} message={`Hạn nộp ${estimate.deadline}${estimate.amountPayable !== undefined ? `, số phải nộp tạm tính ${estimate.amountPayable.toLocaleString('vi-VN')} ₫` : ''}`}
+              description={[estimate.deadlineBasis, estimate.vat && `Thuế đầu ra ${estimate.vat.outputVat.toLocaleString('vi-VN')} ₫, thuế đầu vào được khấu trừ ${estimate.vat.deductibleInputVat.toLocaleString('vi-VN')} ₫.`,
+                estimate.cit && `Lợi nhuận kế toán ${estimate.cit.profit.toLocaleString('vi-VN')} ₫ nhân thuế suất ${estimate.cit.rate * 100}% (${estimate.cit.rateBasis}), đã kê khai trước đó ${estimate.cit.alreadyDeclared.toLocaleString('vi-VN')} ₫.`,
+                ...estimate.notes].filter(Boolean).join(' ')} />
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
             <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>

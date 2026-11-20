@@ -18,6 +18,7 @@ import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsT
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
 import { vatRateProblem } from './vatRules.mjs';
+import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
   maskPhone,
@@ -2496,12 +2497,15 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (duplicate) throw new HttpError(409, 'Mã hồ sơ thuế đã tồn tại.');
     }
     record.taxType = requiredText(record.taxType, 'Loại thuế', 160);
-    const standardTaxTypes = ['Thuế GTGT', 'Thuế TNDN tạm tính', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài'];
+    const standardTaxTypes = ['Thuế GTGT', 'Thuế TNDN tạm tính', 'Quyết toán thuế TNDN', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài'];
     if (!standardTaxTypes.includes(record.taxType)) {
       const configuredType = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_tax_types' AND json_extract(payload_json, '$.taxName') = ? AND json_extract(payload_json, '$.status') = 'Đang theo dõi' LIMIT 1").get(record.taxType);
       if (!configuredType) throw new HttpError(422, 'Sắc thuế không có trong danh mục chuẩn hoặc hồ sơ nội bộ đang tạm ngưng.');
     }
     record.period = requiredText(record.period, 'Kỳ kê khai', 120);
+    // Lệ phí môn bài được bãi bỏ từ 01/01/2026 (Nghị quyết 198/2025/QH15, xác minh qua bài tổng hợp); hồ sơ kỳ trước vẫn được lưu.
+    const filingYear = Number(String(record.taxYear || record.periodStart || '').slice(0, 4));
+    if (record.taxType === 'Lệ phí Môn bài' && filingYear >= 2026) throw new HttpError(422, 'Lệ phí môn bài không còn thu từ năm 2026.');
     if (record.filingMethod !== undefined && record.filingMethod !== '') {
       record.filingMethod = oneOf(record.filingMethod, 'Chu kỳ kê khai', ['Tháng', 'Quý', 'Năm', 'Khác']);
     }
@@ -2533,7 +2537,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.taxCode = requiredText(record.taxCode, 'Mã sắc thuế', 40).toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9._-]*$/.test(record.taxCode)) throw new HttpError(422, 'Mã sắc thuế chỉ được gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang.');
     record.taxName = requiredText(record.taxName, 'Tên sắc thuế', 160);
-    if (['Thuế GTGT', 'Thuế TNDN tạm tính', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài'].includes(record.taxName)) {
+    if (['Thuế GTGT', 'Thuế TNDN tạm tính', 'Quyết toán thuế TNDN', 'Thuế TNCN khấu trừ', 'Lệ phí Môn bài'].includes(record.taxName)) {
       throw new HttpError(409, 'Tên sắc thuế này đã thuộc danh mục chuẩn tích hợp sẵn.');
     }
     record.taxGroup = oneOf(record.taxGroup, 'Nhóm thuế', ['GTGT', 'TNDN', 'TNCN', 'Thuế nhà thầu', 'Tiêu thụ đặc biệt', 'Xuất nhập khẩu', 'Tài nguyên', 'Nghĩa vụ khác']);
@@ -9607,6 +9611,52 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === 'GET' && resource === '/finance/tax/estimate') {
+    await requireAdmin(request);
+    const query = new URL(request.url || '/', 'http://localhost').searchParams;
+    const taxType = oneOf(query.get('taxType'), 'Loại thuế', Object.values(TAX_FILING_TYPES));
+    const periodStart = requiredIsoDate(query.get('periodStart'), 'Ngày bắt đầu kỳ');
+    const periodEnd = requiredIsoDate(query.get('periodEnd'), 'Ngày kết thúc kỳ');
+    if (periodStart > periodEnd) throw new HttpError(422, 'Ngày bắt đầu kỳ không được sau ngày kết thúc kỳ.');
+    let filing;
+    try { filing = taxFilingDeadline({ taxType, filingMethod: query.get('filingMethod') || '', periodEnd }); } catch (error) { throw new HttpError(422, error.message); }
+    const profile = await getCompanyProfile();
+    const result = { taxType, periodStart, periodEnd, deadline: filing.deadline, deadlineBasis: filing.basis, notes: [] };
+    if (taxType === TAX_FILING_TYPES.vat) {
+      if (profile.vatMethod && profile.vatMethod !== 'deduction') throw new HttpError(409, 'Hồ sơ kế toán dùng phương pháp tính thuế GTGT trực tiếp; hệ thống mới tính được phương pháp khấu trừ.');
+      const rows = await db.prepare("SELECT * FROM finance_documents WHERE document_type IN ('invoice', 'purchase') AND document_date >= ? AND document_date <= ?").all(periodStart, periodEnd);
+      const summary = vatSummary(rows.map(publicFinanceDocument), periodStart, periodEnd);
+      Object.assign(result, { vat: summary, amountPayable: summary.amountPayable });
+      if (summary.inputVatNeedingProof > 0) result.notes.push(`Có ${summary.needsProof.length} nhóm hóa đơn đầu vào từ ngưỡng thanh toán không dùng tiền mặt, thuế ${summary.inputVatNeedingProof.toLocaleString('vi-VN')} đồng chưa tính vào số khấu trừ; cộng lại nếu đã có chứng từ chuyển khoản.`);
+      if (summary.carriedForward > 0) result.notes.push(`Thuế đầu vào lớn hơn đầu ra ${summary.carriedForward.toLocaleString('vi-VN')} đồng: không phải nộp, số này được khấu trừ kỳ sau hoặc xét hoàn thuế. Số dư khấu trừ chuyển từ kỳ trước chưa được cộng vào.`);
+    } else if (taxType === TAX_FILING_TYPES.citProvisional || taxType === TAX_FILING_TYPES.citFinalization) {
+      const fiscalStart = accountingFiscalYearStartDate(profile, periodEnd) || `${periodEnd.slice(0, 4)}-01-01`;
+      const taxYear = Number(fiscalStart.slice(0, 4));
+      const ledger = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_general_ledger'").all()).map(row => parseJsonObject(row.payload_json));
+      const previousStart = `${taxYear - 1}${fiscalStart.slice(4)}`;
+      const previousEnd = new Date(Date.parse(`${fiscalStart}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+      const requestedRevenue = query.get('previousYearRevenue');
+      const previousRevenue = requestedRevenue !== null && requestedRevenue !== '' ? Number(requestedRevenue) : ledgerProfit(ledger, previousStart, previousEnd).revenue;
+      let rate;
+      try { rate = citRate({ taxYear, previousYearRevenue: previousRevenue }); } catch (error) { throw new HttpError(422, error.message); }
+      const current = ledgerProfit(ledger, fiscalStart, periodEnd);
+      const declared = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_tax'").all()).map(row => parseJsonObject(row.payload_json))
+        .filter(item => item.taxType === TAX_FILING_TYPES.citProvisional && item.periodEnd >= fiscalStart && item.periodEnd <= periodEnd && (taxType === TAX_FILING_TYPES.citFinalization || item.periodEnd !== periodEnd));
+      const alreadyDeclared = declared.reduce((sum, item) => sum + (Number(item.amountPayable) || 0), 0);
+      const taxDue = Math.max(0, Math.round(current.profit * rate.rate));
+      result.cit = { fiscalYearStart: fiscalStart, revenue: current.revenue, expense: current.expense, profit: current.profit, previousYearRevenue: previousRevenue, rate: rate.rate, rateBasis: rate.basis, taxDueToDate: taxDue, alreadyDeclared };
+      result.amountPayable = Math.max(0, taxDue - alreadyDeclared);
+      result.notes.push('Lợi nhuận lấy từ sổ cái chưa điều chỉnh chi phí không được trừ, thu nhập miễn thuế, lỗ chuyển và ưu đãi thuế; kiểm tra lại trước khi nộp.');
+      if (requestedRevenue === null && previousRevenue === 0) result.notes.push('Sổ cái không có doanh thu năm trước nên thuế suất tính theo mức doanh thu tới 3 tỷ đồng; nhập doanh thu năm trước thực tế nếu khác.');
+      if (taxType === TAX_FILING_TYPES.citFinalization) {
+        const provisional = declared.reduce((sum, item) => sum + (Number(item.amountPayable) || 0), 0);
+        result.cit.provisionalPaid = provisional;
+        if (taxDue > 0 && provisional < taxDue * 0.8) result.notes.push(`Tổng tạm nộp ${provisional.toLocaleString('vi-VN')} đồng thấp hơn 80% số quyết toán: phần thiếu bị tính tiền chậm nộp kể từ ngày sau hạn tạm nộp quý 4 (Nghị định 252/2026 Điều 24 khoản 3).`);
+      }
+    }
+    sendJson(response, 200, { data: result });
+    return;
+  }
   if (request.method === 'GET' && resource === '/finance/accounting-transitions/tt132-to-tt58') {
     await requireAdmin(request);
     const profile = await requireAccountingProfile();

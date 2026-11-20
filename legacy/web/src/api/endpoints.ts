@@ -583,6 +583,16 @@ export type FinancePaymentRequest = {
   financeTransactionId?: string;
 };
 
+export type TaxEstimate = {
+  taxType: string; periodStart: string; periodEnd: string; deadline: string; deadlineBasis: string; notes: string[]; amountPayable?: number;
+  vat?: { outputVat: number; deductibleInputVat: number; inputVatNeedingProof: number; carriedForward: number };
+  cit?: { revenue: number; expense: number; profit: number; rate: number; rateBasis: string; taxDueToDate: number; alreadyDeclared: number };
+};
+
+export const financeTaxEstimateApi = {
+  get: (params: { taxType: string; filingMethod?: string; periodStart: string; periodEnd: string; previousYearRevenue?: number }) => api.get<{ data: TaxEstimate }>('/finance/tax/estimate', { params }),
+};
+
 export const financePaymentsApi = {
   getAll: (page = 1, limit = 200) => api.get<{ data: FinancePaymentRequest[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>('/finance/payments', { params: { page, limit } }),
   create: (data: { beneficiary: string; bankAccountInfo: string; category: string; amount: number; paymentMethod: FinancePaymentRequest['paymentMethod']; debitAccount: string; taxCode?: string; sourceModule: 'finance_tax'; sourceReference: string }) => api.post<{ payment: FinancePaymentRequest }>('/finance/payments', data),
