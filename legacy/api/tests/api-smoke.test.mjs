@@ -2841,3 +2841,29 @@ test('software licenses keep purchase documents, VAT and the accounting treatmen
   await request('/assets/licenses', 'POST', { ...license }, 409);
 });
 
+test('digital certificates enforce the 3-year limit, tax code, authorization and revocation lifecycle', async () => {
+  const cert = (key, extra = {}) => ({ certNumber: `CTS-${key}`, provider: 'Nhà cung cấp CTS', subjectName: 'Công ty chứng thư', signType: 'USB Token', authorizedSigner: 'Giám đốc', validFrom: '2026-01-01', validTo: '2028-12-31', subjectTaxCode: '0100109106', ...extra });
+  const post = (record, expected = 201) => request('/collections/finance_digital_signatures', 'POST', { record }, expected);
+  await post(cert('LONG', { validTo: '2029-01-02' }), 422);
+  await post(cert('BADTAX', { subjectTaxCode: '0100109107' }), 422);
+  await post(cert('AUTH', { signerRole: 'authorized' }), 422);
+  await post(cert('REVOKE', { lifecycle: 'revoked' }), 422);
+  const saved = (await post(cert('OK', { warnings: [], lifecycle: 'active' }))).record;
+  assert.equal(saved.certKind, 'public');
+  assert.equal(saved.signerRole, 'legal_representative');
+  assert.equal(saved.lifecycle, 'active');
+  assert.ok(Array.isArray(saved.warnings));
+  const authorized = (await post(cert('AUTHOK', { signerRole: 'authorized', authorizationNo: 'UQ-01', authorizationDate: '2026-01-15', certKind: 'dedicated', validTo: '2034-12-31' }))).record;
+  assert.equal(authorized.authorizationNo, 'UQ-01');
+  assert.equal(authorized.certKind, 'dedicated');
+  const patch = (key, body, expected = 200) => request(`/collections/finance_digital_signatures/${key}`, 'PATCH', { patch: body }, expected);
+  assert.equal((await patch(saved.key, { lifecycle: 'suspended' })).record.lifecycle, 'suspended');
+  assert.equal((await patch(saved.key, { lifecycle: 'active' })).record.lifecycle, 'active');
+  await patch(saved.key, { lifecycle: 'revoked', revokedAt: '2099-01-01', revokeReason: 'Mất' }, 422);
+  const revoked = (await patch(saved.key, { lifecycle: 'revoked', revokedAt: '2026-06-01', revokeReason: 'Mất token' })).record;
+  assert.equal(revoked.lifecycle, 'revoked');
+  await patch(saved.key, { lifecycle: 'active' }, 422);
+  await patch(saved.key, { validTo: '2029-01-01' }, 422);
+  await patch(saved.key, { revokeReason: 'Sửa' }, 422);
+});
+

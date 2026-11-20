@@ -27,6 +27,7 @@ import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
 import { calculateCosting } from './costingRules.mjs';
 import { normalizeBreach } from './incidentRules.mjs';
 import { normalizeLicenseLegal } from './licenseRules.mjs';
+import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -5025,6 +5026,12 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       };
     });
     delete record.status;
+    // Loại chữ ký và thời hạn tối đa, mã số thuế chủ thể, người ký và ủy quyền, tạm dừng hoặc thu hồi; cảnh báo do máy chủ tính.
+    try {
+      const legal = normalizeCertificateLegal(record, current, { today: todayInVietnam(), companyTaxCode: (await getCompanyProfile()).taxCode || '' });
+      Object.assign(record, legal.fields);
+      record.warnings = legal.warnings;
+    } catch (error) { throw new HttpError(422, error.message); }
   }
   if (scope === 'finance_equity') {
     // Vốn góp = số cổ phần x mệnh giá do người dùng nhập; tỷ lệ sở hữu được tính khi hiển thị nên không lưu.
@@ -7448,7 +7455,7 @@ async function processExpiryReminders() {
     // 2. Chứng thư số của doanh nghiệp.
     for (const row of await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_digital_signatures'").all()) {
       const cert = parseJsonObject(row.payload_json);
-      if (!isIsoDate(cert.validTo)) continue;
+      if (!isIsoDate(cert.validTo) || cert.lifecycle === 'revoked') continue;
       const days = daysBetween(today, cert.validTo);
       const bucket = reminderBucket(days);
       if (bucket === null) continue;
