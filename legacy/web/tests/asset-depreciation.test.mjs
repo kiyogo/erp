@@ -58,3 +58,12 @@ test('depreciation rejects invalid cost, life, and date instead of inventing val
   assert.throws(() => buildDepreciationSchedule({ ...base, lifeMonths: 0 }), /thời gian/i);
   assert.throws(() => buildDepreciationSchedule({ ...base, startDate: '2026-13-01' }), /ngày bắt đầu/i);
 });
+
+test('buildings can be depreciated over 50 years (600 months) but not longer', () => {
+  const base = { originalCost: 6_000_000_000, residualValue: 0, startDate: '2026-01-01', method: 'Đường thẳng' };
+  const rows = buildDepreciationSchedule({ ...base, lifeMonths: 600 });
+  assert.equal(rows.length, 600);
+  assert.equal(rows.at(-1).period, '2075-12');
+  assert.equal(rows.reduce((sum, row) => sum + row.monthlyAmount, 0), 6_000_000_000);
+  assert.throws(() => buildDepreciationSchedule({ ...base, lifeMonths: 601 }), /600 tháng/);
+});

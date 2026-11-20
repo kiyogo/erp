@@ -102,7 +102,7 @@ const normalizeAsset = (item: any): DepreciationItem => {
 function parseOpeningProductionHistory(value: unknown): Record<string, number> {
   const history: Record<string, number> = {};
   const lines = String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length > 120) throw new Error('Lịch sản lượng đầu kỳ không được quá 120 kỳ.');
+  if (lines.length > 600) throw new Error('Lịch sản lượng đầu kỳ không được quá 600 kỳ.');
   for (const line of lines) {
     const match = /^(\d{4}-(?:0[1-9]|1[0-2]))\s*:\s*(\d+)$/.exec(line);
     if (!match) throw new Error(`Dòng sản lượng đầu kỳ không hợp lệ: ${line}. Dùng định dạng YYYY-MM: số lượng.`);

@@ -25,7 +25,7 @@ export function buildDepreciationSchedule(input: {
   if (!Number.isFinite(originalCost) || originalCost <= 0 || !Number.isFinite(residualValue) || residualValue < 0 || residualValue >= originalCost) {
     throw new Error('Nguyên giá phải lớn hơn 0 và giá trị thu hồi phải nhỏ hơn nguyên giá.');
   }
-  if (!Number.isInteger(lifeMonths) || lifeMonths < 1 || lifeMonths > 120) throw new Error('Thời gian khấu hao phải từ 1 đến 120 tháng.');
+  if (!Number.isInteger(lifeMonths) || lifeMonths < 1 || lifeMonths > 600) throw new Error('Thời gian khấu hao phải từ 1 đến 600 tháng.');
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
   const year = Number(match?.[1]);
   const month = Number(match?.[2]);

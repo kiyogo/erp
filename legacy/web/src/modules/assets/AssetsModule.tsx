@@ -20,7 +20,8 @@ import {
   FilePdfOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Table, Progress } from '../../custom-ui';
+import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Table, Progress, Checkbox } from '../../custom-ui';
+import { ASSET_CLASS_OPTIONS, assetLifeGroupOptions } from './assetLifeGroups';
 import { dataService } from '../../services/dataService';
 import { collectionsApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -48,6 +49,11 @@ export interface ComprehensiveAsset {
   specs: string;
   notes: string;
   history?: Array<{ key: string; date: string; action: string; actor: string; note: string }>;
+  assetClass?: string;
+  usefulLifeGroup?: string;
+  taxDeductibleCost?: number;
+  taxWarnings?: string[];
+  ownershipProof?: string;
 }
 
 const INITIAL_EXTENDED_ASSETS: ComprehensiveAsset[] = [];
@@ -711,6 +717,37 @@ export const AssetsModule: React.FC = () => {
             <Input.TextArea rows={2} placeholder="Chi tiết CPU, RAM, Ổ cứng, Cáp sạc, Túi chống sốc..." />
           </Form.Item>
 
+          <div style={{ color: '#64748B', margin: '4px 0 8px' }}>Thông tin pháp lý và thuế. Tài sản cố định cần nguyên giá từ 30 triệu đồng, thời gian khấu hao nằm trong khung của nhóm tài sản (Thông tư 45/2013/TT-BTC).</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="assetClass" label="Phân loại tài sản"><Select allowClear options={ASSET_CLASS_OPTIONS} /></Form.Item>
+            <Form.Item name="usefulLifeGroup" label="Nhóm theo khung khấu hao"><Select allowClear showSearch optionFilterProp="label" options={assetLifeGroupOptions} /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="invoiceNumber" label="Số hóa đơn mua"><Input maxLength={80} /></Form.Item>
+            <Form.Item name="invoiceDate" label="Ngày hóa đơn"><Input type="date" /></Form.Item>
+            <Form.Item name="inUseDate" label="Ngày đưa vào sử dụng"><Input type="date" /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="purchasePrice" label="Giá mua"><Input type="number" min={0} /></Form.Item>
+            <Form.Item name="nonRefundableTax" label="Thuế không hoàn lại"><Input type="number" min={0} /></Form.Item>
+            <Form.Item name="installCost" label="Vận chuyển, lắp đặt"><Input type="number" min={0} /></Form.Item>
+            <Form.Item name="otherCost" label="Chi phí khác"><Input type="number" min={0} /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="ownershipProof" label="Chứng từ quyền sở hữu"><Input maxLength={300} placeholder="Hóa đơn, hợp đồng, giấy đăng ký" /></Form.Item>
+            <Form.Item name="registrationNumber" label="Biển số hoặc số đăng ký"><Input maxLength={40} /></Form.Item>
+            <Form.Item name="vehicleSeats" label="Số chỗ ngồi (ô tô)"><Input type="number" min={1} max={100} /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="yearOfManufacture" label="Năm sản xuất"><Input type="number" min={1900} /></Form.Item>
+            <Form.Item name="countryOfOrigin" label="Nước sản xuất"><Input maxLength={100} /></Form.Item>
+            <Form.Item name="fundingSource" label="Nguồn vốn đầu tư"><Input maxLength={160} /></Form.Item>
+          </div>
+          <div style={{ display: 'flex', gap: 24, marginBottom: 8 }}>
+            <Form.Item name="usedAsset" valuePropName="checked"><Checkbox>Tài sản đã qua sử dụng</Checkbox></Form.Item>
+            <Form.Item name="transportBusiness" valuePropName="checked"><Checkbox>Xe kinh doanh vận tải, du lịch, khách sạn</Checkbox></Form.Item>
+          </div>
+
           <Form.Item name="notes" label="Ghi chú nghiệp vụ">
             <Input placeholder="Mục đích sử dụng hoặc điều kiện bàn giao..." />
           </Form.Item>
@@ -744,6 +781,13 @@ export const AssetsModule: React.FC = () => {
               </div>
               <div style={{ fontSize: 12.5, color: '#64748B', marginTop: 6 }}>{detailItem.model}</div>
             </div>
+
+            {detailItem.taxWarnings && detailItem.taxWarnings.length > 0 && (
+              <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', padding: 14, borderRadius: 8, fontSize: 12.5, color: '#92400E' }}>
+                <div style={{ marginBottom: 6 }}>Lưu ý khi tính thuế thu nhập doanh nghiệp</div>
+                {detailItem.taxWarnings.map(warning => <div key={warning} style={{ marginTop: 4 }}>{warning}</div>)}
+              </div>
+            )}
 
             {/* Financial Status */}
             <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', padding: 14, borderRadius: 8 }}>

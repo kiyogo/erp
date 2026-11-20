@@ -18,7 +18,8 @@ import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsT
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
 import { vatRateProblem } from './vatRules.mjs';
-import { contactTaxCodeProblem, dataConsentProblem, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
+import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, assetTaxWarnings, costBreakdownProblem, taxDeductibleCost } from './assetRules.mjs';
+import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
@@ -2061,6 +2062,49 @@ function parseMeetingTimeRange(value) {
   return { slot, start, end };
 }
 
+// Kiểm tra các trường pháp lý của danh mục tài sản và tính phần phái sinh (nguyên giá được trừ thuế, cảnh báo thuế) ở máy chủ.
+function validateAssetItemLegalFields(record) {
+  const today = todayInVietnam();
+  const whole = (field, label, min, max) => {
+    if (record[field] === undefined || record[field] === null || record[field] === '') { delete record[field]; return undefined; }
+    const value = Number(record[field]);
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw new HttpError(422, `${label} phải là số nguyên từ ${min} đến ${max}.`);
+    record[field] = value;
+    return value;
+  };
+  const price = whole('originalPrice', 'Nguyên giá', 0, 1_000_000_000_000_000);
+  const months = whole('depreciationMonths', 'Thời gian khấu hao (tháng)', 1, MAX_DEPRECIATION_MONTHS);
+  const seats = whole('vehicleSeats', 'Số chỗ ngồi', 1, 100);
+  whole('yearOfManufacture', 'Năm sản xuất', 1900, Number(today.slice(0, 4)));
+  const costParts = {};
+  for (const [field, label] of [['purchasePrice', 'Giá mua'], ['nonRefundableTax', 'Thuế không hoàn lại'], ['installCost', 'Chi phí vận chuyển, lắp đặt, chạy thử'], ['otherCost', 'Chi phí liên quan khác']]) {
+    costParts[field] = whole(field, label, 0, 1_000_000_000_000_000);
+  }
+  for (const [field, label, max] of [['invoiceNumber', 'Số hóa đơn mua', 80], ['ownershipProof', 'Chứng từ chứng minh quyền sở hữu', 300], ['registrationNumber', 'Biển số hoặc số đăng ký', 40], ['countryOfOrigin', 'Nước sản xuất', 100], ['fundingSource', 'Nguồn vốn đầu tư', 160]]) {
+    record[field] = optionalText(record[field], label, max);
+  }
+  record.usedAsset = record.usedAsset === true;
+  record.transportBusiness = record.transportBusiness === true;
+  record.assetClass = record.assetClass ? oneOf(record.assetClass, 'Phân loại tài sản', ASSET_CLASSES) : '';
+  record.usefulLifeGroup = record.usefulLifeGroup ? oneOf(record.usefulLifeGroup, 'Nhóm theo khung khấu hao', Object.keys(ASSET_LIFE_GROUPS)) : '';
+  const dateProblem = pastDateProblem(record.invoiceDate, 'Ngày hóa đơn mua') || pastDateProblem(record.purchaseDate, 'Ngày mua');
+  if (dateProblem) throw new HttpError(422, dateProblem);
+  if (record.warrantyExpiry && record.purchaseDate && record.warrantyExpiry < record.purchaseDate) throw new HttpError(422, 'Hạn bảo hành không được trước ngày mua.');
+  if (record.inUseDate && record.purchaseDate && record.inUseDate < record.purchaseDate) throw new HttpError(422, 'Ngày đưa vào sử dụng không được trước ngày mua.');
+  const problem = price !== undefined
+    ? assetClassProblem(record.assetClass, price) || costBreakdownProblem(costParts, price)
+    : '';
+  const lifeProblem = assetLifeProblem(record.usefulLifeGroup, months, record.usedAsset);
+  if (problem || lifeProblem) throw new HttpError(422, problem || lifeProblem);
+  if (price !== undefined) {
+    record.taxDeductibleCost = taxDeductibleCost({ originalPrice: price, vehicleSeats: seats, transportBusiness: record.transportBusiness, assetClass: record.assetClass, lifeGroup: record.usefulLifeGroup });
+    record.taxWarnings = assetTaxWarnings({ originalPrice: price, taxCost: record.taxDeductibleCost, ownershipProof: record.ownershipProof });
+  }
+}
+
+// Nhà cửa, vật kiến trúc kiên cố khấu hao tới 50 năm (Thông tư 45/2013/TT-BTC Phụ lục I), nên giới hạn chung là 600 tháng.
+const MAX_DEPRECIATION_MONTHS = 600;
+
 function buildAssetDepreciationSchedule({ originalCost, residualValue, lifeMonths, startDate, depreciatedMonths = 0, method, productionCapacity = 0, productionByPeriod = {} }) {
   const cost = Number(originalCost);
   const residual = Number(residualValue);
@@ -2068,7 +2112,7 @@ function buildAssetDepreciationSchedule({ originalCost, residualValue, lifeMonth
   if (!Number.isSafeInteger(cost) || cost <= 0 || !Number.isSafeInteger(residual) || residual < 0 || residual >= cost) {
     throw new HttpError(422, 'Nguyên giá phải lớn hơn 0 và giá trị thu hồi phải nhỏ hơn nguyên giá.');
   }
-  if (!Number.isSafeInteger(life) || life < 1 || life > 120) throw new HttpError(422, 'Thời gian khấu hao phải từ 1 đến 120 tháng.');
+  if (!Number.isSafeInteger(life) || life < 1 || life > MAX_DEPRECIATION_MONTHS) throw new HttpError(422, `Thời gian khấu hao phải từ 1 đến ${MAX_DEPRECIATION_MONTHS} tháng.`);
   const start = requiredIsoDate(startDate, 'Ngày bắt đầu khấu hao');
   const methods = ['Đường thẳng', 'Số dư giảm dần có điều chỉnh', 'Theo sản lượng / Công suất'];
   oneOf(method, 'Phương pháp khấu hao', methods);
@@ -3592,6 +3636,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (duplicateBarcode) throw new HttpError(409, 'Mã barcode đã tồn tại.');
       record.barcode = barcode;
     }
+    validateAssetItemLegalFields(record);
   }
   if (scope === 'asset_depreciations') {
     if (current) {
@@ -3618,8 +3663,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         throw new HttpError(422, 'Chỉ lập hồ sơ mới khi tài sản có nguyên giá hợp lệ và khấu hao lũy kế không vượt nguyên giá.');
       }
       const lifeMonths = Number(asset.depreciationMonths);
-      if (!Number.isSafeInteger(lifeMonths) || lifeMonths < 1 || lifeMonths > 120) {
-        throw new HttpError(422, 'Thời gian khấu hao trong danh mục phải từ 1 đến 120 tháng.');
+      if (!Number.isSafeInteger(lifeMonths) || lifeMonths < 1 || lifeMonths > MAX_DEPRECIATION_MONTHS) {
+        throw new HttpError(422, `Thời gian khấu hao trong danh mục phải từ 1 đến ${MAX_DEPRECIATION_MONTHS} tháng.`);
       }
       const residualValue = optionalAmount(record.residualValue, 'Giá trị thu hồi');
       if (residualValue >= originalCost) throw new HttpError(422, 'Giá trị thu hồi phải nhỏ hơn nguyên giá.');
