@@ -17,6 +17,7 @@ import { getFiscalQuarterDates } from '../shared/finance-periods.mjs';
 import { chartAccountType, getChartOfAccountsTemplate } from './chartOfAccountsTemplates.mjs';
 import { buildTT132ToTT58BalancePreview } from './tt58BalanceTransition.mjs';
 import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from './webauthn.mjs';
+import { vatRateProblem } from './vatRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
   maskPhone,
@@ -2753,9 +2754,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
         }
         const suppliedRate = String(line.vatRate ?? '').trim();
         const rate = Number(suppliedRate.replace(/%$/, ''));
-        if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
-          throw new HttpError(422, `Thuế suất dòng ${index + 1} phải từ 0 đến 100% và được đối chiếu theo hàng hóa, dịch vụ và ngày áp dụng.`);
-        }
+        const lineRateProblem = vatRateProblem(rate, record.issueDate, `Thuế suất dòng ${index + 1}`);
+        if (lineRateProblem) throw new HttpError(422, lineRateProblem);
         const amount = grossAmount - discountAmount;
         const lineVatAmount = Math.round(amount * rate / 100);
         if (!Number.isSafeInteger(totalAmount + amount) || !Number.isSafeInteger(vatAmount + lineVatAmount)) {
@@ -2783,7 +2783,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (!Number.isFinite(record.totalAmount) || record.totalAmount <= 0 || record.totalAmount > 1_000_000_000_000_000) throw new HttpError(422, 'Tổng tiền hàng phải lớn hơn 0 và nằm trong giới hạn cho phép.');
       const suppliedRate = String(record.vatRate ?? '').trim();
       const rate = suppliedRate === 'Không chịu thuế' ? 0 : Number(suppliedRate.replace(/%$/, ''));
-      if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new HttpError(422, 'Thuế suất GTGT phải từ 0 đến 100% và được đối chiếu theo loại hàng hóa, dịch vụ và thời điểm áp dụng.');
+      const rateProblem = vatRateProblem(rate, record.issueDate);
+      if (rateProblem) throw new HttpError(422, rateProblem);
       record.vatRate = rate;
       record.vatAmount = Math.round(record.totalAmount * rate / 100);
       record.finalAmount = record.totalAmount + record.vatAmount;
@@ -6106,7 +6107,8 @@ function validateFinanceDocument(input) {
   }
 
   const vatRate = optionalAmount(input.vatRate, 'Thuế suất VAT');
-  if (![0, 5, 8, 10].includes(vatRate)) throw new HttpError(422, 'Thuế suất VAT không hợp lệ.');
+  const vatProblem = vatRateProblem(vatRate, documentDate, 'Thuế suất VAT');
+  if (vatProblem) throw new HttpError(422, vatProblem);
   const vatAmount = optionalAmount(input.vatAmount, 'Tiền VAT');
 
   return {

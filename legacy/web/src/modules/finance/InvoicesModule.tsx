@@ -11,6 +11,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer } from '../../custom-ui';
 import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
+import { vatRateOptions } from './vatRateRules';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const outputSubtype = 'Đầu ra';
@@ -22,6 +23,7 @@ export const InvoicesModule: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | typeof outputSubtype | typeof inputSubtype>('all');
   const [modalOpen, setModalOpen] = useState(false);
+  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().substring(0, 10));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<FinanceDocument | null>(null);
   const [form] = Form.useForm();
@@ -192,7 +194,7 @@ export const InvoicesModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
-              form.setFieldsValue({ subtype: outputSubtype, documentDate: new Date().toISOString().substring(0, 10), vatRate: 10, paidAmount: 0, status: 'Đã phát hành' });
+              setInvoiceDate(new Date().toISOString().substring(0, 10)); form.setFieldsValue({ subtype: outputSubtype, documentDate: new Date().toISOString().substring(0, 10), vatRate: 10, paidAmount: 0, status: 'Đã phát hành' });
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -232,7 +234,7 @@ export const InvoicesModule: React.FC = () => {
               <Input type="number" min={1} />
             </Form.Item>
             <Form.Item name="vatRate" label="VAT" rules={[{ required: true }]}>
-              <Select options={[{ label: '10%', value: 10 }, { label: '8%', value: 8 }, { label: '5%', value: 5 }, { label: '0%', value: 0 }]} />
+              <Select options={vatRateOptions(invoiceDate)} />
             </Form.Item>
             <Form.Item name="paidAmount" label="Đã thanh toán">
               <Input type="number" min={0} />
@@ -240,7 +242,7 @@ export const InvoicesModule: React.FC = () => {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="documentDate" label="Ngày hóa đơn" rules={[{ required: true }]}>
-              <Input type="date" />
+              <Input type="date" onChange={(event: React.ChangeEvent<HTMLInputElement>) => setInvoiceDate(event.target.value)} />
             </Form.Item>
             <Form.Item name="dueDate" label="Hạn thanh toán">
               <Input type="date" />

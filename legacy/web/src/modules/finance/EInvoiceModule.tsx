@@ -24,6 +24,7 @@ import { collectionsApi, crmContactsApi, type CrmContact } from '../../api/endpo
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { filterEInvoiceReport } from './eInvoiceReportRules';
+import { allowedVatRates, vatRateOptions } from './vatRateRules';
 import archivedProviderCatalog from '../../data/einvoiceProviderCatalog.json';
 import publishedProviderCatalog from '../../data/einvoiceProvidersPublished.json';
 import providerIntegrationCatalog from '../../data/einvoiceProviderIntegrationCatalog.json';
@@ -116,10 +117,13 @@ const blankInvoiceLine = (): EInvoiceLineDraft => ({
   key: crypto.randomUUID(), productKey: '', sku: '', name: '', unit: '', quantity: '1', unitPrice: '', discountAmount: '0', vatRate: '',
 });
 
+const vietnamToday = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
 function EInvoiceItemsEditor({
-  lines, products, onChange, onAdd, onRemove,
+  lines, products, issueDate, onChange, onAdd, onRemove,
 }: {
   lines: EInvoiceLineDraft[];
+  issueDate: string;
   products: EInvoiceProduct[];
   onChange: (key: string, patch: Partial<EInvoiceLineDraft>) => void;
   onAdd: () => void;
@@ -162,7 +166,7 @@ function EInvoiceItemsEditor({
               <Input type="number" min={0.001} step="0.001" value={line.quantity} placeholder="Số lượng" onChange={event => onChange(line.key, { quantity: event.target.value })} />
               <Input type="number" min={0} step={1} value={line.unitPrice} placeholder="Đơn giá" onChange={event => onChange(line.key, { unitPrice: event.target.value })} />
               <Input type="number" min={0} step={1} value={line.discountAmount} placeholder="Chiết khấu" onChange={event => onChange(line.key, { discountAmount: event.target.value })} />
-              <Input type="number" min={0} max={100} step="any" value={line.vatRate} placeholder="Thuế suất (%)" onChange={event => onChange(line.key, { vatRate: event.target.value })} />
+              <Select value={line.vatRate === '' ? undefined : Number(line.vatRate)} placeholder="Thuế suất" options={vatRateOptions(issueDate)} onChange={value => onChange(line.key, { vatRate: String(value) })} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', color: '#64748B', fontSize: 12 }}>
               Tiền hàng {amount.toLocaleString('vi-VN')} ₫ · thuế tạm tính {vatAmount.toLocaleString('vi-VN')} ₫ · tổng { (amount + vatAmount).toLocaleString('vi-VN') } ₫
@@ -337,8 +341,8 @@ export const EInvoiceModule: React.FC = () => {
       const vatRate = Number(line.vatRate);
       if (!line.name.trim() || !line.unit.trim() || !Number.isFinite(quantity) || quantity <= 0
         || !Number.isSafeInteger(unitPrice) || unitPrice < 0 || !Number.isSafeInteger(discountAmount) || discountAmount < 0
-        || !Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
-        message.error(`Kiểm tra tên, đơn vị tính, số lượng, đơn giá, chiết khấu và thuế suất ở dòng ${index + 1}.`);
+        || line.vatRate === '' || !allowedVatRates(editingRecord?.issueDate || vietnamToday()).includes(vatRate)) {
+        message.error(`Kiểm tra tên, đơn vị tính, số lượng, đơn giá, chiết khấu và thuế suất (0%, 5%, 10%, riêng 8% theo ngày lập) ở dòng ${index + 1}.`);
         return null;
       }
       const grossAmount = Math.round(quantity * unitPrice);
@@ -738,7 +742,7 @@ export const EInvoiceModule: React.FC = () => {
             <Form.Item name="buyerEmail" label="Email nhận hóa đơn">
               <Input type="email" />
             </Form.Item>
-            <EInvoiceItemsEditor lines={invoiceLines} products={products} onChange={updateInvoiceLine}
+            <EInvoiceItemsEditor lines={invoiceLines} products={products} issueDate={editingRecord?.issueDate || vietnamToday()} onChange={updateInvoiceLine}
               onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
               onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
@@ -997,7 +1001,7 @@ export const EInvoiceModule: React.FC = () => {
           <Form.Item name="buyerAddress" label="Địa chỉ người mua"><Input /></Form.Item>
           <Form.Item name="buyerEmail" label="Email nhận hóa đơn"><Input type="email" /></Form.Item>
           <Form.Item name="buyerPhone" label="Số điện thoại"><Input /></Form.Item>
-          <EInvoiceItemsEditor lines={invoiceLines} products={products} onChange={updateInvoiceLine}
+          <EInvoiceItemsEditor lines={invoiceLines} products={products} issueDate={editingRecord?.issueDate || vietnamToday()} onChange={updateInvoiceLine}
             onAdd={() => setInvoiceLines(current => [...current, blankInvoiceLine()])}
             onRemove={key => setInvoiceLines(current => current.filter(line => line.key !== key))} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>

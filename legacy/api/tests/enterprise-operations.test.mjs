@@ -281,10 +281,14 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(invoiceDraft.vatAmount, 100);
   assert.equal(invoiceDraft.finalAmount, 1100);
   assert.equal(invoiceDraft.cqtCode, undefined);
-  const customRateDraft = (await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-custom-rate', invoiceNumber: 'DRAFT-2', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: 7.25 } }, 201)).record;
-  assert.equal(customRateDraft.vatRate, 7.25);
-  assert.equal(customRateDraft.vatAmount, 73);
-  assert.equal(customRateDraft.finalAmount, 1073);
+  // Thuế suất chỉ nhận 0, 5, 10; 8% chỉ trong giai đoạn giảm thuế (Nghị quyết 204/2025/QH15, đến hết 31/12/2026).
+  const invoiceWithRate = (key, issueDate, vatRate) => ({ record: { key, invoiceNumber: key, buyerName: 'Khách kiểm thử', issueDate, totalAmount: 1000, vatRate } });
+  await request('/collections/finance_einvoices', 'POST', invoiceWithRate('invoice-custom-rate', '2026-10-10', 7.25), 422);
+  const reducedRateDraft = (await request('/collections/finance_einvoices', 'POST', invoiceWithRate('invoice-reduced-rate', '2026-10-10', 8), 201)).record;
+  assert.equal(reducedRateDraft.vatAmount, 80);
+  await request('/collections/finance_einvoices', 'POST', invoiceWithRate('invoice-reduced-late', '2027-01-05', 8), 422);
+  await request('/collections/finance_einvoices', 'POST', invoiceWithRate('invoice-reduced-early', '2022-01-31', 8), 422);
+  assert.equal((await request('/collections/finance_einvoices', 'POST', invoiceWithRate('invoice-standard-2027', '2027-01-05', 10), 201)).record.vatAmount, 100);
   await request('/collections/finance_einvoices', 'POST', { record: { key: 'invoice-invalid', invoiceNumber: 'DRAFT-INVALID', buyerName: 'Khách kiểm thử', issueDate: '2026-10-10', totalAmount: 1000, vatRate: 120 } }, 422);
   await request('/collections/finance_chart_of_accounts', 'POST', { record: { key: 'bypass-chart' } }, 409);
   const existingCash = (await request('/finance/chart-of-accounts', 'POST', { record: {
