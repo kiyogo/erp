@@ -12,7 +12,9 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
 import { ContactSelect } from '../crm/ContactSelect';
+import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
 import { TradeTermsFields } from './TradeTermsFields';
+import { isAdjustment, netTradeTotals } from './tradeAdjustments';
 import { termsFromValues, vatOf } from './tradeTerms';
 import { vatRateOptions } from './vatRateRules';
 import { crmContactsApi, crmPromotionsApi, financeDocumentsApi, type CrmContact, type CrmPromotion, type FinanceDocument, type SalePromotionPreview } from '../../api/endpoints';
@@ -27,7 +29,7 @@ const salesStatusOptions = [
   { label: 'Đã hủy', value: 'Đã hủy' },
 ];
 
-export const SalesModule: React.FC = () => {
+const SalesDocumentsModule: React.FC = () => {
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
@@ -100,19 +102,18 @@ export const SalesModule: React.FC = () => {
         (item.code || '').toLowerCase().includes(keyword) ||
         (item.partnerName || '').toLowerCase().includes(keyword) ||
         (item.description || '').toLowerCase().includes(keyword);
+      if (isAdjustment(item)) return false;
       if (isQuotes) return matchSearch && item.subtype === 'Báo giá';
       if (isContracts) return matchSearch && item.subtype !== 'Báo giá';
       return matchSearch;
     });
   }, [data, searchText, isQuotes, isContracts]);
 
-  const totalSales = data.filter((item) => item.status !== 'Đã hủy').reduce((sum, item) => sum + item.amount, 0);
-  const totalCollected = data.filter((item) => item.status !== 'Đã hủy').reduce((sum, item) => sum + item.paidAmount, 0);
-  const totalReceivable = Math.max(0, totalSales - totalCollected);
+  const { total: totalSales, paid: totalCollected, remaining: totalReceivable } = netTradeTotals(data);
 
   const bySubtype = useMemo(() => {
     const totals = new Map<string, number>();
-    data.filter((item) => item.status !== 'Đã hủy').forEach((item) => totals.set(item.subtype, (totals.get(item.subtype) || 0) + item.amount));
+    data.filter((item) => item.status !== 'Đã hủy' && !isAdjustment(item)).forEach((item) => totals.set(item.subtype, (totals.get(item.subtype) || 0) + item.amount - (item.adjustedAmount || 0)));
     return Array.from(totals, ([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
   }, [data]);
 
@@ -415,4 +416,12 @@ export const SalesModule: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+export const SalesModule: React.FC = () => {
+  const location = useLocation();
+  const currentPath = location.pathname.replace(/^\/admin/, '');
+  if (currentPath === '/finance/sales/returns') return <TradeAdjustmentsModule side="sale" kind="return" />;
+  if (currentPath === '/finance/sales/discounts') return <TradeAdjustmentsModule side="sale" kind="discount" />;
+  return <SalesDocumentsModule />;
 };

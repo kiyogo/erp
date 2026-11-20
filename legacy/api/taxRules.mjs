@@ -157,6 +157,20 @@ export function vatSummary(documents, startDate, endDate) {
       deductibleInputVat += group.vat;
     }
   }
+  // Hàng trả lại, giảm giá có hóa đơn điều chỉnh: trừ thuế đầu ra, hoặc trừ thuế đầu vào được khấu trừ, ở kỳ lập chứng từ điều chỉnh
+  // (kỳ kê khai điều chỉnh chưa đối chiếu được văn bản gốc). Không đối chiếu với việc gốc có đủ chứng từ thanh toán hay không.
+  for (const doc of inPeriod.filter(item => item.adjustment?.onTaxInvoice)) {
+    const vat = Number(doc.vatAmount) || 0;
+    if (doc.adjustment.side === 'sale') {
+      const rate = Number(doc.vatRate) || 0;
+      const row = byRate.get(rate) || { rate, base: 0, vat: 0 };
+      row.vat -= vat;
+      row.base -= (Number(doc.amount) || 0) - vat;
+      byRate.set(rate, row);
+    } else {
+      deductibleInputVat -= vat;
+    }
+  }
   const outputVat = [...byRate.values()].reduce((sum, row) => sum + row.vat, 0);
   const net = outputVat - deductibleInputVat;
   return {

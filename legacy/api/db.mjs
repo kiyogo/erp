@@ -865,6 +865,12 @@ export async function initDatabaseSchema() {
     ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'crm_contacts' AND table_schema = current_schema()")).map(row => row.column_name)
     : (await queryAll('PRAGMA table_info(crm_contacts)')).map(row => row.name));
   if (!crmColumns.has('details_json')) await exec(`ALTER TABLE crm_contacts ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}details_json TEXT NOT NULL DEFAULT ''`);
+  // Hàng trả lại, giảm giá: chứng từ điều chỉnh trỏ về chứng từ gốc để tính công nợ, doanh số bằng SQL.
+  const documentColumns = new Set(isPg
+    ? (await queryAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'finance_documents' AND table_schema = current_schema()")).map(row => row.column_name)
+    : (await queryAll('PRAGMA table_info(finance_documents)')).map(row => row.name));
+  if (!documentColumns.has('adjusts_document_id')) await exec(`ALTER TABLE finance_documents ADD COLUMN ${isPg ? 'IF NOT EXISTS ' : ''}adjusts_document_id TEXT`);
+  await exec('CREATE INDEX IF NOT EXISTS finance_documents_adjusts_idx ON finance_documents(adjusts_document_id)');
 
 }
 

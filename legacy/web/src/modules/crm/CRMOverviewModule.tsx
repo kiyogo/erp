@@ -305,10 +305,11 @@ export const CRMOverviewModule: React.FC = () => {
 
   // Aggregate stats
   const stats = useMemo(() => {
-    const documents = salesDocuments.filter((doc) => inTimeRange(doc.documentDate, timeFilter));
+    // Hàng bán bị trả lại, giảm giá không phải đơn hàng; trừ vào giá trị đơn gốc.
+    const documents = salesDocuments.filter((doc) => !doc.adjustsDocumentId && inTimeRange(doc.documentDate, timeFilter));
     const orderCount = documents.length;
-    const orderValue = documents.reduce((sum, doc) => sum + (doc.amount || 0), 0);
-    const collectedValue = documents.reduce((sum, doc) => sum + Math.max(0, (doc.amount || 0) - (doc.remainingAmount || 0)), 0);
+    const orderValue = documents.reduce((sum, doc) => sum + (doc.amount || 0) - (doc.adjustedAmount || 0), 0);
+    const collectedValue = documents.reduce((sum, doc) => sum + Math.max(0, (doc.amount || 0) - (doc.adjustedAmount || 0) - (doc.remainingAmount || 0)), 0);
     const remainingValue = documents.reduce((sum, doc) => sum + (doc.remainingAmount || 0), 0);
 
     return {

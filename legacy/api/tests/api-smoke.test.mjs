@@ -2579,3 +2579,45 @@ test('system broadcasts persist server-side and track real in-app recipients and
   await request(`/admin/system/broadcasts/${created.id}`, 'DELETE', undefined, 200);
   assert.ok((await request('/notifications', 'GET', undefined, 200, employeeHeaders)).data.some(item => item.id === delivered.id));
 });
+
+test('returns and discounts adjust the original document, debts, sales totals, cash and VAT', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const sale = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách có hàng trả lại', description: 'Bán hàng', amount: 1_100_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '0100109106', vatRate: 10, vatAmount: 100_000 };
+  const original = (await request('/finance/documents', 'POST', sale, 201)).document;
+  const ret = { documentType: 'sale', subtype: 'Hàng bán bị trả lại', partnerName: 'Tên giả', description: 'Khách trả hàng lỗi', amount: 330_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã ghi nhận', taxCode: '', vatRate: 10, vatAmount: 30_000, adjustsDocumentId: original.key, terms: { reason: 'Hàng lỗi', invoiceNo: 'DC-01' } };
+  const quote = (await request('/finance/documents', 'POST', { ...sale, subtype: 'Báo giá', status: 'Báo giá' }, 201)).document;
+  const overviewBefore = (await request(`/finance/overview?dateFrom=${today}&dateTo=${today}`)).documents;
+  await request('/finance/documents', 'POST', { ...ret, terms: { invoiceNo: 'DC-01' } }, 422);
+  await request('/finance/documents', 'POST', { ...ret, vatRate: 0, vatAmount: 0 }, 422);
+  await request('/finance/documents', 'POST', { ...ret, amount: 1_210_000, vatAmount: 110_000 }, 422);
+  await request('/finance/documents', 'POST', { ...ret, adjustsDocumentId: undefined }, 422);
+  await request('/finance/documents', 'POST', { ...ret, subtype: 'Đơn bán hàng' }, 422);
+  await request('/finance/documents', 'POST', { ...ret, subtype: 'Hàng mua trả lại', documentType: 'purchase' }, 422);
+  await request('/finance/documents', 'POST', { ...ret, adjustsDocumentId: 'missing' }, 422);
+  await request('/finance/documents', 'POST', { ...ret, documentDate: '2000-01-01' }, 422);
+  await request('/finance/documents', 'POST', { ...ret, adjustsDocumentId: quote.key }, 422);
+  const saved = (await request('/finance/documents', 'POST', ret, 201)).document;
+  assert.equal(saved.partnerName, 'Khách có hàng trả lại');
+  assert.equal(saved.taxCode, '0100109106');
+  assert.equal(saved.adjustsDocumentId, original.key);
+  assert.equal(saved.remainingAmount, 0);
+  assert.deepEqual(saved.termWarnings, []);
+  await request('/finance/documents', 'POST', { ...ret, adjustsDocumentId: saved.key }, 422);
+  await request('/finance/documents', 'POST', { ...ret, amount: 770_001, vatAmount: 70_000, terms: { reason: 'Quá mức' } }, 422);
+  const refunded = (await request('/finance/documents', 'POST', { ...ret, amount: 110_000, vatAmount: 10_000, paidAmount: 110_000, description: 'Giảm giá sau bán' , subtype: 'Giảm giá hàng bán', terms: { reason: 'Giảm giá', invoiceNo: 'DC-02' } }, 201)).document;
+  const listed = (await request('/finance/documents?documentType=sale')).data;
+  const updated = listed.find((item) => item.key === original.key);
+  assert.equal(updated.adjustedAmount, 440_000);
+  assert.equal(updated.remainingAmount, 660_000);
+  const overviewAfter = (await request(`/finance/overview?dateFrom=${today}&dateTo=${today}`)).documents;
+  assert.equal(overviewBefore.sales - overviewAfter.sales, 440_000, 'doanh số giảm đúng phần điều chỉnh');
+  assert.equal(overviewBefore.receivable - overviewAfter.receivable, 440_000, 'công nợ phải thu giảm đúng phần điều chỉnh');
+  const cash = (await request('/finance/cash-transactions?source=bank')).data;
+  assert.ok(cash.some((item) => item.code === `AUTO-${refunded.code}` && item.type === 'Chi'), 'hoàn tiền cho khách là phiếu chi');
+
+  const invoice = (await request('/finance/documents', 'POST', { documentType: 'invoice', subtype: 'Đầu ra', partnerName: 'Khách VAT', description: 'Hóa đơn', amount: 11_000_000, paidAmount: 0, documentDate: '2026-03-10', dueDate: '', status: 'Đã phát hành', taxCode: '', vatRate: 10, vatAmount: 1_000_000 }, 201)).document;
+  const estimate = async () => (await request('/finance/tax/estimate?taxType=Thu%E1%BA%BF%20GTGT&periodStart=2026-03-01&periodEnd=2026-03-31&filingMethod=Th%C3%A1ng')).data.vat.outputVat;
+  assert.equal(await estimate(), 1_000_000);
+  await request('/finance/documents', 'POST', { documentType: 'invoice', subtype: 'Giảm giá hàng bán', partnerName: 'x', description: 'Điều chỉnh giảm', amount: 1_100_000, paidAmount: 0, documentDate: '2026-03-20', dueDate: '', status: 'Đã ghi nhận', taxCode: '', vatRate: 10, vatAmount: 100_000, adjustsDocumentId: invoice.key, terms: { reason: 'Chiết khấu thương mại', invoiceNo: 'DC-03' } }, 201);
+  assert.equal(await estimate(), 900_000);
+});

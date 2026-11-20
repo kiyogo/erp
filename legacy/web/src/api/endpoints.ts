@@ -640,11 +640,14 @@ export type FinanceDocument = {
   discountAmount?: number;
   appliedPromotions?: SalePromotionApplication[];
   supplierId?: string;
+  adjustsDocumentId?: string;
+  adjustedAmount?: number;
   terms?: FinanceDocumentTerms;
   paymentMethod?: string;
   termWarnings?: string[];
 };
 export type FinanceDocumentTerms = {
+  reason?: string;
   invoiceNo?: string;
   invoiceSymbol?: string;
   contractNo?: string;
@@ -685,7 +688,7 @@ export const financeOverviewApi = {
   getSummary: (params: { dateFrom?: string; dateTo?: string; source?: 'all' | 'bank' | 'petty'; type?: 'all' | 'Thu' | 'Chi'; currency?: 'VND'; accountId?: string; counterpartyId?: string }) => api.get<FinanceOverviewSummary>('/finance/overview', { params }),
 };
 
-export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'code' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions' | 'paymentMethod' | 'termWarnings'> & {
+export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'code' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions' | 'paymentMethod' | 'termWarnings' | 'adjustedAmount'> & {
   promotionKeys?: string[];
   promotionFingerprint?: string;
   requestId?: string;

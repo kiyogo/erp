@@ -7,7 +7,7 @@ export const PAYMENT_METHOD_OPTIONS = PAYMENT_METHODS.map((value) => ({ value, l
 export const vatOf = (net: number, rate: number) => Math.round((net * rate) / 100);
 
 const TERM_NUMBER_FIELDS = ['paymentTermDays', 'penaltyRate', 'lateInterestRate', 'warrantyMonths'] as const;
-const TERM_TEXT_FIELDS = ['invoiceNo', 'invoiceSymbol', 'contractNo', 'signedDate', 'effectiveDate', 'expiryDate', 'deliveryDate', 'deliveryAddress', 'paymentMethod', 'note'] as const;
+const TERM_TEXT_FIELDS = ['reason', 'invoiceNo', 'invoiceSymbol', 'contractNo', 'signedDate', 'effectiveDate', 'expiryDate', 'deliveryDate', 'deliveryAddress', 'paymentMethod', 'note'] as const;
 
 /** Đọc các ô `terms_*` của form thành đối tượng điều khoản, bỏ ô trống. */
 export function termsFromValues(values: Record<string, unknown>): FinanceDocumentTerms {

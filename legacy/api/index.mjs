@@ -21,7 +21,7 @@ import { vatRateProblem } from './vatRules.mjs';
 import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, assetTaxWarnings, costBreakdownProblem, taxDeductibleCost } from './assetRules.mjs';
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
 import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
-import { isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
+import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
 import { OVERTIME_HOUR_FIELDS, REGIONS, calculatePayslip, countActiveDependents, normalizePeriod, payrollParameters, workdayPay } from './payrollRules.mjs';
 import {
@@ -1546,6 +1546,7 @@ function publicFinanceDocument(row) {
     taxCode: row.tax_code,
     vatRate: financeStoredInteger(row.vat_rate),
     vatAmount: financeStoredInteger(row.vat_amount),
+    ...(row.adjusts_document_id ? { adjustsDocumentId: row.adjusts_document_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -5666,6 +5667,19 @@ async function financeDocumentTerms() {
   return new Map(rows.map(publicCollectionRecord).filter(Boolean).map(record => [record.key, record]));
 }
 
+// Tổng đã điều chỉnh giảm theo từng chứng từ gốc (bỏ chứng từ điều chỉnh đã hủy).
+async function adjustedAmounts() {
+  const rows = await db.prepare("SELECT adjusts_document_id AS id, SUM(amount) AS total FROM finance_documents WHERE adjusts_document_id IS NOT NULL AND status <> 'Đã hủy' GROUP BY adjusts_document_id").all();
+  return new Map(rows.map(row => [row.id, financeStoredInteger(row.total)]));
+}
+
+// Công nợ còn lại của chứng từ gốc đã trừ phần hàng trả lại, giảm giá; chứng từ điều chỉnh không tạo công nợ.
+function withAdjustmentCredit(document, adjusted) {
+  if (document.adjustsDocumentId) return { ...document, remainingAmount: 0 };
+  const credit = adjusted.get(document.key) || 0;
+  return credit ? { ...document, adjustedAmount: credit, remainingAmount: Math.max(0, document.amount - document.paidAmount - credit) } : document;
+}
+
 function withDocumentTerms(document, record) {
   const terms = record?.terms || {};
   return {
@@ -7048,6 +7062,8 @@ async function nextUniqueCode(prefix, tableName, columnName = 'code') {
 }
 
 function cashTypeForDocument(document) {
+  // Hoàn tiền: trả lại hàng bán, giảm giá hàng bán là chi cho khách; trả lại hàng mua, giảm giá hàng mua là thu từ nhà cung cấp.
+  if (isAdjustmentSubtype(document.subtype)) return adjustmentSide(document.subtype) === 'sale' ? 'Chi' : 'Thu';
   if (document.documentType === 'sale') return 'Thu';
   if (document.documentType === 'purchase') return 'Chi';
   if (document.documentType === 'invoice' && document.subtype.includes('Đầu ra')) return 'Thu';
@@ -9737,9 +9753,14 @@ async function handleRequest(request, response) {
       if (profile.vatMethod && profile.vatMethod !== 'deduction') throw new HttpError(409, 'Hồ sơ kế toán dùng phương pháp tính thuế GTGT trực tiếp; hệ thống mới tính được phương pháp khấu trừ.');
       const rows = await db.prepare("SELECT * FROM finance_documents WHERE document_type IN ('invoice', 'purchase') AND document_date >= ? AND document_date <= ?").all(periodStart, periodEnd);
       const termsByDocument = await financeDocumentTerms();
+      const originals = new Map((await db.prepare('SELECT id, subtype FROM finance_documents WHERE id IN (SELECT adjusts_document_id FROM finance_documents WHERE adjusts_document_id IS NOT NULL)').all()).map(row => [row.id, row.subtype]));
       const summary = vatSummary(rows.map(row => {
         const document = publicFinanceDocument(row);
-        return { ...document, paymentProof: isNonCashPayment(termsByDocument.get(row.id)?.terms?.paymentMethod) };
+        // Hàng trả lại, giảm giá chỉ điều chỉnh thuế khi chứng từ gốc là hóa đơn (hóa đơn điều chỉnh).
+        const adjustment = isAdjustmentSubtype(document.subtype)
+          ? { side: adjustmentSide(document.subtype), onTaxInvoice: document.documentType === 'invoice' || originals.get(document.adjustsDocumentId) === 'Hóa đơn đầu vào' }
+          : undefined;
+        return { ...document, paymentProof: isNonCashPayment(termsByDocument.get(row.id)?.terms?.paymentMethod), adjustment };
       }), periodStart, periodEnd);
       Object.assign(result, { vat: summary, amountPayable: summary.amountPayable });
       if (summary.inputVatNeedingProof > 0) result.notes.push(`Có ${summary.needsProof.length} nhóm hóa đơn đầu vào từ ngưỡng thanh toán không dùng tiền mặt, thuế ${summary.inputVatNeedingProof.toLocaleString('vi-VN')} đồng chưa tính vào số khấu trừ; cộng lại nếu đã có chứng từ chuyển khoản, hoặc ghi hình thức thanh toán không dùng tiền mặt trên chứng từ.`);
@@ -11972,19 +11993,25 @@ async function handleRequest(request, response) {
       });
     }
     const today = now().slice(0, 10);
+    // Công nợ theo chứng từ gốc trừ phần hàng trả lại, giảm giá; chứng từ điều chỉnh không tạo công nợ.
+    const creditSql = "COALESCE((SELECT SUM(a.amount) FROM finance_documents a WHERE a.adjusts_document_id = d.id AND a.status <> 'Đã hủy'), 0)";
+    const remainingSql = `(CASE WHEN d.amount - d.paid_amount - ${creditSql} > 0 THEN d.amount - d.paid_amount - ${creditSql} ELSE 0 END)`;
+    const receivableSide = "(d.document_type = 'sale' OR lower(d.subtype) LIKE '%đầu ra%') AND d.adjusts_document_id IS NULL";
+    const payableSide = "(d.document_type = 'purchase' OR lower(d.subtype) LIKE '%đầu vào%') AND d.adjusts_document_id IS NULL";
     const documentBalances = await db.prepare(`SELECT
-      COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND amount > paid_amount THEN amount - paid_amount ELSE 0 END), 0) AS receivable,
-      COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND amount > paid_amount AND due_date IS NOT NULL AND due_date <> '' AND due_date < ? THEN amount - paid_amount ELSE 0 END), 0) AS overdueReceivable,
-      COALESCE(SUM(CASE WHEN (document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%') AND amount > paid_amount THEN amount - paid_amount ELSE 0 END), 0) AS payable,
-      COALESCE(SUM(CASE WHEN (document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%') AND amount > paid_amount AND due_date IS NOT NULL AND due_date <> '' AND due_date < ? THEN amount - paid_amount ELSE 0 END), 0) AS overduePayable
-      FROM finance_documents WHERE status <> 'Đã hủy'`).get(today, today);
+      COALESCE(SUM(CASE WHEN ${receivableSide} THEN ${remainingSql} ELSE 0 END), 0) AS receivable,
+      COALESCE(SUM(CASE WHEN ${receivableSide} AND d.due_date IS NOT NULL AND d.due_date <> '' AND d.due_date < ? THEN ${remainingSql} ELSE 0 END), 0) AS overdueReceivable,
+      COALESCE(SUM(CASE WHEN ${payableSide} THEN ${remainingSql} ELSE 0 END), 0) AS payable,
+      COALESCE(SUM(CASE WHEN ${payableSide} AND d.due_date IS NOT NULL AND d.due_date <> '' AND d.due_date < ? THEN ${remainingSql} ELSE 0 END), 0) AS overduePayable
+      FROM finance_documents d WHERE d.status <> 'Đã hủy'`).get(today, today);
     const documentWhere = ["status <> 'Đã hủy'"];
     const documentParams = [];
     if (dateFrom) { documentWhere.push('document_date >= ?'); documentParams.push(dateFrom); }
     if (dateTo) { documentWhere.push('document_date <= ?'); documentParams.push(dateTo); }
+    const adjustmentList = (side) => Object.entries(ADJUSTMENT_SUBTYPES).filter(([, value]) => value === side).map(([name]) => `'${name}'`).join(', ');
     const documentTotals = await db.prepare(`SELECT
-      COALESCE(SUM(CASE WHEN document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%' THEN amount ELSE 0 END), 0) AS sales,
-      COALESCE(SUM(CASE WHEN document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%' THEN amount ELSE 0 END), 0) AS purchases
+      COALESCE(SUM(CASE WHEN (document_type = 'sale' OR lower(subtype) LIKE '%đầu ra%') AND adjusts_document_id IS NULL THEN amount WHEN subtype IN (${adjustmentList('sale')}) THEN -amount ELSE 0 END), 0) AS sales,
+      COALESCE(SUM(CASE WHEN (document_type = 'purchase' OR lower(subtype) LIKE '%đầu vào%') AND adjusts_document_id IS NULL THEN amount WHEN subtype IN (${adjustmentList('purchase')}) THEN -amount ELSE 0 END), 0) AS purchases
       FROM finance_documents WHERE ${documentWhere.join(' AND ')}`).get(...documentParams);
     sendJson(response, 200, {
       cash: {
@@ -13152,8 +13179,9 @@ async function handleRequest(request, response) {
     const linksBySale = new Map(links.map((link) => [link.key, link]));
     const promotionsBySale = new Map(promotions.map((snapshot) => [snapshot.key, snapshot]));
     const termsByDocument = await financeDocumentTerms();
+    const adjusted = await adjustedAmounts();
     sendJson(response, 200, { data: rows.map((row) => {
-      const document = withDocumentTerms(publicFinanceDocument(row), termsByDocument.get(row.id));
+      const document = withAdjustmentCredit(withDocumentTerms(publicFinanceDocument(row), termsByDocument.get(row.id)), adjusted);
       const link = linksBySale.get(row.id);
       return { ...document, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(promotionsBySale.get(row.id)) };
     }) });
@@ -13168,6 +13196,10 @@ async function handleRequest(request, response) {
     if (customerId && input.documentType !== 'sale') throw new HttpError(422, 'Liên kết khách hàng chỉ áp dụng cho chứng từ bán hàng.');
     const promotionKeys = salePromotionKeys(input.promotionKeys);
     if (promotionKeys.length && (!customerId || input.documentType !== 'sale')) throw new HttpError(422, 'Chọn khách hàng CRM cho chứng từ bán có khuyến mại.');
+    const adjustsDocumentId = optionalText(input.adjustsDocumentId, 'Chứng từ gốc', 160);
+    const isAdjustment = isAdjustmentSubtype(input.subtype);
+    if (isAdjustment !== !!adjustsDocumentId) throw new HttpError(422, isAdjustment ? 'Chọn chứng từ gốc cho chứng từ trả lại hàng hoặc giảm giá.' : 'Chỉ chứng từ trả lại hàng hoặc giảm giá mới có chứng từ gốc.');
+    if (isAdjustment && (customerId || optionalText(input.supplierId, 'Nhà cung cấp', 160) || promotionKeys.length)) throw new HttpError(422, 'Chứng từ điều chỉnh lấy đối tác từ chứng từ gốc, không chọn khách hàng, nhà cung cấp hay khuyến mại.');
     const supplierId = optionalText(input.supplierId, 'Nhà cung cấp', 160);
     if (supplierId && input.documentType !== 'purchase') throw new HttpError(422, 'Liên kết nhà cung cấp chỉ áp dụng cho chứng từ mua hàng.');
     let terms;
@@ -13182,8 +13214,8 @@ async function handleRequest(request, response) {
     const timestamp = now();
     const insertDocument = await db.prepare(`INSERT INTO finance_documents (
       id, document_type, code, subtype, partner_name, description, amount, paid_amount,
-      document_date, due_date, status, tax_code, vat_rate, vat_amount, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      document_date, due_date, status, tax_code, vat_rate, vat_amount, created_by, created_at, updated_at, adjusts_document_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     await db.transaction(async () => {
       if (promotionKeys.length && db.pool) {
         await db.query("SELECT pg_advisory_xact_lock(hashtext('crm_promotions'))");
@@ -13194,6 +13226,15 @@ async function handleRequest(request, response) {
         customer = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE id = ? AND contact_type = 'customer'").get(customerId);
         if (!customer || String(customer.status || '').toLocaleLowerCase().includes('tạm')) throw new HttpError(422, 'Khách hàng không tồn tại hoặc đang tạm dừng.');
       }
+      let original;
+      if (isAdjustment) {
+        if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_document_adjustments'))");
+        const originalRow = await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(adjustsDocumentId);
+        original = originalRow && publicFinanceDocument(originalRow);
+        const originalProblem = adjustmentOriginalProblem(input.subtype, original);
+        if (originalProblem) throw new HttpError(422, originalProblem);
+        if (!terms.reason) throw new HttpError(422, 'Nhập lý do trả lại hàng hoặc giảm giá (hóa đơn điều chỉnh phải nêu lý do).');
+      }
       let supplier;
       if (supplierId) {
         supplier = await db.prepare("SELECT id, code, name, status, tax_code FROM crm_contacts WHERE id = ? AND contact_type = 'supplier'").get(supplierId);
@@ -13201,9 +13242,14 @@ async function handleRequest(request, response) {
       }
       document = validateFinanceDocument({
         ...input,
-        partnerName: customer ? customer.name : supplier ? supplier.name : input.partnerName,
-        taxCode: supplier && !String(input.taxCode || '').trim() ? supplier.tax_code : input.taxCode,
+        partnerName: original ? original.partnerName : customer ? customer.name : supplier ? supplier.name : input.partnerName,
+        taxCode: original ? original.taxCode : supplier && !String(input.taxCode || '').trim() ? supplier.tax_code : input.taxCode,
       });
+      if (original) {
+        const alreadyAdjusted = (await adjustedAmounts()).get(original.key) || 0;
+        const amountProblem = adjustmentAmountProblem(document, original, alreadyAdjusted);
+        if (amountProblem) throw new HttpError(422, amountProblem);
+      }
       if (terms.deliveryDate && terms.deliveryDate < document.documentDate && /^Đơn|^Hợp đồng/.test(document.subtype)) {
         throw new HttpError(422, 'Ngày giao hàng không được trước ngày chứng từ.');
       }
@@ -13243,6 +13289,7 @@ async function handleRequest(request, response) {
         actor.id,
         timestamp,
         timestamp,
+        original ? original.key : null,
       );
       if (customer) link = await insertSaleCustomerLink(id, document.code, customer, actor, timestamp);
       if (supplier || Object.keys(terms).length) {
@@ -13258,7 +13305,7 @@ async function handleRequest(request, response) {
       }
       await insertAutomaticCashTransaction(document, actor.id, timestamp);
     });
-    const saved = withDocumentTerms(publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id)), (await financeDocumentTerms()).get(id));
+    const saved = withAdjustmentCredit(withDocumentTerms(publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id)), (await financeDocumentTerms()).get(id)), await adjustedAmounts());
     const result = { ...saved, ...(link ? { customerId: link.customerId, customerCode: link.customerCode } : {}), ...publicSalePromotion(snapshot) };
     sendJson(response, replayed ? 200 : 201, promotionKeys.length ? { document: result, replayed } : { document: result });
     return;
@@ -13405,7 +13452,7 @@ async function handleRequest(request, response) {
     const balances = loyaltyBalances(entries);
     const customers = await db.prepare("SELECT id, code, name, status FROM crm_contacts WHERE contact_type = 'customer' ORDER BY name, code").all();
     const links = new Map((await saleCustomerLinks()).map((link) => [link.key, link]));
-    const saleRows = await db.prepare("SELECT id, code, amount, document_date FROM finance_documents WHERE document_type = 'sale' AND status = 'Đã bàn giao' AND subtype <> 'Báo giá' ORDER BY document_date DESC, created_at DESC").all();
+    const saleRows = await db.prepare("SELECT id, code, amount, document_date FROM finance_documents WHERE document_type = 'sale' AND status = 'Đã bàn giao' AND subtype <> 'Báo giá' AND adjusts_document_id IS NULL ORDER BY document_date DESC, created_at DESC").all();
     sendJson(response, 200, {
       customers: customers.map((customer) => ({ key: customer.id, code: customer.code, name: customer.name, status: customer.status, balance: balances.get(customer.id) || 0 })),
       entries,

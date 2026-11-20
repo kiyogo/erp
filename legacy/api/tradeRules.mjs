@@ -13,6 +13,40 @@ export const PAYMENT_METHODS = ['Tiền mặt', 'Chuyển khoản', 'Tiền mặ
 const NON_CASH_METHODS = new Set(['Chuyển khoản', 'Thẻ', 'Bù trừ công nợ']);
 export const isNonCashPayment = (method) => NON_CASH_METHODS.has(method);
 
+// Hàng trả lại và giảm giá sau bán: chứng từ điều chỉnh giảm trỏ về chứng từ gốc (Nghị định 123/2020 Điều 19 và văn bản thay thế
+// từ 01/07/2026: hóa đơn điều chỉnh nêu hóa đơn gốc và lý do; Thông tư 99/2025/TT-BTC: TK 521 bên bán, TK 133 giảm bên mua).
+export const ADJUSTMENT_SUBTYPES = {
+  'Hàng bán bị trả lại': 'sale',
+  'Giảm giá hàng bán': 'sale',
+  'Hàng mua trả lại': 'purchase',
+  'Giảm giá hàng mua': 'purchase',
+};
+export const isAdjustmentSubtype = (subtype) => Object.hasOwn(ADJUSTMENT_SUBTYPES, subtype);
+export const adjustmentSide = (subtype) => ADJUSTMENT_SUBTYPES[subtype] || '';
+
+// Chứng từ gốc phải cùng phía (bán hoặc mua), còn hiệu lực, là hóa đơn hoặc đơn đã ghi nhận, chưa phải chứng từ điều chỉnh.
+export function adjustmentOriginalProblem(subtype, original) {
+  const side = adjustmentSide(subtype);
+  if (!original) return 'Chứng từ gốc không tồn tại.';
+  if (original.adjustsDocumentId) return 'Không điều chỉnh một chứng từ điều chỉnh khác; chọn chứng từ gốc.';
+  if (original.status === 'Đã hủy' || original.status === 'Hóa đơn nháp') return 'Chứng từ gốc đã hủy hoặc còn là hóa đơn nháp, chưa thể điều chỉnh.';
+  const isInvoice = original.documentType === 'invoice';
+  const fits = side === 'sale'
+    ? (original.documentType === 'sale' && original.subtype !== 'Báo giá') || (isInvoice && /đầu ra/i.test(original.subtype))
+    : (original.documentType === 'purchase') || (isInvoice && /đầu vào/i.test(original.subtype));
+  return fits ? '' : `Chứng từ gốc phải là chứng từ ${side === 'sale' ? 'bán hàng (không phải báo giá) hoặc hóa đơn đầu ra' : 'mua hàng hoặc hóa đơn đầu vào'}.`;
+}
+
+// Chứng từ điều chỉnh: cùng loại và thuế suất với gốc, không trước ngày gốc, tổng các lần điều chỉnh không quá giá trị gốc.
+export function adjustmentAmountProblem(document, original, alreadyAdjusted) {
+  if (document.documentType !== original.documentType) return 'Chứng từ điều chỉnh phải cùng loại với chứng từ gốc.';
+  if (document.documentDate < original.documentDate) return 'Ngày điều chỉnh không được trước ngày chứng từ gốc.';
+  if (document.vatRate !== original.vatRate) return `Thuế suất điều chỉnh phải bằng thuế suất chứng từ gốc (${original.vatRate}%).`;
+  const room = original.amount - alreadyAdjusted;
+  if (document.amount > room) return `Số tiền điều chỉnh ${document.amount.toLocaleString('vi-VN')} đồng vượt phần còn điều chỉnh được ${Math.max(room, 0).toLocaleString('vi-VN')} đồng của chứng từ gốc.`;
+  return '';
+}
+
 export const MAX_PENALTY_RATE = 8;
 export const LATE_INTEREST_WARNING_RATE = 20;
 
@@ -75,6 +109,7 @@ export function normalizeTradeTerms(input) {
     lateInterestRate: number(source.lateInterestRate, 'Lãi chậm thanh toán (%/năm)', { min: 0, max: 100 }),
     warrantyMonths: number(source.warrantyMonths, 'Thời gian bảo hành (tháng)', { min: 0, max: 600, integer: true }),
     note: text(source.note, 'Ghi chú điều khoản', 1000),
+    reason: text(source.reason, 'Lý do điều chỉnh', 500),
   };
   if (terms.paymentMethod && !PAYMENT_METHODS.includes(terms.paymentMethod)) throw new Error('Hình thức thanh toán không hợp lệ.');
   if (terms.effectiveDate && terms.signedDate && terms.effectiveDate < terms.signedDate) throw new Error('Ngày hiệu lực không được trước ngày ký.');
@@ -87,6 +122,10 @@ export function normalizeTradeTerms(input) {
 // Cảnh báo không chặn lưu. document: chứng từ đã kiểm tra; terms: điều khoản đã chuẩn hóa.
 export function tradeWarnings(document, terms = {}) {
   const warnings = [];
+  if (document.adjustsDocumentId) {
+    if (document.vatAmount > 0 && !terms.invoiceNo) warnings.push('Chưa ghi số hóa đơn điều chỉnh: chứng từ gốc có thuế GTGT nên cần hóa đơn điều chỉnh (nêu số, ký hiệu, ngày hóa đơn gốc và lý do) để điều chỉnh kê khai thuế.');
+    return warnings;
+  }
   const isContract = /^Hợp đồng/.test(document.subtype);
   if (isContract && !terms.contractNo) warnings.push('Hợp đồng chưa ghi số hợp đồng.');
   if (isContract && !terms.signedDate) warnings.push('Hợp đồng chưa ghi ngày ký.');

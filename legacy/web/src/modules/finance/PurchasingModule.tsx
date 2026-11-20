@@ -5,7 +5,6 @@ import {
   SearchOutlined,
   ReloadOutlined,
   ShoppingOutlined,
-  FileProtectOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
@@ -16,6 +15,8 @@ import { TradeTermsFields } from './TradeTermsFields';
 import { termsFromValues, vatOf } from './tradeTerms';
 import { vatRateOptions } from './vatRateRules';
 import { PurchaseRequestsModule } from './PurchaseRequestsModule';
+import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
+import { isAdjustment, netTradeTotals } from './tradeAdjustments';
 
 const formatMoney = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 const currentBusinessDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -44,7 +45,6 @@ const PurchasingDocumentsModule: React.FC = () => {
 
   const isCharts = currentPath === '/finance/purchasing/charts';
   const isContracts = currentPath === '/finance/purchasing/contracts';
-  const isReturns = currentPath === '/finance/purchasing/returns';
   const isInputInvoices = currentPath === '/finance/purchasing/input-invoices';
 
   const loadData = async () => {
@@ -72,20 +72,19 @@ const PurchasingDocumentsModule: React.FC = () => {
         (item.code || '').toLowerCase().includes(keyword) ||
         (item.partnerName || '').toLowerCase().includes(keyword) ||
         (item.description || '').toLowerCase().includes(keyword);
+      if (isAdjustment(item)) return false;
       if (isContracts) return matchSearch && item.subtype === 'Hợp đồng mua';
       if (isInputInvoices) return matchSearch && item.subtype === 'Hóa đơn đầu vào';
       return matchSearch;
     });
   }, [data, searchText, isContracts, isInputInvoices]);
 
-  const validData = data.filter((item) => item.status !== 'Đã hủy');
-  const totalSpend = validData.reduce((sum, item) => sum + item.amount, 0);
-  const totalPaid = validData.reduce((sum, item) => sum + item.paidAmount, 0);
-  const totalPayable = Math.max(0, totalSpend - totalPaid);
+  const validData = data.filter((item) => item.status !== 'Đã hủy' && !isAdjustment(item));
+  const { total: totalSpend, paid: totalPaid, remaining: totalPayable } = netTradeTotals(data);
 
   const bySubtype = useMemo(() => {
     const totals = new Map<string, number>();
-    validData.forEach((item) => totals.set(item.subtype, (totals.get(item.subtype) || 0) + item.amount));
+    validData.forEach((item) => totals.set(item.subtype, (totals.get(item.subtype) || 0) + item.amount - (item.adjustedAmount || 0)));
     return Array.from(totals, ([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
   }, [validData]);
 
@@ -193,10 +192,6 @@ const PurchasingDocumentsModule: React.FC = () => {
             );
           }) : <div style={{ color: '#64748B' }}>Chưa có chứng từ mua hàng để phân tích.</div>}
         </div>
-      ) : isReturns ? (
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16, color: '#64748B' }}>
-          <FileProtectOutlined /> Trả hàng mua cần nghiệp vụ kho/hóa đơn điều chỉnh. Hiện chưa có nguồn dữ liệu backend cho luồng này nên không hiển thị số liệu mẫu.
-        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
@@ -300,5 +295,7 @@ export const PurchasingModule: React.FC = () => {
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
   if (currentPath === '/finance/purchasing/requests') return <PurchaseRequestsModule />;
+  if (currentPath === '/finance/purchasing/returns') return <TradeAdjustmentsModule side="purchase" kind="return" />;
+  if (currentPath === '/finance/purchasing/discounts') return <TradeAdjustmentsModule side="purchase" kind="discount" />;
   return <PurchasingDocumentsModule />;
 };
