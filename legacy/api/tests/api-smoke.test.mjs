@@ -2790,3 +2790,25 @@ test('document payments create posted receipts and payments, update debts and re
   await pay(quote.key, { amount: 1000 }, 422);
 });
 
+test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
+  const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
+    materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };
+  const before = (await request('/finance/costing/runs')).data.length;
+  const preview = (await request('/finance/costing/runs', 'POST', { ...input, preview: true })).result;
+  assert.equal(preview.fixedUnallocated, 6_000_000);
+  assert.equal((await request('/finance/costing/runs')).data.length, before);
+  await request('/finance/costing/runs', 'POST', { ...input, materialCost: -1 }, 422);
+  await request('/finance/costing/runs', 'POST', { ...input, periodEnd: '2026-08-01' }, 422);
+  const saved = (await request('/finance/costing/runs', 'POST', { ...input, totalCost: 1, unitCost: 1, code: 'GT-RUN-API-1' }, 201)).record;
+  assert.equal(saved.code, 'GT-RUN-API-1');
+  assert.equal(saved.totalCost, preview.totalCost);
+  assert.notEqual(saved.totalCost, 1);
+  assert.equal(saved.journal.reduce((sum, line) => sum + line.debit, 0), saved.journal.reduce((sum, line) => sum + line.credit, 0));
+  await request('/finance/costing/runs', 'POST', { ...input, code: 'GT-RUN-API-1', periodStart: '2026-10-01', periodEnd: '2026-10-31' }, 409);
+  await request('/finance/costing/runs', 'POST', { ...input, code: 'GT-RUN-API-2', periodStart: '2026-09-15', periodEnd: '2026-10-15' }, 409);
+  const coefficient = (await request('/finance/costing/runs', 'POST', { ...input, method: 'coefficient', completedQuantity: undefined, code: 'GT-RUN-API-3', products: [{ name: 'Loại 1', quantity: 40, coefficient: 1 }, { name: 'Loại 2', quantity: 40, coefficient: 1.5 }] }, 201)).record;
+  assert.equal(coefficient.productResults.reduce((sum, product) => sum + product.totalCost, 0), coefficient.totalCost);
+  assert.equal((await request('/finance/costing/runs')).data[0].method !== undefined, true);
+  await request('/collections/finance_costing_runs', 'POST', { record: { key: 'forged' } }, 409);
+});
+

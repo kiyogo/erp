@@ -723,6 +723,23 @@ export const financeLedgerPostingApi = {
   list: () => api.get<{ data: Array<{ sourceReference: string; voucherCode: string; entryDate: string; amount: number }> }>('/finance/ledger-postings'),
 };
 
+export type CostingRunResult = {
+  method: 'simple' | 'coefficient'; periodStart: string; periodEnd: string; productName: string; unit: string;
+  openingWipMaterial: number; openingWipConversion: number; materialCost: number; laborCost: number; variableOverhead: number; fixedOverhead: number;
+  abnormalMaterialLoss: number; normalCapacity: number; wipQuantity: number; wipCompletionRate: number; completedQuantity: number;
+  products?: Array<{ name: string; quantity: number; coefficient: number }>;
+  fixedAllocated: number; fixedUnallocated: number; materialsPool: number; conversionPool: number; closingWipMaterial: number; closingWipConversion: number; closingWip: number;
+  totalCost: number; completedUnits: number; unitCost: number; coefficientUnitCost?: number;
+  productResults?: Array<{ name: string; quantity: number; coefficient: number; totalCost: number; unitCost: number }>;
+  journal: Array<{ account: string; debit: number; credit: number; note: string }>;
+};
+export type CostingRun = CostingRunResult & { key: string; code: string; createdBy: string; createdAt: string };
+export const costingRunApi = {
+  list: () => api.get<{ data: CostingRun[] }>('/finance/costing/runs'),
+  preview: (data: Record<string, unknown>) => api.post<{ result: CostingRunResult }>('/finance/costing/runs', { ...data, preview: true }),
+  create: (data: Record<string, unknown>) => api.post<{ record: CostingRun }>('/finance/costing/runs', data),
+};
+
 export type FinanceBankAccount = {
   key: string;
   bankName: string;

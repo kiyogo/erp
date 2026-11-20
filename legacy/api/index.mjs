@@ -24,6 +24,7 @@ import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
 import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryCountLedgerLines, inventoryCountPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem, provisionLedgerLines, provisionPostingProblem } from './ledgerPostingRules.mjs';
 import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
+import { calculateCosting } from './costingRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -9941,6 +9942,41 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Tính giá thành theo kỳ (giản đơn, hệ số): máy chủ tính lại toàn bộ; preview chỉ trả kết quả, không lưu.
+  if (resource === '/finance/costing/runs' && request.method === 'GET') {
+    await requireAdmin(request);
+    const rows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_costing_runs'").all();
+    sendJson(response, 200, { data: rows.map(row => parseJsonObject(row.payload_json)).sort((a, b) => String(b.periodEnd).localeCompare(String(a.periodEnd)) || String(b.createdAt).localeCompare(String(a.createdAt))) });
+    return;
+  }
+  if (resource === '/finance/costing/runs' && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    const payload = await readJson(request, 256 * 1024);
+    let result;
+    try { result = calculateCosting(payload); } catch (error) { throw new HttpError(422, error.message); }
+    if (payload.preview === true) {
+      sendJson(response, 200, { result });
+      return;
+    }
+    const code = requiredText(payload.code || `GT-${result.periodEnd.replace(/-/g, '')}-${randomUUID().slice(0, 6).toUpperCase()}`, 'Mã kỳ tính giá thành', 80);
+    const timestamp = now();
+    let record;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_costing_runs'))");
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_costing_runs' AND LOWER(record_key) = LOWER(?) LIMIT 1").get(code);
+      if (duplicate) throw new HttpError(409, 'Mã kỳ tính giá thành đã tồn tại.');
+      const overlapping = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_costing_runs'").all()).map(row => parseJsonObject(row.payload_json))
+        .find(item => item.method === result.method && String(item.productName).toLocaleLowerCase('vi-VN') === result.productName.toLocaleLowerCase('vi-VN') && item.periodStart <= result.periodEnd && item.periodEnd >= result.periodStart);
+      if (overlapping) throw new HttpError(409, `Đã có kỳ tính giá thành ${overlapping.code} của sản phẩm này trùng khoảng thời gian.`);
+      record = { key: code, code, ...result, createdBy: actor.name, createdById: actor.id, createdAt: timestamp };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_costing_runs', ?, ?, ?, ?, ?)`).run(randomUUID(), code, actor.id, JSON.stringify(record), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'costing_run', 'finance_costing_runs', code, { method: result.method, totalCost: result.totalCost });
+    });
+    sendJson(response, 201, { record });
+    return;
+  }
+
   // Dự phòng giảm giá hàng tồn kho theo kỳ: tồn kho lấy theo hiện tại nên chỉ lập cho ngày hôm nay.
   if (resource === '/finance/inventory/provisions' && request.method === 'GET') {
     await requireAdmin(request);
@@ -10173,7 +10209,7 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }

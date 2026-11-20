@@ -5,6 +5,7 @@ import { PlusOutlined, SearchOutlined, DownloadOutlined, CalculatorOutlined, Bui
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag } from '../../custom-ui';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
+import { CostingRunsModule } from './CostingRunsModule';
 import { COSTING_CATEGORIES, COSTING_STATUSES, costingExportRows, costingMetrics, createCostingRecord, type CostingRecord } from './costingRules';
 
 const CATEGORY_BY_PATH: Record<string, typeof COSTING_CATEGORIES[number]> = {
@@ -13,7 +14,7 @@ const CATEGORY_BY_PATH: Record<string, typeof COSTING_CATEGORIES[number]> = {
   '/finance/costing/construction': 'Công trình thi công',
 };
 
-export const CostingModule: React.FC = () => {
+const CostingRecordsModule: React.FC = () => {
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
   const currentCategory = CATEGORY_BY_PATH[currentPath];
@@ -248,4 +249,12 @@ export const CostingModule: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+export const CostingModule: React.FC = () => {
+  const location = useLocation();
+  const currentPath = location.pathname.replace(/^\/admin/, '');
+  if (currentPath === '/finance/costing/simple') return <CostingRunsModule method="simple" />;
+  if (currentPath === '/finance/costing/coefficient') return <CostingRunsModule method="coefficient" />;
+  return <CostingRecordsModule />;
 };
