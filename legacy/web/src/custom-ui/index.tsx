@@ -1123,7 +1123,7 @@ export const Checkbox: React.FC<{ checked?: boolean; indeterminate?: boolean; on
           type="checkbox"
           checked={isChecked}
           disabled={disabled}
-          onChange={(e) => onChange && onChange({ target: { checked: e.target.checked } })}
+          onChange={(e) => onChange && onChange({ target: { type: 'checkbox', checked: e.target.checked } })}
           className="ant-checkbox-input"
         />
         <span className="ant-checkbox-inner" />

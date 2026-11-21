@@ -947,6 +947,8 @@ test('meeting rooms enforce server-owned booking identities, room policy, confli
   const date = futureDate(1);
   const booking = (key, timeSlot) => ({ key, roomKey: room.key, meetingTitle: 'Họp kiểm thử', date, timeSlot, participantsCount: 4, booker: 'Người giả', bookerId: 'spoofed', status: 'Đã hủy' });
   await request('/collections/room_bookings', 'POST', { record: booking('meeting-booking-too-long', '08:00 - 09:30') }, 422, employeeHeaders);
+  const vnClock = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+  if (vnClock >= '00:05') await request('/collections/room_bookings', 'POST', { record: { ...booking('meeting-booking-past-slot', '00:00 - 00:15'), date: futureDate(0) } }, 422, employeeHeaders);
   await request('/collections/room_bookings', 'POST', { record: { ...booking('meeting-booking-too-many', '08:00 - 09:00'), participantsCount: 9 } }, 422, employeeHeaders);
   await request('/collections/room_bookings', 'POST', { record: { ...booking('meeting-booking-too-far', '08:00 - 09:00'), date: futureDate(11) } }, 422, employeeHeaders);
   await request('/collections/room_bookings', 'POST', { record: { ...booking('meeting-booking-fake-room', '08:00 - 09:00'), roomKey: 'missing-room' } }, 422, employeeHeaders);
@@ -2819,6 +2821,18 @@ test('bank statement lines without a voucher are posted from the statement and m
   assert.match(ledger[0].creditAccount, /^112/);
   const matches = (await request('/collections/finance_bank_statement_matches')).data.filter((item) => item.statementKey === key && item.action === 'match');
   assert.equal(matches.length, 3);
+});
+
+test('enterprise service catalog validates code, category, status and price', async () => {
+  const service = { key: 'svc-1', code: 'cloud-01', name: 'Máy chủ ảo', category: 'Hạ tầng Cloud & IDC', status: 'Đang cung cấp', priceMonthly: 1_500_000, features: ['SSD', ''], specs: [{ label: 'CPU', value: '4 vCPU' }], iconType: 'forged' };
+  await request('/collections/enterprise_services', 'POST', { record: { ...service, key: 'svc-bad', category: 'Khác' } }, 422);
+  await request('/collections/enterprise_services', 'POST', { record: { ...service, key: 'svc-neg', priceMonthly: -1 } }, 422);
+  const created = (await request('/collections/enterprise_services', 'POST', { record: service }, 201)).record;
+  assert.equal(created.code, 'CLOUD-01');
+  assert.equal(created.iconType, 'cloud');
+  assert.deepEqual(created.features, ['SSD']);
+  await request('/collections/enterprise_services', 'POST', { record: { ...service, key: 'svc-2' } }, 409);
+  assert.equal((await request('/collections/enterprise_services/svc-1', 'PATCH', { patch: { priceMonthly: 2_000_000 } })).record.priceMonthly, 2_000_000);
 });
 
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {

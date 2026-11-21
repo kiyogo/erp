@@ -3525,6 +3525,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       if (date < businessDate) throw new HttpError(422, 'Không thể đặt phòng cho ngày đã qua.');
       const { slot, start, end } = parseMeetingTimeRange(record.timeSlot);
+      if (date === businessDate) {
+        const [hour, minute] = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()).split(':').map(Number);
+        if (start < hour * 60 + minute) throw new HttpError(422, 'Không thể đặt phòng cho khung giờ đã bắt đầu hoặc đã qua.');
+      }
       const settingsRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'meeting_room_settings' AND record_key = 'default' ORDER BY updated_at DESC LIMIT 1").get();
       const settings = publicCollectionRecord(settingsRow) || { maxDuration: 120, maxAdvanceDays: 14 };
       const bookingDay = Date.parse(`${date}T00:00:00.000Z`);
@@ -5184,6 +5188,29 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (problem) throw new HttpError(422, problem);
     }
     record.legalWarnings = shareholderWarnings(record, { today: todayInVietnam(), legalForm: (await getCompanyProfile()).legalForm });
+  }
+  // Danh mục gói dịch vụ doanh nghiệp cung cấp (chỉ quản trị viên ghi): mã không trùng, nhóm và trạng thái trong danh mục, đơn giá nguyên không âm.
+  if (scope === 'enterprise_services') {
+    const categories = { 'Hạ tầng Cloud & IDC': 'cloud', 'Trí tuệ nhân tạo AI': 'ai', 'An ninh mạng & CA': 'sec', 'Kênh truyền & Mạng': 'network' };
+    record.code = requiredText(record.code, 'Mã dịch vụ', 40).toUpperCase();
+    const duplicate = (await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'enterprise_services'").all())
+      .find((row) => row.record_key !== String(current?.key ?? record.key ?? '') && String(parseJsonObject(row.payload_json).code || '').toUpperCase() === record.code);
+    if (duplicate) throw new HttpError(409, 'Mã dịch vụ đã tồn tại.');
+    record.name = requiredText(record.name, 'Tên dịch vụ', 200);
+    record.category = oneOf(record.category, 'Nhóm dịch vụ', Object.keys(categories));
+    record.iconType = categories[record.category];
+    record.description = optionalText(record.description, 'Mô tả dịch vụ', 2_000);
+    const features = Array.isArray(record.features) ? record.features : String(record.features || '').split('\n');
+    record.features = features.map((item, index) => optionalText(item, `Tính năng ${index + 1}`, 200)).filter(Boolean).slice(0, 20);
+    const specs = Array.isArray(record.specs) ? record.specs : [];
+    record.specs = specs.slice(0, 20).map((item, index) => ({ label: requiredText(item?.label, `Tên thông số ${index + 1}`, 100), value: requiredText(item?.value, `Giá trị thông số ${index + 1}`, 200) }));
+    record.slaTarget = optionalText(record.slaTarget, 'Cam kết SLA', 120);
+    for (const [field, label] of [['priceMonthly', 'Đơn giá mỗi tháng'], ['activeContracts', 'Số hợp đồng đang chạy']]) {
+      const amount = Number(record[field] ?? 0);
+      if (!Number.isSafeInteger(amount) || amount < 0) throw new HttpError(422, `${label} phải là số nguyên không âm.`);
+      record[field] = amount;
+    }
+    record.status = oneOf(record.status, 'Trạng thái dịch vụ', ['Đang cung cấp', 'Bảo trì nâng cấp', 'Thử nghiệm Beta']);
   }
   if (scope === 'services_sla') {
     // Cam kết do người dùng nhập; số liệu thực tế chỉ có từ các kỳ đo được ghi nhận, trạng thái luôn suy ra từ kỳ đo gần nhất.

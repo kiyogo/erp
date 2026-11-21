@@ -23,10 +23,10 @@ import {
   CloudOutlined,
   GlobalOutlined,
 } from '@ant-design/icons';
-import { Modal, Form, Input, Button, Select, message, Tag, Drawer, Radio } from '../../custom-ui';
+import { Modal, Form, Input, Button, Select, message, Tag, Drawer, Radio, Checkbox } from '../../custom-ui';
 import { exportRowsToXlsx } from '../../utils/fileExporter';
 import { KTable } from '../../components/KTable';
-import { collectionsApi } from '../../api/endpoints';
+import { collectionsApi, crmContactsApi } from '../../api/endpoints';
 
 export interface EnterpriseServicePackage {
   id: string;
@@ -55,31 +55,100 @@ export const EnterpriseServicesModule: React.FC = () => {
   const [form] = Form.useForm();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editing, setEditing] = useState<EnterpriseServicePackage | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editForm] = Form.useForm();
 
-  useEffect(() => {
-    const loadServices = async () => {
+  const loadServices = async () => {
       setLoading(true);
       try {
         const response = await collectionsApi.get<EnterpriseServicePackage>('enterprise_services');
-        setServices(Array.isArray(response.data.data) ? response.data.data : []);
+        setServices(Array.isArray(response.data.data) ? response.data.data.map((item: any) => ({ ...item, id: item.id || item.key, features: item.features || [], specs: item.specs || [] })) : []);
       } catch (error: any) {
         message.error(error?.response?.data?.message || 'Không thể tải dữ liệu dịch vụ doanh nghiệp.');
       } finally {
         setLoading(false);
       }
-    };
+  };
 
+  useEffect(() => {
     void loadServices();
   }, []);
+
+  const openEdit = (service: EnterpriseServicePackage | null) => {
+    setEditing(service);
+    editForm.resetFields();
+    editForm.setFieldsValue(service ? {
+      ...service,
+      features: service.features.join('\n'),
+      specs: service.specs.map((item) => `${item.label}: ${item.value}`).join('\n'),
+    } : { status: 'Đang cung cấp', priceMonthly: 0, activeContracts: 0 });
+    setEditOpen(true);
+  };
+
+  // Thêm, sửa gói dịch vụ trong danh mục (máy chủ kiểm tra mã không trùng, nhóm, trạng thái, đơn giá).
+  const handleSaveService = async (values: any) => {
+    if (saving) return;
+    const specs = String(values.specs || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+      const index = line.indexOf(':');
+      return index > 0 ? { label: line.slice(0, index).trim(), value: line.slice(index + 1).trim() } : { label: line, value: '' };
+    });
+    if (specs.some((item) => !item.value)) {
+      message.error('Mỗi dòng thông số phải có dạng "Tên: giá trị".');
+      return;
+    }
+    const record = {
+      key: editing?.id || `service-${crypto.randomUUID()}`,
+      code: values.code, name: values.name, category: values.category, description: values.description || '',
+      features: String(values.features || '').split('\n').map((line) => line.trim()).filter(Boolean), specs,
+      slaTarget: values.slaTarget || '', priceMonthly: Number(values.priceMonthly || 0), activeContracts: Number(values.activeContracts || 0), status: values.status,
+    };
+    setSaving(true);
+    try {
+      if (editing) await collectionsApi.update('enterprise_services', editing.id, record);
+      else await collectionsApi.create('enterprise_services', record, record.key);
+      message.success(`Đã lưu dịch vụ ${String(values.code).toUpperCase()}.`);
+      setEditOpen(false);
+      setDrawerOpen(false);
+      await loadServices();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được dịch vụ.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const totalContracts = services.reduce((sum, item) => sum + item.activeContracts, 0);
   const totalMRR = services.reduce((sum, item) => sum + item.priceMonthly * item.activeContracts, 0);
   const activeServiceCount = services.filter((item) => item.status === 'Đang cung cấp').length;
 
-  const handleRegister = (values: any) => {
-    message.success(`Đã tiếp nhận yêu cầu đăng ký dịch vụ "${selectedService?.name}" từ khách hàng ${values.contactPerson}!`);
-    setModalOpen(false);
-    form.resetFields();
+  // Đăng ký dịch vụ lưu thành khách hàng tiềm năng trong CRM (nguồn "Đăng ký dịch vụ"), kèm ghi nhận đồng ý xử lý dữ liệu cá nhân.
+  const handleRegister = async (values: any) => {
+    if (!selectedService || saving) return;
+    if (!values.dataConsent) {
+      message.error('Cần xác nhận người đăng ký đã đồng ý cho xử lý dữ liệu cá nhân để liên hệ tư vấn.');
+      return;
+    }
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    setSaving(true);
+    try {
+      const { data } = await crmContactsApi.create({
+        type: 'customer', name: String(values.companyName).trim(), taxCode: String(values.taxCode || '').trim(), contactPerson: String(values.contactPerson).trim(),
+        phone: String(values.phone).trim(), email: String(values.email).trim(), status: 'Đang hoạt động',
+        details: {
+          entityKind: 'organization', customerSource: 'Đăng ký dịch vụ', dataConsent: true, dataConsentDate: today, dataConsentPurposes: 'Liên hệ tư vấn, báo giá dịch vụ',
+          note: `Đăng ký dịch vụ ${selectedService.code} - ${selectedService.name}, thời hạn ${values.duration || '12 tháng'}${values.note ? `. Ghi chú: ${values.note}` : ''}`,
+        },
+      } as any);
+      message.success(`Đã lưu khách hàng tiềm năng ${data.contact.code || ''} trong Khách hàng và đối tác.`);
+      setModalOpen(false);
+      form.resetFields();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được đăng ký dịch vụ.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filteredServices = services.filter((item) => {
@@ -275,6 +344,9 @@ export const EnterpriseServicesModule: React.FC = () => {
           <Button icon={<DownloadOutlined />} onClick={() => { if (!filteredServices.length) { message.warning('Không có dịch vụ để xuất.'); return; } const count = exportRowsToXlsx('Bao_cao_dich_vu', [{ title: 'Mã dịch vụ', dataIndex: 'code' }, { title: 'Tên dịch vụ', dataIndex: 'name' }, { title: 'Nhóm', dataIndex: 'category' }, { title: 'Mô tả', dataIndex: 'description' }, { title: 'Cam kết SLA', dataIndex: 'slaTarget' }, { title: 'Giá mỗi tháng', dataIndex: 'priceMonthly' }, { title: 'Hợp đồng đang chạy', dataIndex: 'activeContracts' }, { title: 'Trạng thái', dataIndex: 'status' }, { title: 'Tính năng', dataIndex: 'features' }], filteredServices); message.success(`Đã xuất ${count} dịch vụ ra tệp Excel.`); }} disabled={!services.length}>
             Xuất Báo Cáo
           </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEdit(null)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+            Thêm dịch vụ
+          </Button>
         </div>
       </div>
 
@@ -382,6 +454,10 @@ export const EnterpriseServicesModule: React.FC = () => {
         width={560}
       >
         <Form form={form} layout="vertical" onFinish={handleRegister} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
+            <Form.Item name="companyName" label="Tên doanh nghiệp" rules={[{ required: true, message: 'Nhập tên doanh nghiệp' }]}><Input /></Form.Item>
+            <Form.Item name="taxCode" label="Mã số thuế"><Input /></Form.Item>
+          </div>
           <Form.Item name="contactPerson" label="Người đại diện doanh nghiệp" rules={[{ required: true, message: 'Nhập họ tên' }]}>
             <Input placeholder="Ví dụ: Nguyễn Văn Minh" />
           </Form.Item>
@@ -406,10 +482,11 @@ export const EnterpriseServicesModule: React.FC = () => {
           <Form.Item name="note" label="Ghi chú yêu cầu kiến trúc hoặc dung lượng">
             <Input.TextArea rows={2} placeholder="Yêu cầu riêng về địa chỉ IP, RAM, băng thông..." />
           </Form.Item>
+          <Form.Item name="dataConsent" valuePropName="checked"><Checkbox>Người đăng ký đã đồng ý cho công ty xử lý dữ liệu cá nhân để liên hệ tư vấn, báo giá</Checkbox></Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
-              Xác nhận khởi tạo
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              {saving ? 'Đang lưu...' : 'Lưu khách hàng tiềm năng'}
             </Button>
           </div>
         </Form>
@@ -468,6 +545,7 @@ export const EnterpriseServicesModule: React.FC = () => {
             </div>
 
             {/* Action */}
+            <Button onClick={() => openEdit(selectedService)}>Sửa dịch vụ</Button>
             <Button
               type="primary"
               onClick={() => {
@@ -481,6 +559,35 @@ export const EnterpriseServicesModule: React.FC = () => {
           </div>
         )}
       </Drawer>
+
+      <Modal title={editing ? `Sửa dịch vụ ${editing.code}` : 'Thêm dịch vụ'} open={editOpen} onCancel={() => setEditOpen(false)} footer={null} width={640}>
+        <Form form={editForm} layout="vertical" onFinish={handleSaveService} style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+            <Form.Item name="code" label="Mã dịch vụ" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="name" label="Tên dịch vụ" rules={[{ required: true }]}><Input /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="category" label="Nhóm dịch vụ" rules={[{ required: true }]}>
+              <Select options={['Hạ tầng Cloud & IDC', 'Trí tuệ nhân tạo AI', 'An ninh mạng & CA', 'Kênh truyền & Mạng'].map((item) => ({ label: item, value: item }))} />
+            </Form.Item>
+            <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]}>
+              <Select options={['Đang cung cấp', 'Bảo trì nâng cấp', 'Thử nghiệm Beta'].map((item) => ({ label: item, value: item }))} />
+            </Form.Item>
+          </div>
+          <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2} /></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="slaTarget" label="Cam kết SLA"><Input placeholder="Ví dụ: 99,9%" /></Form.Item>
+            <Form.Item name="priceMonthly" label="Đơn giá mỗi tháng (VNĐ)" rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>
+            <Form.Item name="activeContracts" label="Hợp đồng đang chạy"><Input type="number" min={0} step={1} /></Form.Item>
+          </div>
+          <Form.Item name="features" label="Tính năng (mỗi dòng một tính năng)"><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="specs" label="Thông số (mỗi dòng dạng Tên: giá trị)"><Input.TextArea rows={3} placeholder="CPU: 8 vCPU" /></Form.Item>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => setEditOpen(false)}>Hủy</Button>
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{saving ? 'Đang lưu...' : 'Lưu dịch vụ'}</Button>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 };
