@@ -8,6 +8,11 @@ export const SETTLED_STATUSES = ['Đã hoàn ứng', 'Đã quyết toán nội b
 const PENDING = 'Chờ cấp tạm ứng';
 const OPEN = 'Chờ thanh quyết toán';
 const LOCKED_AFTER_ISSUE = ['code', 'employeeId', 'advanceType', 'advancedAmount'];
+// Trường do máy chủ ghi khi cấp tiền, quyết toán (route /finance/advances/:key/disburse và /settle); sửa phiếu qua kho chung giữ nguyên.
+const SERVER_FIELDS = ['issuedAmount', 'issuedAt', 'disbursementReference', 'disbursementVoucherCode', 'spentAmount', 'vatAmount', 'expenseAccount', 'balance',
+  'balanceReconciled', 'invoicesSummary', 'settledAt', 'settlementVoucherCode', 'settlementLedgerKey'];
+// Tài khoản ghi Nợ khi quyết toán: nguyên vật liệu, công cụ, hàng hóa, tài sản cố định, chi phí trả trước, chi phí (đầu 6), chi phí khác 811.
+export const ADVANCE_EXPENSE_ACCOUNT = /^(15[2-6]|21[13]|242|6\d|811)/;
 
 const text = (value, label, max) => {
   const result = String(value ?? '').trim();
@@ -25,7 +30,8 @@ const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${va
 export const isAdvanceSettled = (advance) => SETTLED_STATUSES.includes(advance?.status);
 
 // Chuẩn hóa một phiếu tạm ứng theo bước: tạo đề nghị, ghi nhận đã cấp tiền, quyết toán. Ném Error tiếng Việt khi sai.
-export function normalizeAdvance(input, current, { today }) {
+// transition: chỉ route cấp tiền, quyết toán (đã lập phiếu chi, phiếu thu và bút toán) được chuyển bước; sửa qua kho chung thì giữ bước và số liệu.
+export function normalizeAdvance(input, current, { today, transition = false }) {
   const record = { ...input };
   if (current && isAdvanceSettled(current)) throw new Error('Phiếu tạm ứng đã quyết toán được giữ nguyên làm chứng từ, không sửa được.');
   if (!current) {
@@ -44,6 +50,11 @@ export function normalizeAdvance(input, current, { today }) {
     record.advancedAmount = money(record.advancedAmount, 'Số tiền tạm ứng', 1);
   }
   const requested = record.status === 'Quá hạn quyết toán' ? OPEN : record.status;
+  if (!transition) {
+    if (requested !== current.status) throw new Error('Cấp tiền và quyết toán tạm ứng phải dùng nút Cấp tạm ứng, Quyết toán để hệ thống lập phiếu chi, phiếu thu và ghi sổ cái.');
+    const kept = Object.fromEntries(SERVER_FIELDS.filter((field) => current[field] !== undefined).map((field) => [field, current[field]]));
+    return { ...record, issuedAmount: 0, spentAmount: 0, balance: 0, ...kept, status: current.status };
+  }
   if (current.status === PENDING && requested === PENDING) return { ...record, status: PENDING, issuedAmount: 0, spentAmount: 0, balance: 0 };
   if (current.status === PENDING) {
     if (requested !== OPEN) throw new Error('Cần ghi nhận đã cấp tiền trước khi quyết toán.');
@@ -62,4 +73,16 @@ export function normalizeAdvance(input, current, { today }) {
     spentAmount, balance, balanceReconciled, invoicesSummary: text(record.invoicesSummary, 'Bảng kê hoặc tham chiếu chứng từ', 4000),
     status: settled ? 'Đã quyết toán nội bộ' : OPEN, settledAt: settled ? today : undefined,
   };
+}
+
+// Bút toán quyết toán theo chứng từ thực chi: Nợ tài khoản chi phí (phần chưa thuế), Nợ 1331 (thuế GTGT được khấu trừ), Có 141.
+export function settlementLedgerLines({ spentAmount, vatAmount = 0, expenseAccount }) {
+  const vat = money(vatAmount, 'Thuế GTGT được khấu trừ', 0);
+  if (vat > spentAmount) throw new Error('Thuế GTGT không được lớn hơn số thực chi.');
+  if (!ADVANCE_EXPENSE_ACCOUNT.test(String(expenseAccount || ''))) throw new Error('Tài khoản ghi Nợ khi quyết toán phải là vật tư, hàng hóa, tài sản, chi phí trả trước hoặc chi phí (152 đến 156, 211, 213, 242, đầu 6, 811).');
+  return [
+    ...(spentAmount - vat > 0 ? [{ account: expenseAccount, debit: spentAmount - vat, credit: 0 }] : []),
+    ...(vat > 0 ? [{ account: '1331', debit: vat, credit: 0 }] : []),
+    { account: '141', debit: 0, credit: spentAmount },
+  ];
 }

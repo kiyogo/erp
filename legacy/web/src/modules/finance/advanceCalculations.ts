@@ -18,3 +18,11 @@ export function advanceStatus(status: string, deadline: string, today: string): 
   if (status === 'Chờ cấp tạm ứng' || status === 'Đã hoàn ứng' || status === 'Đã quyết toán nội bộ') return status;
   return deadline < today ? 'Quá hạn quyết toán' : 'Chờ thanh quyết toán';
 }
+
+// Tài khoản chi tiết được ghi Nợ khi quyết toán tạm ứng, khớp ADVANCE_EXPENSE_ACCOUNT ở legacy/api/advanceRules.mjs.
+export const ADVANCE_EXPENSE_ACCOUNT = /^(15[2-6]|21[13]|242|6\d|811)/;
+
+export function advanceExpenseAccounts<T extends { code?: string; parentCode?: string; accountingRegime?: string; status?: string }>(accounts: T[], regime: string): T[] {
+  return accounts.filter((account) => account.accountingRegime === regime && account.status === 'Đang sử dụng'
+    && ADVANCE_EXPENSE_ACCOUNT.test(String(account.code || '')) && !accounts.some((child) => child.parentCode === account.code && child.accountingRegime === regime));
+}

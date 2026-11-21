@@ -17,10 +17,10 @@ import {
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Alert } from '../../custom-ui';
-import { collectionsApi } from '../../api/endpoints';
+import { advancesApi, collectionsApi, financePaymentAccountsApi, systemApi, type FinancePaymentAccount } from '../../api/endpoints';
 import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
-import { advanceStatus, calculateAdvanceSettlement } from './advanceCalculations';
+import { advanceExpenseAccounts, advanceStatus, calculateAdvanceSettlement } from './advanceCalculations';
 
 export interface EnterpriseAdvanceItem {
   key: string;
@@ -42,6 +42,10 @@ export interface EnterpriseAdvanceItem {
   invoicesSummary?: string;
   balanceReconciled?: boolean;
   settledAt?: string;
+  disbursementVoucherCode?: string;
+  settlementVoucherCode?: string;
+  vatAmount?: number;
+  expenseAccount?: string;
   status: 'Chờ cấp tạm ứng' | 'Đã hoàn ứng' | 'Đã quyết toán nội bộ' | 'Chờ thanh quyết toán' | 'Quá hạn quyết toán';
 }
 
@@ -66,6 +70,10 @@ export const AdvancesModule: React.FC = () => {
   const [issueForm] = Form.useForm();
   const [saving, setSaving] = useState(false);
 
+  const [cashAccounts, setCashAccounts] = useState<FinancePaymentAccount[]>([]);
+  const [expenseAccounts, setExpenseAccounts] = useState<Array<{ code: string; name: string }>>([]);
+  const [settleSpent, setSettleSpent] = useState(0);
+  useEffect(() => settlementForm.subscribe(() => setSettleSpent(Number(settlementForm.getFieldValue('spentAmount')) || 0)), [settlementForm]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedAdvance, setSelectedAdvance] = useState<EnterpriseAdvanceItem | null>(null);
 
@@ -75,6 +83,23 @@ export const AdvancesModule: React.FC = () => {
   const totalSettled = data.filter((d) => statusOf(d) === 'Đã hoàn ứng' || statusOf(d) === 'Đã quyết toán nội bộ').reduce((sum, item) => sum + (Number(item.spentAmount) || 0), 0);
   const totalPending = data.filter((item) => statusOf(item) === 'Chờ thanh quyết toán' || statusOf(item) === 'Quá hạn quyết toán').reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
   const overdueCount = data.filter((d) => statusOf(d) === 'Quá hạn quyết toán').length;
+
+  // Tài khoản tiền và danh mục tài khoản chi phí cho phiếu chi, phiếu thu và bút toán quyết toán.
+  const loadAccounts = async () => {
+    try {
+      const [{ data: company }, chart, payment] = await Promise.all([
+        systemApi.getCompanyProfile(),
+        dataService.refreshGenericData('finance_chart_of_accounts'),
+        financePaymentAccountsApi.getAccounts(),
+      ]);
+      setExpenseAccounts(advanceExpenseAccounts(chart as any[], String(company.profile.accountingRegime || '')).sort((a, b) => String(a.code).localeCompare(String(b.code))));
+      setCashAccounts(payment.data.accounts.filter((account) => account.status === 'Đang hoạt động'));
+    } catch {
+      message.error('Không tải được tài khoản tiền và danh mục tài khoản.');
+    }
+  };
+  const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const cashOptions = cashAccounts.map((account) => ({ value: account.key, label: `${account.name} · số dư ${Number(account.balance).toLocaleString('vi-VN')} ₫` }));
 
   const loadData = async () => {
     try {
@@ -144,35 +169,25 @@ export const AdvancesModule: React.FC = () => {
     }
   };
 
+  const afterAction = async (updated: EnterpriseAdvanceItem, vouchers: Array<{ code: string; type: 'Thu' | 'Chi' }>, label: string) => {
+    setSelectedAdvance({ ...selectedAdvance, ...updated } as EnterpriseAdvanceItem);
+    await loadData();
+    await dataService.refreshGenericData('finance_advances');
+    const voucherText = vouchers.map((item) => `${item.type === 'Thu' ? 'phiếu thu' : 'phiếu chi'} ${item.code}`).join(', ');
+    message.success(`${label}${voucherText ? `, đã lập ${voucherText}` : ''} và ghi sổ cái.`);
+  };
+
   const handleRecordDisbursement = async (values: any) => {
     if (!selectedAdvance || saving) return;
-    const issuedAmount = Number(values.issuedAmount);
-    if (!Number.isFinite(issuedAmount) || issuedAmount <= 0 || issuedAmount > Number(selectedAdvance.advancedAmount)) {
-      message.error('Số tiền cấp phải lớn hơn 0 và không vượt số tiền đề nghị.');
-      return;
-    }
-    if (values.disbursementConfirmed !== 'yes' || !String(values.disbursementReference || '').trim()) {
-      message.error('Xác nhận đã giao tiền thực tế và nhập mã tham chiếu trước khi lưu.');
-      return;
-    }
-    const updated: EnterpriseAdvanceItem = {
-      ...selectedAdvance,
-      issuedAmount,
-      issuedAt: new Date().toLocaleDateString('sv-SE'),
-      disbursementReference: String(values.disbursementReference).trim(),
-      balance: issuedAmount - Number(selectedAdvance.spentAmount || 0),
-      status: 'Chờ thanh quyết toán',
-    };
     setSaving(true);
     try {
-      await collectionsApi.update('finance_advances', selectedAdvance.key, updated);
-      setSelectedAdvance(updated);
+      const { data: result } = await advancesApi.disburse(selectedAdvance.key, {
+        amount: Number(values.issuedAmount), date: values.date, sourceAccountId: values.sourceAccountId, reference: values.reference || '',
+      });
       setIssueModalOpen(false);
-      await loadData();
-      await dataService.refreshGenericData('finance_advances');
-      message.success(`Đã lưu thông tin cấp tiền cho phiếu ${selectedAdvance.code}.`);
+      await afterAction(result.advance as unknown as EnterpriseAdvanceItem, result.vouchers, `Đã cấp tạm ứng ${selectedAdvance.code}`);
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể lưu thông tin cấp tiền.');
+      message.error(error?.response?.data?.message || 'Không thể cấp tạm ứng.');
     } finally {
       setSaving(false);
     }
@@ -180,39 +195,16 @@ export const AdvancesModule: React.FC = () => {
 
   const handleSettle = async (values: any) => {
     if (!selectedAdvance || saving) return;
-    const spentAmount = Number(values.spentAmount);
-    if (!Number.isFinite(spentAmount) || spentAmount < 0) {
-      message.error('Số thực chi phải là số tiền từ 0 trở lên.');
-      return;
-    }
-    const issuedAmount = Number(selectedAdvance.issuedAmount || 0);
-    const balanceReconciled = values.balanceReconciled === 'yes';
-    let settlement: ReturnType<typeof calculateAdvanceSettlement>;
-    try {
-      settlement = calculateAdvanceSettlement(issuedAmount, spentAmount, balanceReconciled);
-    } catch (error: any) {
-      message.error(error?.message || 'Số liệu quyết toán không hợp lệ.');
-      return;
-    }
-    const updated: EnterpriseAdvanceItem = {
-      ...selectedAdvance,
-      spentAmount,
-      balance: settlement.balance,
-      invoicesSummary: String(values.invoicesSummary || '').trim(),
-      balanceReconciled,
-      settledAt: settlement.status === 'Đã quyết toán nội bộ' ? new Date().toLocaleDateString('sv-SE') : undefined,
-      status: settlement.status,
-    };
     setSaving(true);
     try {
-      await collectionsApi.update('finance_advances', selectedAdvance.key, updated);
-      setSelectedAdvance(updated);
+      const { data: result } = await advancesApi.settle(selectedAdvance.key, {
+        spentAmount: Number(values.spentAmount), vatAmount: Number(values.vatAmount || 0), expenseAccount: values.expenseAccount || '',
+        invoicesSummary: String(values.invoicesSummary || '').trim(), date: values.date, sourceAccountId: values.sourceAccountId, reference: values.reference || '',
+      });
       setSettlementModalOpen(false);
-      await loadData();
-      await dataService.refreshGenericData('finance_advances');
-      message.success(`Đã lưu số liệu quyết toán phiếu ${selectedAdvance.code}.`);
+      await afterAction(result.advance as unknown as EnterpriseAdvanceItem, result.vouchers, `Đã quyết toán tạm ứng ${selectedAdvance.code}`);
     } catch (error: any) {
-      message.error(error?.response?.data?.message || 'Không thể lưu quyết toán tạm ứng.');
+      message.error(error?.response?.data?.message || 'Không thể quyết toán tạm ứng.');
     } finally {
       setSaving(false);
     }
@@ -542,9 +534,9 @@ export const AdvancesModule: React.FC = () => {
                   <span style={{ color: '#0F172A', fontWeight: 700 }}>Chênh lệch thừa/thiếu:</span>
                   <strong style={{ color: selectedAdvance.balance > 0 ? '#D97706' : '#16A34A', fontSize: 15 }}>
                     {selectedAdvance.balance > 0
-                      ? `Nhân viên cần hoàn: ${selectedAdvance.balance.toLocaleString('vi-VN')} ₫`
+                      ? `${selectedAdvance.settledAt ? 'Nhân viên đã nộp lại' : 'Nhân viên cần hoàn'}: ${selectedAdvance.balance.toLocaleString('vi-VN')} ₫`
                       : selectedAdvance.balance < 0
-                        ? `Công ty cần thanh toán thêm: ${Math.abs(selectedAdvance.balance).toLocaleString('vi-VN')} ₫`
+                        ? `${selectedAdvance.settledAt ? 'Công ty đã chi bù' : 'Công ty cần thanh toán thêm'}: ${Math.abs(selectedAdvance.balance).toLocaleString('vi-VN')} ₫`
                         : 'Không còn chênh lệch'}
                   </strong>
                 </div>
@@ -561,7 +553,14 @@ export const AdvancesModule: React.FC = () => {
               </div>
             </div>
 
-            <Alert message="Màn hình lưu số liệu quyết toán nội bộ; chưa thực hiện chuyển tiền hoặc thu tiền qua ngân hàng/quỹ." type="info" showIcon />
+            {(selectedAdvance.disbursementReference || selectedAdvance.settlementVoucherCode) && (
+              <div style={{ fontSize: 12.5, color: '#334155', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {selectedAdvance.disbursementReference && <div>Phiếu chi tạm ứng: {selectedAdvance.disbursementReference}</div>}
+                {selectedAdvance.expenseAccount && <div>Quyết toán ghi Nợ {selectedAdvance.expenseAccount}{selectedAdvance.vatAmount ? `, Nợ 1331 ${Number(selectedAdvance.vatAmount).toLocaleString('vi-VN')} ₫` : ''}, Có 141</div>}
+                {selectedAdvance.settlementVoucherCode && <div>Phiếu xử lý chênh lệch: {selectedAdvance.settlementVoucherCode}</div>}
+              </div>
+            )}
+            <Alert message="Cấp tạm ứng lập phiếu chi Nợ 141. Quyết toán ghi Nợ chi phí, Nợ 1331 (nếu có), Có 141, và lập phiếu thu phần nhân viên nộp lại hoặc phiếu chi phần chi bù. Các phiếu đều ghi sổ cái, không gửi lệnh chuyển tiền tới ngân hàng." type="info" showIcon />
 
             <div style={{ display: 'flex', gap: 10 }}>
               {statusOf(selectedAdvance) === 'Chờ cấp tạm ứng' && (
@@ -569,11 +568,13 @@ export const AdvancesModule: React.FC = () => {
                   type="primary"
                   style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
                   onClick={() => {
-                    issueForm.setFieldsValue({ issuedAmount: selectedAdvance.advancedAmount, disbursementReference: '', disbursementConfirmed: 'no' });
+                    issueForm.resetFields();
+                    issueForm.setFieldsValue({ issuedAmount: selectedAdvance.advancedAmount, date: today() });
+                    void loadAccounts();
                     setIssueModalOpen(true);
                   }}
                 >
-                  Ghi nhận cấp tiền
+                  Cấp tạm ứng
                 </Button>
               )}
               {(statusOf(selectedAdvance) === 'Chờ thanh quyết toán' || statusOf(selectedAdvance) === 'Quá hạn quyết toán') && (
@@ -581,11 +582,13 @@ export const AdvancesModule: React.FC = () => {
                   type="primary"
                   style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688' }}
                   onClick={() => {
-                    settlementForm.setFieldsValue({ spentAmount: selectedAdvance.spentAmount || 0, invoicesSummary: selectedAdvance.invoicesSummary || '', balanceReconciled: 'no' });
+                    settlementForm.resetFields();
+                    settlementForm.setFieldsValue({ spentAmount: selectedAdvance.issuedAmount || 0, vatAmount: 0, invoicesSummary: selectedAdvance.invoicesSummary || '', date: today() });
+                    void loadAccounts();
                     setSettlementModalOpen(true);
                   }}
                 >
-                  Ghi nhận quyết toán
+                  Quyết toán
                 </Button>
               )}
               <Button
@@ -608,35 +611,55 @@ export const AdvancesModule: React.FC = () => {
         )}
       </Drawer>
 
-      <Modal title="Ghi nhận đã cấp tạm ứng" open={issueModalOpen} onCancel={() => setIssueModalOpen(false)} footer={null} width={540}>
+      <Modal title="Cấp tạm ứng" open={issueModalOpen} onCancel={() => setIssueModalOpen(false)} footer={null} width={540}>
         <Form form={issueForm} layout="vertical" onFinish={handleRecordDisbursement} style={{ marginTop: 14 }}>
-          <Form.Item name="issuedAmount" label="Số tiền đã cấp thực tế (VNĐ)" rules={[{ required: true }]}><Input type="number" min={1} step={1} /></Form.Item>
-          <Form.Item name="disbursementReference" label="Mã phiếu chi hoặc tham chiếu giao dịch" rules={[{ required: true }]}><Input /></Form.Item>
-          <Alert message="Chỉ lưu khi tiền đã được giao/chuyển thực tế. Thao tác này ghi nhận sổ nội bộ, không tự gửi lệnh ngân hàng." type="info" showIcon />
-          <Form.Item name="disbursementConfirmed" label="Đã giao/chuyển tiền thực tế?" rules={[{ required: true }]}>
-            <Select options={[{ label: 'Chưa giao tiền', value: 'no' }, { label: 'Đã giao/chuyển tiền', value: 'yes' }]} />
+          <Alert message="Hệ thống lập phiếu chi Nợ 141 Có tiền đã ghi sổ cái và trừ số dư tài khoản được chọn. Chỉ lưu khi tiền đã giao hoặc chuyển thực tế." type="info" showIcon />
+          <Form.Item name="sourceAccountId" label="Chi từ tài khoản tiền" rules={[{ required: true, message: 'Chọn tài khoản ngân hàng hoặc quỹ tiền mặt' }]} style={{ marginTop: 12 }}>
+            <Select options={cashOptions} placeholder="Chọn tài khoản ngân hàng hoặc quỹ" />
           </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="issuedAmount" label="Số tiền cấp (VNĐ)" rules={[{ required: true }]}><Input type="number" min={1} max={selectedAdvance?.advancedAmount} step={1} /></Form.Item>
+            <Form.Item name="date" label="Ngày chi" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+          </div>
+          <Form.Item name="reference" label="Số chứng từ ngân hàng hoặc tham chiếu"><Input /></Form.Item>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Button onClick={() => setIssueModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{saving ? 'Đang lưu...' : 'Lưu xác nhận'}</Button>
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{saving ? 'Đang lưu...' : 'Lập phiếu chi và ghi sổ'}</Button>
           </div>
         </Form>
       </Modal>
 
-      <Modal title="Ghi nhận quyết toán nội bộ" open={settlementModalOpen} onCancel={() => setSettlementModalOpen(false)} footer={null} width={560}>
+      <Modal title="Quyết toán tạm ứng" open={settlementModalOpen} onCancel={() => setSettlementModalOpen(false)} footer={null} width={600}>
         <Form form={settlementForm} layout="vertical" onFinish={handleSettle} style={{ marginTop: 14 }}>
-          <Form.Item name="spentAmount" label="Tổng thực chi theo chứng từ (VNĐ)" rules={[{ required: true }]}>
-            <Input type="number" min={0} step={1} />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="spentAmount" label="Tổng thực chi theo chứng từ, gồm thuế (VNĐ)" rules={[{ required: true }]}><Input type="number" min={0} step={1} /></Form.Item>
+            <Form.Item name="vatAmount" label="Trong đó thuế GTGT được khấu trừ (VNĐ)"><Input type="number" min={0} step={1} /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="expenseAccount" label="Tài khoản ghi Nợ" rules={[{ required: Number(settleSpent) > 0, message: 'Chọn tài khoản chi phí, vật tư hoặc hàng hóa' }]}>
+              <Select showSearch options={expenseAccounts.map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" />
+            </Form.Item>
+            <Form.Item name="date" label="Ngày quyết toán" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+          </div>
           <Form.Item name="invoicesSummary" label="Bảng kê hoặc số tham chiếu chứng từ" rules={[{ required: true, message: 'Nhập bảng kê hoặc tham chiếu chứng từ.' }]}>
-            <Input.TextArea rows={3} placeholder="Ghi các khoản chi và số tham chiếu chứng từ đã đối chiếu" />
+            <Input.TextArea rows={3} placeholder="Ghi các khoản chi và số hóa đơn, chứng từ đã đối chiếu" />
           </Form.Item>
-          <Form.Item name="balanceReconciled" label="Chênh lệch tiền đã thực sự hoàn trả/chi bổ sung?" rules={[{ required: true }]}>
-            <Select options={[{ label: 'Chưa, còn chờ xử lý tiền', value: 'no' }, { label: 'Có, đã đối chiếu giao nhận tiền', value: 'yes' }]} />
-          </Form.Item>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {(() => {
+            const balance = calculateAdvanceSettlement(Number(selectedAdvance?.issuedAmount || 0), Math.max(0, Number(settleSpent) || 0), true).balance;
+            if (!balance) return <Alert message="Không có chênh lệch: chỉ ghi bút toán quyết toán Có 141." type="info" showIcon />;
+            return (
+              <>
+                <Alert type="warning" showIcon message={balance > 0 ? `Nhân viên nộp lại ${balance.toLocaleString('vi-VN')} ₫: hệ thống lập phiếu thu Nợ tiền Có 141.` : `Công ty chi bù ${Math.abs(balance).toLocaleString('vi-VN')} ₫: hệ thống lập phiếu chi Nợ 141 Có tiền.`} />
+                <Form.Item name="sourceAccountId" label={balance > 0 ? 'Thu vào tài khoản tiền' : 'Chi từ tài khoản tiền'} rules={[{ required: true, message: 'Chọn tài khoản ngân hàng hoặc quỹ tiền mặt' }]} style={{ marginTop: 12 }}>
+                  <Select options={cashOptions} placeholder="Chọn tài khoản ngân hàng hoặc quỹ" />
+                </Form.Item>
+                <Form.Item name="reference" label="Số chứng từ ngân hàng hoặc tham chiếu"><Input /></Form.Item>
+              </>
+            );
+          })()}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button onClick={() => setSettlementModalOpen(false)}>Hủy</Button>
-            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{saving ? 'Đang lưu...' : 'Lưu quyết toán'}</Button>
+            <Button type="primary" htmlType="submit" disabled={saving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{saving ? 'Đang lưu...' : 'Quyết toán và ghi sổ'}</Button>
           </div>
         </Form>
       </Modal>

@@ -34,7 +34,7 @@ import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
-import { isAdvanceSettled, normalizeAdvance } from './advanceRules.mjs';
+import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -6495,6 +6495,50 @@ async function postCashTransactionToLedger(transaction, id, actor, profile) {
   });
 }
 
+// Lập phiếu thu hoặc chi đã ghi sổ cái từ một nghiệp vụ nguồn (thanh toán chứng từ, tạm ứng). Gọi trong giao dịch đã khóa sổ.
+// partnerAccount là tài khoản đối ứng với tiền (131, 331, 141...); tài khoản tiền lấy từ tài khoản ngân hàng (112 chi tiết) hoặc quỹ (111).
+async function createPostedCashVoucher({ id, actor, profile, timestamp, sourceAccountId, type, partnerAccount, category, amount, date, reference, description, note, sourceDocument, recipientOrPayer, counterpartyType, employeeCode }) {
+  const account = (await internalTransferAccounts()).find(item => item.key === sourceAccountId);
+  if (!account || account.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản tiền không tồn tại hoặc đã ngừng hoạt động.');
+  const bank = account.source === 'bank' ? await db.prepare('SELECT ledger_account_code FROM finance_bank_accounts WHERE id = ?').get(account.key) : null;
+  const defaultCash = account.source === 'petty' ? '111' : '112';
+  const configuredCash = String(bank?.ledger_account_code || '').replace(/^TK\s*/i, '').trim();
+  const cashAccount = configuredCash.startsWith(defaultCash) ? configuredCash : defaultCash;
+  const resolved = await resolveLedgerLeafAccounts(profile, [{ account: partnerAccount }, { account: cashAccount }]);
+  const journalLines = paymentJournalLines({ type, partnerAccount: resolved[0].account }, resolved[1].account, amount, description);
+  const transaction = validateCashTransaction({
+    type, source: account.source, category, amount, journalLines, date, voucherDate: date, currency: account.currency || 'VND',
+    reference, sourceDocument, recipientOrPayer, account: account.name, status: 'Chờ duyệt', note: note || description,
+    sourceAccountId: account.key, counterpartyType, ...(employeeCode ? { employeeCode } : {}),
+  });
+  transaction.code = await nextUniqueCode(type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
+  await insertCashTransactionRow(transaction, id, actor, timestamp);
+  await postCashTransactionToLedger(transaction, id, actor, profile);
+  return transaction;
+}
+
+// Ghi một bút toán nhiều dòng (không phải phiếu tiền) vào Sổ Cái từ nghiệp vụ nguồn; gọi trong giao dịch đã khóa sổ.
+// source: { sourceModule, sourceReference, voucherCode, entryDate, description }; lines: [{ account, debit, credit }] đã đổi sang tài khoản chi tiết.
+async function insertSourceLedgerEntry(actor, profile, source, lines) {
+  const amount = lines.reduce((sum, line) => sum + line.debit, 0);
+  if (amount <= 0 || amount !== lines.reduce((sum, line) => sum + line.credit, 0)) throw new HttpError(422, 'Bút toán không cân Nợ Có.');
+  await validateLedgerAccountLines(profile, lines);
+  const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND (record_key = ? OR json_extract(payload_json, '$.sourceReference') = ? OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?)) LIMIT 1").get(source.sourceReference, source.sourceReference, source.voucherCode);
+  if (duplicate) throw new HttpError(409, 'Chứng từ đã được ghi sổ cái hoặc số chứng từ đã tồn tại trong Sổ Cái.');
+  await requireOpenLedgerPeriod(source.entryDate, profile);
+  const timestamp = now();
+  const record = {
+    key: source.sourceReference, voucherCode: source.voucherCode, entryDate: source.entryDate, description: source.description, amount,
+    lines: lines.map(({ account, debit, credit }) => ({ account, debit, credit })),
+    author: actor.name, authorId: actor.id, status: 'Đã ghi sổ cái', sourceModule: source.sourceModule, sourceReference: source.sourceReference,
+    accountingRegime: profile.accountingRegime, createdAt: timestamp,
+  };
+  await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+    VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
+  await recordAuditEvent(actor.id, 'post_source_ledger_entry', 'finance_general_ledger', record.key, { sourceModule: source.sourceModule, voucherCode: source.voucherCode, amount });
+  return record;
+}
+
 async function resolveCashAttachments(ids, actor) {
   const attachments = [];
   let totalBytes = 0;
@@ -10269,22 +10313,10 @@ async function handleRequest(request, response) {
       sendJson(response, 200, { preview: { voucherCode: source.voucherCode, entryDate: source.entryDate, description: source.description, amount, lines }, posted: !!posted });
       return;
     }
-    await validateLedgerAccountLines(profile, lines);
-    const timestamp = now();
-    const record = {
-      key: source.sourceReference, voucherCode: source.voucherCode, entryDate: source.entryDate, description: source.description, amount,
-      lines: lines.map(({ account, debit, credit }) => ({ account, debit, credit })),
-      author: actor.name, authorId: actor.id, status: 'Đã ghi sổ cái', sourceModule: source.sourceModule, sourceReference: source.sourceReference,
-      accountingRegime: profile.accountingRegime, createdAt: timestamp,
-    };
+    let record;
     await db.transaction(async () => {
       if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
-      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_general_ledger' AND (record_key = ? OR json_extract(payload_json, '$.sourceReference') = ? OR LOWER(json_extract(payload_json, '$.voucherCode')) = LOWER(?)) LIMIT 1").get(record.key, source.sourceReference, source.voucherCode);
-      if (duplicate) throw new HttpError(409, 'Chứng từ đã được ghi sổ cái hoặc số chứng từ đã tồn tại trong Sổ Cái.');
-      await requireOpenLedgerPeriod(source.entryDate, profile);
-      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
-        VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
-      await recordAuditEvent(actor.id, 'post_source_ledger_entry', 'finance_general_ledger', record.key, { sourceModule: source.sourceModule, voucherCode: source.voucherCode, amount });
+      record = await insertSourceLedgerEntry(actor, profile, source, lines);
     });
     sendJson(response, 201, { record });
     return;
@@ -12769,23 +12801,10 @@ async function handleRequest(request, response) {
       if (plan.problem) throw new HttpError(422, plan.problem);
       if (date < document.documentDate) throw new HttpError(422, 'Ngày thanh toán không được trước ngày chứng từ.');
       if (amount > plan.remaining) throw new HttpError(422, `Số tiền ${amount.toLocaleString('vi-VN')} đồng vượt số còn thanh toán được ${plan.remaining.toLocaleString('vi-VN')} đồng.`);
-      const account = (await internalTransferAccounts()).find(item => item.key === sourceAccountId);
-      if (!account || account.status !== 'Đang hoạt động') throw new HttpError(422, 'Tài khoản tiền không tồn tại hoặc đã ngừng hoạt động.');
-      const bank = account.source === 'bank' ? await db.prepare('SELECT ledger_account_code FROM finance_bank_accounts WHERE id = ?').get(account.key) : null;
-      const defaultCash = account.source === 'petty' ? '111' : '112';
-      const configuredCash = String(bank?.ledger_account_code || '').replace(/^TK\s*/i, '').trim();
-      const cashAccount = configuredCash.startsWith(defaultCash) ? configuredCash : defaultCash;
-      const description = `${plan.note} ${document.code}`;
-      const resolved = await resolveLedgerLeafAccounts(profile, [{ account: plan.partnerAccount }, { account: cashAccount }]);
-      const journalLines = paymentJournalLines({ ...plan, partnerAccount: resolved[0].account }, resolved[1].account, amount, description);
-      const transaction = validateCashTransaction({
-        type: plan.type, source: account.source, category: plan.category, amount, journalLines, date, voucherDate: date, currency: account.currency || 'VND',
-        reference, sourceDocument: document.code, recipientOrPayer: document.partnerName, account: account.name, status: 'Chờ duyệt', note: note || description,
-        sourceAccountId: account.key, counterpartyType: 'other',
+      const transaction = await createPostedCashVoucher({
+        id, actor, profile, timestamp, sourceAccountId, type: plan.type, partnerAccount: plan.partnerAccount, category: plan.category, amount, date, reference,
+        description: `${plan.note} ${document.code}`, note, sourceDocument: document.code, recipientOrPayer: document.partnerName, counterpartyType: 'other',
       });
-      transaction.code = await nextUniqueCode(transaction.type === 'Thu' ? 'PT' : 'PC', 'finance_cash_transactions');
-      await insertCashTransactionRow(transaction, id, actor, timestamp);
-      await postCashTransactionToLedger(transaction, id, actor, profile);
       const update = await db.prepare('UPDATE finance_documents SET paid_amount = paid_amount + ?, updated_at = ? WHERE id = ? AND paid_amount + ? <= ?').run(amount, timestamp, documentId, amount, plan.limit);
       if (!update.changes) throw new HttpError(409, 'Chứng từ vừa được thanh toán ở nơi khác; hãy tải lại.');
       if (document.documentType === 'invoice' && document.status === 'Đã phát hành' && plan.remaining === amount) {
@@ -12795,6 +12814,78 @@ async function handleRequest(request, response) {
     });
     const saved = withAdjustmentCredit(publicFinanceDocument(await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(documentId)), await adjustedAmounts());
     sendJson(response, 201, { document: saved, transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
+    return;
+  }
+
+  // Tạm ứng (advanceRules.mjs, tài khoản 141): cấp tiền lập phiếu chi Nợ 141 Có tiền; quyết toán ghi Nợ chi phí (và 1331) Có 141 theo
+  // chứng từ thực chi, phần chênh lệch lập phiếu thu (nhân viên nộp lại tiền thừa) hoặc phiếu chi (chi bù). Mọi phiếu đều đã ghi sổ cái.
+  const advanceActionMatch = /^\/finance\/advances\/([^/]+)\/(disburse|settle)$/.exec(resource);
+  if (request.method === 'POST' && advanceActionMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const payload = await readJson(request, 64 * 1024);
+    const key = requiredText(decodeURIComponent(advanceActionMatch[1]), 'Phiếu tạm ứng', 160);
+    const settle = advanceActionMatch[2] === 'settle';
+    const date = requiredIsoDate(payload.date, settle ? 'Ngày quyết toán' : 'Ngày chi tạm ứng');
+    const today = todayInVietnam();
+    if (date > today) throw new HttpError(422, 'Ngày không được ở tương lai.');
+    const reference = optionalText(payload.reference, 'Số chứng từ ngân hàng hoặc tham chiếu', 200);
+    await requireSecurityPin(request, actor);
+    let saved;
+    const vouchers = [];
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_advances'))");
+      }
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_advances' AND record_key = ? LIMIT 1").get(key);
+      if (!row) throw new HttpError(404, 'Không tìm thấy phiếu tạm ứng.');
+      const current = parseJsonObject(row.payload_json);
+      const timestamp = now();
+      const voucher = async (type, amount, description) => {
+        const transaction = await createPostedCashVoucher({
+          id: randomUUID(), actor, profile, timestamp, sourceAccountId: requiredText(payload.sourceAccountId, 'Tài khoản tiền', 160), type, partnerAccount: '141',
+          category: type === 'Chi' ? 'Chi tạm ứng cho người lao động' : 'Thu hoàn ứng của người lao động', amount, date, reference, description,
+          sourceDocument: current.code, recipientOrPayer: current.employeeName || 'Người nhận tạm ứng', counterpartyType: 'employee', employeeCode: current.empCode,
+        });
+        vouchers.push({ code: transaction.code, type, amount });
+        return transaction.code;
+      };
+      let next;
+      if (!settle) {
+        if (current.status !== 'Chờ cấp tạm ứng') throw new HttpError(409, 'Phiếu tạm ứng đã được cấp tiền.');
+        if (date < current.requestDate) throw new HttpError(422, 'Ngày chi tạm ứng không được trước ngày đề nghị.');
+        try {
+          next = normalizeAdvance({ ...current, status: 'Chờ thanh quyết toán', issuedAmount: payload.amount, disbursementReference: 'PC' }, current, { today, transition: true });
+        } catch (error) { throw new HttpError(422, error.message); }
+        const code = await voucher('Chi', next.issuedAmount, `Chi tạm ứng ${current.code} - ${current.employeeName || ''}`.trim());
+        Object.assign(next, { issuedAt: date, disbursementVoucherCode: code, disbursementReference: reference ? `${code} (${reference})` : code });
+      } else {
+        if (!['Chờ thanh quyết toán', 'Quá hạn quyết toán'].includes(current.status)) throw new HttpError(409, current.status === 'Chờ cấp tạm ứng' ? 'Phiếu tạm ứng chưa được cấp tiền.' : 'Phiếu tạm ứng đã quyết toán.');
+        if (current.issuedAt && date < current.issuedAt) throw new HttpError(422, 'Ngày quyết toán không được trước ngày cấp tạm ứng.');
+        let lines;
+        try {
+          next = normalizeAdvance({ ...current, status: 'Chờ thanh quyết toán', spentAmount: payload.spentAmount, invoicesSummary: payload.invoicesSummary, balanceReconciled: true }, current, { today, transition: true });
+          lines = next.spentAmount > 0 ? settlementLedgerLines({ spentAmount: next.spentAmount, vatAmount: payload.vatAmount || 0, expenseAccount: String(payload.expenseAccount || '').trim() }) : [];
+        } catch (error) { throw new HttpError(422, error.message); }
+        if (lines.length) {
+          const entry = await insertSourceLedgerEntry(actor, profile, {
+            sourceModule: 'finance_advance', sourceReference: `advance-settlement:${key}`, voucherCode: `${current.code}-QT`, entryDate: date,
+            description: `Quyết toán tạm ứng ${current.code} - ${current.employeeName || ''}`.trim(),
+          }, await resolveLedgerLeafAccounts(profile, lines));
+          Object.assign(next, { settlementLedgerKey: entry.key, expenseAccount: entry.lines.find((line) => line.debit > 0 && !line.account.startsWith('133'))?.account || '', vatAmount: Number(payload.vatAmount) || 0 });
+        }
+        if (next.balance > 0) next.settlementVoucherCode = await voucher('Thu', next.balance, `Thu hoàn tạm ứng thừa ${current.code}`);
+        if (next.balance < 0) next.settlementVoucherCode = await voucher('Chi', -next.balance, `Chi bù tạm ứng ${current.code}`);
+        next.settledAt = date;
+      }
+      const update = await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ? AND payload_json = ?').run(JSON.stringify(next), timestamp, row.id, row.payload_json);
+      if (!update.changes) throw new HttpError(409, 'Phiếu tạm ứng vừa được sửa ở nơi khác; hãy tải lại.');
+      await recordAuditEvent(actor.id, settle ? 'advance_settle' : 'advance_disburse', 'finance_advances', key, { code: current.code, vouchers });
+      saved = next;
+    });
+    sendJson(response, 200, { advance: saved, vouchers });
     return;
   }
 

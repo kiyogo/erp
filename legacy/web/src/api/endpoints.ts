@@ -707,6 +707,14 @@ export const financeDocumentsApi = {
   linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
 };
 
+// Tạm ứng: cấp tiền lập phiếu chi Nợ 141; quyết toán ghi Nợ chi phí, 1331, Có 141 và lập phiếu thu hoặc chi phần chênh lệch (cần PIN nếu đã đặt).
+export const advancesApi = {
+  disburse: (key: string, data: { amount: number; date: string; sourceAccountId: string; reference?: string }) =>
+    api.post<{ advance: Record<string, unknown>; vouchers: Array<{ code: string; type: 'Thu' | 'Chi'; amount: number }> }>(`/finance/advances/${encodeURIComponent(key)}/disburse`, data),
+  settle: (key: string, data: { spentAmount: number; vatAmount: number; expenseAccount: string; invoicesSummary: string; date: string; sourceAccountId?: string; reference?: string }) =>
+    api.post<{ advance: Record<string, unknown>; vouchers: Array<{ code: string; type: 'Thu' | 'Chi'; amount: number }> }>(`/finance/advances/${encodeURIComponent(key)}/settle`, data),
+};
+
 export type LedgerPreviewLine = { account: string; defaultAccount: string; debit: number; credit: number; note: string; alternatives: string[] };
 export type LedgerSourceKind = 'documents' | 'asset-disposals' | 'inventory-transactions' | 'inventory-provisions';
 export type InventoryProvision = { key: string; asOfDate: string; evidence: string; lines: Array<{ productKey: string; sku: string; name: string; quantity: number; unitCost: number; nrvUnit: number | null; cost: number; nrv: number; required: number; previous: number }>; totalRequired: number; totalPrevious: number; totalAdjustment: number; createdBy: string };
