@@ -1418,6 +1418,21 @@ export const pitFinalizationApi = {
     api.post<{ finalization: PitFinalizationRow }>('/finance/pit-finalization/authorizations', data),
 };
 
+export type PitVoucher = {
+  key: string; templateSymbol: string; series: string; number: string; employeeId: string; year: number; fromMonth: number; toMonth: number;
+  incomeType: string; paymentPeriod: string; months: number; totalIncome: number; taxableIncome: number; exemptIncome: number; insurance: number; charity: number; taxWithheld: number;
+  company: { name: string; taxCode: string; address: string; phone: string };
+  person: { name: string; employeeCode: string; taxCode: string; identityNumber: string; address: string; phone: string; nationality: string; resident: boolean };
+  contentIssues: string[]; issuedAt: string; issuedBy: string; status: string; cancelledAt?: string; cancelledBy?: string; cancelReason?: string;
+};
+// Chứng từ khấu trừ thuế TNCN: lập từ phiếu lương đã chốt (quản trị viên), hủy kèm lý do, nhân viên xem của mình (cần PIN nếu đã đặt).
+export const pitVouchersApi = {
+  list: () => api.get<{ data: PitVoucher[] }>('/finance/pit-vouchers'),
+  mine: () => api.get<{ data: PitVoucher[] }>('/employees/me/pit-vouchers'),
+  issue: (data: { employeeId: string; year: number; fromMonth: number; toMonth: number; series: string; templateSymbol?: string }) => api.post<{ voucher: PitVoucher }>('/finance/pit-vouchers', data),
+  cancel: (key: string, reason: string) => api.post<{ voucher: PitVoucher }>(`/finance/pit-vouchers/${encodeURIComponent(key)}/cancel`, { reason }),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

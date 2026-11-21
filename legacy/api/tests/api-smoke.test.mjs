@@ -2920,6 +2920,37 @@ test('annual PIT finalization sums closed payslips, applies 12-month personal de
   await request('/collections/hr_pit_authorizations', 'POST', { record: { key: 'forged' } }, 409);
 });
 
+test('PIT withholding vouchers are numbered, snapshot payslips, refuse authorized years and can only be cancelled', async () => {
+  const staff = (await request('/users', 'POST', { email: 'voucher-staff@example.test', name: 'Nhân viên chứng từ', password: 'Voucher-Staff-26!Secure', employeeCode: 'VCH-1', role: 'USER' }, 201)).user;
+  const login = await request('/auth/login', 'POST', { email: 'voucher-staff@example.test', password: 'Voucher-Staff-26!Secure' });
+  const staffHeaders = { ...headers, Authorization: `Bearer ${login.access_token || login.token}` };
+  for (const month of ['01', '02', '03']) {
+    await request('/collections/payroll', 'POST', { record: { key: `vch-${month}`, employeeCode: 'VCH-1', month: `2025-${month}`, gross: 25_000_000, insuranceDeduction: 2_625_000, taxDeduction: 600_000, status: 'Chưa chi trả' } }, 201);
+  }
+  const issue = (body, expected = 201) => request('/finance/pit-vouchers', 'POST', { employeeId: staff.id, year: 2025, series: 'AA/25E', ...body }, expected);
+  await request('/finance/pit-vouchers', 'POST', { employeeId: staff.id, year: 2025, fromMonth: 1, toMonth: 3, series: 'AA/25E' }, 403, staffHeaders);
+  await issue({ fromMonth: 4, toMonth: 6 }, 422);
+  const first = (await issue({ fromMonth: 1, toMonth: 3 })).voucher;
+  assert.equal(first.number, '0000001');
+  assert.equal(first.totalIncome, 75_000_000);
+  assert.equal(first.taxWithheld, 1_800_000);
+  assert.equal(first.person.name, 'Nhân viên chứng từ');
+  assert.equal(first.status, 'Đã lập, chưa ký số');
+  await issue({ fromMonth: 2, toMonth: 2 }, 409);
+  await request(`/finance/pit-vouchers/${encodeURIComponent(first.key)}/cancel`, 'POST', {}, 422);
+  assert.equal((await request(`/finance/pit-vouchers/${encodeURIComponent(first.key)}/cancel`, 'POST', { reason: 'Sai kỳ' })).voucher.status, 'Đã hủy');
+  const second = (await issue({ fromMonth: 1, toMonth: 2 })).voucher;
+  assert.equal(second.number, '0000002');
+  const own = (await request('/employees/me/pit-vouchers', 'GET', undefined, 200, staffHeaders)).data;
+  assert.equal(own.length, 2);
+  await request('/collections/finance_pit_vouchers', 'POST', { record: { key: 'forged' } }, 409);
+  const thisYear = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric' }).format(new Date()));
+  const pitRow = (await request(`/finance/pit-finalization?year=${thisYear}`)).data.find((item) => item.employeeCode === 'PIT-1');
+  assert.equal(pitRow.authorization.authorized, true);
+  const refused = await request('/finance/pit-vouchers', 'POST', { employeeId: pitRow.employeeId, year: thisYear, fromMonth: 1, toMonth: 1, series: 'AA/25E' }, 409);
+  assert.match(refused.message, /ủy quyền quyết toán/);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };

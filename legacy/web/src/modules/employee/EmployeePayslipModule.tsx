@@ -14,7 +14,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Input, Button, message, Select } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
-import { employeePayslipsApi, pitFinalizationApi, type PitFinalizationRow } from '../../api/endpoints';
+import { employeePayslipsApi, pitFinalizationApi, pitVouchersApi, type PitFinalizationRow, type PitVoucher } from '../../api/endpoints';
+import { printPitVoucher } from '../finance/pitVoucherPrint';
 import { PIT_YEAR_OPTIONS, PitAuthorizationModal } from '../finance/PitFinalizationModule';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { useAuth } from '../../context/AuthContext';
@@ -40,6 +41,14 @@ export const EmployeePayslipModule: React.FC = () => {
   const [pitYear, setPitYear] = useState<number>(Number(PIT_YEAR_OPTIONS[Math.min(1, PIT_YEAR_OPTIONS.length - 1)].value));
   const [pitRow, setPitRow] = useState<PitFinalizationRow | null>(null);
   const [pitAuthorizing, setPitAuthorizing] = useState(false);
+  const [vouchers, setVouchers] = useState<PitVoucher[] | null>(null);
+  const openVouchers = async () => {
+    try {
+      setVouchers((await pitVouchersApi.mine()).data.data);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không tải được chứng từ khấu trừ thuế.');
+    }
+  };
   const loadPit = async (year: number) => {
     try {
       setPitRow((await pitFinalizationApi.mine(year)).data.finalization);
@@ -214,6 +223,7 @@ export const EmployeePayslipModule: React.FC = () => {
           }}>
             Tải Toàn Bộ Phiếu Lương
           </Button>
+          <Button onClick={() => void openVouchers()}>Chứng từ khấu trừ thuế</Button>
           <Button onClick={() => { setPitOpen(true); void loadPit(pitYear); }}>Quyết toán thuế năm</Button>
           <Button
             type="primary"
@@ -266,6 +276,20 @@ export const EmployeePayslipModule: React.FC = () => {
               </div>
             </>
           )}
+        </div>
+      </Modal>
+      <Modal title="Chứng từ khấu trừ thuế TNCN" open={vouchers !== null} onCancel={() => setVouchers(null)} footer={null} width={640}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, fontSize: 13 }}>
+          {vouchers && !vouchers.length && <div style={{ color: '#64748B' }}>Chưa có chứng từ khấu trừ. Người đã ủy quyền quyết toán thuế năm nào thì không được cấp chứng từ cho năm đó; liên hệ bộ phận kế toán nếu cần.</div>}
+          {(vouchers || []).map((voucher) => (
+            <div key={voucher.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: '1px solid #E2E8F0', borderRadius: 6, padding: '8px 12px' }}>
+              <div>
+                <div>{voucher.series}-{voucher.number} · {voucher.paymentPeriod}</div>
+                <div style={{ color: '#64748B', fontSize: 12 }}>Thu nhập chịu thuế {voucher.taxableIncome.toLocaleString('vi-VN')} ₫ · Thuế đã khấu trừ {voucher.taxWithheld.toLocaleString('vi-VN')} ₫ · {voucher.status}</div>
+              </div>
+              <Button onClick={() => { if (!printPitVoucher(voucher)) message.error('Trình duyệt chặn cửa sổ in.'); }}>In</Button>
+            </div>
+          ))}
         </div>
       </Modal>
       <PitAuthorizationModal row={pitAuthorizing ? pitRow : null} onClose={() => setPitAuthorizing(false)} onSaved={(row) => setPitRow(row)} />

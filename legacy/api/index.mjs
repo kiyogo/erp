@@ -39,6 +39,7 @@ import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './adv
 import { statementPostingProblem } from './bankStatementRules.mjs';
 import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
 import { annualPitFinalization, authorizationProblems, finalizationDeadline } from './pitFinalizationRules.mjs';
+import { buildPitVoucher, voucherNumber } from './pitVoucherRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -6088,6 +6089,21 @@ async function ownPayslips(actor) {
     .sort((a, b) => String(b.month.slice(3) + b.month.slice(0, 2)).localeCompare(a.month.slice(3) + a.month.slice(0, 2)));
 }
 
+// Phiếu lương đã chốt (chưa chi trả hoặc đã chi trả) của một năm, gom theo mã nhân viên viết thường; dùng cho quyết toán và chứng từ khấu trừ thuế TNCN.
+async function closedPayslipsByCode(year) {
+  const payslipsByCode = new Map();
+  for (const record of (await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll'").all()).map(publicCollectionRecord)) {
+    if (!record || !PAYSLIP_VISIBLE_STATUSES.includes(record.status)) continue;
+    const local = payrollMonth(record.month);
+    const month = local ? `${local.slice(3)}-${local.slice(0, 2)}` : '';
+    if (!month.startsWith(`${year}-`)) continue;
+    const code = String(record.employeeCode || '').toLocaleLowerCase('vi-VN');
+    const gross = Number(record.gross) || (Number(record.baseSalary) || 0) + (Number(record.allowance) || 0) + (Number(record.bonus) || 0) + (Number(record.overtimePay) || 0);
+    payslipsByCode.set(code, [...(payslipsByCode.get(code) || []), { month, gross, exemptIncome: record.exemptIncome, insuranceDeduction: record.insuranceDeduction, taxDeduction: record.taxDeduction }]);
+  }
+  return payslipsByCode;
+}
+
 function ledgerCashAccount(profile, source) {
   if (profile.accountingRegime === 'TT132') return source === 'petty' ? '1111' : '1112';
   if (profile.accountingRegime === 'TT133') return source === 'petty' ? '1111' : '1121';
@@ -10603,7 +10619,7 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }
@@ -15415,6 +15431,79 @@ async function handleRequest(request, response) {
   }
 
   // Phiếu lương của chính nhân viên, lấy từ bảng lương đã được duyệt (không lấy bản ghi tự khai của nhân viên).
+  // Chứng từ khấu trừ thuế TNCN (pitVoucherRules.mjs): quản trị viên lập từ phiếu lương đã chốt, số tự tăng theo ký hiệu mẫu và ký hiệu,
+  // nội dung chụp lại tại thời điểm lập; không xóa, chỉ hủy kèm lý do. Nhân viên xem chứng từ của mình. Phạm vi `finance_pit_vouchers` chỉ ghi qua đây.
+  if (resource === '/finance/pit-vouchers' || resource === '/employees/me/pit-vouchers' || /^\/finance\/pit-vouchers\/[^/]+\/cancel$/.test(resource)) {
+    const actor = await requireUser(request);
+    const self = resource === '/employees/me/pit-vouchers';
+    if (!self && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên lập và quản lý chứng từ khấu trừ thuế.');
+    await requireSecurityPin(request, actor);
+    const list = async () => (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_pit_vouchers'").all()).map((row) => parseJsonObject(row.payload_json));
+    if (request.method === 'GET') {
+      const vouchers = (await list()).filter((item) => !self || item.employeeId === actor.id).sort((a, b) => String(b.issuedAt).localeCompare(String(a.issuedAt)));
+      sendJson(response, 200, { data: vouchers });
+      return;
+    }
+    if (request.method !== 'POST' || self) throw new HttpError(405, 'Phương thức không hỗ trợ.');
+    const payload = await readJson(request, 16 * 1024);
+    const cancelMatch = /^\/finance\/pit-vouchers\/([^/]+)\/cancel$/.exec(resource);
+    if (cancelMatch) {
+      const key = decodeURIComponent(cancelMatch[1]);
+      const reason = requiredText(payload.reason, 'Lý do hủy', 500);
+      let saved;
+      await db.transaction(async () => {
+        const row = await db.prepare("SELECT id, payload_json FROM collection_records WHERE scope = 'finance_pit_vouchers' AND record_key = ?").get(key);
+        if (!row) throw new HttpError(404, 'Không tìm thấy chứng từ khấu trừ.');
+        const voucher = parseJsonObject(row.payload_json);
+        if (voucher.status === 'Đã hủy') throw new HttpError(409, 'Chứng từ đã hủy.');
+        saved = { ...voucher, status: 'Đã hủy', cancelledAt: now(), cancelledBy: actor.name, cancelReason: reason };
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(saved), now(), row.id);
+        await recordAuditEvent(actor.id, 'pit_voucher_cancel', 'finance_pit_vouchers', key, { number: voucher.number, reason });
+      });
+      sendJson(response, 200, { voucher: saved });
+      return;
+    }
+    const year = Number(payload.year);
+    const templateSymbol = requiredText(payload.templateSymbol || 'CTT56', 'Ký hiệu mẫu chứng từ', 20).toUpperCase();
+    const series = requiredText(payload.series, 'Ký hiệu chứng từ', 20).toUpperCase();
+    const employeeId = requiredText(payload.employeeId, 'Người lao động', 160);
+    const row = await db.prepare('SELECT u.*, p.phone, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ?').get(employeeId);
+    if (!row) throw new HttpError(404, 'Không tìm thấy người lao động.');
+    const authorization = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_pit_authorizations' AND record_key = ?").get(`${year}:${employeeId}`);
+    if (authorization && parseJsonObject(authorization.payload_json).authorized) throw new HttpError(409, `Người lao động đã ủy quyền quyết toán thuế năm ${year}: doanh nghiệp không cấp chứng từ khấu trừ cho năm này (Thông tư 111/2013 Điều 25).`);
+    const details = decryptProfileDetails(parseJsonObject(row.details_json));
+    const companyProfile = await getCompanyProfile();
+    let voucher;
+    try {
+      voucher = buildPitVoucher({
+        year, fromMonth: Number(payload.fromMonth), toMonth: Number(payload.toMonth),
+        payslips: (await closedPayslipsByCode(year)).get(String(row.employee_code || '').toLocaleLowerCase('vi-VN')) || [],
+        company: { name: companyProfile.fullName || companyProfile.companyName, taxCode: companyProfile.taxCode, address: companyProfile.address, phone: companyProfile.phone },
+        person: {
+          name: row.name, employeeCode: row.employee_code, taxCode: details.taxCode || '', identityNumber: details.docNumber || details.idNumber || '',
+          address: details.resAddress || details.hkttAddress || details.currentAddress || '', phone: decryptField(row.phone || '', 'profile'),
+          nationality: details.nationality || 'Việt Nam', resident: details.taxResident !== false,
+        },
+      });
+    } catch (error) { throw new HttpError(422, error.message); }
+    let saved;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_pit_vouchers'))");
+      const existing = await list();
+      const overlap = existing.find((item) => item.status !== 'Đã hủy' && item.employeeId === employeeId && item.year === year && item.fromMonth <= voucher.toMonth && item.toMonth >= voucher.fromMonth);
+      if (overlap) throw new HttpError(409, `Đã có chứng từ ${overlap.series}-${overlap.number} cho kỳ trùng; hủy chứng từ đó trước khi lập lại.`);
+      const sequence = existing.filter((item) => item.templateSymbol === templateSymbol && item.series === series).length + 1;
+      const number = voucherNumber(sequence);
+      const key = `${templateSymbol}-${series}-${number}`;
+      saved = { key, templateSymbol, series, number, employeeId, ...voucher, issuedAt: now(), issuedBy: actor.name, issuedById: actor.id, status: 'Đã lập, chưa ký số' };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_pit_vouchers', ?, ?, ?, ?, ?)`).run(randomUUID(), key, employeeId, JSON.stringify(saved), saved.issuedAt, saved.issuedAt);
+      await recordAuditEvent(actor.id, 'pit_voucher_issue', 'finance_pit_vouchers', key, { employeeId, year, taxWithheld: saved.taxWithheld });
+    });
+    sendJson(response, 201, { voucher: saved });
+    return;
+  }
+
   // Quyết toán thuế TNCN năm (pitFinalizationRules.mjs): tổng hợp phiếu lương đã chốt của năm, ủy quyền quyết toán (mẫu 08/UQ-QTT-TNCN).
   // Ủy quyền lưu ở `hr_pit_authorizations` (khóa năm:mã người dùng), chỉ ghi qua route này; nhân viên tự ủy quyền hoặc quản trị viên ghi nhận.
   if (resource === '/finance/pit-finalization' || resource === '/employees/me/pit-finalization' || resource === '/finance/pit-finalization/authorizations') {
@@ -15431,16 +15520,7 @@ async function handleRequest(request, response) {
     const employeeRows = await db.prepare(`SELECT u.*, p.employment_status, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
       WHERE u.role != 'ADMIN'${targetId ? ' AND u.id = ?' : ''} ORDER BY u.employee_code`).all(...(targetId ? [targetId] : []));
     if (targetId && !employeeRows.length) throw new HttpError(404, 'Không tìm thấy người lao động.');
-    const payslipsByCode = new Map();
-    for (const record of (await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll'").all()).map(publicCollectionRecord)) {
-      if (!record || !PAYSLIP_VISIBLE_STATUSES.includes(record.status)) continue;
-      const local = payrollMonth(record.month);
-      const month = local ? `${local.slice(3)}-${local.slice(0, 2)}` : '';
-      if (!month.startsWith(`${year}-`)) continue;
-      const code = String(record.employeeCode || '').toLocaleLowerCase('vi-VN');
-      const gross = Number(record.gross) || (Number(record.baseSalary) || 0) + (Number(record.allowance) || 0) + (Number(record.bonus) || 0) + (Number(record.overtimePay) || 0);
-      payslipsByCode.set(code, [...(payslipsByCode.get(code) || []), { month, gross, exemptIncome: record.exemptIncome, insuranceDeduction: record.insuranceDeduction, taxDeduction: record.taxDeduction }]);
-    }
+    const payslipsByCode = await closedPayslipsByCode(year);
     const authorizations = new Map((await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_pit_authorizations'").all()).map((row) => [row.record_key, parseJsonObject(row.payload_json)]));
     const contractMonthsOf = async (userId) => {
       const contracts = await db.prepare("SELECT start_date, end_date, contract_type, status FROM contracts WHERE employee_user_id = ? AND contract_category = 'labor'").all(userId);
