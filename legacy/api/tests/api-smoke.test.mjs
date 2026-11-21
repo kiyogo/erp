@@ -2984,3 +2984,20 @@ test('discipline records are assessed on the server and one violation gets one m
   assert.match(second.message, /chỉ bị xử lý một hình thức/);
   assert.equal((await request('/collections/hr_employee_history', 'POST', { record: history('disc-other-violation', {}, { violationDate: '2026-10-02', discoveredDate: '2026-10-02' }) }, 201)).record.key, 'disc-other-violation');
 });
+
+test('insurance records link real employees, respect the regional minimum and benefit day limits', async () => {
+  const staff = (await request('/users', 'POST', { email: 'insured@example.test', name: 'Insured Staff', password: 'Insured-26!Secure', employeeCode: 'TEST-INS', role: 'USER' }, 201)).user;
+  const adjustment = (key, extra = {}) => ({ key, d02Code: key, adjustType: 'Báo tăng mới', employeeId: staff.id, empName: 'Forged', newSalary: 10_000_000, workRegion: 'I', effectiveMonth: '2026-09', filingDate: '2026-09-10', ...extra });
+  await request('/collections/insurance_adjustments', 'POST', { record: adjustment('D02-LOW', { newSalary: 3_000_000 }) }, 422);
+  await request('/collections/insurance_adjustments', 'POST', { record: adjustment('D02-NOREGION', { workRegion: '' }) }, 422);
+  const saved = (await request('/collections/insurance_adjustments', 'POST', { record: adjustment('D02-OK', { newSalary: 60_000_000 }) }, 201)).record;
+  assert.equal(saved.empName, 'Insured Staff');
+  assert.ok(saved.legalWarnings.some(item => /mức trần/.test(item)));
+  await request('/collections/insurance_adjustments', 'POST', { record: adjustment('d02-ok') }, 409);
+  const regime = (key, extra = {}) => ({ key, claimCode: key, regimeType: 'Ốm đau ngắn ngày', employeeId: staff.id, leaveDays: 30, startDate: '2026-03-02', calculatedAmount: 1_000_000, bankAccount: '0123456789 - Ngân hàng thử', ...extra });
+  await request('/collections/insurance_regimes', 'POST', { record: regime('CD-1') }, 201);
+  await request('/collections/insurance_regimes', 'POST', { record: regime('CD-2', { startDate: '2026-06-01' }) }, 201);
+  await request('/collections/insurance_regimes', 'POST', { record: regime('CD-3', { startDate: '2026-09-01', leaveDays: 1 }) }, 422);
+  await request('/collections/insurance_regimes', 'POST', { record: regime('CD-4', { startDate: '2027-01-04', leaveDays: 1 }) }, 201);
+  await request('/collections/insurance_regimes', 'POST', { record: regime('CD-5', { regimeType: 'Dưỡng sức sau sinh', leaveDays: 12 }) }, 422);
+});

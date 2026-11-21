@@ -34,6 +34,7 @@ import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
+import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
@@ -5474,6 +5475,53 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     else record.signer = current?.signer || '';
     if (current && [approved, waiting].includes(current.status) && record.status === 'Đã trao giải') { record.awardedBy = actor.name; record.awardedById = actor.id; record.awardedAt = now(); }
     record.createdAt = current?.createdAt || now(); record.updatedAt = now();
+  }
+  // Hồ sơ bảo hiểm (insuranceRules.mjs): gắn nhân viên thật, mức lương đóng theo lương tối thiểu vùng và trần, số ngày hưởng chế độ.
+  if (scope === 'insurance_adjustments' || scope === 'insurance_regimes') {
+    if (!current || record.employeeId) {
+      const employee = await getUserById(requiredText(record.employeeId, 'Nhân viên', 160));
+      if (!employee) throw new HttpError(422, 'Nhân viên không tồn tại.');
+      record.employeeId = employee.id; record.empName = employee.name; record.empCode = employee.employee_code;
+    }
+    const codeField = scope === 'insurance_adjustments' ? 'd02Code' : 'claimCode';
+    record[codeField] = requiredText(record[codeField], scope === 'insurance_adjustments' ? 'Mã hồ sơ D02' : 'Mã hồ sơ chế độ', 80);
+    const duplicate = (await db.prepare('SELECT record_key, payload_json FROM collection_records WHERE scope = ?').all(scope))
+      .find((row) => row.record_key !== String(current?.key ?? record.key) && String(parseJsonObject(row.payload_json)[codeField] || '').toLowerCase() === record[codeField].toLowerCase());
+    if (duplicate) throw new HttpError(409, 'Mã hồ sơ đã tồn tại.');
+  }
+  if (scope === 'insurance_adjustments') {
+    record.adjustType = oneOf(record.adjustType, 'Loại nghiệp vụ điều chỉnh', ADJUST_TYPES);
+    record.newSalary = optionalAmount(record.newSalary, 'Mức lương đóng mới');
+    record.oldSalary = optionalAmount(record.oldSalary, 'Mức lương đóng cũ');
+    record.filingDate = record.filingDate ? requiredIsoDate(record.filingDate, 'Ngày nộp hồ sơ') : '';
+    record.vssSubmissionStatus = oneOf(record.vssSubmissionStatus || current?.vssSubmissionStatus || 'Chờ nộp', 'Trạng thái nộp hồ sơ', ['Chờ nộp', 'Đã nộp qua Cổng eBH', 'BHXH đã duyệt', 'Yêu cầu giải trình']);
+    const fields = ['adjustType', 'newSalary', 'workRegion', 'effectiveMonth', 'filingDate'];
+    if (!current || fields.some((field) => String(current[field] ?? '') !== String(record[field] ?? ''))) {
+      try { record.effectiveMonth = normalizeInsuranceMonth(record.effectiveMonth); } catch (error) { throw new HttpError(422, error.message); }
+      record.workRegion = oneOf(record.workRegion, 'Vùng lương tối thiểu', ['I', 'II', 'III', 'IV']);
+      if (record.adjustType !== 'Báo giảm hẳn' && !record.newSalary) throw new HttpError(422, 'Nhập mức lương đóng mới lớn hơn 0.');
+      const check = adjustmentSalaryCheck({ ...record, month: record.effectiveMonth, region: record.workRegion });
+      if (check.error) throw new HttpError(422, check.error);
+      record.legalWarnings = check.warnings;
+    }
+  }
+  if (scope === 'insurance_regimes') {
+    record.regimeType = oneOf(record.regimeType, 'Loại chế độ hưởng', REGIME_TYPES);
+    record.leaveDays = Number(record.leaveDays);
+    record.calculatedAmount = optionalAmount(record.calculatedAmount, 'Số tiền đề nghị chi trả');
+    record.bankAccount = requiredText(record.bankAccount, 'Tài khoản nhận tiền', 200);
+    const fields = ['regimeType', 'leaveDays', 'startDate', 'childrenCount'];
+    if (!current || fields.some((field) => String(current[field] ?? '') !== String(record[field] ?? ''))) {
+      record.startDate = requiredIsoDate(record.startDate, 'Ngày bắt đầu nghỉ');
+      record.childrenCount = record.childrenCount === undefined || record.childrenCount === '' ? 1 : Number(record.childrenCount);
+      const sickDaysThisYear = (await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'insurance_regimes'").all())
+        .map((row) => ({ key: row.record_key, ...parseJsonObject(row.payload_json) }))
+        .filter((item) => item.key !== String(current?.key ?? record.key) && item.employeeId === record.employeeId && item.regimeType === 'Ốm đau ngắn ngày' && String(item.startDate || '').slice(0, 4) === record.startDate.slice(0, 4))
+        .reduce((sum, item) => sum + (Number(item.leaveDays) || 0), 0);
+      const problem = regimeDaysProblem({ ...record, sickDaysThisYear });
+      if (problem) throw new HttpError(422, problem);
+    }
+    record.approvalStatus = oneOf(record.approvalStatus || current?.approvalStatus || 'Đang thẩm định', 'Trạng thái hồ sơ chế độ', ['Đang thẩm định', 'BHXH duyệt chi', 'Đã giải ngân']);
   }
   if (scope === 'hr_job_openings') {
     record.jobCode = requiredText(record.jobCode, 'Mã tuyển dụng', 160);

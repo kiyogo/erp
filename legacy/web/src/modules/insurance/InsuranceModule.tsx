@@ -27,6 +27,7 @@ import { Card, Button, Input, Select, Tag, Modal, Form, message, Drawer, Progres
 import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 import { collectionsApi, contractsApi, employeesApi, type ContractPayload, type EnterpriseEmployee } from '../../api/endpoints';
 import { dataService, type PayrollRecord } from '../../services/dataService';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 
 export interface InsuranceLaborItem {
   key: string;
@@ -262,13 +263,14 @@ export const InsuranceModule: React.FC = () => {
     try {
       if (modalType === 'adjust') {
         const newSalary = Number(values.newSalary);
-        if (!Number.isFinite(newSalary) || newSalary <= 0) throw new Error('Nhập mức lương đóng mới lớn hơn 0.');
+        if (!Number.isFinite(newSalary) || newSalary < 0 || (newSalary === 0 && values.adjustType !== 'Báo giảm hẳn')) throw new Error('Nhập mức lương đóng mới lớn hơn 0.');
         // Hồ sơ mới ở trạng thái chờ nộp: hệ thống chưa kết nối cổng của cơ quan BHXH nên không tự nộp.
         const saved = await dataService.createGenericRecord('insurance_adjustments', {
           ...values, oldSalary: Number(values.oldSalary) || 0, newSalary, vssSubmissionStatus: 'Chờ nộp',
         });
+        ((saved.legalWarnings || []) as string[]).forEach((warning) => message.warning(warning, 8));
         setAdjustments((current) => [saved, ...current.filter((item) => item.key !== saved.key)]);
-        message.success(`Đã lập hồ sơ D02-LT ${values.d02Code} (${values.empName}). Hồ sơ đang chờ nộp cơ quan BHXH.`);
+        message.success(`Đã lập hồ sơ D02-LT ${values.d02Code} (${saved.empName}). Hồ sơ đang chờ nộp cơ quan BHXH.`);
       } else {
         const leaveDays = Number(values.leaveDays);
         const calculatedAmount = Number(values.calculatedAmount);
@@ -839,11 +841,11 @@ export const InsuranceModule: React.FC = () => {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Form.Item name="empName" label="Họ và tên nhân viên" rules={[{ required: true }]}>
-                  <Input placeholder="Ví dụ: Hoàng Văn Long" />
+                <Form.Item name="employeeId" label="Nhân viên" rules={[{ required: true }]}>
+                  <EmployeeSelect valueKey="id" />
                 </Form.Item>
-                <Form.Item name="empCode" label="Mã nhân viên" rules={[{ required: true }]}>
-                  <Input placeholder="Ví dụ: KY-056" />
+                <Form.Item name="workRegion" label="Vùng lương tối thiểu nơi làm việc" rules={[{ required: true }]}>
+                  <Select options={['I', 'II', 'III', 'IV'].map((value) => ({ value, label: `Vùng ${value}` }))} />
                 </Form.Item>
               </div>
 
@@ -858,7 +860,7 @@ export const InsuranceModule: React.FC = () => {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <Form.Item name="effectiveMonth" label="Tháng áp dụng" rules={[{ required: true }]}>
-                  <Input placeholder="Ví dụ: Tháng 09/2026" />
+                  <Input type="month" />
                 </Form.Item>
                 <Form.Item name="filingDate" label="Ngày nộp hồ sơ">
                   <Input type="date" />
@@ -884,11 +886,20 @@ export const InsuranceModule: React.FC = () => {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Form.Item name="empName" label="Họ tên người hưởng" rules={[{ required: true }]}>
-                  <Input placeholder="Ví dụ: Lê Thị Thu Thảo" />
+                <Form.Item name="employeeId" label="Người hưởng" rules={[{ required: true }]}>
+                  <EmployeeSelect valueKey="id" />
                 </Form.Item>
                 <Form.Item name="leaveDays" label="Số ngày nghỉ hưởng trợ cấp" rules={[{ required: true }]}>
-                  <Input type="number" min={1} />
+                  <Input type="number" min={0.5} step={0.5} />
+                </Form.Item>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Form.Item name="startDate" label="Ngày bắt đầu nghỉ" rules={[{ required: true }]}>
+                  <Input type="date" />
+                </Form.Item>
+                <Form.Item name="childrenCount" label="Số con sinh một lần (khi thai sản)">
+                  <Input type="number" min={1} step={1} />
                 </Form.Item>
               </div>
 
