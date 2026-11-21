@@ -19,7 +19,7 @@ import {
   AimOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Progress, Drawer, Checkbox } from '../../custom-ui';
 import { useSearchParams } from 'react-router-dom';
 import { collectionsApi, filesApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
@@ -67,6 +67,11 @@ export interface RecruitmentCandidate {
   personalAccount: string;
   source: string;
   talentPool?: boolean;
+  dataConsent?: boolean;
+  talentPoolConsent?: boolean;
+  offerSalary?: number;
+  workRegion?: string;
+  complianceWarnings?: string[];
   status: RecruitmentStage;
   appliedAt: string;
   interviewAt: string;
@@ -221,9 +226,9 @@ export const RecruitmentModule: React.FC = () => {
     };
     try {
       setSaving(true);
-      if (editingJob) await collectionsApi.update('hr_job_openings', id, newJob);
-      else await collectionsApi.create('hr_job_openings', newJob, id);
+      const savedJob = editingJob ? await collectionsApi.update('hr_job_openings', id, newJob) : await collectionsApi.create('hr_job_openings', newJob, id);
       message.success(`${editingJob ? 'Đã cập nhật' : 'Đã đăng'} tin tuyển dụng: ${values.title} (${values.jobCode})`);
+      (((savedJob.data as any)?.record?.complianceWarnings || []) as string[]).forEach((warning) => message.warning(warning, 8));
       setModalOpen(false);
       form.resetFields();
       await loadData();
@@ -263,6 +268,8 @@ export const RecruitmentModule: React.FC = () => {
       status, appliedAt: values.appliedAt || '', interviewAt: values.interviewAt || '',
       interviewer: String(values.interviewer || '').trim(), offerDate: values.offerDate || '', hiredDate: values.hiredDate || '',
       notes: String(values.notes || '').trim(),
+      offerSalary: values.offerSalary === '' || values.offerSalary == null ? undefined : Number(values.offerSalary),
+      dataConsent: values.dataConsent === true, talentPoolConsent: values.talentPoolConsent === true,
       history: editingCandidate?.history || [{ status: 'applied', at: new Date().toISOString() }],
     };
     const validation = validateRecruitmentCandidate(candidate, editingCandidate || undefined);
@@ -287,6 +294,7 @@ export const RecruitmentModule: React.FC = () => {
       setCandidates(previous => editingCandidate ? previous.map(item => item.key === candidate.key ? record : item) : [record, ...previous]);
       setCandidateModalOpen(false); candidateForm.resetFields(); setCvFile(null);
       message.success(editingCandidate ? 'Đã lưu hồ sơ và tiến độ ứng viên.' : 'Đã tiếp nhận hồ sơ ứng viên.');
+      (record.complianceWarnings || []).forEach((warning) => message.warning(warning, 8));
     } catch (error: any) {
       if (uploadedFileId && !saved) await filesApi.remove(uploadedFileId).catch(() => message.warning('CV đã tải lên kho tệp nhưng chưa gắn được vào hồ sơ.'));
       message.error(error?.response?.data?.message || 'Không thể lưu hồ sơ ứng viên.');
@@ -816,7 +824,11 @@ export const RecruitmentModule: React.FC = () => {
             <Form.Item name="interviewer" label="Người phỏng vấn" rules={[{ required: candidateStatus === 'interview' }]}><Input maxLength={200} /></Form.Item>
             <Form.Item name="offerDate" label="Ngày gửi Offer" rules={[{ required: candidateStatus === 'offer' || candidateStatus === 'hired' }]}><Input type="date" disabled={!['offer', 'hired'].includes(candidateStatus)} /></Form.Item>
             <Form.Item name="hiredDate" label="Ngày nhận việc" rules={[{ required: candidateStatus === 'hired' }]}><Input type="date" disabled={candidateStatus !== 'hired'} /></Form.Item>
+            <Form.Item name="offerSalary" label="Lương đề nghị (₫/tháng)"><Input type="number" min={0} /></Form.Item>
+            <Form.Item name="workRegion" label="Vùng lương tối thiểu nơi làm việc"><Select allowClear options={['I', 'II', 'III', 'IV'].map((value) => ({ value, label: `Vùng ${value}` }))} /></Form.Item>
           </div>
+          <Form.Item name="dataConsent" valuePropName="checked"><Checkbox>Ứng viên đã đồng ý cho công ty xử lý dữ liệu cá nhân để tuyển dụng vị trí này</Checkbox></Form.Item>
+          <Form.Item name="talentPoolConsent" valuePropName="checked"><Checkbox>Ứng viên đồng ý lưu hồ sơ để xét các vị trí khác (cần khi đưa vào Kho tiềm năng)</Checkbox></Form.Item>
           <Form.Item name="notes" label="Ghi chú / kết quả phỏng vấn"><Input.TextArea rows={3} maxLength={5000} /></Form.Item>
           <div style={{ marginBottom: 12 }}>
             <label htmlFor="recruitment-cv-file" style={{ display: 'block', marginBottom: 6 }}>CV đính kèm</label>

@@ -32,6 +32,8 @@ import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
 import { validatePlanRecord } from './planRules.mjs';
 import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
+import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
+import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
@@ -5459,6 +5461,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.deadline = requiredIsoDate(record.deadline, 'Hạn tuyển dụng');
     record.status = oneOf(record.status || 'Đang tuyển dụng', 'Trạng thái tuyển dụng', ['Đang tuyển dụng', 'Tạm dừng', 'Đã đóng', 'Đã đóng (Đủ định biên)', 'Đã đủ chỉ tiêu']);
     record.createdAt = current?.createdAt || record.createdAt || now();
+    record.complianceWarnings = jobPostingWarnings(record);
     const jobs = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_job_openings'").all();
     if (jobs.some(row => row.record_key !== recordKey && String(parseJsonObject(row.payload_json).jobCode || '').toLowerCase() === record.jobCode.toLowerCase())) throw new HttpError(409, 'Mã tuyển dụng đã tồn tại.');
   }
@@ -5479,6 +5482,17 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.source = optionalText(record.source, 'Nguồn ứng viên', 160);
     if (record.talentPool !== undefined && typeof record.talentPool !== 'boolean') throw new HttpError(422, 'Trạng thái Kho tiềm năng không hợp lệ.');
     record.talentPool = record.talentPool === true;
+    // Đồng ý xử lý dữ liệu cá nhân: lưu thời điểm lần đầu đồng ý; giữ hồ sơ trong kho tiềm năng cho vị trí khác cần đồng ý riêng.
+    // Không gửi thì giữ giá trị cũ; gửi false là ứng viên rút lại đồng ý.
+    record.dataConsent = record.dataConsent === undefined ? current?.dataConsent === true : record.dataConsent === true;
+    record.dataConsentAt = record.dataConsent ? (current?.dataConsent ? current.dataConsentAt : '') || record.dataConsentAt || now() : '';
+    record.talentPoolConsent = record.talentPoolConsent === undefined ? current?.talentPoolConsent === true : record.talentPoolConsent === true;
+    if (record.talentPool && !record.talentPoolConsent) throw new HttpError(422, 'Cần ứng viên đồng ý lưu hồ sơ cho các vị trí khác trước khi đưa vào kho tiềm năng (Luật Bảo vệ dữ liệu cá nhân 2025).');
+    record.offerSalary = optionalAmount(record.offerSalary, 'Lương đề nghị');
+    record.workRegion = optionalText(record.workRegion, 'Vùng nơi làm việc', 4);
+    const offerProblem = offerSalaryProblem(record.offerSalary, record.workRegion, record.offerDate || record.appliedAt);
+    if (offerProblem && (!current || current.offerSalary !== record.offerSalary || current.workRegion !== record.workRegion || current.offerDate !== record.offerDate)) throw new HttpError(422, offerProblem);
+    record.complianceWarnings = record.dataConsent ? [] : ['Chưa ghi nhận ứng viên đồng ý xử lý dữ liệu cá nhân cho việc tuyển dụng.'];
     record.notes = optionalText(record.notes, 'Thông tin khác', 5000);
     record.appliedAt = requiredIsoDate(record.appliedAt, 'Ngày ứng tuyển');
     record.status = oneOf(record.status || 'applied', 'Giai đoạn ứng viên', ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected']);
@@ -8785,6 +8799,7 @@ async function handleRequest(request, response) {
     if (!initialJob || initialJob.status !== 'Đang tuyển dụng' || initialJob.deadline < usageDateKey(new Date())) throw new HttpError(409, 'Tin tuyển dụng đã đóng hoặc hết hạn nhận hồ sơ.');
     const owner = await getUserById(existingJob.owner_id);
     if (!owner || owner.role !== 'ADMIN') throw new HttpError(409, 'Không thể tiếp nhận hồ sơ cho tin tuyển dụng này.');
+    if (payload.dataConsent !== true) throw new HttpError(422, 'Vui lòng đồng ý cho công ty xử lý dữ liệu cá nhân trong hồ sơ để xét tuyển (Luật Bảo vệ dữ liệu cá nhân 2025).');
     const email = normalizeEmail(payload.email);
     const candidateKey = `candidate-${randomUUID()}`;
     const timestamp = now();
@@ -8795,6 +8810,7 @@ async function handleRequest(request, response) {
       country: optionalText(payload.country, 'Quốc gia', 100), province: optionalText(payload.province, 'Tỉnh/Thành phố', 160),
       ward: optionalText(payload.ward, 'Phường/Xã', 160), personalAccount: optionalText(payload.personalAccount, 'Tài khoản cá nhân', 500),
       source: 'Website tuyển dụng', talentPool: false, status: 'applied', appliedAt,
+      dataConsent: true, dataConsentAt: timestamp, talentPoolConsent: payload.talentPoolConsent === true,
       interviewAt: '', interviewer: '', offerDate: '', hiredDate: '', notes: optionalText(payload.message, 'Lời nhắn', 5000),
       cvFileId: '', cvFileName: '', history: [], createdAt: timestamp,
     };
@@ -13908,6 +13924,8 @@ async function handleRequest(request, response) {
       WHERE u.role != 'ADMIN' AND u.is_active = 1 ORDER BY u.employee_code`).all();
     const rows = [];
     const skipped = [];
+    // Tiền thưởng đã trao trong kỳ là thu nhập chịu thuế TNCN: cộng vào khoản thưởng (rewardRules.mjs).
+    const rewardBonuses = rewardBonusByEmployee((await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_rewards'").all()).map((item) => parseJsonObject(item.payload_json)), period);
     for (const row of employeeRows) {
       const employee = serializeEmployeeDetail(row, row, { role: 'ADMIN' });
       const code = String(employee.employeeCode || '');
@@ -13928,7 +13946,7 @@ async function handleRequest(request, response) {
           });
         }
         const slip = calculatePayslip({
-          period, region, baseSalary: attendance ? attendance.proratedBase : baseSalary, allowance: extra.allowance, bonus: extra.bonus,
+          period, region, baseSalary: attendance ? attendance.proratedBase : baseSalary, allowance: extra.allowance, bonus: (Number(extra.bonus) || 0) + (rewardBonuses.get(employee.id)?.amount || 0),
           overtimePay: attendance?.overtime.pay, exemptIncome: (Number(extra.exemptIncome) || 0) + (attendance?.overtime.exempt || 0),
           // Đóng bảo hiểm theo lương hợp đồng, không giảm theo ngày công.
           insuranceSalary: extra.insuranceSalary ?? (attendance ? baseSalary : undefined),
@@ -13939,6 +13957,7 @@ async function handleRequest(request, response) {
         rows.push({
           employeeCode: code, employeeName: employee.name, department: employee.department || '', ...slip, warnings: [...slip.warnings, ...extraWarnings],
           basis, contractBaseSalary: baseSalary,
+          rewardBonus: rewardBonuses.get(employee.id)?.amount || 0, rewardCodes: rewardBonuses.get(employee.id)?.codes || [],
           workdays: attendance ? { standardDays: attendance.standardDays, payDays: attendance.payDays, actualDays: Number(timesheet.actualDays) || 0, paidLeaveDays: Number(timesheet.paidLeaveDays) || 0, unpaidLeaveDays: Number(timesheet.unpaidLeaveDays) || 0 } : null,
           overtime: attendance ? { ...attendance.overtime, hourlyWage: attendance.hourlyWage } : null,
         });

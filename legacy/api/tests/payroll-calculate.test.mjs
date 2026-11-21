@@ -200,3 +200,18 @@ test('phiếu lương lưu kèm tiền làm thêm giờ và nhân viên thấy �
   assert.equal(april.overtimePay, calculated.overtimePay);
   assert.equal(april.workDays, 13);
 });
+
+test('tiền thưởng đã trao trong kỳ được cộng vào thu nhập chịu thuế TNCN của kỳ lương', async () => {
+  const staff = await createEmployee('PAY-RW', 20_000_000);
+  const reward = { key: 'rw-1', rewardCode: 'KT-RW-1', title: 'Thưởng dự án', department: 'Kế toán', decisionNo: 'QĐ-01', employeeId: staff.id, rewardType: 'Tiền mặt & Cúp pha lê', rewardValue: 5_000_000, date: '2026-11-01' };
+  await request('/collections/hr_rewards', 'POST', { record: reward }, 201);
+  await request('/collections/hr_rewards/rw-1', 'PATCH', { patch: { status: 'Đã ký quyết định' } });
+  const awarded = (await request('/collections/hr_rewards/rw-1', 'PATCH', { patch: { status: 'Đã trao giải' } })).record;
+  const period = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).format(new Date(awarded.awardedAt));
+  const result = await request('/finance/payroll/calculate', 'POST', { period, region: 'I', employeeCodes: ['PAY-RW'] });
+  const row = result.rows.find(item => item.employeeCode === 'PAY-RW');
+  assert.equal(row.rewardBonus, 5_000_000);
+  assert.deepEqual(row.rewardCodes, ['KT-RW-1']);
+  assert.equal(row.bonus, 5_000_000);
+  assert.equal(row.gross, 25_000_000);
+});

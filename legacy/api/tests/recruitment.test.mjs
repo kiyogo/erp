@@ -69,7 +69,7 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   const publicCv = Buffer.from('%PDF-1.4\nPublic recruitment CV\n%%EOF\n');
   const publicApplicationResponse = await fetch(`${base}/public/recruitment/jobs/${encodeURIComponent(job.key)}/applications`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Public Applicant', email: 'public@example.test', phone: '0900000000', region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/public-applicant', message: 'Tôi quan tâm đến vị trí này.', cv: { name: 'public-cv.pdf', contentBase64: publicCv.toString('base64') } }),
+    body: JSON.stringify({ dataConsent: true, name: 'Public Applicant', email: 'public@example.test', phone: '0900000000', region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/public-applicant', message: 'Tôi quan tâm đến vị trí này.', cv: { name: 'public-cv.pdf', contentBase64: publicCv.toString('base64') } }),
   });
   assert.equal(publicApplicationResponse.status, 201, 'The public application should be accepted.');
   const publicApplication = await publicApplicationResponse.json();
@@ -85,11 +85,11 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   assert.equal(publicCvResponse.status, 200);
   assert.deepEqual(Buffer.from(await publicCvResponse.arrayBuffer()), publicCv);
   const duplicatePublicApplication = await fetch(`${base}/public/recruitment/jobs/${encodeURIComponent(job.key)}/applications`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Public Applicant', email: 'PUBLIC@example.test' }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataConsent: true, name: 'Public Applicant', email: 'PUBLIC@example.test' }),
   });
   assert.equal(duplicatePublicApplication.status, 409);
   const invalidPublicCv = await fetch(`${base}/public/recruitment/jobs/${encodeURIComponent(job.key)}/applications`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Invalid CV', email: 'invalid-cv@example.test', cv: { name: 'invalid.pdf', contentBase64: Buffer.from('not a PDF').toString('base64') } }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataConsent: true, name: 'Invalid CV', email: 'invalid-cv@example.test', cv: { name: 'invalid.pdf', contentBase64: Buffer.from('not a PDF').toString('base64') } }),
   });
   assert.equal(invalidPublicCv.status, 422);
   const workspace = await request('/files?scope=employee');
@@ -99,7 +99,7 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
   const candidate = {
     key: 'candidate-test', jobKey: job.key, name: 'Integration Candidate', email: 'candidate@example.test', appliedAt: '2026-10-01', status: 'applied',
     region: 'Miền Bắc', country: 'Việt Nam', province: 'Hà Nội', ward: 'Phường Dịch Vọng', personalAccount: 'https://example.test/candidate', source: 'Website tuyển dụng',
-    talentPool: true,
+    talentPool: true, talentPoolConsent: true, dataConsent: true,
     cvFileId: file.id, cvFileName: file.name,
   };
   await request('/collections/hr_recruitment_candidates', 'POST', { record: candidate }, 201);
@@ -153,4 +153,18 @@ test('recruitment persists jobs, actual CV bytes and candidate stages; rejects i
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Late Applicant', email: 'late@example.test' }),
   });
   assert.equal(applicationForPausedJob.status, 409, 'Paused jobs must reject public applications.');
+});
+
+test('tin tuyển dụng, đồng ý dữ liệu và lương đề nghị tuân thủ luật lao động và bảo vệ dữ liệu cá nhân', async () => {
+  const job = (await request('/collections/hr_job_openings', 'POST', { record: { key: 'job-law', jobCode: 'TD-LAW', title: 'Nhân viên kho', department: 'Kho', headcountNeeded: 1, deadline: '2999-12-31', experienceReq: 'Chỉ tuyển nam, dưới 30 tuổi, chưa lập gia đình' } }, 201)).record;
+  assert.match(job.complianceWarnings[0], /giới tính, tình trạng hôn nhân, độ tuổi/);
+  const noConsent = await fetch(`${base}/public/recruitment/jobs/${encodeURIComponent(job.key)}/applications`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Không đồng ý', email: 'noconsent@example.test' }) });
+  assert.equal(noConsent.status, 422);
+  const base2 = { jobKey: job.key, name: 'Ứng viên luật', appliedAt: '2026-10-01', status: 'applied' };
+  await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...base2, key: 'law-pool', email: 'pool@example.test', talentPool: true } }, 422);
+  const plain = (await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...base2, key: 'law-plain', email: 'plain@example.test' } }, 201)).record;
+  assert.match(plain.complianceWarnings[0], /đồng ý xử lý dữ liệu/);
+  await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...base2, key: 'law-low', email: 'low@example.test', offerSalary: 3_000_000, workRegion: 'I' } }, 422);
+  await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...base2, key: 'law-noregion', email: 'noregion@example.test', offerSalary: 8_000_000 } }, 422);
+  assert.equal((await request('/collections/hr_recruitment_candidates', 'POST', { record: { ...base2, key: 'law-ok', email: 'ok@example.test', offerSalary: 8_000_000, workRegion: 'I', dataConsent: true } }, 201)).record.complianceWarnings.length, 0);
 });

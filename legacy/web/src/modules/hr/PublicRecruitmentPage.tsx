@@ -58,11 +58,13 @@ const PublicRecruitmentPage: React.FC = () => {
   const [applicant, setApplicant] = useState<ApplicantForm>(emptyApplicant);
   const [cvFile, setCvFile] = useState<File | null>(null);
   const [applicationCode, setApplicationCode] = useState('');
+  const [dataConsent, setDataConsent] = useState(false);
+  const [talentPoolConsent, setTalentPoolConsent] = useState(false);
 
   useEffect(() => {
     let active = true;
     setLoading(true); setError(''); setJob(null);
-    setApplicant(emptyApplicant); setCvFile(null); setApplicationCode(''); setFormError('');
+    setApplicant(emptyApplicant); setCvFile(null); setDataConsent(false); setTalentPoolConsent(false); setApplicationCode(''); setFormError('');
     const request = jobKey
       ? apiJson<{ job: PublicJob }>(`/public/recruitment/jobs/${encodeURIComponent(jobKey)}`).then(result => { if (active) setJob(result.job); })
       : apiJson<{ data: PublicJob[] }>('/public/recruitment/jobs').then(result => { if (active) setJobs(result.data); });
@@ -81,7 +83,7 @@ const PublicRecruitmentPage: React.FC = () => {
       const cv = cvFile ? { name: cvFile.name, contentBase64: encodeBase64(new Uint8Array(await cvFile.arrayBuffer())) } : undefined;
       const response = await fetch(`${apiBase}/public/recruitment/jobs/${encodeURIComponent(job.key)}/applications`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ ...applicant, ...(cv ? { cv } : {}) }),
+        body: JSON.stringify({ ...applicant, dataConsent, talentPoolConsent, ...(cv ? { cv } : {}) }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message || 'Không thể gửi hồ sơ. Vui lòng thử lại.');
@@ -160,6 +162,8 @@ const PublicRecruitmentPage: React.FC = () => {
                 <label style={labelStyle}>CV đính kèm — PDF, DOC hoặc DOCX, tối đa 10 MB<span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 400 }}><FileTextOutlined style={{ color: '#009688' }} /><input type="file" accept=".pdf,.doc,.docx" onChange={event => { const file = event.target.files?.[0] || null; if (file && (!/\.(pdf|doc|docx)$/i.test(file.name) || file.size > 10 * 1024 * 1024)) { setCvFile(null); setFormError('CV phải là tệp PDF, DOC hoặc DOCX tối đa 10 MB.'); event.target.value = ''; return; } setFormError(''); setCvFile(file); }} /></span></label>
                 {cvFile && <span style={{ color: '#64748B', fontSize: 12 }}>Đã chọn: {cvFile.name}</span>}
                 <label style={labelStyle}>Lời nhắn<textarea maxLength={5000} rows={3} value={applicant.message} onChange={event => updateApplicant('message', event.target.value)} style={{ ...fieldStyle, height: 'auto', resize: 'vertical' }} /></label>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#334155' }}><input type="checkbox" required checked={dataConsent} onChange={event => setDataConsent(event.target.checked)} style={{ marginTop: 3 }} />Tôi đồng ý cho công ty xử lý dữ liệu cá nhân trong hồ sơ này để xét tuyển vị trí đang ứng tuyển *</label>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#334155' }}><input type="checkbox" checked={talentPoolConsent} onChange={event => setTalentPoolConsent(event.target.checked)} style={{ marginTop: 3 }} />Tôi đồng ý để công ty lưu hồ sơ và liên hệ khi có vị trí phù hợp khác</label>
                 <button type="submit" disabled={sending} style={{ border: 0, borderRadius: 6, minHeight: 42, marginTop: 3, background: sending ? '#94A3B8' : '#009688', color: '#FFFFFF', cursor: sending ? 'wait' : 'pointer', fontWeight: 700 }}>{sending ? 'Đang gửi hồ sơ...' : 'Gửi hồ sơ ứng tuyển'}</button>
               </form>
             </>}
