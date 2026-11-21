@@ -1,4 +1,5 @@
 // Quy tắc thuế GTGT và TNDN: hạn nộp hồ sơ, thuế suất TNDN, thuế GTGT phải nộp theo kỳ, tiền chậm nộp.
+import { isPublicNonWorkingDay } from './holidayRules.mjs';
 // Căn cứ pháp lý ghi ở từng khối. Các căn cứ dưới đây được xác minh qua bài đăng tổng hợp văn bản và bản đăng
 // nghị định trên luatvietnam.vn (Nghị định 252/2026/NĐ-CP đọc được một phần); chưa đối chiếu được bản gốc
 // trên vbpl.vn, nên cần kiểm tra lại trước khi nộp tờ khai thật. Ngày lễ, Tết chưa được trừ khi tính hạn.
@@ -21,10 +22,12 @@ const formatIso = (date) => date.toISOString().slice(0, 10);
 const lastDayOfMonth = (year, month) => formatIso(new Date(Date.UTC(year, month, 0)));
 const addDays = (iso, days) => formatIso(new Date(parseIso(iso).getTime() + days * 86_400_000));
 
-// Điều 3 khoản 7 Nghị định 252/2026/NĐ-CP: hạn trùng ngày nghỉ thì chuyển sang ngày làm việc liền kề sau (chỉ tính thứ bảy, chủ nhật).
+// Điều 3 khoản 7 Nghị định 252/2026/NĐ-CP, Luật Quản lý thuế: hạn trùng ngày nghỉ thì chuyển sang ngày làm việc liền kề sau (thứ bảy, chủ nhật và ngày
+// nghỉ lễ, tết theo holidayRules.mjs).
 export function nextWorkingDay(iso) {
-  const day = parseIso(iso).getUTCDay();
-  return addDays(iso, day === 6 ? 2 : day === 0 ? 1 : 0);
+  let day = iso;
+  while (isPublicNonWorkingDay(day)) day = addDays(day, 1);
+  return day;
 }
 
 function monthAfter(iso, offset) {

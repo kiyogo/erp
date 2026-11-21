@@ -42,6 +42,7 @@ import { annualPitFinalization, authorizationProblems, finalizationDeadline } fr
 import { buildPitVoucher, voucherNumber } from './pitVoucherRules.mjs';
 import { CONTRACTOR_BUSINESS_TYPES, calculateContractorTax } from './contractorTaxRules.mjs';
 import { calculateCasualIncomeTax, commitmentOverLimit } from './casualIncomeRules.mjs';
+import { holidayOverrides, holidaysOf, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -15623,6 +15624,40 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Lịch nghỉ lễ, tết (holidayRules.mjs): ai đăng nhập cũng xem được; quản trị viên chọn ngày nghỉ hằng tuần, thêm hoặc bỏ ngày theo thông báo hằng năm.
+  // Điều chỉnh lưu ở thiết lập hệ thống `holiday_calendar` và nạp vào bộ nhớ để các quy tắc đồng bộ (hạn thuế, ngày làm việc, hệ số làm thêm) dùng.
+  if (resource === '/attendance/holidays') {
+    const actor = await requireUser(request);
+    if (request.method === 'GET') {
+      const year = Number(url.searchParams.get('year') || todayInVietnam().slice(0, 4));
+      if (!Number.isInteger(year) || year < 2000 || year > 2199) throw new HttpError(422, 'Năm không hợp lệ.');
+      const adjust = holidayOverrides().years?.[String(year)] || {};
+      sendJson(response, 200, { year, weeklyRestDays: holidayOverrides().weeklyRestDays, holidays: holidaysOf(year), statutory: statutoryHolidays(year), extraDays: adjust.extraDays || [], removedDates: adjust.removedDates || [] });
+      return;
+    }
+    if (request.method !== 'PUT') throw new HttpError(405, 'Phương thức không hỗ trợ.');
+    if (actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên được sửa lịch nghỉ lễ.');
+    const payload = await readJson(request, 32 * 1024);
+    const year = Number(payload.year);
+    if (!Number.isInteger(year) || year < 2000 || year > 2199) throw new HttpError(422, 'Năm không hợp lệ.');
+    const restDays = Array.isArray(payload.weeklyRestDays) ? [...new Set(payload.weeklyRestDays.map(Number))] : holidayOverrides().weeklyRestDays;
+    if (!restDays.length || restDays.length > 2 || restDays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) throw new HttpError(422, 'Ngày nghỉ hằng tuần phải có 1 hoặc 2 ngày trong tuần (Điều 111: ít nhất 24 giờ liên tục mỗi tuần).');
+    const inYear = (date, label) => { const value = requiredIsoDate(date, label); if (!value.startsWith(`${year}-`)) throw new HttpError(422, `${label} phải thuộc năm ${year}.`); return value; };
+    const extraDays = (Array.isArray(payload.extraDays) ? payload.extraDays : []).slice(0, 40).map((item, index) => ({ date: inYear(item?.date, `Ngày nghỉ thêm ${index + 1}`), name: requiredText(item?.name, `Tên ngày nghỉ thêm ${index + 1}`, 120) }));
+    const removedDates = [...new Set((Array.isArray(payload.removedDates) ? payload.removedDates : []).slice(0, 20).map((date, index) => inYear(date, `Ngày bỏ ${index + 1}`)))];
+    const statutoryDates = new Set(statutoryHolidays(year).map((item) => item.date));
+    for (const date of removedDates) if (!statutoryDates.has(date)) throw new HttpError(422, `Ngày ${date} không phải ngày lễ mặc định để bỏ.`);
+    // Chỉ được dời ngày Tết Âm lịch hoặc ngày liền kề Quốc khánh: số ngày lễ theo luật sau điều chỉnh không được ít hơn 11.
+    const statutoryCount = statutoryHolidays(year).length - removedDates.length + extraDays.filter((item) => !statutoryDates.has(item.date)).length;
+    if (statutoryCount < 11) throw new HttpError(422, 'Sau khi bỏ ngày, phải thêm ngày thay thế để đủ 11 ngày nghỉ lễ, tết hưởng nguyên lương (Điều 112).');
+    const next = { weeklyRestDays: restDays, years: { ...holidayOverrides().years, [String(year)]: { extraDays, removedDates } } };
+    await setSystemSetting('holiday_calendar', JSON.stringify(next));
+    setHolidayOverrides(next);
+    await recordAuditEvent(actor.id, 'holiday_calendar_update', 'system_settings', 'holiday_calendar', { year, extraDays: extraDays.length, removedDates: removedDates.length, weeklyRestDays: restDays });
+    sendJson(response, 200, { year, weeklyRestDays: restDays, holidays: holidaysOf(year), statutory: statutoryHolidays(year), extraDays, removedDates });
+    return;
+  }
+
   // Quyết toán thuế TNCN năm (pitFinalizationRules.mjs): tổng hợp phiếu lương đã chốt của năm, ủy quyền quyết toán (mẫu 08/UQ-QTT-TNCN).
   // Ủy quyền lưu ở `hr_pit_authorizations` (khóa năm:mã người dùng), chỉ ghi qua route này; nhân viên tự ủy quyền hoặc quản trị viên ghi nhận.
   if (resource === '/finance/pit-finalization' || resource === '/employees/me/pit-finalization' || resource === '/finance/pit-finalization/authorizations') {
@@ -16546,6 +16581,7 @@ async function encryptLegacyProfileDetails() {
   if (encrypted) console.log(`Đã mã hóa dữ liệu nhạy cảm của ${encrypted} hồ sơ nhân viên.`);
 }
 
+setHolidayOverrides(parseJsonObject(await getSystemSetting('holiday_calendar')));
 await migrateAttendanceCollections();
 await encryptLegacyProfileDetails();
 await ensureAllEmployeeWorkspaces();

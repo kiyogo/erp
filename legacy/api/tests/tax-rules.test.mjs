@@ -13,7 +13,7 @@ test('hạn nộp theo kỳ: GTGT tháng ngày 20, quý ngày cuối tháng đ�
 
 test('tạm nộp TNDN quý và quyết toán năm đổi cách tính từ 01/07/2026', () => {
   const deadline = (taxType, periodEnd) => taxFilingDeadline({ taxType, filingMethod: '', periodEnd }).deadline;
-  assert.equal(deadline('Thuế TNDN tạm tính', '2026-03-31'), '2026-04-30', 'trước 01/07/2026: ngày thứ 30');
+  assert.equal(deadline('Thuế TNDN tạm tính', '2026-03-31'), '2026-05-04', 'trước 01/07/2026: ngày thứ 30, 30/4 và 01/5 là ngày lễ nên dời sang thứ hai 04/5');
   assert.equal(deadline('Thuế TNDN tạm tính', '2026-06-30'), '2026-07-31', 'từ 01/07/2026: ngày cuối tháng');
   assert.equal(deadline('Thuế TNDN tạm tính', '2026-12-31'), '2027-02-01', '31/01/2027 là chủ nhật');
   assert.equal(deadline('Quyết toán thuế TNDN', '2025-12-31'), '2026-03-31');

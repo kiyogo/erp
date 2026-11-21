@@ -161,6 +161,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
           { id: 'att-req-leaves', title: 'Bảng tổng hợp ngày nghỉ', path: '/admin/attendance/requests/leaves' },
           { id: 'att-req-overtime', title: 'Bảng tổng hợp làm thêm', path: '/admin/attendance/requests/overtime' },
           { id: 'att-req-plans', title: 'Kế hoạch nghỉ phép', path: '/admin/attendance/requests/plans' },
+          { id: 'att-req-holidays', title: 'Lịch nghỉ lễ', path: '/admin/attendance/requests/holidays' },
         ],
       },
     ],

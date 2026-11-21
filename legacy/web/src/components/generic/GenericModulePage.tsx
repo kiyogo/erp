@@ -40,6 +40,7 @@ import { EmployeeFullEditModule } from '../../modules/hr/EmployeeFullEditModule'
 // Attendance deep submodules
 import { AttendanceOverviewModule } from '../../modules/attendance/AttendanceOverviewModule';
 import { AttendanceAlertsModule } from '../../modules/attendance/AttendanceAlertsModule';
+import { HolidayCalendarModule } from '../../modules/attendance/HolidayCalendarModule';
 import { TimesheetModule } from '../../modules/attendance/TimesheetModule';
 import { TimesheetSummaryModule } from '../../modules/attendance/TimesheetSummaryModule';
 import { TimesheetRawDataModule } from '../../modules/attendance/TimesheetRawDataModule';
@@ -305,6 +306,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/hr') return <Navigate to="/admin/hr/overview" replace />;
 
   // 6. Attendance
+  if (p === '/attendance/requests/holidays') return <HolidayCalendarModule />;
   if (p === '/attendance/overview' || p === '/attendance/monitoring') return <AttendanceOverviewModule />;
   if (p === '/attendance/alerts') return <AttendanceAlertsModule />;
     if (p === '/attendance/shifts/detail') return <ShiftDetailModule />;

@@ -7,6 +7,8 @@
 // có thể sửa đổi hướng dẫn. Xác minh qua bài tổng hợp (thuvienphapluat.vn, luatvietnam.vn), chưa đối chiếu văn bản gốc; quy tắc làm tròn tháng lẻ,
 // ngày công chuẩn 26 ngày và mức trả tiền phép chưa xác nhận. Trường hợp báo trước đặc biệt (ốm đau, thai sản, thiên tai, địch họa) chưa tính.
 
+import { isNonWorkingDay } from './holidayRules.mjs';
+
 export const TERMINATION_TYPES = {
   mutual: 'Hai bên thỏa thuận (Điều 34 khoản 3)',
   expiry: 'Hết hạn hợp đồng (Điều 34 khoản 1)',
@@ -44,11 +46,12 @@ export function severanceYears(months) {
   const rest = months % 12;
   return years + (rest >= 6 ? 1 : rest >= 1 ? 0.5 : 0);
 }
+// Ngày làm việc: bỏ thứ bảy, chủ nhật và ngày nghỉ lễ, tết, nghỉ bù (holidayRules.mjs).
+const isoOf = (time) => new Date(time).toISOString().slice(0, 10);
 export function workingDaysBetween(from, to) {
   let count = 0;
   for (let time = Date.parse(`${from}T00:00:00Z`) + DAY_MS; time <= Date.parse(`${to}T00:00:00Z`); time += DAY_MS) {
-    const day = new Date(time).getUTCDay();
-    if (day !== 0 && day !== 6) count += 1;
+    if (!isNonWorkingDay(isoOf(time))) count += 1;
   }
   return count;
 }
@@ -57,10 +60,9 @@ export function addWorkingDays(from, days) {
   let left = days;
   while (left > 0) {
     time += DAY_MS;
-    const day = new Date(time).getUTCDay();
-    if (day !== 0 && day !== 6) left -= 1;
+    if (!isNonWorkingDay(isoOf(time))) left -= 1;
   }
-  return new Date(time).toISOString().slice(0, 10);
+  return isoOf(time);
 }
 
 // Báo trước tối thiểu: { days, unit } với unit 'ngày' hoặc 'ngày làm việc'.

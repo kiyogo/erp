@@ -10,6 +10,8 @@
 // Luật Dân số 2025 chưa kiểm tra; cách tính phép năm cho người làm chưa đủ 12 tháng (Nghị định 145/2020/NĐ-CP Điều 66) là gần đúng:
 // một tháng tính khi làm từ 14 ngày làm việc trở lên, làm tròn đến nửa ngày.
 
+import { isHoliday, isWeeklyRestDay } from './holidayRules.mjs';
+
 export const LEAVE_TYPES = [
   { label: 'Nghỉ phép năm', annual: true },
   { label: 'Nghỉ ốm BHXH', aliases: ['Nghỉ ốm'] },
@@ -71,13 +73,11 @@ export function annualLeaveEntitlement({ baseDays, joinDate, year }) {
   return { baseDays: base, seniorityDays, monthsWorked, standardQuota, seniorityQuota, entitled: standardQuota + seniorityQuota };
 }
 
-// Ngày lễ cố định theo dương lịch; Tết Nguyên đán và giỗ tổ Hùng Vương theo âm lịch chưa có trong hệ thống.
-const FIXED_HOLIDAYS = ['01-01', '04-30', '05-01', '09-02'];
-
-// Hệ số làm thêm tối thiểu: 150% ngày thường, 200% ngày nghỉ hằng tuần (coi là chủ nhật), 300% ngày lễ.
+// Hệ số làm thêm tối thiểu: 150% ngày thường, 200% ngày nghỉ hằng tuần (theo thiết lập lịch nghỉ, mặc định chủ nhật), 300% ngày lễ, tết, nghỉ bù
+// có hưởng lương (holidayRules.mjs, gồm Tết Âm lịch và Giỗ Tổ theo lịch âm).
 export function overtimeMinMultiplier(isoDate) {
-  if (FIXED_HOLIDAYS.includes(String(isoDate).slice(5))) return 3;
-  return new Date(`${isoDate}T00:00:00Z`).getUTCDay() === 0 ? 2 : 1.5;
+  if (isHoliday(isoDate)) return 3;
+  return isWeeklyRestDay(isoDate) ? 2 : 1.5;
 }
 
 export function isMinor(birthDate, onDate) {

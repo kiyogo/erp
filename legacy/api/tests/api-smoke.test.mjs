@@ -2993,6 +2993,19 @@ test('casual income payments withhold 10% from 2 million, honour 08/CK-TNCN comm
   await request('/collections/finance_casual_income_payments', 'POST', { record: { key: 'forged' } }, 409);
 });
 
+test('holiday calendar includes lunar Tết and Giỗ Tổ, keeps 11 statutory days and feeds deadlines', async () => {
+  const calendar = await request('/attendance/holidays?year=2026');
+  const dates = calendar.holidays.map((item) => item.date);
+  for (const date of ['2026-01-01', '2026-02-16', '2026-02-17', '2026-02-20', '2026-04-26', '2026-04-30', '2026-05-01', '2026-09-02']) assert.ok(dates.includes(date), date);
+  assert.ok(calendar.holidays.some((item) => item.kind === 'compensation' && item.date === '2026-04-27'));
+  await request('/attendance/holidays', 'PUT', { year: 2026, removedDates: ['2026-09-01'] }, 422);
+  await request('/attendance/holidays', 'PUT', { year: 2026, weeklyRestDays: [] }, 422);
+  const updated = await request('/attendance/holidays', 'PUT', { year: 2026, removedDates: ['2026-09-01'], extraDays: [{ date: '2026-09-03', name: 'Quốc khánh (ngày liền kề theo thông báo)' }] });
+  assert.ok(updated.holidays.some((item) => item.date === '2026-09-03'));
+  assert.ok(!updated.holidays.some((item) => item.date === '2026-09-01'));
+  await request('/attendance/holidays', 'PUT', { year: 2026, removedDates: [], extraDays: [] });
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };
@@ -3135,9 +3148,13 @@ test('overtime approval enforces the legal minimum pay multiplier for the day ty
   await request('/collections/attendance_overtime', 'POST', { record: overtime('law-ot-weekday', '2027-02-02') }, 201);
   await request('/collections/attendance_overtime/law-ot-weekday', 'PATCH', { patch: { status: 'Đã duyệt OT' } }, 422);
   await request('/collections/attendance_overtime/law-ot-weekday', 'PATCH', { patch: { status: 'Đã duyệt OT', multiplier: 1.5 } });
-  await request('/collections/attendance_overtime', 'POST', { record: overtime('law-ot-sunday', '2027-02-07', { multiplier: 1.5 }) }, 201);
+  await request('/collections/attendance_overtime', 'POST', { record: overtime('law-ot-sunday', '2027-02-14', { multiplier: 1.5 }) }, 201);
   await request('/collections/attendance_overtime/law-ot-sunday', 'PATCH', { patch: { status: 'Đã duyệt OT' } }, 422);
   await request('/collections/attendance_overtime/law-ot-sunday', 'PATCH', { patch: { status: 'Đã duyệt OT', multiplier: 2 } });
+  // Mùng 3 Tết Đinh Mùi (08/02/2027) là ngày lễ theo lịch âm: tối thiểu 300%.
+  await request('/collections/attendance_overtime', 'POST', { record: overtime('law-ot-tet', '2027-02-08', { multiplier: 2 }) }, 201);
+  await request('/collections/attendance_overtime/law-ot-tet', 'PATCH', { patch: { status: 'Đã duyệt OT' } }, 422);
+  await request('/collections/attendance_overtime/law-ot-tet', 'PATCH', { patch: { status: 'Đã duyệt OT', multiplier: 3 } });
 });
 
 test('strategic plans are validated on the server and only administrators can write them', async () => {

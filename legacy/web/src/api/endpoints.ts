@@ -1461,6 +1461,14 @@ export const casualIncomeApi = {
   create: (data: CasualIncomeInput) => api.post<{ record: CasualIncomeRecord }>('/finance/casual-income', data),
 };
 
+export type HolidayItem = { date: string; name: string; kind: 'statutory' | 'announced' | 'compensation' };
+export type HolidayCalendar = { year: number; weeklyRestDays: number[]; holidays: HolidayItem[]; statutory: HolidayItem[]; extraDays: Array<{ date: string; name: string }>; removedDates: string[] };
+// Lịch nghỉ lễ, tết (có Tết Âm lịch, Giỗ Tổ theo lịch âm và nghỉ bù); quản trị viên sửa theo thông báo hằng năm.
+export const holidayApi = {
+  get: (year: number) => api.get<HolidayCalendar>('/attendance/holidays', { params: { year } }),
+  save: (data: { year: number; weeklyRestDays: number[]; extraDays: Array<{ date: string; name: string }>; removedDates: string[] }) => api.put<HolidayCalendar>('/attendance/holidays', data),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),
