@@ -2493,7 +2493,7 @@ test('admin audit logs support server search and category filters with admin-onl
   assert.equal(created.data[0].action, 'create_audit_probe');
   assert.equal(created.data[0].role, 'ADMIN');
   assert.equal(created.data[0].resourceId, marker);
-  assert.deepEqual(created.data[0].details, { marker, count: 3 });
+  assert.deepEqual(created.data[0].details, { marker, count: 3, source: 'client' });
 
   const sensitive = await request(`/admin/audit-logs?q=${marker}&category=sensitive`);
   assert.equal(sensitive.pagination.total, 1);
@@ -2949,4 +2949,23 @@ test('strategic plans are validated on the server and only administrators can wr
   await request('/collections/plan_items', 'POST', { record: { ...plan, key: 'KH-LAW-3', code: 'kh-law-1' } }, 409);
   const progress = { key: 'T-LAW-1', code: 'T-LAW-1', planName: 'Kế hoạch thử', taskTitle: 'Thiết kế', assignee: 'An', dueDate: '2020-01-01', progressPercent: 30, weightPercent: 20, status: 'Hoàn thành' };
   assert.equal((await request('/collections/plan_progress', 'POST', { record: progress }, 201)).record.status, 'Chậm tiến độ');
+});
+
+test('accounting records cannot be purged from the trash within the retention period, notification links stay internal and client audit events are tagged', async () => {
+  const scope = '/collections/finance_retention_probe';
+  const recordKey = `retention-${Date.now()}`;
+  await request(scope, 'POST', { record: { key: recordKey, name: 'Chứng từ kiểm tra lưu trữ', code: 'RET-01' } }, 201);
+  const deletion = await request(`${scope}/${encodeURIComponent(recordKey)}`, 'DELETE');
+  const blocked = await request(`/admin/trash/${encodeURIComponent(deletion.trashItemId)}`, 'DELETE', undefined, 409);
+  assert.match(blocked.message, /Điều 41 Luật Kế toán/);
+  assert.equal((await request('/admin/trash/' + encodeURIComponent(deletion.trashItemId) + '/restore', 'POST', {})).restored, true);
+
+  await request('/notifications', 'POST', { title: 'Liên kết ngoài', message: 'Thử', link: 'https://evil.example/login' }, 422);
+  await request('/notifications', 'POST', { title: 'Liên kết ngoài', message: 'Thử', link: '//evil.example' }, 422);
+  assert.equal((await request('/notifications', 'POST', { title: 'Liên kết trong', message: 'Thử', link: '/admin/documents/notes' }, 201)).notification.link, '/admin/documents/notes');
+
+  const marker = `forged-${Date.now()}`;
+  await request('/audit-events', 'POST', { action: 'approve_payment', module: 'finance_payments', detail: marker, details: { source: 'server' } }, 201);
+  const logged = (await request(`/admin/audit-logs?q=${marker}`)).data[0];
+  assert.equal(logged.details.source, 'client');
 });

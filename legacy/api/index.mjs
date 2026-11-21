@@ -30,6 +30,7 @@ import { normalizeLicenseLegal } from './licenseRules.mjs';
 import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
 import { validatePlanRecord } from './planRules.mjs';
+import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
@@ -11566,6 +11567,7 @@ async function handleRequest(request, response) {
     const message = requiredText(payload.message, 'Nội dung thông báo', 2000);
     const type = optionalText(payload.type, 'Loại thông báo', 64) || 'system';
     const link = optionalText(payload.link, 'Đường dẫn', 500) || '';
+    if (!isInternalLink(link)) throw new HttpError(422, 'Đường dẫn thông báo phải là đường dẫn nội bộ bắt đầu bằng một dấu gạch chéo.');
     const targetUserId = actor.role === 'ADMIN' && payload.userId ? payload.userId : actor.id;
     const timestamp = now();
     const id = randomUUID();
@@ -11692,8 +11694,10 @@ async function handleRequest(request, response) {
     const actor = await requireAdmin(request);
     const trashId = requiredText(decodeURIComponent(trashItemMatch[1]), 'Mã mục thùng rác', 160);
     await db.transaction(async () => {
-      const entry = await db.prepare('SELECT scope, record_key FROM trash_items WHERE id = ?').get(trashId);
+      const entry = await db.prepare('SELECT scope, record_key, created_at FROM trash_items WHERE id = ?').get(trashId);
       if (!entry) throw new HttpError(404, 'Không tìm thấy mục trong thùng rác.');
+      const retentionProblem = trashPurgeProblem(entry, todayInVietnam());
+      if (retentionProblem) throw new HttpError(409, retentionProblem);
       await db.prepare('DELETE FROM trash_items WHERE id = ?').run(trashId);
       await recordAuditEvent(actor.id, 'permanently_delete_trash_item', entry.scope, entry.record_key, { trashItemId: trashId });
     });
@@ -11760,7 +11764,8 @@ async function handleRequest(request, response) {
     const moduleScope = normalizeAuditModule(moduleLabel);
     const detail = optionalText(payload.detail || payload.resourceId, 'Chi tiết', 500) || '';
     const details = payload.details && typeof payload.details === 'object' && !Array.isArray(payload.details) ? payload.details : {};
-    const auditDetails = { ...details };
+    // Sự kiện do trình duyệt tự báo, không phải do máy chủ ghi: luôn gắn nguồn để không giả được nhật ký của máy chủ.
+    const auditDetails = { ...details, source: 'client' };
     if (moduleScope !== moduleLabel) auditDetails.moduleLabel = moduleLabel;
     else delete auditDetails.moduleLabel;
     await recordAuditEvent(actor.id, action, moduleScope, detail, auditDetails);
