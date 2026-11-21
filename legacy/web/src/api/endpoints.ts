@@ -1409,6 +1409,8 @@ export const ekycApi = {
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),
   connectSession: (token: string) => api.post<{ success: boolean; status: string }>(`/ekyc/session/${encodeURIComponent(token)}/connect`, {}),
   verifySession: (token: string, data: any) => api.post(`/ekyc/session/${encodeURIComponent(token)}/verify`, { data }),
+  // Rút đồng ý xử lý dữ liệu sinh trắc học: xóa ảnh, video eKYC khỏi hồ sơ (chính nhân viên, hoặc quản trị viên truyền userId).
+  withdrawConsent: (userId?: string, reason?: string) => api.post<{ withdrawn: boolean; removedItems: number }>('/ekyc/withdraw', { userId, reason }),
   checkSessionStatus: (token: string, userId?: string) =>
     api.get<{ status: string; verified: boolean; connected?: boolean; data: any; verifiedAt?: string }>(
       `/ekyc/session/${encodeURIComponent(token)}/status${userId ? `?userId=${encodeURIComponent(userId)}` : ''}`

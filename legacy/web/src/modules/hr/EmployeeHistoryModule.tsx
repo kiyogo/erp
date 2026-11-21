@@ -29,7 +29,7 @@ import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Checkbox, Tag } from '../../custom-ui';
 import { EmployeeSelect } from './EmployeeSelect';
 import { dataService, Employee } from '../../services/dataService';
-import { employeesApi, collectionsApi } from '../../api/endpoints';
+import { employeesApi, collectionsApi, ekycApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 import { terminationApi, type TerminationSettlement } from '../../api/endpoints';
@@ -150,6 +150,63 @@ const matchesStoredEkyc = (stored: any, employee: any) => {
   );
 };
 
+// Dòng xác thực danh tính của một nhân viên từ hồ sơ (details lấy từ GET /employees/:id; danh sách nhân viên không trả details).
+const identityRowOf = (emp: any, index: number, storedEkycData: any) => {
+  const empName = emp.name || emp.fullName || '';
+  const matchedEkyc = matchesStoredEkyc(storedEkycData, emp) ? storedEkycData : null;
+  
+  let details: any = {};
+  if (emp.details && typeof emp.details === 'object') {
+    details = emp.details;
+  } else if (typeof emp.detailsJson === 'string') {
+    try { details = JSON.parse(emp.detailsJson); } catch {}
+  }
+  
+  const source = { ...details, ...matchedEkyc, ...emp };
+
+  const cccdNum = source.docNumber || source.idNumber || source.identityNumber || '';
+  const isVerified = Boolean(source.ekycVerified && cccdNum);
+  const verifiedAtStr = isVerified ? normalizeDisplayDate(source.verifiedAt || source.updatedAt || source.profileUpdatedAt) : '';
+  const faceMatchScore = source.faceMatchScore ? Number(source.faceMatchScore) : 0;
+  const certificateId = source.certificateId || source.certId || '';
+
+  return {
+    id: `id-real-${emp.id || index}`,
+    userId: emp.id || '',
+    employeeCode: emp.code || emp.employeeCode || `EMP-${index + 100}`,
+    employeeName: empName,
+    department: emp.department || 'Chưa phân công',
+    position: emp.position || 'Nhân sự',
+    email: emp.email || '',
+    phone: emp.phone || '',
+    avatar: source.cardAvatarUrl || source.livePhotoUrl || source.avatarUrl || emp.avatar || '',
+    idType: cccdNum ? (source.docType || 'Căn cước công dân') : 'Chưa có dữ liệu',
+    idNumber: cccdNum || '',
+    verifiedAt: verifiedAtStr || '—',
+    verifiedBy: isVerified ? (source.verifiedBy || 'Hồ sơ nhân sự') : '—',
+    status: isVerified ? 'Đã xác thực' : 'Chưa xác thực',
+    isVerified,
+    hash: isVerified ? (source.sha256 || source.hash || (certificateId ? `Certificate: ${certificateId}` : '')) : '',
+    note: isVerified
+      ? `Dữ liệu đồng bộ từ Xác thực danh tính${faceMatchScore ? `, FaceMatch ${faceMatchScore}%` : ''}.`
+      : 'Chưa hoàn tất xác thực danh tính eKYC.',
+    dob: normalizeDateOnly(source.birthDate || source.dob) || '',
+    gender: source.gender || '',
+    hometown: source.originPlace || source.hometown || '',
+    address: source.residencePlace || source.hkttAddress || source.currentAddress || source.address || '',
+    issueDate: source.issueDate || source.docIssueDate || '',
+    issuePlace: source.issuePlace || source.docIssuePlace || '',
+    expiryDate: source.expiryDate || source.docExpiryDate || '',
+    livePhotoUrl: source.livePhotoUrl || '',
+    liveVideoUrl: source.liveVideoUrl || '',
+    cardFrontUrl: source.cardFrontUrl || '',
+    cardBackUrl: source.cardBackUrl || '',
+    cardAvatarUrl: source.cardAvatarUrl || '',
+    faceMatchScore,
+    certificateId,
+  };
+};
+
 const CCCDCardPreview: React.FC<{ employee: any; side: 'front' | 'back' }> = ({ employee, side }) => {
   const [imgError, setImgError] = useState(false);
   const sourceImage = side === 'front' ? employee.cardFrontUrl : employee.cardBackUrl;
@@ -182,169 +239,19 @@ const CCCDCardPreview: React.FC<{ employee: any; side: 'front' | 'back' }> = ({ 
     );
   }
 
-  const avatarUrl = employee.cardAvatarUrl || employee.avatar || employee.livePhotoUrl || '';
-  const idNumber = employee.idNumber || '—';
-  const fullName = (employee.employeeName || '').toUpperCase();
-  const dob = employee.dob || '—';
-  const gender = employee.gender || '—';
-  const hometown = employee.hometown || '—';
-  const address = employee.address || '—';
-  const expiryDate = employee.expiryDate || '—';
-  const issueDate = employee.issueDate || '—';
-
-  if (side === 'front') {
-    return (
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 540,
-          borderRadius: 12,
-          padding: '16px 20px',
-          background: 'linear-gradient(135deg, #E0F2FE 0%, #F0FDF4 50%, #EFF6FF 100%)',
-          border: '1.5px solid #93C5FD',
-          boxShadow: '0 6px 16px rgba(0, 0, 0, 0.08)',
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between',
-          overflow: 'hidden',
-          color: '#0F172A',
-          fontFamily: 'system-ui, -apple-system, sans-serif',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(147, 197, 253, 0.5)', paddingBottom: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#FDE047', fontWeight: 900, fontSize: 18, boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)' }}>
-              ★
-            </div>
-            <div>
-              <div style={{ fontSize: 10.5, fontWeight: 800, color: '#1E3A8A', letterSpacing: 0.5 }}>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
-              <div style={{ fontSize: 9.5, fontWeight: 700, color: '#475569', textAlign: 'center' }}>Độc lập - Tự do - Hạnh phúc</div>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 11, fontWeight: 900, color: '#0369A1', textTransform: 'uppercase', letterSpacing: 0.5 }}>CĂN CƯỚC CÔNG DÂN</div>
-            <div style={{ fontSize: 8.5, color: '#64748B', fontWeight: 600 }}>IDENTITY CARD</div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 10 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <div
-              style={{
-                width: 95,
-                height: 120,
-                borderRadius: 6,
-                border: '2px solid #38BDF8',
-                background: '#FFFFFF',
-                overflow: 'hidden',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
-              }}
-            >
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="Ảnh chân dung" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <IdcardOutlined style={{ fontSize: 40, color: '#94A3B8' }} />
-              )}
-            </div>
-            <div style={{ fontSize: 8.5, fontWeight: 700, color: '#0284C7' }}>Hạn: {expiryDate}</div>
-          </div>
-
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-              <div style={{ width: 28, height: 20, borderRadius: 3, background: 'linear-gradient(135deg, #F59E0B, #FDE68A)', border: '1px solid #D97706', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 800, color: '#78350F' }}>
-                CHIP
-              </div>
-              <div style={{ fontSize: 13.5, fontWeight: 900, color: '#DC2626', letterSpacing: 1 }}>
-                Số / No.: {idNumber}
-              </div>
-            </div>
-
-            <div><span style={{ color: '#64748B', fontSize: 10 }}>Họ và tên / Full name: </span><strong style={{ color: '#0F172A', fontSize: 12 }}>{fullName || '—'}</strong></div>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div><span style={{ color: '#64748B', fontSize: 10 }}>Ngày sinh / DOB: </span><strong style={{ color: '#0F172A' }}>{dob}</strong></div>
-              <div><span style={{ color: '#64748B', fontSize: 10 }}>Giới tính / Sex: </span><strong style={{ color: '#0F172A' }}>{gender}</strong></div>
-            </div>
-            <div><span style={{ color: '#64748B', fontSize: 10 }}>Quốc tịch / Nationality: </span><strong style={{ color: '#0F172A' }}>Việt Nam</strong></div>
-            <div><span style={{ color: '#64748B', fontSize: 10 }}>Quê quán / Origin: </span><strong style={{ color: '#0F172A' }}>{hometown}</strong></div>
-            <div><span style={{ color: '#64748B', fontSize: 10 }}>Nơi thường trú / Residence: </span><strong style={{ color: '#0F172A' }}>{address}</strong></div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', fontSize: 9, color: '#64748B', borderTop: '1px solid rgba(147, 197, 253, 0.4)', paddingTop: 6, marginTop: 8 }}>
-          <span>Bộ Công An / Ministry of Public Security</span>
-          <span style={{ color: employee.isVerified ? '#16A34A' : '#64748B', fontWeight: 700 }}>{employee.isVerified ? '✓ eID Chip Verifiable' : 'Chưa xác thực'}</span>
-        </div>
-      </div>
-    );
-  }
-
-  const cleanId = idNumber !== '—' ? idNumber.replace(/\D/g, '') : '';
+  // Không có ảnh giấy tờ (chưa chụp hoặc đã xóa theo yêu cầu rút đồng ý): chỉ liệt kê dữ liệu đã lưu, không dựng thẻ giả.
+  const rows: Array<[string, string]> = side === 'front'
+    ? [['Số định danh', employee.idNumber], ['Họ tên', employee.employeeName], ['Ngày sinh', employee.dob], ['Giới tính', employee.gender], ['Quê quán', employee.hometown], ['Nơi thường trú', employee.address], ['Có giá trị đến', employee.expiryDate]]
+    : [['Ngày cấp', employee.issueDate], ['Nơi cấp', employee.issuePlace]];
   return (
-    <div
-      style={{
-        width: '100%',
-        maxWidth: 540,
-        borderRadius: 12,
-        padding: '16px 20px',
-        background: 'linear-gradient(135deg, #EFF6FF 0%, #F8FAFC 50%, #E0F2FE 100%)',
-        border: '1.5px solid #93C5FD',
-        boxShadow: '0 6px 16px rgba(0, 0, 0, 0.08)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        color: '#0F172A',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-      }}
-    >
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, borderBottom: '1px solid rgba(147, 197, 253, 0.5)', paddingBottom: 6, marginBottom: 8 }}>
-          <div>
-            <div style={{ color: '#64748B', fontSize: 9.5 }}>Đặc điểm nhân dạng / Personal identification:</div>
-            <div style={{ fontWeight: 700, color: '#1E293B', fontSize: 11 }}>{employee.isVerified ? 'Nốt ruồi dưới dái tai trái' : 'Chưa cập nhật'}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ color: '#64748B', fontSize: 9.5 }}>Ngày cấp / Date of issue: <strong style={{ color: '#1E293B' }}>{issueDate}</strong></div>
-            <div style={{ fontSize: 9.5, fontWeight: 700, color: '#0369A1' }}>CỤC CẢNH SÁT QLHC VỀ TTXH</div>
-          </div>
+    <div style={{ padding: 16, background: '#F8FAFC', borderRadius: 10, border: '1px dashed #CBD5E1', width: '100%', maxWidth: 540, fontSize: 12.5 }}>
+      <div style={{ color: '#64748B', marginBottom: 8 }}>Chưa có ảnh {side === 'front' ? 'mặt trước' : 'mặt sau'} thẻ căn cước. Thông tin đã lưu trong hồ sơ:</div>
+      {rows.map(([label, value]) => (
+        <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '3px 0' }}>
+          <span style={{ color: '#64748B' }}>{label}</span>
+          <span style={{ color: '#0F172A', textAlign: 'right' }}>{value || '—'}</span>
         </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', margin: '12px 0' }}>
-          <div style={{ width: 48, height: 48, background: '#0F172A', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#FFFFFF', fontSize: 9, fontWeight: 700 }}>
-            [ QR ]
-          </div>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 9.5, color: '#64748B' }}>Chữ ký số BCA & Dấu giáp lai điện tử</div>
-            <div style={{ fontSize: 11, fontWeight: 800, color: employee.isVerified ? '#DC2626' : '#94A3B8', marginTop: 2 }}>
-              {employee.isVerified ? 'ĐÃ KÝ SỐ CHỨNG THỰC' : 'CHƯA CHỨNG THỰC'}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {cleanId ? (
-        <div
-          style={{
-            background: 'rgba(15, 23, 42, 0.05)',
-            borderRadius: 6,
-            padding: '8px 10px',
-            fontFamily: 'Courier New, monospace',
-            fontSize: 10.5,
-            fontWeight: 700,
-            color: '#1E293B',
-            letterSpacing: 1.5,
-            lineHeight: 1.3,
-            marginTop: 6,
-          }}
-        >
-          <div>{`IDVNM${cleanId}<<<<<<<<<<<<<<<`}</div>
-          <div>{`9001010M3001010VNM<<<<<<<<<<<`}</div>
-          <div>{`${fullName.replace(/\s+/g, '<')}<<<<<<<<<<<<<`}</div>
-        </div>
-      ) : null}
+      ))}
     </div>
   );
 };
@@ -444,6 +351,21 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
   const [isIdentityViewModalOpen, setIsIdentityViewModalOpen] = useState(false);
   const [viewingIdentity, setViewingIdentity] = useState<any | null>(null);
   const [identityTab, setIdentityTab] = useState<'cccd' | 'video' | 'info'>('cccd');
+  // Mở hộp thoại xác thực danh tính: tải hồ sơ đầy đủ (ảnh thẻ, ảnh, video eKYC) của nhân viên từ máy chủ.
+  const openIdentity = async (record: any, tab: 'cccd' | 'video' | 'info') => {
+    let row = record;
+    if (record.userId) {
+      try {
+        const { data } = await employeesApi.getOne(record.userId);
+        if (data?.employee) row = { ...record, ...identityRowOf(data.employee, 0, null), id: record.id, employeeCode: record.employeeCode };
+      } catch {
+        message.warning('Không tải được hồ sơ đầy đủ; đang hiện dữ liệu tóm tắt.');
+      }
+    }
+    setViewingIdentity(row);
+    setIdentityTab(tab);
+    setIsIdentityViewModalOpen(true);
+  };
 
   const [bankAccounts, setBankAccounts] = useState<any[]>(() => {
     try {
@@ -512,60 +434,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
         }
       } catch (e) {}
 
-      const realIdentityRows = activeEmps.map((emp: any, index: number) => {
-        const empName = emp.name || emp.fullName || '';
-        const matchedEkyc = matchesStoredEkyc(storedEkycData, emp) ? storedEkycData : null;
-        
-        let details: any = {};
-        if (emp.details && typeof emp.details === 'object') {
-          details = emp.details;
-        } else if (typeof emp.detailsJson === 'string') {
-          try { details = JSON.parse(emp.detailsJson); } catch {}
-        }
-        
-        const source = { ...details, ...matchedEkyc, ...emp };
-
-        const cccdNum = source.docNumber || source.idNumber || source.identityNumber || '';
-        const isVerified = Boolean(source.ekycVerified && cccdNum);
-        const verifiedAtStr = isVerified ? normalizeDisplayDate(source.verifiedAt || source.updatedAt || source.profileUpdatedAt) : '';
-        const faceMatchScore = source.faceMatchScore ? Number(source.faceMatchScore) : 0;
-        const certificateId = source.certificateId || source.certId || '';
-
-        return {
-          id: `id-real-${emp.id || index}`,
-          employeeCode: emp.code || emp.employeeCode || `EMP-${index + 100}`,
-          employeeName: empName,
-          department: emp.department || 'Chưa phân công',
-          position: emp.position || 'Nhân sự',
-          email: emp.email || '',
-          phone: emp.phone || '',
-          avatar: source.cardAvatarUrl || source.livePhotoUrl || source.avatarUrl || emp.avatar || '',
-          idType: cccdNum ? (source.docType || 'Căn cước công dân') : 'Chưa có dữ liệu',
-          idNumber: cccdNum || '',
-          verifiedAt: verifiedAtStr || '—',
-          verifiedBy: isVerified ? (source.verifiedBy || 'Hồ sơ nhân sự') : '—',
-          status: isVerified ? 'Đã xác thực' : 'Chưa xác thực',
-          isVerified,
-          hash: isVerified ? (source.sha256 || source.hash || (certificateId ? `Certificate: ${certificateId}` : '')) : '',
-          note: isVerified
-            ? `Dữ liệu đồng bộ từ Xác thực danh tính${faceMatchScore ? `, FaceMatch ${faceMatchScore}%` : ''}.`
-            : 'Chưa hoàn tất xác thực danh tính eKYC.',
-          dob: normalizeDateOnly(source.birthDate || source.dob) || '',
-          gender: source.gender || '',
-          hometown: source.originPlace || source.hometown || '',
-          address: source.residencePlace || source.hkttAddress || source.currentAddress || source.address || '',
-          issueDate: source.issueDate || source.docIssueDate || '',
-          issuePlace: source.issuePlace || source.docIssuePlace || '',
-          expiryDate: source.expiryDate || source.docExpiryDate || '',
-          livePhotoUrl: source.livePhotoUrl || '',
-          liveVideoUrl: source.liveVideoUrl || '',
-          cardFrontUrl: source.cardFrontUrl || '',
-          cardBackUrl: source.cardBackUrl || '',
-          cardAvatarUrl: source.cardAvatarUrl || '',
-          faceMatchScore,
-          certificateId,
-        };
-      });
+      const realIdentityRows = activeEmps.map((emp: any, index: number) => identityRowOf(emp, index, storedEkycData));
 
       setIdentityData(realIdentityRows);
       localStorage.setItem('employee_identity_history', JSON.stringify(realIdentityRows));
@@ -1201,11 +1070,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             size="small"
             icon={<IdcardOutlined />}
             style={{ borderColor: '#38BDF8', color: '#0284C7' }}
-            onClick={() => {
-              setViewingIdentity(record);
-              setIdentityTab('cccd');
-              setIsIdentityViewModalOpen(true);
-            }}
+            onClick={() => void openIdentity(record, 'cccd')}
           >
             CCCD
           </Button>
@@ -1213,11 +1078,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             size="small"
             icon={<VideoCameraOutlined />}
             style={{ borderColor: '#22C55E', color: '#16A34A' }}
-            onClick={() => {
-              setViewingIdentity(record);
-              setIdentityTab('video');
-              setIsIdentityViewModalOpen(true);
-            }}
+            onClick={() => void openIdentity(record, 'video')}
           >
             Video
           </Button>
@@ -1225,11 +1086,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             size="small"
             icon={<FileTextOutlined />}
             style={{ borderColor: '#CBD5E1', color: '#334155' }}
-            onClick={() => {
-              setViewingIdentity(record);
-              setIdentityTab('info');
-              setIsIdentityViewModalOpen(true);
-            }}
+            onClick={() => void openIdentity(record, 'info')}
           >
             Thông tin
           </Button>
@@ -1647,7 +1504,31 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
         }
         open={isIdentityViewModalOpen}
         onCancel={() => setIsIdentityViewModalOpen(false)}
-        footer={<Button onClick={() => setIsIdentityViewModalOpen(false)}>Đóng</Button>}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            {viewingIdentity?.userId && ['livePhotoUrl', 'liveVideoUrl', 'cardFrontUrl', 'cardBackUrl', 'cardAvatarUrl'].some((field) => viewingIdentity[field]) && (
+              <Button danger onClick={() => Modal.confirm({
+                title: 'Xóa dữ liệu sinh trắc học theo yêu cầu rút đồng ý?',
+                content: `Ảnh khuôn mặt, video xác thực và ảnh hai mặt thẻ căn cước của ${viewingIdentity.employeeName} sẽ bị xóa khỏi hồ sơ, trạng thái đã xác minh eKYC bị bỏ; số và thông tin giấy tờ vẫn giữ. Chỉ làm khi nhân viên yêu cầu rút đồng ý. Không khôi phục được.`,
+                okText: 'Xóa dữ liệu sinh trắc học',
+                cancelText: 'Hủy',
+                okButtonProps: { danger: true },
+                onOk: async () => {
+                  try {
+                    await ekycApi.withdrawConsent(viewingIdentity.userId, 'Nhân viên yêu cầu rút đồng ý, quản trị viên thực hiện');
+                    const cleared = { ...viewingIdentity, livePhotoUrl: '', liveVideoUrl: '', cardFrontUrl: '', cardBackUrl: '', cardAvatarUrl: '', faceMatchScore: 0, isVerified: false, status: 'Chưa xác thực', hash: '' };
+                    setViewingIdentity(cleared);
+                    setIdentityData((rows) => rows.map((row) => (row.userId === cleared.userId ? cleared : row)));
+                    message.success('Đã xóa dữ liệu sinh trắc học khỏi hồ sơ.');
+                  } catch (error: any) {
+                    message.error(error?.response?.data?.message || 'Không xóa được dữ liệu sinh trắc học.');
+                  }
+                },
+              })}>Xóa ảnh sinh trắc học</Button>
+            )}
+            <Button onClick={() => setIsIdentityViewModalOpen(false)}>Đóng</Button>
+          </div>
+        }
         width={780}
       >
         {viewingIdentity && (

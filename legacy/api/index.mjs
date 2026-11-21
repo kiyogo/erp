@@ -36,7 +36,7 @@ import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
-import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken } from './ekycRules.mjs';
+import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -9978,6 +9978,27 @@ async function handleRequest(request, response) {
     const session = liveEkycSession(token);
     if (session.status !== 'VERIFIED') Object.assign(session, { status: 'CONNECTED', connectedAt: now(), updatedAt: Date.now() });
     sendJson(response, 200, { success: true, status: session.status, token });
+    return;
+  }
+
+  // Rút đồng ý xử lý dữ liệu sinh trắc học (ekycRules.mjs): xóa ảnh khuôn mặt, video, ảnh hai mặt thẻ và điểm so khớp khỏi hồ sơ, bỏ trạng thái
+  // đã xác minh eKYC; số và thông tin giấy tờ (dữ liệu hồ sơ lao động thông thường) được giữ. Chính nhân viên hoặc quản trị viên thực hiện.
+  if (request.method === 'POST' && resource === '/ekyc/withdraw') {
+    const actor = await requireUser(request);
+    const payload = await readJson(request, 16 * 1024).catch(() => ({}));
+    const userId = String(payload.userId || actor.id);
+    if (userId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ chính nhân viên hoặc quản trị viên được rút đồng ý.');
+    const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(userId);
+    if (!profile) throw new HttpError(404, 'Không tìm thấy hồ sơ nhân viên.');
+    const details = parseJsonObject(profile.details_json);
+    const { details: cleaned, removed } = withdrawBiometricData(details, { at: now(), by: actor.name, reason: optionalText(payload.reason, 'Lý do', 500) });
+    const avatar = removed.includes(profile.avatar_url) ? '' : profile.avatar_url;
+    await db.transaction(async () => {
+      await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(cleaned), avatar, now(), userId);
+      await recordAuditEvent(actor.id, 'ekyc_consent_withdrawn', 'employee_profiles', userId, { removedItems: removed.length });
+    });
+    for (const [token, session] of ekycSessions.entries()) if (session.userId === userId) ekycSessions.delete(token);
+    sendJson(response, 200, { withdrawn: true, removedItems: removed.length, biometricConsentWithdrawnAt: cleaned.biometricConsentWithdrawnAt });
     return;
   }
 

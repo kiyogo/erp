@@ -45,7 +45,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input as BaseInput, Select as BaseSelect, message, Checkbox as BaseCheckbox, Modal, Tag, InputNumber } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
-import { authApi, collectionsApi, employeesApi } from '../../api/endpoints';
+import { authApi, collectionsApi, ekycApi, employeesApi } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { EmployeeProfileWizard } from '../employee/EmployeeProfileWizard';
 import { getEmployeeOnboardingStorage, isEmployeeOnboardingComplete } from '../employee/onboardingStorage';
@@ -1060,6 +1060,8 @@ export const EmployeeFullEditModule: React.FC = () => {
   const [activeTab, setActiveTab] = useState('basic');
   const isClickingTabRef = useRef(false);
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
+  // Dữ liệu sinh trắc học eKYC đang lưu (ảnh khuôn mặt, video, ảnh thẻ) và thời điểm đã rút đồng ý, đọc từ hồ sơ máy chủ.
+  const [biometricState, setBiometricState] = useState<{ stored: boolean; withdrawnAt: string; userId: string }>({ stored: false, withdrawnAt: '', userId: '' });
   const [isSaving, setIsSaving] = useState(false);
 
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
@@ -1641,6 +1643,11 @@ export const EmployeeFullEditModule: React.FC = () => {
           setWizardDone(true);
         }
         const details = typeof employee.details === 'object' && employee.details ? employee.details : {};
+        setBiometricState({
+          stored: ['livePhotoUrl', 'liveVideoUrl', 'cardFrontUrl', 'cardBackUrl', 'cardAvatarUrl'].some((field) => Boolean((details as any)[field])),
+          withdrawnAt: String((details as any).biometricConsentWithdrawnAt || ''),
+          userId: String(employee.id || ''),
+        });
         const empName = employee.name || employee.fullName || '';
         const nameParts = empName.trim().split(/\s+/);
         const autoFirstName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : empName;
@@ -1967,6 +1974,26 @@ export const EmployeeFullEditModule: React.FC = () => {
   const handleOpenViewBank = (item: BankAccount) => {
     setViewingBankAccount(item);
     setIsBankViewModalOpen(true);
+  };
+
+  const handleWithdrawBiometric = () => {
+    Modal.confirm({
+      title: 'Rút đồng ý xử lý dữ liệu sinh trắc học?',
+      content: 'Ảnh khuôn mặt, video xác thực và ảnh hai mặt thẻ căn cước sẽ bị xóa khỏi hồ sơ, trạng thái đã xác minh eKYC bị bỏ. Số và thông tin giấy tờ vẫn giữ. Không khôi phục được ảnh đã xóa.',
+      okText: 'Rút đồng ý và xóa ảnh',
+      cancelText: 'Hủy',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const { data } = await ekycApi.withdrawConsent(isEmployeePortal ? undefined : biometricState.userId);
+          setBiometricState((current) => ({ ...current, stored: false, withdrawnAt: new Date().toISOString() }));
+          try { localStorage.removeItem('employee_ekyc_verified'); } catch {}
+          message.success(`Đã rút đồng ý và xóa ${data.removedItems} mục dữ liệu sinh trắc học.`);
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không rút được đồng ý.');
+        }
+      },
+    });
   };
 
   const handleDeleteBank = (bankId: string, bankName: string) => {
@@ -3529,6 +3556,16 @@ export const EmployeeFullEditModule: React.FC = () => {
                   <Input type="date" value={formData.docExpiryDate} onChange={e => handleChange('docExpiryDate', e.target.value)} />
                 </div>
               </div>
+              {(biometricState.stored || biometricState.withdrawnAt) && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 12, padding: '10px 12px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 12.5, color: '#475569' }}>
+                  <span>
+                    {biometricState.stored
+                      ? 'Hồ sơ đang lưu ảnh khuôn mặt, video và ảnh thẻ căn cước từ xác minh eKYC (dữ liệu sinh trắc học, xử lý theo sự đồng ý của nhân viên).'
+                      : `Đã rút đồng ý và xóa dữ liệu sinh trắc học lúc ${new Date(biometricState.withdrawnAt).toLocaleString('vi-VN')}.`}
+                  </span>
+                  {biometricState.stored && <Button danger onClick={handleWithdrawBiometric}>Rút đồng ý, xóa ảnh</Button>}
+                </div>
+              )}
             </div>
 
             {/* Trình độ / Bằng cấp */}

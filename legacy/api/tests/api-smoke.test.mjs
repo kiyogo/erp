@@ -2847,7 +2847,7 @@ test('ekyc sessions only write to the employee who created them, need consent an
   await request('/ekyc/session', 'POST', { token }, 200, staffHeaders);
   await request('/ekyc/session', 'POST', { token }, 409, otherHeaders);
   const anonymous = { 'Content-Type': 'application/json' };
-  const card = { idNumber: '001203004567', name: 'NGUYỄN VĂN EKYC', birthDate: '2000-01-02', biometricConsent: true };
+  const card = { idNumber: '001203004567', name: 'NGUYỄN VĂN EKYC', birthDate: '2000-01-02', biometricConsent: true, livePhotoUrl: 'data:image/jpeg;base64,AAAA' };
   await request(`/ekyc/session/${'b2'.repeat(32)}/verify`, 'POST', { data: card }, 404, anonymous);
   await request(`/ekyc/session/${token}/verify`, 'POST', { data: { ...card, biometricConsent: false } }, 422, anonymous);
   await request(`/ekyc/session/${token}/verify`, 'POST', { data: { ...card, idNumber: '12345' } }, 422, anonymous);
@@ -2862,6 +2862,14 @@ test('ekyc sessions only write to the employee who created them, need consent an
   assert.equal(status.data.biometricConsent, true);
   const otherStatus = await request(`/ekyc/session/${'d4'.repeat(32)}/status`, 'GET', undefined, 200, otherHeaders);
   assert.equal(otherStatus.verified, false);
+  await request('/ekyc/withdraw', 'POST', { userId: staff.id }, 403, otherHeaders);
+  assert.equal((await request('/ekyc/withdraw', 'POST', {}, 200, staffHeaders)).withdrawn, true);
+  const after = await request(`/ekyc/session/${token}/status`, 'GET', undefined, 200, staffHeaders);
+  assert.equal(after.verified, false);
+  const profile = (await request(`/employees/${staff.id}`)).employee;
+  assert.equal(profile.details.docNumber, '001203004567');
+  assert.equal(profile.details.biometricConsent, false);
+  assert.equal(profile.details.livePhotoUrl, undefined);
 });
 
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {

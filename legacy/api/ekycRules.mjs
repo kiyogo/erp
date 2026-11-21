@@ -15,3 +15,17 @@ export function ekycVerificationProblem(data) {
   if (!String(data.name || '').trim()) return 'Chưa đọc được họ tên trên thẻ căn cước.';
   return '';
 }
+
+// Dữ liệu sinh trắc học và ảnh giấy tờ do eKYC lưu trong hồ sơ; bị xóa khi người được xác minh rút đồng ý.
+export const BIOMETRIC_FIELDS = ['livePhotoUrl', 'liveVideoUrl', 'cardFrontUrl', 'cardBackUrl', 'cardAvatarUrl', 'faceMatchScore', 'certificateId'];
+
+// Trả về hồ sơ đã xóa dữ liệu sinh trắc học và danh sách giá trị đã xóa (để gỡ ảnh đại diện nếu đang dùng ảnh eKYC).
+export function withdrawBiometricData(details, { at, by, reason = '' }) {
+  const removed = BIOMETRIC_FIELDS.map((field) => details[field]).filter((value) => value !== undefined && value !== null && value !== '');
+  const cleaned = Object.fromEntries(Object.entries(details).filter(([field]) => !BIOMETRIC_FIELDS.includes(field)));
+  if (removed.includes(cleaned.avatarUrl)) delete cleaned.avatarUrl;
+  return {
+    removed,
+    details: { ...cleaned, ekycVerified: false, biometricConsent: false, biometricConsentWithdrawnAt: at, biometricConsentWithdrawnBy: by, ...(reason ? { biometricConsentWithdrawReason: reason } : {}) },
+  };
+}
