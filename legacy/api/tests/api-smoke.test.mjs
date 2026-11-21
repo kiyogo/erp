@@ -2854,6 +2854,15 @@ test('ekyc sessions only write to the employee who created them, need consent an
   await request(`/ekyc/session/${token}/verify`, 'POST', { data: { ...card, userId: other.id } }, 403, anonymous);
   await request(`/ekyc/session/${token}/verify`, 'POST', { data: card }, 200, anonymous);
   await request(`/ekyc/session/${token}/verify`, 'POST', { data: card }, 409, anonymous);
+  const stored = new DatabaseSync(env.KIYOVN_DB_PATH, { readOnly: true });
+  const raw = JSON.parse(stored.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(staff.id).details_json);
+  stored.close();
+  assert.match(raw.livePhotoUrl, /^ENC:.*"kid":"biometric-v1"/);
+  assert.match(raw.docNumber, /^ENC:/);
+  assert.equal((await request(`/employees/${staff.id}`)).employee.details.livePhotoUrl, card.livePhotoUrl);
+  const authProfile = (await request('/auth/profile', 'GET', undefined, 200, staffHeaders)).user;
+  assert.equal(authProfile.details.ekycVerified, true);
+  assert.equal(authProfile.details.livePhotoUrl, undefined);
   await request(`/ekyc/session/${token}/status?userId=${staff.id}`, 'GET', undefined, 401, anonymous);
   await request(`/ekyc/session/${'c3'.repeat(32)}/status?userId=${staff.id}`, 'GET', undefined, 403, otherHeaders);
   const status = await request(`/ekyc/session/${token}/status`, 'GET', undefined, 200, staffHeaders);

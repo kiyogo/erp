@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import db, { initDatabaseSchema } from './db.mjs';
 import cryptoService, { encryptField, decryptField, isEncrypted, computeBlindIndex } from './crypto.mjs';
+import { decryptProfileDetails, encryptProfileDetails } from './profileCrypto.mjs';
 import logger from './logger.mjs';
 import { createBackupManager } from './backups.mjs';
 import { createDocxFromText } from './document-files.mjs';
@@ -389,14 +390,9 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
   
   const currentDetails = parseJsonObject(profile.details_json);
   const inputDetails = changes.details === undefined ? currentDetails : { ...currentDetails, ...validateEmployeeProfileDetails(changes.details) };
-  const details = { ...inputDetails };
+  let details = { ...inputDetails };
   if (changes.details !== undefined) await applyEmployeeDetailRules(details, currentDetails, changes.details, allowIdentityChanges, realUserId);
-  const sensitiveKeys = ['idNumber', 'docNumber', 'bankAccount', 'taxCode', 'resAddress'];
-  for (const k of sensitiveKeys) {
-    if (details[k] && !isEncrypted(details[k])) {
-      details[k] = encryptField(details[k], 'profile');
-    }
-  }
+  details = encryptProfileDetails(details);
   const timestamp = now();
   let passwordChanged = false;
 
@@ -9930,7 +9926,7 @@ async function handleRequest(request, response) {
     const timestamp = now();
     await ensureEmployeeProfile(userRow);
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(session.userId);
-    const existingDetails = parseJsonObject(profile?.details_json);
+    const existingDetails = decryptProfileDetails(parseJsonObject(profile?.details_json));
     const keep = (value, current) => text(value) || current || '';
     const idNumber = text(verifiedData.idNumber, 12);
     const updatedDetails = {
@@ -9964,7 +9960,7 @@ async function handleRequest(request, response) {
     };
     const newAvatar = verifiedData.cardAvatarUrl || verifiedData.livePhotoUrl || profile?.avatar_url;
     await db.transaction(async () => {
-      await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(updatedDetails), newAvatar, timestamp, session.userId);
+      await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(encryptProfileDetails(updatedDetails)), newAvatar, timestamp, session.userId);
       await db.prepare('UPDATE users SET name = ?, updated_at = ? WHERE id = ?').run(updatedDetails.name, timestamp, session.userId);
       await recordAuditEvent(session.userId, 'ekyc_verified', 'employee_profiles', session.userId, { faceMatchScore: updatedDetails.faceMatchScore, certificateId: updatedDetails.certificateId });
     });
@@ -9990,11 +9986,11 @@ async function handleRequest(request, response) {
     if (userId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ chính nhân viên hoặc quản trị viên được rút đồng ý.');
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(userId);
     if (!profile) throw new HttpError(404, 'Không tìm thấy hồ sơ nhân viên.');
-    const details = parseJsonObject(profile.details_json);
+    const details = decryptProfileDetails(parseJsonObject(profile.details_json));
     const { details: cleaned, removed } = withdrawBiometricData(details, { at: now(), by: actor.name, reason: optionalText(payload.reason, 'Lý do', 500) });
     const avatar = removed.includes(profile.avatar_url) ? '' : profile.avatar_url;
     await db.transaction(async () => {
-      await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(cleaned), avatar, now(), userId);
+      await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(encryptProfileDetails(cleaned)), avatar, now(), userId);
       await recordAuditEvent(actor.id, 'ekyc_consent_withdrawn', 'employee_profiles', userId, { removedItems: removed.length });
     });
     for (const [token, session] of ekycSessions.entries()) if (session.userId === userId) ekycSessions.delete(token);
@@ -10010,7 +10006,7 @@ async function handleRequest(request, response) {
     const targetUserId = session?.userId || url.searchParams.get('userId') || actor.id;
     if (targetUserId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Bạn không được xem kết quả xác minh của người khác.');
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(targetUserId);
-    const details = parseJsonObject(profile?.details_json);
+    const details = decryptProfileDetails(parseJsonObject(profile?.details_json));
     if (details.ekycVerified === true) {
       sendJson(response, 200, {
         status: 'VERIFIED', verified: true, verifiedAt: details.verifiedAt || profile.updated_at,
@@ -16244,7 +16240,22 @@ async function migrateAttendanceCollections() {
   });
 }
 
+// Hồ sơ lưu trước khi có mã hóa (ảnh eKYC, số giấy tờ... dạng rõ) được mã hóa lại khi khởi động; chạy mỗi lần nhưng chỉ ghi hồ sơ còn dạng rõ.
+async function encryptLegacyProfileDetails() {
+  const rows = await db.prepare('SELECT user_id, details_json FROM employee_profiles').all();
+  let encrypted = 0;
+  for (const row of rows) {
+    const current = parseJsonObject(row.details_json);
+    const next = JSON.stringify(encryptProfileDetails(current));
+    if (next === JSON.stringify(current)) continue;
+    await db.prepare('UPDATE employee_profiles SET details_json = ? WHERE user_id = ? AND details_json = ?').run(next, row.user_id, row.details_json);
+    encrypted += 1;
+  }
+  if (encrypted) console.log(`Đã mã hóa dữ liệu nhạy cảm của ${encrypted} hồ sơ nhân viên.`);
+}
+
 await migrateAttendanceCollections();
+await encryptLegacyProfileDetails();
 await ensureAllEmployeeWorkspaces();
 if (process.env.SEED_DEMO_DATA === 'true') await seedDefaultContracts();
 

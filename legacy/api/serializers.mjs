@@ -1,4 +1,5 @@
 import { decryptField } from './crypto.mjs';
+import { decryptProfileDetails, withoutBiometricImages } from './profileCrypto.mjs';
 
 /**
  * Server-Side Masking Functions
@@ -104,13 +105,8 @@ export function serializeEmployeeDetail(userRow, profileRow, actor) {
   const rawPhone = profileRow ? decryptField(profileRow.phone, 'profile') : '';
   const rawDetails = profileRow ? parseJsonSafe(profileRow.details_json) : {};
 
-  // Decrypt confidential fields inside details if any
-  const decryptedDetails = { ...rawDetails };
-  if (decryptedDetails.idNumber) decryptedDetails.idNumber = decryptField(decryptedDetails.idNumber, 'profile');
-  if (decryptedDetails.docNumber) decryptedDetails.docNumber = decryptField(decryptedDetails.docNumber, 'profile');
-  if (decryptedDetails.bankAccount) decryptedDetails.bankAccount = decryptField(decryptedDetails.bankAccount, 'profile');
-  if (decryptedDetails.taxCode) decryptedDetails.taxCode = decryptField(decryptedDetails.taxCode, 'profile');
-  if (decryptedDetails.resAddress) decryptedDetails.resAddress = decryptField(decryptedDetails.resAddress, 'profile');
+  // Giải mã các trường nhạy cảm và ảnh eKYC (profileCrypto.mjs).
+  const decryptedDetails = decryptProfileDetails(rawDetails);
 
   let rawSalary = profileRow?.salary_base || 0;
   if (typeof rawSalary === 'string') {
@@ -189,7 +185,7 @@ export function serializeUserProfile(userRow, profileRow) {
     joinDate: profileRow?.join_date || '',
     avatarUrl: profileRow?.avatar_url || '',
     onboardingCompleted,
-    details: rawDetails,
+    details: withoutBiometricImages(rawDetails),
   };
 }
 
