@@ -73,7 +73,7 @@ export function annualLeaveEntitlement({ baseDays, joinDate, year }) {
   return { baseDays: base, seniorityDays, monthsWorked, standardQuota, seniorityQuota, entitled: standardQuota + seniorityQuota };
 }
 
-// Hệ số làm thêm tối thiểu: 150% ngày thường, 200% ngày nghỉ hằng tuần (theo thiết lập lịch nghỉ, mặc định chủ nhật), 300% ngày lễ, tết, nghỉ bù
+// Hệ số làm thêm tối thiểu: 150% ngày thường, 200% ngày nghỉ hằng tuần (theo thiết lập lịch nghỉ, mặc định thứ bảy, chủ nhật), 300% ngày lễ, tết, nghỉ bù
 // có hưởng lương (holidayRules.mjs, gồm Tết Âm lịch và Giỗ Tổ theo lịch âm).
 export function overtimeMinMultiplier(isoDate) {
   if (isHoliday(isoDate)) return 3;

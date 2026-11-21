@@ -8,12 +8,12 @@ import { lunarToSolar } from './lunarCalendar.mjs';
 const addDays = (iso, days) => { const date = new Date(`${iso}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
 const weekday = (iso) => new Date(`${iso}T00:00:00Z`).getUTCDay();
 
-// Điều chỉnh do quản trị viên lưu: { weeklyRestDays: [0], years: { '2026': { extraDays: [{ date, name }], removedDates: [] } } }.
-let overrides = { weeklyRestDays: [0], years: {} };
+// Điều chỉnh do quản trị viên lưu (mặc định nghỉ thứ bảy, chủ nhật; doanh nghiệp làm thứ bảy thì bỏ chọn): { weeklyRestDays: [0, 6], years: { '2026': { extraDays: [{ date, name }], removedDates: [] } } }.
+let overrides = { weeklyRestDays: [0, 6], years: {} };
 const cache = new Map();
 
 export function setHolidayOverrides(value) {
-  overrides = { weeklyRestDays: Array.isArray(value?.weeklyRestDays) && value.weeklyRestDays.length ? value.weeklyRestDays : [0], years: value?.years || {} };
+  overrides = { weeklyRestDays: Array.isArray(value?.weeklyRestDays) && value.weeklyRestDays.length ? value.weeklyRestDays : [0, 6], years: value?.years || {} };
   cache.clear();
 }
 export const holidayOverrides = () => overrides;

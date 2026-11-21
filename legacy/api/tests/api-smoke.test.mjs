@@ -3006,6 +3006,21 @@ test('holiday calendar includes lunar Tết and Giỗ Tổ, keeps 11 statutory d
   await request('/attendance/holidays', 'PUT', { year: 2026, removedDates: [], extraDays: [] });
 });
 
+test('timesheet summaries add paid holidays from the calendar and suggestions classify approved overtime by day type', async () => {
+  const staff = (await request('/users', 'POST', { email: 'holiday-ts@example.test', name: 'Nhân viên bảng công', password: 'Holiday-Ts-26!Secure', employeeCode: 'TS-HOL', role: 'USER' }, 201)).user;
+  const ot = { key: 'ts-hol-ot', code: 'TS-HOL-OT', employeeId: staff.id, employeeCode: 'TS-HOL', empCode: 'TS-HOL', otDate: '2026-02-18', timeRange: '08:00 - 16:00', totalHours: 8, reason: 'Trực Tết', multiplier: 3, baseHourlyRate: 0, status: 'Chờ phê duyệt' };
+  await request('/collections/attendance_overtime', 'POST', { record: ot }, 201);
+  await request('/collections/attendance_overtime/ts-hol-ot', 'PATCH', { patch: { status: 'Đã duyệt OT' } });
+  const suggestion = await request('/attendance/timesheet-suggestion?month=2026-02&employeeCode=TS-HOL');
+  assert.equal(suggestion.calendar.standardDays, 20);
+  assert.equal(suggestion.calendar.holidayDays, 5);
+  assert.equal(suggestion.overtime.otHoursHoliday, 8);
+  const summary = (await request('/collections/attendance_timesheet_summary', 'POST', { record: { key: 'ts-hol-2026-02', empCode: 'TS-HOL', employeeName: 'Nhân viên bảng công', month: '2026-02', standardDays: 20, actualDays: 15, paidLeaveDays: 0, unpaidLeaveDays: 0, holidayDays: 0, totalPayDays: 15, otHoursHoliday: 8, status: 'Chờ đối soát' } }, 201)).record;
+  assert.equal(summary.holidayDays, 5);
+  assert.equal(summary.totalPayDays, 20);
+  await request('/collections/attendance_timesheet_summary', 'POST', { record: { key: 'ts-hol-over', empCode: 'TS-HOL', month: '2026-02', standardDays: 20, actualDays: 24, status: 'Chờ đối soát' } }, 422);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };

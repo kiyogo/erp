@@ -1469,6 +1469,14 @@ export const holidayApi = {
   save: (data: { year: number; weeklyRestDays: number[]; extraDays: Array<{ date: string; name: string }>; removedDates: string[] }) => api.put<HolidayCalendar>('/attendance/holidays', data),
 };
 
+// Gợi ý bảng công tháng: ngày công chuẩn, ngày lễ hưởng lương theo lịch nghỉ lễ và giờ làm thêm theo loại ngày từ đơn đã duyệt.
+export const timesheetSuggestionApi = {
+  get: (month: string, employeeCode: string) => api.get<{
+    calendar: { month: string; days: number; weeklyRestDays: number; standardDays: number; holidayDays: number; workingDays: number; holidays: HolidayItem[] };
+    overtime: Record<string, number>; approvedOvertimeCount: number;
+  }>('/attendance/timesheet-suggestion', { params: { month, employeeCode } }),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

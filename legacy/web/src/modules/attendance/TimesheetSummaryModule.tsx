@@ -1,5 +1,5 @@
 import { dataService } from '../../services/dataService';
-import { collectionsApi } from '../../api/endpoints';
+import { collectionsApi, timesheetSuggestionApi } from '../../api/endpoints';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceDate, attendanceNumber, employeeAttendanceFields, monthDayCount } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
@@ -37,6 +37,7 @@ export interface EnterpriseTimesheetSummaryItem {
   actualDays: number;
   paidLeaveDays: number;
   unpaidLeaveDays: number;
+  holidayDays?: number;
   otHoursWeekday: number;
   otHoursWeekend: number;
   otHoursHoliday?: number;
@@ -89,11 +90,26 @@ export const TimesheetSummaryModule: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
 
+  const [suggestionNote, setSuggestionNote] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedSummary, setSelectedSummary] = useState<EnterpriseTimesheetSummaryItem | null>(null);
 
   const totalActual = data.reduce((sum, item) => sum + item.actualDays, 0);
   const totalOT = data.reduce((sum, item) => sum + item.otHoursWeekday + item.otHoursWeekend, 0);
+
+  // Lấy ngày công chuẩn, số ngày lễ và giờ làm thêm theo loại ngày từ lịch nghỉ lễ và đơn làm thêm đã duyệt (máy chủ tính).
+  const applySuggestion = async () => {
+    const { month, employeeCode } = form.getFieldsValue();
+    if (!month || !employeeCode) { message.warning('Chọn nhân viên và tháng chấm công trước.'); return; }
+    try {
+      const { data: suggestion } = await timesheetSuggestionApi.get(month, employeeCode);
+      form.setFieldsValue({ standardDays: suggestion.calendar.standardDays, ...suggestion.overtime });
+      const names = suggestion.calendar.holidays.map((item) => `${item.date.slice(8)}/${item.date.slice(5, 7)} ${item.name}`).join('; ');
+      setSuggestionNote(`Tháng có ${suggestion.calendar.holidayDays} ngày lễ hưởng lương (máy chủ tự cộng vào ngày tính lương, không nhập vào công thực tế hay phép)${names ? `: ${names}` : ''}. Đã lấy giờ làm thêm từ ${suggestion.approvedOvertimeCount} đơn đã duyệt.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lấy được gợi ý.');
+    }
+  };
 
   const handleCreate = async (values: any) => {
     if (saving) return;
@@ -178,6 +194,7 @@ export const TimesheetSummaryModule: React.FC = () => {
       render: (_: any, record: EnterpriseTimesheetSummaryItem) => (
         <div style={{ fontSize: 12 }}>
           <span style={{ color: '#D97706', fontWeight: 600 }}>{record.paidLeaveDays} Phép năm</span>
+          {Number(record.holidayDays) > 0 && <div style={{ color: '#0F766E' }}>{record.holidayDays} Ngày lễ</div>}
           {record.unpaidLeaveDays > 0 && (
             <div style={{ color: '#DC2626' }}>{record.unpaidLeaveDays} Không lương</div>
           )}
@@ -309,7 +326,7 @@ export const TimesheetSummaryModule: React.FC = () => {
           />
 
           <TimesheetBoardDialog summary />
-          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_hop_cong.xlsx', generateValidXlsxBlob([['Tháng', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Công chuẩn', 'Công thực tế', 'Phép hưởng lương', 'Không lương', 'OT thường', 'OT cuối tuần', ...EXTRA_HOUR_FIELDS.map(({ label }) => label), 'Ngày tính lương', 'Trạng thái'], ...filteredData.map((item) => [item.month || '', item.employeeCode, item.employeeName, item.department, item.standardDays, item.actualDays, item.paidLeaveDays, item.unpaidLeaveDays, item.otHoursWeekday, item.otHoursWeekend, ...EXTRA_HOUR_FIELDS.map(({ name }) => item[name] ?? 0), item.totalPayDays, item.status])]))}>
+          <Button icon={<DownloadOutlined />} onClick={() => downloadFile('Tong_hop_cong.xlsx', generateValidXlsxBlob([['Tháng', 'Mã NV', 'Nhân viên', 'Phòng ban', 'Công chuẩn', 'Công thực tế', 'Phép hưởng lương', 'Không lương', 'Ngày lễ', 'OT thường', 'OT cuối tuần', ...EXTRA_HOUR_FIELDS.map(({ label }) => label), 'Ngày tính lương', 'Trạng thái'], ...filteredData.map((item) => [item.month || '', item.employeeCode, item.employeeName, item.department, item.standardDays, item.actualDays, item.paidLeaveDays, item.unpaidLeaveDays, item.holidayDays ?? 0, item.otHoursWeekday, item.otHoursWeekend, ...EXTRA_HOUR_FIELDS.map(({ name }) => item[name] ?? 0), item.totalPayDays, item.status])]))}>
             Xuất Excel
           </Button>
 
@@ -328,6 +345,7 @@ export const TimesheetSummaryModule: React.FC = () => {
                 otHoursWeekend: 0,
                 ...Object.fromEntries(EXTRA_HOUR_FIELDS.map(({ name }) => [name, 0])),
               });
+              setSuggestionNote('');
               setModalOpen(true);
             }}
             style={{ backgroundColor: '#009688', borderColor: '#009688' }}
@@ -372,7 +390,11 @@ export const TimesheetSummaryModule: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Form.Item name="month" label="Tháng chấm công" rules={[{ required: true }]}><Input type="month" /></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'end' }}>
+            <Form.Item name="month" label="Tháng chấm công" rules={[{ required: true }]}><Input type="month" /></Form.Item>
+            <Form.Item><Button onClick={() => void applySuggestion()}>Lấy từ lịch và đơn làm thêm</Button></Form.Item>
+          </div>
+          {suggestionNote && <div style={{ fontSize: 12.5, color: '#0F766E', marginBottom: 12 }}>{suggestionNote}</div>}
           <Form.Item name="standardDays" label="Ngày công chuẩn" rules={[{ required: true }]}><Input type="number" min={0.5} max={31} step={0.5} /></Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <Form.Item name="actualDays" label="Công thực tế" rules={[{ required: true }]}>

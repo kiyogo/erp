@@ -42,7 +42,8 @@ import { annualPitFinalization, authorizationProblems, finalizationDeadline } fr
 import { buildPitVoucher, voucherNumber } from './pitVoucherRules.mjs';
 import { CONTRACTOR_BUSINESS_TYPES, calculateContractorTax } from './contractorTaxRules.mjs';
 import { calculateCasualIncomeTax, commitmentOverLimit } from './casualIncomeRules.mjs';
-import { holidayOverrides, holidaysOf, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
+import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
+import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -5658,10 +5659,12 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record[field] = Number(record[field] ?? 0);
       if (!Number.isFinite(record[field]) || record[field] < 0 || record[field] > (OVERTIME_HOUR_FIELDS.includes(field) ? days * 24 : days)) throw new HttpError(422, 'Số ngày hoặc giờ công không hợp lệ.');
     }
-    if (!record.standardDays || record.actualDays + record.paidLeaveDays + record.unpaidLeaveDays > days) throw new HttpError(422, 'Tổng ngày công/nghỉ không hợp lệ trong tháng.');
+    // Ngày lễ, tết, nghỉ bù rơi vào ngày làm việc do máy chủ tính từ lịch nghỉ lễ (timesheetRules.mjs) và cộng vào ngày hưởng lương (Điều 112).
+    record.holidayDays = monthCalendar(record.month).holidayDays;
+    if (!record.standardDays || record.actualDays + record.paidLeaveDays + record.unpaidLeaveDays + record.holidayDays > days) throw new HttpError(422, `Tổng ngày công, nghỉ và ${record.holidayDays} ngày lễ vượt số ngày trong tháng (ngày lễ đã tự cộng, không nhập vào công thực tế hay phép).`);
     if (current?.status === 'Đã khóa công') throw new HttpError(422, 'Bảng công đã khóa không thể thay đổi.');
     record.employeeCode = record.empCode;
-    record.totalPayDays = record.actualDays + record.paidLeaveDays;
+    record.totalPayDays = record.actualDays + record.paidLeaveDays + record.holidayDays;
     record.attendanceRate = Math.round(record.totalPayDays / record.standardDays * 100);
     record.status = oneOf(record.status || 'Chờ đối soát', 'Trạng thái bảng công', ['Chờ đối soát', 'Đã khóa công']);
     if (!current && record.status !== 'Chờ đối soát') throw new HttpError(422, 'Cần lập bảng công trước khi khóa.');
@@ -5795,7 +5798,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     // không quá 40 giờ một tháng và 200 giờ một năm (một số ngành được tới 300 giờ, cần được cấu hình riêng khi doanh nghiệp thuộc các ngành đó).
     const dayOfWeek = new Date(`${record.otDate}T00:00:00Z`).getUTCDay();
     if (hours > 12) throw new HttpError(422, 'Tổng số giờ làm thêm một ngày không quá 12 giờ theo Điều 107 Bộ luật Lao động 2019.');
-    if (dayOfWeek >= 1 && dayOfWeek <= 5 && hours > 4) throw new HttpError(422, 'Ngày làm việc bình thường chỉ được làm thêm tối đa 4 giờ (50% số giờ làm việc bình thường) theo Điều 107 Bộ luật Lao động 2019.');
+    // Giới hạn 50% chỉ áp dụng cho ngày làm việc bình thường; ngày nghỉ hằng tuần, ngày lễ, tết (theo lịch nghỉ lễ) chỉ giới hạn 12 giờ một ngày.
+    if (!isHoliday(record.otDate) && !isWeeklyRestDay(record.otDate) && hours > 4) throw new HttpError(422, 'Ngày làm việc bình thường chỉ được làm thêm tối đa 4 giờ (50% số giờ làm việc bình thường) theo Điều 107 Bộ luật Lao động 2019.');
     const overtimeOwner = String(record.employeeCode || record.empCode || '').toLocaleLowerCase('vi-VN');
     if (overtimeOwner) {
       const others = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_overtime'").all())
@@ -15621,6 +15625,19 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'pit_voucher_issue', 'finance_pit_vouchers', key, { employeeId, year, taxWithheld: saved.taxWithheld });
     });
     sendJson(response, 201, { voucher: saved });
+    return;
+  }
+
+  // Gợi ý bảng công tháng (timesheetRules.mjs): ngày công chuẩn, số ngày lễ hưởng lương và giờ làm thêm theo loại ngày từ đơn làm thêm đã duyệt.
+  if (request.method === 'GET' && resource === '/attendance/timesheet-suggestion') {
+    await requireAdmin(request);
+    const month = String(url.searchParams.get('month') || '');
+    const code = String(url.searchParams.get('employeeCode') || '').trim().toLocaleLowerCase('vi-VN');
+    let calendar;
+    try { calendar = monthCalendar(month); } catch (error) { throw new HttpError(422, error.message); }
+    const overtime = code ? (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_overtime'").all()).map((row) => parseJsonObject(row.payload_json))
+      .filter((item) => item.status === 'Đã duyệt OT' && String(item.employeeCode || item.empCode || '').toLocaleLowerCase('vi-VN') === code) : [];
+    sendJson(response, 200, { calendar, overtime: overtimeBreakdown(overtime, month), approvedOvertimeCount: overtime.filter((item) => String(item.otDate).startsWith(`${month}-`)).length });
     return;
   }
 
