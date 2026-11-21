@@ -12,7 +12,8 @@ import {
   IdcardOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Progress } from '../../custom-ui';
+import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Progress, Checkbox } from '../../custom-ui';
+import { HOLDER_KIND_OPTIONS, SHARE_CLASS_OPTIONS } from './loanEquityOptions';
 import { exportRecordToPdf, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseShareholder {
@@ -88,8 +89,12 @@ export const EquityModule: React.FC = () => {
         parValue: Number(values.parValue),
         joinDate: values.joinDate,
         certificateNumber: String(values.certificateNumber || '').trim(),
+        shareClass: values.shareClass, holderKind: values.holderKind, nationality: String(values.nationality || '').trim(),
+        governmentAuthorized: values.governmentAuthorized === true,
+        paidValue: values.paidValue === undefined || values.paidValue === '' ? undefined : Number(values.paidValue),
       });
       message.success(`Đã ghi sổ cổ đông ${created.fullName}.`);
+      ((created.legalWarnings || []) as string[]).forEach((warning) => message.warning(warning, 8));
       setModalOpen(false);
       form.resetFields();
     } catch (error: any) {
@@ -263,7 +268,14 @@ export const EquityModule: React.FC = () => {
           </div>
           <Form.Item name="fullName" label="Họ tên cổ đông hoặc tên tổ chức" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="idNumber" label="Số CCCD hoặc mã số doanh nghiệp" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
+            <Form.Item name="holderKind" label="Cổ đông là" rules={[{ required: true }]}><Select options={HOLDER_KIND_OPTIONS} /></Form.Item>
+            <Form.Item name="shareClass" label="Loại cổ phần (Điều 114 Luật Doanh nghiệp)" rules={[{ required: true }]}><Select options={SHARE_CLASS_OPTIONS} /></Form.Item>
+            <Form.Item name="nationality" label="Quốc tịch (bắt buộc với cá nhân)"><Input placeholder="Việt Nam" /></Form.Item>
+            <Form.Item name="paidValue" label="Số vốn đã góp (₫)"><Input type="number" min={0} step={1} /></Form.Item>
+          </div>
+          <Form.Item name="governmentAuthorized" valuePropName="checked"><Checkbox>Tổ chức được Chính phủ ủy quyền (được nắm giữ cổ phần ưu đãi biểu quyết)</Checkbox></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <Form.Item name="idNumber" label="Số định danh, hộ chiếu hoặc mã số doanh nghiệp" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>
             <Form.Item name="joinDate" label="Ngày ghi sổ" rules={[{ required: true }]}><Input type="date" aria-label="Ngày ghi sổ" /></Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>

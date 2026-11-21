@@ -335,7 +335,7 @@ test('company profile stores all legal fields, validates dates and settings, rej
   assert.equal(fullChart.find((account) => account.code === '111').key, existingCash.key);
   assert.equal(fullChart.find((account) => account.code === '111').tracksParty, true, 'a matching manual account must not be overwritten');
   const loanDraft = (await request('/collections/finance_loans', 'POST', { record: {
-    key: 'loan-draft-1', direction: 'borrow', contractCode: 'LOAN-TEST-1', counterpartyName: 'Ngân hàng kiểm thử',
+    key: 'loan-draft-1', direction: 'borrow', contractCode: 'LOAN-TEST-1', counterpartyName: 'Ngân hàng kiểm thử', counterpartyType: 'credit_institution',
     principalAmount: 100000, termMonths: 12, disbursedDate: '2026-10-01', dueDate: '2027-10-01',
     principalAccount: '3411', interestAccount: '635', accountingRegime: 'Forged',
     loanSchedules: [
@@ -350,6 +350,11 @@ test('company profile stores all legal fields, validates dates and settings, rej
   await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-group-account', contractCode: 'LOAN-GROUP', principalAccount: '341' } }, 422);
   await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-invalid-rate', contractCode: 'LOAN-RATE', rates: [{ rate: 7.25, overdueRate: null, effectiveFrom: '2026-10-01' }, { rate: 8, overdueRate: null, effectiveFrom: '2026-10-01' }] } }, 422);
   await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-invalid-schedule', contractCode: 'LOAN-SCHEDULE', loanSchedules: [{ key: 'schedule-only', dueDate: '2027-10-01', principalAmount: 99999, interestAmount: 5000 }] } }, 422);
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-no-party-type', contractCode: 'LOAN-NO-TYPE', counterpartyType: '' } }, 422);
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-usury', contractCode: 'LOAN-USURY', counterpartyType: 'individual', rates: [{ rate: 25, overdueRate: null, effectiveFrom: '2026-10-01' }] } }, 422);
+  await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-overdue', contractCode: 'LOAN-OVERDUE', rates: [{ rate: 8, overdueRate: 20, effectiveFrom: '2026-10-01' }] } }, 422);
+  const personalLoan = (await request('/collections/finance_loans', 'POST', { record: { ...loanDraft, key: 'loan-personal', contractCode: 'LOAN-PERSONAL', counterpartyType: 'individual' } }, 201)).record;
+  assert.ok(personalLoan.legalWarnings.some((warning) => /5%/.test(warning)));
   const addAccount = (code, accountType, parentCode = '', status = 'Đang sử dụng') => request('/finance/chart-of-accounts', 'POST', { record: {
     code, name: `Tài khoản ${code}`, parentCode, accountType, balanceNature: 'Chưa xác định',
     effectiveDate: '2026-01-01', status, tracksParty: false,

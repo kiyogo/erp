@@ -14,6 +14,7 @@ import { filesApi, financeLoanEventsApi, financePaymentAccountsApi, systemApi, t
 import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { Alert, Button, Drawer, Form, Input, message, Modal, Select, Tabs } from '../../custom-ui';
+import { COUNTERPARTY_TYPE_OPTIONS } from './loanEquityOptions';
 import { buildLoanDebtReport, buildLoanDueReport, hasUniqueLoanContractCode, isValidLoanDateRange, loanAccountsFor, loanDirectionOf, type LoanDirection } from './loanRules';
 
 type InterestRateRow = { rate: string; overdueRate: string; effectiveFrom: string; note: string };
@@ -473,11 +474,13 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
         loanType: direction === 'borrow' ? 'Khế ước đi vay' : 'Khế ước cho vay',
       };
       if (editingLoan) {
-        await dataService.updateGenericRecord('finance_loans', item);
+        const saved = await dataService.updateGenericRecord('finance_loans', item);
         message.success(`Đã cập nhật khế ước ${contractCode}.`);
+        ((saved?.legalWarnings || []) as string[]).forEach((warning) => message.warning(warning, 8));
       } else {
-        await dataService.createGenericRecord('finance_loans', item);
+        const saved = await dataService.createGenericRecord('finance_loans', item);
         message.success(`Đã lưu khế ước ${contractCode}.`);
+        ((saved?.legalWarnings || []) as string[]).forEach((warning) => message.warning(warning, 8));
       }
       const removalResults = await Promise.allSettled(removedAttachments.map(file => filesApi.remove(file.id)));
       if (removalResults.some(result => result.status === 'rejected')) message.warning('Khế ước đã lưu, nhưng một số tệp đã bỏ chưa được xóa khỏi kho tệp.');
@@ -573,6 +576,7 @@ export const LoansModule: React.FC<{ defaultType?: string }> = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '3px 4px' }}>
             <Form.Item name="contractCode" label="Số khế ước" rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} maxLength={80} /></Form.Item>
             <Form.Item name="counterpartyName" label={isLend ? 'Đối tượng vay' : 'Đối tượng cho vay'} rules={[{ required: true, whitespace: true }]}><Input disabled={hasPostedLoanEvents} /></Form.Item>
+            <Form.Item name="counterpartyType" label={isLend ? 'Bên vay là' : 'Bên cho vay là'} rules={[{ required: true }]}><Select options={COUNTERPARTY_TYPE_OPTIONS} /></Form.Item>
             <Form.Item name="creditContract" label="Hợp đồng tín dụng"><Input /></Form.Item>
             <Form.Item name="purpose" label="Mục đích vay"><Input /></Form.Item>
             <Form.Item name="principalAccount" label="Tài khoản hạch toán nợ gốc" rules={[{ required: true, whitespace: true }]}><Select disabled={hasPostedLoanEvents} showSearch options={loanAccountsFor(chartAccounts, accountingRegime, isLend ? 'Tài sản' : 'Nợ phải trả').map(account => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" /></Form.Item>

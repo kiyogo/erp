@@ -57,7 +57,7 @@ test('sổ kế toán cần hồ sơ kế toán đầy đủ trước khi ghi nh
 });
 
 test('sổ cổ đông: vốn góp là số cổ phần nhân mệnh giá, không lưu tỷ lệ và cổ tức tự bịa', async () => {
-  const created = await create('finance_equity', { shareholderCode: 'cd-001', type: 'Cổ đông sáng lập', fullName: 'Nguyễn Văn A', idNumber: '001099000001', address: 'Hà Nội', sharesCount: 1200, parValue: 10000, joinDate: '2026-01-15', ownershipPercentage: 99, pendingDividend: 123456 });
+  const created = await create('finance_equity', { shareClass: 'ordinary', holderKind: 'individual', nationality: 'Việt Nam', shareholderCode: 'cd-001', type: 'Cổ đông sáng lập', fullName: 'Nguyễn Văn A', idNumber: '001099000001', address: 'Hà Nội', sharesCount: 1200, parValue: 10000, joinDate: '2026-01-15', ownershipPercentage: 99, pendingDividend: 123456 });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.body.record.shareholderCode, 'CD-001');
   assert.equal(created.body.record.capitalValue, 12_000_000);
@@ -107,4 +107,20 @@ test('chứng thư số: không lưu trạng thái, không trùng serial, lịch
   assert.equal(renewed.body.record.renewals.length, 1);
   assert.equal(renewed.body.record.renewals[0].recordedBy.length > 0, true);
   assert.equal((await patch('finance_digital_signatures', key, { renewals: [] })).status, 422, 'không được xóa lịch sử gia hạn');
+});
+
+test('sổ cổ đông theo Luật Doanh nghiệp 2020: loại cổ phần, giấy tờ, ưu đãi biểu quyết và hạn góp vốn', async () => {
+  const shareholder = (code, extra = {}) => ({ shareholderCode: code, type: 'Cổ đông phổ thông', fullName: 'Cổ đông luật', idNumber: '001099000777', address: 'Hà Nội', sharesCount: 100, parValue: 10000, joinDate: '2026-01-01', shareClass: 'ordinary', holderKind: 'individual', nationality: 'Việt Nam', ...extra });
+  assert.equal((await create('finance_equity', shareholder('LAW-NOCLASS', { shareClass: '' }))).status, 422);
+  assert.equal((await create('finance_equity', shareholder('LAW-NONAT', { nationality: '' }))).status, 422);
+  assert.equal((await create('finance_equity', shareholder('LAW-BADID', { idNumber: '123' }))).status, 422);
+  assert.equal((await create('finance_equity', shareholder('LAW-VOTE', { shareClass: 'voting_preference' }))).status, 422);
+  assert.equal((await create('finance_equity', shareholder('LAW-VOTE-OK', { shareClass: 'voting_preference', type: 'Cổ đông sáng lập', idNumber: '001099000778' }))).status, 201);
+  assert.equal((await create('finance_equity', shareholder('LAW-ORG-BAD', { holderKind: 'organization', idNumber: '0012345678' }))).status, 422);
+  assert.equal((await create('finance_equity', shareholder('LAW-ORG', { holderKind: 'organization', idNumber: '0012345672', nationality: '' }))).status, 201);
+  assert.equal((await create('finance_equity', shareholder('LAW-FOREIGN', { nationality: 'Nhật Bản', idNumber: 'TR1234567' }))).status, 201);
+  assert.equal((await create('finance_equity', shareholder('LAW-OVERPAID', { idNumber: '001099000779', paidValue: 2_000_000 }))).status, 422);
+  const unpaid = await create('finance_equity', shareholder('LAW-UNPAID', { idNumber: '001099000780', paidValue: 500_000 }));
+  assert.equal(unpaid.status, 201, JSON.stringify(unpaid.body));
+  assert.ok(unpaid.body.record.legalWarnings.some((warning) => /90 ngày/.test(warning)));
 });

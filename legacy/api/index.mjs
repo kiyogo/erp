@@ -34,6 +34,7 @@ import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
+import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
@@ -2815,6 +2816,14 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (rate === null && overdueRate === null) throw new HttpError(422, 'Mỗi dòng lãi suất cần có lãi suất trong hạn hoặc quá hạn.');
       return { rate, overdueRate, effectiveFrom, note: optionalText(row.note, 'Ghi chú lãi suất', 500) };
     });
+    // Loại bên đối ứng quyết định trần lãi suất (Điều 468 Bộ luật Dân sự) và các cảnh báo thuế, thanh toán (loanEquityRules.mjs).
+    record.counterpartyType = record.counterpartyType || current?.counterpartyType || '';
+    if ((!current || record.counterpartyType) && !COUNTERPARTY_TYPES[record.counterpartyType]) throw new HttpError(422, 'Chọn loại bên đối ứng: tổ chức tín dụng, doanh nghiệp hoặc tổ chức khác, cá nhân.');
+    if (record.counterpartyType && (!current || current.counterpartyType !== record.counterpartyType || JSON.stringify(current.rates ?? null) !== JSON.stringify(record.rates))) {
+      const rateProblem = loanRateProblem(record.rates, record.counterpartyType);
+      if (rateProblem) throw new HttpError(422, rateProblem);
+    }
+    record.legalWarnings = record.counterpartyType ? loanWarnings(record) : [];
     record.accountingRegime = profile.accountingRegime;
     record.loanType = record.direction === 'borrow' ? 'Khế ước đi vay' : 'Khế ước cho vay';
   }
@@ -5176,6 +5185,19 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.joinDate = requiredIsoDate(record.joinDate, 'Ngày ghi sổ');
     record.certificateNumber = optionalText(record.certificateNumber, 'Số sổ hoặc số cổ phiếu', 64) || '';
     for (const field of ['ownershipPercentage', 'pendingDividend', 'paidDividends']) delete record[field];
+    // Nội dung sổ đăng ký cổ đông và loại cổ phần theo Luật Doanh nghiệp 2020 (loanEquityRules.mjs); hồ sơ cũ chưa có loại cổ đông không bị chặn khi sửa.
+    record.shareClass = record.shareClass || current?.shareClass || '';
+    record.holderKind = record.holderKind || current?.holderKind || '';
+    record.nationality = optionalText(record.nationality, 'Quốc tịch', 100) || '';
+    record.governmentAuthorized = record.governmentAuthorized === true;
+    if (record.paidValue === undefined || record.paidValue === null || record.paidValue === '') delete record.paidValue;
+    else { record.paidValue = Number(record.paidValue); if (!Number.isSafeInteger(record.paidValue) || record.paidValue < 0) throw new HttpError(422, 'Số vốn đã góp phải là số nguyên không âm.'); }
+    const legalFields = ['shareClass', 'holderKind', 'nationality', 'idNumber', 'type', 'governmentAuthorized', 'paidValue', 'sharesCount', 'parValue'];
+    if (!current || (record.holderKind && legalFields.some((field) => JSON.stringify(current[field] ?? null) !== JSON.stringify(record[field] ?? null)))) {
+      const problem = shareholderProblem(record);
+      if (problem) throw new HttpError(422, problem);
+    }
+    record.legalWarnings = shareholderWarnings(record, { today: todayInVietnam(), legalForm: (await getCompanyProfile()).legalForm });
   }
   if (scope === 'services_sla') {
     // Cam kết do người dùng nhập; số liệu thực tế chỉ có từ các kỳ đo được ghi nhận, trạng thái luôn suy ra từ kỳ đo gần nhất.
