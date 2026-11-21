@@ -85,7 +85,7 @@ try {
   }, 201)).account;
   const blankCompanyProfile = (await request('/system/company-profile')).profile;
   const configuredCompanyProfile = (await request('/system/company-profile', 'PUT', {
-    ...blankCompanyProfile, companyName: 'PG company', taxCode: '0012345678', bankAccountId: accountingBank.key,
+    ...blankCompanyProfile, companyName: 'PG company', taxCode: '0012345672', bankAccountId: accountingBank.key,
     legalForm: 'llc_single', companySize: 'small', industry: 'PostgreSQL tests', accountingRegime: 'TT99', accountingEffectiveDate: '2026-01-01',
     fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
   })).profile;
@@ -707,7 +707,7 @@ try {
   assert.equal((await request('/admin/backups')).capabilities.database, false); completed++;
   await request('/admin/backups', 'POST', { name: 'Unavailable PG dump', type: 'Database' }, 422);
   const company = (await request('/system/company-profile')).profile;
-  const companySaved = (await request('/system/company-profile', 'PUT', { ...company, companyName: 'PG company', fullName: 'Pháp nhân PostgreSQL', taxCode: '0012345678' })).profile;
+  const companySaved = (await request('/system/company-profile', 'PUT', { ...company, companyName: 'PG company', fullName: 'Pháp nhân PostgreSQL', taxCode: '0012345672' })).profile;
   assert.equal(companySaved.revision, 2);
   assert.equal((await request('/system/company-profile')).profile.fullName, 'Pháp nhân PostgreSQL');
   await request('/system/company-profile', 'PUT', { ...company, companyName: 'Stale' }, 409); completed++;

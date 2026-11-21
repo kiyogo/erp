@@ -3066,10 +3066,8 @@ export const EmployeeProfileWizard: React.FC<Props> = ({ onDone, storage, initia
             <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Nghề nghiệp</label>
             <Input value={familyForm.job} onChange={e => setFamilyForm({ ...familyForm, job: e.target.value })} />
           </div>
-          <div style={{ marginTop: 6 }}>
-            <Checkbox checked={familyForm.isDependent} onChange={e => setFamilyForm({ ...familyForm, isDependent: e.target.checked })}>
-              Người phụ thuộc
-            </Checkbox>
+          <div style={{ marginTop: 6, fontSize: 12.5, color: '#64748B' }}>
+            Đăng ký người phụ thuộc để giảm trừ gia cảnh ở mục Thông tin gia đình trong hồ sơ cá nhân, nơi nhập đủ mã số thuế, ngày bắt đầu và căn cứ phụ thuộc.
           </div>
         </div>
       </Modal>

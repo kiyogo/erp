@@ -393,7 +393,16 @@ interface FamilyMember {
   dependentTaxCode?: string;
   dependentStartDate?: string;
   dependentEndDate?: string;
+  dependentBasis?: string;
+  dependentVerified?: boolean;
 }
+
+const DEPENDENT_BASIS_OPTIONS = [
+  { label: 'Con dưới 18 tuổi (không cần căn cứ)', value: '' },
+  { label: 'Đang học đại học, cao đẳng, trung cấp, dạy nghề', value: 'student' },
+  { label: 'Khuyết tật, không có khả năng lao động', value: 'disabled' },
+  { label: 'Ngoài độ tuổi lao động, không thu nhập hoặc thu nhập không quá 1 triệu đồng một tháng', value: 'low_income' },
+];
 
 interface BankAccount {
   employeeName?: string;
@@ -1798,6 +1807,7 @@ export const EmployeeFullEditModule: React.FC = () => {
     dependentTaxCode: '',
     dependentStartDate: '',
     dependentEndDate: '',
+    dependentBasis: '',
   });
 
   const handleOpenAddFamily = () => {
@@ -1840,24 +1850,25 @@ export const EmployeeFullEditModule: React.FC = () => {
       },
     };
     try {
-      if (isEmployeePortal) {
-        await employeesApi.updateMyProfile(payload);
-      } else if (id) {
-        await employeesApi.update(id, payload);
-      }
+      const response = isEmployeePortal
+        ? await employeesApi.updateMyProfile(payload)
+        : id ? await employeesApi.update(id, payload) : null;
+      const saved = (response?.data as any)?.employee?.details?.familyMembers;
+      return Array.isArray(saved) ? saved as FamilyMember[] : updated;
     } catch (error: any) {
-      console.error('syncFamilyList error:', error);
+      message.error(error?.response?.data?.message || 'Không lưu được danh sách thân nhân.');
+      return null;
     }
   };
 
-  const handleDeleteFamily = (memberId: string, memberName: string) => {
-    const updated = familyList.filter(m => m.id !== memberId);
-    setFamilyList(updated);
-    void syncFamilyList(updated);
+  const handleDeleteFamily = async (memberId: string, memberName: string) => {
+    const saved = await syncFamilyList(familyList.filter(m => m.id !== memberId));
+    if (!saved) return;
+    setFamilyList(saved);
     message.success(`Đã xóa thân nhân "${memberName}" thành công!`);
   };
 
-  const handleSaveFamilyMember = () => {
+  const handleSaveFamilyMember = async () => {
     if (!familyMemberForm.name?.trim()) {
       message.error('Vui lòng nhập họ và tên thân nhân!');
       return;
@@ -1867,8 +1878,9 @@ export const EmployeeFullEditModule: React.FC = () => {
     if (editingFamilyMember) {
       // Update
       updatedList = familyList.map(m => (m.id === editingFamilyMember.id ? { ...(familyMemberForm as FamilyMember), id: m.id } : m));
-      setFamilyList(updatedList);
-      void syncFamilyList(updatedList);
+      const saved = await syncFamilyList(updatedList);
+      if (!saved) return;
+      setFamilyList(saved);
       message.success(`Đã cập nhật thông tin thân nhân "${familyMemberForm.name}" thành công!`);
     } else {
       // Add
@@ -1877,8 +1889,9 @@ export const EmployeeFullEditModule: React.FC = () => {
         id: `fm-${Date.now()}`,
       };
       updatedList = [...familyList, newMember];
-      setFamilyList(updatedList);
-      void syncFamilyList(updatedList);
+      const saved = await syncFamilyList(updatedList);
+      if (!saved) return;
+      setFamilyList(saved);
       message.success(`Đã thêm thân nhân "${newMember.name}" thành công!`);
     }
     setIsFamilyModalOpen(false);
@@ -4206,7 +4219,7 @@ export const EmployeeFullEditModule: React.FC = () => {
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                           {member.isDependent ? (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#16A34A', fontSize: 12, background: '#DCFCE7', padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>
-                              <CheckCircleOutlined /> Người phụ thuộc
+                              <CheckCircleOutlined /> {member.dependentVerified === false ? 'Người phụ thuộc, chờ xác minh' : 'Người phụ thuộc'}
                             </span>
                           ) : (
                             <span style={{ color: '#94A3B8', fontSize: 12, whiteSpace: 'nowrap' }}>Không</span>
@@ -5285,6 +5298,24 @@ export const EmployeeFullEditModule: React.FC = () => {
                     onChange={e => setFamilyMemberForm(prev => ({ ...prev, dependentEndDate: e.target.value }))}
                   />
                 </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#64748B', marginBottom: 4 }}>Căn cứ phụ thuộc</label>
+                  <BaseSelect
+                    value={familyMemberForm.dependentBasis || ''}
+                    onChange={val => setFamilyMemberForm(prev => ({ ...prev, dependentBasis: val }))}
+                    options={DEPENDENT_BASIS_OPTIONS}
+                  />
+                </div>
+                {!isEmployeePortal && (
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <BaseCheckbox
+                      checked={familyMemberForm.dependentVerified !== false}
+                      onChange={e => setFamilyMemberForm(prev => ({ ...prev, dependentVerified: e.target.checked }))}
+                    >
+                      Đã kiểm tra hồ sơ chứng minh người phụ thuộc (chỉ người phụ thuộc đã xác minh mới được trừ khi tính thuế)
+                    </BaseCheckbox>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -63,7 +63,7 @@ function seedLedger(records) {
 test('TT132 year-end balance preview maps official opening books and flags missing detail reconciliation', async () => {
   const initial = (await request('/system/company-profile')).profile;
   await request('/system/company-profile', 'PUT', {
-    ...initial, companyName: 'Doanh nghiệp siêu nhỏ chuyển đổi', taxCode: '0012345678', legalForm: 'llc_single',
+    ...initial, companyName: 'Doanh nghiệp siêu nhỏ chuyển đổi', taxCode: '0012345672', legalForm: 'llc_single',
     companySize: 'micro', industry: 'Thương mại', accountingRegime: 'TT58', accountingEffectiveDate: '2026-07-01',
     fiscalYearStartMonth: 7, fiscalYearStartDay: 1, vatMethod: 'deduction', citMethod: 'taxable_income',
   });

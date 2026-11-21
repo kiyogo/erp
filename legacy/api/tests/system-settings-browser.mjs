@@ -72,7 +72,7 @@ try {
 
   const values = {
     'Tên pháp nhân công ty': 'Công ty kiểm thử hồ sơ',
-    'Mã số thuế doanh nghiệp': '0012345678',
+    'Mã số thuế doanh nghiệp': '0012345672',
     'Địa chỉ trụ sở chính': '12 Đường Kiểm Thử, Hà Nội',
     'Tên đầy đủ': 'Công ty Cổ phần Kiểm Thử Hệ Thống',
     'Tên viết tắt': 'KTS',

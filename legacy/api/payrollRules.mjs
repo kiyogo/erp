@@ -108,6 +108,8 @@ export function countActiveDependents(familyMembers, periodInput) {
   if (!Array.isArray(familyMembers)) return 0;
   return familyMembers.filter((member) => {
     if (!member || member.isDependent !== true) return false;
+    // Người phụ thuộc nhân viên tự khai chỉ được tính sau khi quản trị viên xác minh hồ sơ (Thông tư 111/2013 Điều 9); hồ sơ cũ chưa có cờ vẫn tính.
+    if (member.dependentVerified === false) return false;
     const start = String(member.dependentStartDate || '').slice(0, 10);
     const end = String(member.dependentEndDate || '').slice(0, 10);
     if (start && start > periodEnd) return false;

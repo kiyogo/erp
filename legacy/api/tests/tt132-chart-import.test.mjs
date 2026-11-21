@@ -53,7 +53,7 @@ async function request(route, method = 'GET', payload, expected = 200) {
 test('TT132 chart import is regime-specific, idempotent and rejects parent-account posting', async () => {
   const initial = (await request('/system/company-profile')).profile;
   await request('/system/company-profile', 'PUT', {
-    ...initial, companyName: 'Doanh nghiệp siêu nhỏ kiểm thử', taxCode: '0012345678', legalForm: 'llc_single',
+    ...initial, companyName: 'Doanh nghiệp siêu nhỏ kiểm thử', taxCode: '0012345672', legalForm: 'llc_single',
     companySize: 'micro', industry: 'Kiểm thử', accountingRegime: 'TT132', accountingEffectiveDate: '2026-01-01',
     fiscalYearStartMonth: 1, fiscalYearStartDay: 1, vatMethod: 'deduction',
   });

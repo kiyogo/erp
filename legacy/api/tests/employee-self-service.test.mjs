@@ -33,3 +33,30 @@ test('nhân viên tự cập nhật hồ sơ không đổi được lương, ch�
   assert.equal(after.position, 'Kế toán viên');
   assert.equal(after.department, 'Kế toán');
 });
+
+test('người phụ thuộc nhân viên tự khai chờ xác minh, bị kiểm tra điều kiện và không khai trùng giữa hai nhân viên', async () => {
+  const first = await server.makeUser('pt1');
+  const second = await server.makeUser('pt2');
+  const child = { id: 'kid-1', name: 'Con nhỏ', relation: 'Con đẻ', gender: 'Nam', birthDate: '2018-05-01', idNumber: '001218000321', isDependent: true, dependentStartDate: '2026-01-01' };
+  const members = (employee) => call(admin, `/employees/${employee.id}`).then((response) => response.body.employee.details.familyMembers);
+
+  const incomplete = await call(first, '/employees/me', 'PATCH', { details: { familyMembers: [{ ...child, idNumber: '' }] } });
+  assert.equal(incomplete.status, 422, JSON.stringify(incomplete.body));
+  const adult = await call(first, '/employees/me', 'PATCH', { details: { familyMembers: [{ ...child, birthDate: '2000-01-01' }] } });
+  assert.equal(adult.status, 422, JSON.stringify(adult.body));
+
+  const declared = await call(first, '/employees/me', 'PATCH', { details: { familyMembers: [{ ...child, dependentVerified: true }] } });
+  assert.equal(declared.status, 200, JSON.stringify(declared.body));
+  assert.equal((await members(first))[0].dependentVerified, false, 'nhân viên không tự xác nhận được');
+
+  const duplicate = await call(second, '/employees/me', 'PATCH', { details: { familyMembers: [{ ...child, id: 'kid-2' }] } });
+  assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
+  assert.match(duplicate.body.message, /chỉ tính cho một người nộp thuế/);
+
+  const confirmed = await call(admin, `/employees/${first.id}`, 'PATCH', { details: { familyMembers: [{ ...child, dependentVerified: true }] } });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  assert.equal((await members(first))[0].dependentVerified, true);
+
+  const badId = await call(first, '/employees/me', 'PATCH', { details: { idNumber: '123' } });
+  assert.equal(badId.status, 422, JSON.stringify(badId.body));
+});

@@ -64,7 +64,7 @@ async function createEmployee(code, salaryBase, familyMembers = []) {
 }
 
 test('tính lương theo hồ sơ nhân viên: bảo hiểm, người phụ thuộc và thuế TNCN kỳ 2026', async () => {
-  await createEmployee('PAY-1', 30_000_000, [{ id: 'm1', name: 'Con', relation: 'Con', isDependent: true, dependentStartDate: '2026-01-01' }]);
+  await createEmployee('PAY-1', 30_000_000, [{ id: 'm1', name: 'Con', relation: 'Con', birthDate: '2018-05-01', idNumber: '001218000123', isDependent: true, dependentStartDate: '2026-01-01' }]);
   await createEmployee('PAY-2', 80_000_000);
   const result = await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I' });
   const first = result.rows.find(row => row.employeeCode === 'PAY-1');

@@ -20,7 +20,7 @@ import { WebAuthnError, toBase64Url, verifyAssertion, verifyRegistration } from 
 import { vatRateProblem } from './vatRules.mjs';
 import { ASSET_CLASSES, ASSET_LIFE_GROUPS, assetClassProblem, assetLifeProblem, assetTaxWarnings, costBreakdownProblem, taxDeductibleCost } from './assetRules.mjs';
 import { contactTaxCodeProblem, dataConsentProblem, todayInVietnam, invoiceEmailsProblem, isValidPassportNumber, isValidPhone, isValidWebsite, pastDateProblem } from './contactRules.mjs';
-import { buyerTaxCodeProblem, invoiceContentIssues, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
+import { buyerTaxCodeProblem, invoiceContentIssues, isPersonalIdNumber, isValidTaxCode, vatBreakdown, vndInWords } from './invoiceRules.mjs';
 import { ADJUSTMENT_SUBTYPES, adjustmentAmountProblem, adjustmentOriginalProblem, adjustmentSide, isAdjustmentSubtype, isNonCashPayment, normalizeTradeTerms, partnerTaxCodeProblem, tradeWarnings, vatConsistencyProblem } from './tradeRules.mjs';
 import { accountBalance, applyAccountMap, documentLedgerLines, documentPostingProblem, inventoryCountLedgerLines, inventoryCountPostingProblem, inventoryIssueLedgerLines, inventoryIssuePostingProblem, provisionLedgerLines, provisionPostingProblem } from './ledgerPostingRules.mjs';
 import { provisionLine, provisionTotals } from './inventoryProvisionRules.mjs';
@@ -31,6 +31,7 @@ import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
 import { validatePlanRecord } from './planRules.mjs';
 import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
+import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
@@ -233,6 +234,26 @@ function validateEmployeeProfileDetails(value) {
   return details;
 }
 
+// Kiểm tra ngày sinh, giấy tờ và người phụ thuộc trong hồ sơ nhân viên (employeeRules.mjs). `incoming` là phần details client gửi lên,
+// `trusted` là quản trị viên hoặc vai trò ủy quyền; nhân viên tự sửa thì người phụ thuộc phải chờ quản trị viên xác minh.
+async function applyEmployeeDetailRules(details, previousRaw, incoming, trusted, userId) {
+  const today = todayInVietnam();
+  const previous = { ...previousRaw };
+  for (const field of ['idNumber', 'taxCode']) if (previous[field]) previous[field] = decryptField(previous[field], 'profile');
+  const problem = identityProblems(details, previous, today);
+  if (problem) throw new HttpError(422, problem);
+  if (!Object.hasOwn(incoming, 'familyMembers') && !Object.hasOwn(incoming, 'familyList')) return;
+  let members;
+  try { members = normalizeFamilyMembers(incoming.familyMembers ?? incoming.familyList, previousRaw.familyMembers ?? previousRaw.familyList, { trusted, today }); } catch (error) { throw new HttpError(422, error.message); }
+  const others = (await db.prepare('SELECT p.user_id, p.details_json, u.name, u.employee_code FROM employee_profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id <> ?').all(userId))
+    .map((row) => { const other = parseJsonObject(row.details_json); return { members: other.familyMembers ?? other.familyList, label: `${row.name} (${row.employee_code})` }; })
+    .filter((other) => Array.isArray(other.members));
+  const conflict = dependentClaimConflict(members.filter((member) => member.isDependent && !(Array.isArray(previousRaw.familyMembers) && previousRaw.familyMembers.some((before) => before?.id === member.id && before.isDependent && before.dependentTaxCode === member.dependentTaxCode && before.idNumber === member.idNumber && before.dependentStartDate === member.dependentStartDate && before.dependentEndDate === member.dependentEndDate))), others);
+  if (conflict) throw new HttpError(409, conflict);
+  details.familyMembers = members;
+  details.familyList = members;
+}
+
 function publicEmployee(row, actor = null) {
   if (!row) return null;
   return serializeEmployeeDetail(row, row, actor || { role: 'ADMIN' });
@@ -361,6 +382,7 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
   const currentDetails = parseJsonObject(profile.details_json);
   const inputDetails = changes.details === undefined ? currentDetails : { ...currentDetails, ...validateEmployeeProfileDetails(changes.details) };
   const details = { ...inputDetails };
+  if (changes.details !== undefined) await applyEmployeeDetailRules(details, currentDetails, changes.details, allowIdentityChanges, realUserId);
   const sensitiveKeys = ['idNumber', 'docNumber', 'bankAccount', 'taxCode', 'resAddress'];
   for (const k of sensitiveKeys) {
     if (details[k] && !isEncrypted(details[k])) {
@@ -14921,6 +14943,12 @@ async function handleRequest(request, response) {
         throw new HttpError(422, 'Chế độ kế toán không phù hợp với loại hình, quy mô hoặc kỳ tài chính đã chọn. Hãy xác nhận lại chế độ áp dụng.');
       }
       profile.companyName = requiredText(profile.companyName, 'Tên công ty', 300);
+      // Mã số thuế và số điện thoại của doanh nghiệp in lên hóa đơn: chỉ kiểm khi giá trị đổi (hồ sơ đã lưu không bị chặn lại).
+      const companyTaxCode = String(profile.taxCode || '').trim();
+      if (companyTaxCode && companyTaxCode !== String(current.taxCode || '').trim() && !isValidTaxCode(companyTaxCode) && !(profile.legalForm === 'household_business' && isPersonalIdNumber(companyTaxCode))) {
+        throw new HttpError(422, 'Mã số thuế doanh nghiệp không hợp lệ (10 số, hoặc 13 số dạng 0123456789-001, đúng số kiểm tra; hộ kinh doanh dùng được số định danh 12 số).');
+      }
+      if (profile.phone && profile.phone !== String(current.phone || '').trim() && !isValidPhone(profile.phone)) throw new HttpError(422, 'Số điện thoại công ty không hợp lệ.');
       if (profile.email) profile.email = normalizeEmail(profile.email);
       for (const field of ['establishedDate', 'registrationDate']) profile[field] = payload[field] ? requiredIsoDate(payload[field], 'Ngày đăng ký / thành lập') : '';
       if (profile.website) {
