@@ -13,10 +13,11 @@ import {
 import { KTable } from '../../components/KTable';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { Modal, Form, Input, Select, Button, message, Card, Tag, Alert } from '../../custom-ui';
-import { financeBankAccountsApi, FinanceBankAccount, financeBankStatementMatchesApi, financeBankStatementsApi, FinanceBankStatement, FinanceBankStatementMatchEvent, financeCashApi, FinanceCashTransaction, financeTransfersApi } from '../../api/endpoints';
+import { financeBankAccountsApi, FinanceBankAccount, financeBankStatementMatchesApi, financeBankStatementsApi, FinanceBankStatement, FinanceBankStatementMatchEvent, financeCashApi, FinanceCashTransaction, financeTransfersApi, systemApi } from '../../api/endpoints';
+import { dataService } from '../../services/dataService';
 import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { bankStatementLineFingerprint, ImportedBankStatementLine, parseBankStatementFile } from './bankStatementImport';
-import { BANK_STATEMENT_CLASSIFICATIONS, BankStatementClassification, BankStatementMatchEvent, getActiveBankStatementMatches, getBankStatementMatchCandidates, summarizeBankStatementReconciliation } from './bankStatementReconciliation';
+import { BANK_STATEMENT_CLASSIFICATIONS, BankStatementClassification, BankStatementMatchEvent, getActiveBankStatementMatches, getBankStatementMatchCandidates, statementCounterAccounts, STATEMENT_POSTING_RULES, summarizeBankStatementReconciliation } from './bankStatementReconciliation';
 
 const markStatementDuplicates = (
   lines: ImportedBankStatementLine[],
@@ -61,6 +62,12 @@ export const BankAccountsModule: React.FC = () => {
   const [savingStatement, setSavingStatement] = useState(false);
   const [reconciliationStatement, setReconciliationStatement] = useState<FinanceBankStatement | null>(null);
   const [selectedVoucherByLine, setSelectedVoucherByLine] = useState<Record<string, string>>({});
+  const [postingLine, setPostingLine] = useState<{ statement: FinanceBankStatement; line: ImportedBankStatementLine } | null>(null);
+  const [postingClassification, setPostingClassification] = useState<BankStatementClassification | undefined>();
+  const [chartAccounts, setChartAccounts] = useState<Array<{ code: string; name: string; parentCode?: string; accountingRegime: string; status: string }>>([]);
+  const [accountingRegime, setAccountingRegime] = useState('');
+  const [postingSaving, setPostingSaving] = useState(false);
+  const [postForm] = Form.useForm();
   const [form] = Form.useForm();
   const [transferForm] = Form.useForm();
   const [transferring, setTransferring] = useState(false);
@@ -283,6 +290,46 @@ export const BankAccountsModule: React.FC = () => {
     }
   };
 
+  // Ghi sổ theo sao kê: dòng chưa có phiếu thì lập phiếu ngân hàng theo số liệu ngân hàng và tự ghép.
+  const openPostLine = async (statement: FinanceBankStatement, line: ImportedBankStatementLine) => {
+    const classification = activeStatementMatchState.classifications.get(`${statement.key}|${line.key}`);
+    let chart = chartAccounts;
+    let regime = accountingRegime;
+    try {
+      if (!chart.length) {
+        const [{ data: company }, accounts] = await Promise.all([systemApi.getCompanyProfile(), dataService.refreshGenericData('finance_chart_of_accounts')]);
+        regime = String(company.profile.accountingRegime || '');
+        chart = accounts as any[];
+        setAccountingRegime(regime);
+        setChartAccounts(chart);
+      }
+    } catch {
+      message.error('Không tải được danh mục tài khoản.');
+      return;
+    }
+    postForm.resetFields();
+    postForm.setFieldsValue({ classification, counterAccount: statementCounterAccounts(chart, regime, classification, line.direction).suggested || undefined });
+    setPostingClassification(classification);
+    setPostingLine({ statement, line });
+  };
+
+  const submitPostLine = async (values: any) => {
+    if (!postingLine || postingSaving) return;
+    setPostingSaving(true);
+    try {
+      const { data: result } = await financeBankStatementMatchesApi.postLine(postingLine.statement.key, postingLine.line.key, {
+        classification: values.classification, counterAccount: values.counterAccount, note: values.note || '',
+      });
+      message.success(`Đã lập ${result.transaction.type === 'Thu' ? 'phiếu thu' : 'phiếu chi'} ${result.transaction.code}, ghi sổ cái và ghép với dòng sao kê.`);
+      setPostingLine(null);
+      await loadData();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể ghi sổ theo sao kê.');
+    } finally {
+      setPostingSaving(false);
+    }
+  };
+
   const exportReconciliationReport = (statement: FinanceBankStatement) => {
     const { activeByLine, classifications } = activeStatementMatchState;
     const summary = summarizeBankStatementReconciliation(statement, transactions, statementMatchEvents, data, activeStatementMatchState);
@@ -478,7 +525,7 @@ export const BankAccountsModule: React.FC = () => {
                 type="info"
                 showIcon
                 message="Chỉ ghép với phiếu ngân hàng đã ghi sổ, cùng tài khoản, loại giao dịch, tiền tệ và số tiền chính xác."
-                description="Việc ghép xác nhận dòng sao kê khớp với phiếu nội bộ; tự nó không tạo bút toán hoặc thay đổi trạng thái thanh toán. Dòng trùng không thể ghép."
+                description="Việc ghép xác nhận dòng sao kê khớp với phiếu nội bộ; tự nó không tạo bút toán hoặc thay đổi trạng thái thanh toán. Dòng trùng không thể ghép. Dòng không có phiếu khớp (phí, lãi, khoản chưa rõ) dùng nút Ghi sổ để lập phiếu theo số liệu ngân hàng; khoản chưa rõ nguyên nhân ghi tạm vào 1388 hoặc 3388."
               />
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, color: '#475569' }}>
                 <span>Tệp: {statement.fileName}</span>
@@ -531,6 +578,7 @@ export const BankAccountsModule: React.FC = () => {
                             showSearch
                           />
                           <Button disabled={!selectedVoucherByLine[selectionKey]} onClick={() => void matchStatementLine(statement, line)}>Ghép</Button>
+                          {!candidates.length && <Button onClick={() => void openPostLine(statement, line)}>Ghi sổ</Button>}
                         </div>
                       );
                     } },
@@ -542,6 +590,39 @@ export const BankAccountsModule: React.FC = () => {
                 <Button onClick={() => setReconciliationStatement(null)}>Đóng</Button>
               </div>
             </div>
+          );
+        })()}
+      </Modal>
+      <Modal title="Ghi sổ theo sao kê" open={Boolean(postingLine)} onCancel={() => setPostingLine(null)} footer={null} width={560}>
+        {postingLine && (() => {
+          const { line } = postingLine;
+          const { options } = statementCounterAccounts(chartAccounts, accountingRegime, postingClassification, line.direction);
+          const rule = postingClassification ? STATEMENT_POSTING_RULES[postingClassification] : undefined;
+          return (
+            <Form form={postForm} layout="vertical" onFinish={submitPostLine} style={{ marginTop: 14 }}>
+              <Alert type="info" showIcon message={`${line.transactionDate} · ${line.direction === 'Thu' ? 'Tiền vào' : 'Tiền ra'} ${line.amount.toLocaleString('vi-VN')} ₫${line.description ? ` · ${line.description}` : ''}`}
+                description={`Hệ thống lập ${line.direction === 'Thu' ? 'phiếu thu Nợ 112 Có tài khoản đối ứng' : 'phiếu chi Nợ tài khoản đối ứng Có 112'} đã ghi sổ cái theo số liệu ngân hàng và ghép với dòng này.`} />
+              <Form.Item name="classification" label="Phân loại" rules={[{ required: true, message: 'Chọn phân loại' }]} style={{ marginTop: 12 }}>
+                <Select
+                  options={BANK_STATEMENT_CLASSIFICATIONS.filter((item) => !STATEMENT_POSTING_RULES[item].direction || STATEMENT_POSTING_RULES[item].direction === line.direction).map((item) => ({ label: item, value: item }))}
+                  onChange={(value) => {
+                    const classification = value as BankStatementClassification;
+                    setPostingClassification(classification);
+                    postForm.setFieldsValue({ counterAccount: statementCounterAccounts(chartAccounts, accountingRegime, classification, line.direction).suggested || undefined });
+                  }}
+                />
+              </Form.Item>
+              <Form.Item name="counterAccount" label="Tài khoản đối ứng" rules={[{ required: true, message: 'Chọn tài khoản chi tiết' }]}>
+                <Select showSearch options={options.map((account) => ({ value: account.code, label: `${account.code} · ${account.name}` }))} placeholder="Chọn tài khoản chi tiết" />
+              </Form.Item>
+              {postingClassification === 'Khác' && <Alert type="warning" showIcon message="Khoản chưa rõ nguyên nhân: ghi tạm vào 1388 (tiền ra) hoặc 3388 (tiền vào), xác định nguyên nhân rồi lập bút toán xử lý sau." />}
+              {rule && postingClassification === 'Phí ngân hàng' && <Alert type="warning" showIcon message="Phí có hóa đơn GTGT thì thuế đầu vào chưa được tách ở đây; lập phiếu chi tay ở Thu chi nếu cần khấu trừ thuế." />}
+              <Form.Item name="note" label="Ghi chú" style={{ marginTop: 12 }}><Input.TextArea rows={2} /></Form.Item>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <Button onClick={() => setPostingLine(null)}>Hủy</Button>
+                <Button type="primary" htmlType="submit" disabled={postingSaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>{postingSaving ? 'Đang lưu...' : 'Lập phiếu và ghi sổ'}</Button>
+              </div>
+            </Form>
           );
         })()}
       </Modal>
@@ -684,7 +765,7 @@ export const BankAccountsModule: React.FC = () => {
             </Button>
           </div>
 
-          <Alert type="info" showIcon message="Chưa có kết nối API ngân hàng đã xác minh. Sao kê CSV, XLS hoặc XLSX được đối chiếu với phiếu ngân hàng đã ghi sổ; ghép sao kê chỉ xác nhận đối chiếu, không tự tạo bút toán." />
+          <Alert type="info" showIcon message="Chưa có kết nối API ngân hàng đã xác minh. Sao kê CSV, XLS hoặc XLSX được đối chiếu với phiếu ngân hàng đã ghi sổ; ghép sao kê chỉ xác nhận đối chiếu; dòng chưa có phiếu (phí, lãi, khoản chưa rõ) dùng nút Ghi sổ trong màn Đối soát để lập phiếu theo số liệu ngân hàng." />
           <div className="transparent-table-card">
             <KTable
               dataSource={statementImports.map((statement) => ({ ...statement, key: statement.key }))}

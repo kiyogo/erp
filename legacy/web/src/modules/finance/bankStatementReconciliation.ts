@@ -151,3 +151,26 @@ export function getStatementLineMatch(statementKey: string, lineKey: string, eve
 export function getStatementLineClassification(statementKey: string, lineKey: string, events: BankStatementMatchEvent[]) {
   return getActiveBankStatementMatches(events).classifications.get(`${statementKey}|${lineKey}`);
 }
+
+// Bản sao STATEMENT_POSTING_RULES ở legacy/api/bankStatementRules.mjs (test so khớp): chiều bắt buộc và tài khoản đối ứng gợi ý khi ghi sổ theo sao kê.
+export const STATEMENT_POSTING_RULES: Record<BankStatementClassification, { direction?: 'Thu' | 'Chi'; accounts: string[] | { Thu: string[]; Chi: string[] } }> = {
+  'Thu khách hàng': { direction: 'Thu', accounts: ['131'] },
+  'Thanh toán nhà cung cấp': { direction: 'Chi', accounts: ['331'] },
+  'Phí ngân hàng': { direction: 'Chi', accounts: ['6427', '6422', '642'] },
+  'Lãi tiền gửi': { direction: 'Thu', accounts: ['515'] },
+  'Chuyển khoản nội bộ': { accounts: ['1131', '113'] },
+  'Khác': { accounts: { Thu: ['3388', '338'], Chi: ['1388', '138'] } },
+};
+
+/** Tài khoản chi tiết dùng được làm đối ứng (bỏ tiền mặt, tiền gửi 111, 112) và tài khoản gợi ý đầu tiên có trong danh sách đó. */
+export function statementCounterAccounts<T extends { code?: string; parentCode?: string; accountingRegime?: string; status?: string }>(
+  chart: T[], regime: string, classification: BankStatementClassification | undefined, direction: 'Thu' | 'Chi',
+) {
+  const options = chart.filter((account) => account.accountingRegime === regime && account.status === 'Đang sử dụng'
+    && !/^11[12]/.test(String(account.code || '')) && !chart.some((child) => child.parentCode === account.code && child.accountingRegime === regime))
+    .sort((left, right) => String(left.code).localeCompare(String(right.code)));
+  const rule = classification ? STATEMENT_POSTING_RULES[classification] : undefined;
+  const suggestions = !rule ? [] : Array.isArray(rule.accounts) ? rule.accounts : rule.accounts[direction];
+  const suggested = suggestions.find((code) => options.some((account) => account.code === code)) || '';
+  return { options, suggested };
+}

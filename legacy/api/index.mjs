@@ -35,6 +35,7 @@ import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
+import { statementPostingProblem } from './bankStatementRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -3067,25 +3068,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (!line) throw new HttpError(404, 'Không tìm thấy dòng giao dịch trong sao kê.');
     if (line.duplicate) throw new HttpError(409, 'Dòng giao dịch trùng không được ghép chứng từ.');
 
-    const matchRows = await db.prepare("SELECT record_key, payload_json, created_at FROM collection_records WHERE scope = 'finance_bank_statement_matches' ORDER BY created_at ASC, record_key ASC").all();
-    const events = matchRows.map(row => ({ ...parseJsonObject(row.payload_json), key: row.record_key }))
-      .sort((left, right) => Number(left.eventSequence || 0) - Number(right.eventSequence || 0));
+    const { events, activeByLine, activeByTransaction } = await bankStatementMatchState();
     record.eventSequence = events.length + 1;
-    const activeByLine = new Map();
-    const activeByTransaction = new Map();
-    for (const event of events) {
-      const eventLineKey = `${event.statementKey}|${event.lineKey}`;
-      if (event.action === 'match' && event.cashTransactionId) {
-        activeByLine.set(eventLineKey, event);
-        activeByTransaction.set(event.cashTransactionId, event);
-      } else if (event.action === 'unmatch' && event.reversesMatchKey) {
-        const current = activeByLine.get(eventLineKey);
-        if (current?.key === event.reversesMatchKey) {
-          activeByLine.delete(eventLineKey);
-          if (current.cashTransactionId) activeByTransaction.delete(current.cashTransactionId);
-        }
-      }
-    }
 
     const lineId = `${record.statementKey}|${record.lineKey}`;
     if (record.action === 'match') {
@@ -6537,6 +6521,29 @@ async function insertSourceLedgerEntry(actor, profile, source, lines) {
     VALUES (?, 'finance_general_ledger', ?, ?, ?, ?, ?)`).run(randomUUID(), record.key, actor.id, JSON.stringify(record), timestamp, timestamp);
   await recordAuditEvent(actor.id, 'post_source_ledger_entry', 'finance_general_ledger', record.key, { sourceModule: source.sourceModule, voucherCode: source.voucherCode, amount });
   return record;
+}
+
+// Trạng thái ghép sao kê dựng lại từ nhật ký sự kiện ghép, bỏ ghép (chỉ bổ sung, không sửa).
+async function bankStatementMatchState() {
+  const matchRows = await db.prepare("SELECT record_key, payload_json, created_at FROM collection_records WHERE scope = 'finance_bank_statement_matches' ORDER BY created_at ASC, record_key ASC").all();
+  const events = matchRows.map(row => ({ ...parseJsonObject(row.payload_json), key: row.record_key }))
+    .sort((left, right) => Number(left.eventSequence || 0) - Number(right.eventSequence || 0));
+  const activeByLine = new Map();
+  const activeByTransaction = new Map();
+  for (const event of events) {
+    const eventLineKey = `${event.statementKey}|${event.lineKey}`;
+    if (event.action === 'match' && event.cashTransactionId) {
+      activeByLine.set(eventLineKey, event);
+      activeByTransaction.set(event.cashTransactionId, event);
+    } else if (event.action === 'unmatch' && event.reversesMatchKey) {
+      const current = activeByLine.get(eventLineKey);
+      if (current?.key === event.reversesMatchKey) {
+        activeByLine.delete(eventLineKey);
+        if (current.cashTransactionId) activeByTransaction.delete(current.cashTransactionId);
+      }
+    }
+  }
+  return { events, activeByLine, activeByTransaction };
 }
 
 async function resolveCashAttachments(ids, actor) {
@@ -12886,6 +12893,59 @@ async function handleRequest(request, response) {
       saved = next;
     });
     sendJson(response, 200, { advance: saved, vouchers });
+    return;
+  }
+
+  // Ghi sổ theo sao kê (bankStatementRules.mjs): dòng sao kê chưa có phiếu thì lập phiếu ngân hàng đã ghi sổ theo số liệu ngân hàng
+  // (phí, lãi, khoản chưa rõ nguyên nhân treo 1388, 3388) rồi tự ghép dòng với phiếu vừa lập.
+  const statementPostMatch = /^\/finance\/bank-statements\/([^/]+)\/lines\/([^/]+)\/post$/.exec(resource);
+  if (request.method === 'POST' && statementPostMatch) {
+    const actor = await requireAdmin(request);
+    const profile = await requireAccountingProfile();
+    const payload = await readJson(request, 16 * 1024);
+    const statementKey = requiredText(decodeURIComponent(statementPostMatch[1]), 'Mã sao kê', 160);
+    const lineKey = requiredText(decodeURIComponent(statementPostMatch[2]), 'Mã dòng sao kê', 120);
+    const classification = String(payload.classification || '');
+    const counterAccount = String(payload.counterAccount || '').replace(/^TK\s*/i, '').trim();
+    const note = optionalText(payload.note, 'Ghi chú', 1_000);
+    await requireSecurityPin(request, actor);
+    const id = randomUUID();
+    let matchRecord;
+    await db.transaction(async () => {
+      await lockTransferLedger();
+      if (db.pool) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_general_ledger'))");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_bank_statement_matches'))");
+      }
+      const statementRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_bank_statements' AND record_key = ?").get(statementKey);
+      if (!statementRow) throw new HttpError(404, 'Không tìm thấy sao kê.');
+      const statement = parseJsonObject(statementRow.payload_json);
+      const line = Array.isArray(statement.lines) ? statement.lines.find(item => item.key === lineKey) : null;
+      if (!line) throw new HttpError(404, 'Không tìm thấy dòng giao dịch trong sao kê.');
+      if (line.duplicate) throw new HttpError(409, 'Dòng giao dịch trùng không được ghi sổ.');
+      if ((line.currency || statement.currency) !== 'VND') throw new HttpError(422, 'Chỉ ghi sổ theo sao kê bằng VND.');
+      const problem = statementPostingProblem({ classification, direction: line.direction, counterAccount });
+      if (problem) throw new HttpError(422, problem);
+      const { events, activeByLine } = await bankStatementMatchState();
+      if (activeByLine.has(`${statementKey}|${lineKey}`)) throw new HttpError(409, 'Dòng sao kê đã được ghép với phiếu; không ghi sổ thêm.');
+      const description = `${classification} theo sao kê ${line.transactionDate}${line.description ? ` - ${line.description}` : ''}`.slice(0, 500);
+      const transaction = await createPostedCashVoucher({
+        id, actor, profile, timestamp: now(), sourceAccountId: statement.bankAccountId, type: line.direction, partnerAccount: counterAccount,
+        category: `${classification} (ghi theo sao kê)`, amount: line.amount, date: line.transactionDate,
+        reference: [line.transactionId, line.reference].filter(Boolean).join(' / ').slice(0, 500), description, note,
+        sourceDocument: statement.fileName, recipientOrPayer: line.counterparty || 'Ngân hàng', counterpartyType: 'other',
+      });
+      const timestamp = now();
+      matchRecord = {
+        key: `match-${randomUUID()}`, action: 'match', statementKey, bankAccountId: statement.bankAccountId, lineKey, cashTransactionId: id,
+        cashTransactionCode: transaction.code, classification, postedFromStatement: true, eventSequence: events.length + 1,
+        createdAt: timestamp, createdBy: actor.name, createdById: actor.id,
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_bank_statement_matches', ?, ?, ?, ?, ?)`).run(randomUUID(), matchRecord.key, actor.id, JSON.stringify(matchRecord), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'bank_statement_post', 'finance_bank_statements', statementKey, { lineKey, code: transaction.code, classification, amount: line.amount });
+    });
+    sendJson(response, 201, { match: matchRecord, transaction: publicCashTransaction(await db.prepare('SELECT * FROM finance_cash_transactions WHERE id = ?').get(id)) });
     return;
   }
 

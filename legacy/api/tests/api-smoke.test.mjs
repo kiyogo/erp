@@ -2790,6 +2790,37 @@ test('document payments create posted receipts and payments, update debts and re
   await pay(quote.key, { amount: 1000 }, 422);
 });
 
+test('bank statement lines without a voucher are posted from the statement and matched automatically', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const bank = (await request('/finance/bank-accounts', 'POST', { bankName: 'Ngân hàng sao kê', accountNumber: '5566778899', accountHolder: 'Công ty sao kê', balance: 1_000_000, status: 'Đang hoạt động' }, 201)).account;
+  const fileHash = 'a'.repeat(64);
+  const key = `statement-${bank.key}-${fileHash}`;
+  const lines = [
+    { key: 'l1', rowNumber: 1, transactionDate: today, direction: 'Chi', amount: 11_000, description: 'Phí SMS banking', reference: 'FT001' },
+    { key: 'l2', rowNumber: 2, transactionDate: today, direction: 'Thu', amount: 2_500, description: 'Lãi không kỳ hạn' },
+    { key: 'l3', rowNumber: 3, transactionDate: today, direction: 'Thu', amount: 300_000, description: 'Không rõ người chuyển' },
+  ];
+  await request('/collections/finance_bank_statements', 'POST', { key, record: { key, bankAccountId: bank.key, fileHash, fileName: 'saoke.csv', currency: 'VND', lines } }, 201);
+  const post = (lineKey, body, expected = 201) => request(`/finance/bank-statements/${encodeURIComponent(key)}/lines/${lineKey}/post`, 'POST', body, expected);
+  await post('l1', { classification: 'Phí ngân hàng', counterAccount: '1121' }, 422);
+  await post('l1', { classification: 'Lãi tiền gửi', counterAccount: '515' }, 422);
+  await post('missing', { classification: 'Khác', counterAccount: '1388' }, 404);
+  const fee = await post('l1', { classification: 'Phí ngân hàng', counterAccount: '6422' });
+  assert.equal(fee.transaction.type, 'Chi');
+  assert.equal(fee.transaction.status, 'Đã hoàn thành');
+  assert.equal(fee.match.cashTransactionCode, fee.transaction.code);
+  await post('l1', { classification: 'Phí ngân hàng', counterAccount: '6422' }, 409);
+  await post('l2', { classification: 'Lãi tiền gửi', counterAccount: '515' });
+  await post('l3', { classification: 'Khác', counterAccount: '3388' });
+  const balance = (await request('/finance/payment-accounts')).accounts.find((item) => item.key === bank.key).balance;
+  assert.equal(balance, 1_000_000 - 11_000 + 2_500 + 300_000);
+  const ledger = (await request('/collections/finance_general_ledger')).data.filter((item) => item.voucherCode === fee.transaction.code);
+  assert.match(ledger[0].debitAccount, /^6422/);
+  assert.match(ledger[0].creditAccount, /^112/);
+  const matches = (await request('/collections/finance_bank_statement_matches')).data.filter((item) => item.statementKey === key && item.action === 'match');
+  assert.equal(matches.length, 3);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };

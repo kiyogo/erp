@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getActiveBankStatementMatches, getBankStatementMatchCandidates, summarizeBankStatementReconciliation } from '../src/modules/finance/bankStatementReconciliation.ts';
+import { getActiveBankStatementMatches, getBankStatementMatchCandidates, STATEMENT_POSTING_RULES, statementCounterAccounts, summarizeBankStatementReconciliation } from '../src/modules/finance/bankStatementReconciliation.ts';
+import { STATEMENT_POSTING_RULES as API_RULES } from '../../api/bankStatementRules.mjs';
 
 const statement = {
   key: 'statement-1', bankAccountId: 'bank-1', fileHash: 'hash', fileName: 'statement.csv', currency: 'VND',
@@ -105,4 +106,18 @@ test('a voucher matched to another statement remains outstanding for this statem
 
   assert.equal(summary.outstandingVoucherCount, 1);
   assert.equal(summary.status, 'Còn giao dịch chưa khớp');
+});
+
+test('statement posting rules match the API and suggest a leaf counter account', () => {
+  assert.deepEqual(STATEMENT_POSTING_RULES, API_RULES);
+  const chart = [
+    { code: '138', accountingRegime: 'TT133', status: 'Đang sử dụng' },
+    { code: '1388', parentCode: '138', accountingRegime: 'TT133', status: 'Đang sử dụng' },
+    { code: '1121', accountingRegime: 'TT133', status: 'Đang sử dụng' },
+    { code: '515', accountingRegime: 'TT133', status: 'Đang sử dụng' },
+  ];
+  const result = statementCounterAccounts(chart, 'TT133', 'Khác', 'Chi');
+  assert.deepEqual(result.options.map((item) => item.code), ['1388', '515']);
+  assert.equal(result.suggested, '1388');
+  assert.equal(statementCounterAccounts(chart, 'TT133', 'Phí ngân hàng', 'Chi').suggested, '');
 });

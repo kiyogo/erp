@@ -854,6 +854,9 @@ export const financeBankStatementMatchesApi = {
     return { ...first, data: { ...first.data, data: [first, ...rest].flatMap((response) => response.data.data) } };
   },
   create: (record: FinanceBankStatementMatchEvent) => collectionsApi.create<FinanceBankStatementMatchEvent>('finance_bank_statement_matches', record),
+  // Ghi sổ theo sao kê: lập phiếu ngân hàng đã ghi sổ cho dòng chưa có phiếu và tự ghép (cần PIN nếu đã đặt).
+  postLine: (statementKey: string, lineKey: string, data: { classification: string; counterAccount: string; note?: string }) =>
+    api.post<{ match: FinanceBankStatementMatchEvent; transaction: { code: string; type: 'Thu' | 'Chi' } }>(`/finance/bank-statements/${encodeURIComponent(statementKey)}/lines/${encodeURIComponent(lineKey)}/post`, data),
 };
 
 export type FinanceTransferAccount = {
