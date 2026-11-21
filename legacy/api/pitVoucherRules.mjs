@@ -1,4 +1,4 @@
-// Chứng từ khấu trừ thuế TNCN (tiền lương, tiền công) do doanh nghiệp tự lập dạng điện tử cho người lao động.
+// Chứng từ khấu trừ thuế TNCN (tiền lương, tiền công và thu nhập vãng lai đã khấu trừ 10% hoặc 20%) do doanh nghiệp tự lập dạng điện tử.
 // Căn cứ: Nghị định 123/2020/NĐ-CP Điều 32 khoản 1 (sửa đổi bởi khoản 18 Điều 1 Nghị định 70/2025/NĐ-CP, từ 01/6/2025): tên chứng từ, ký hiệu mẫu,
 // ký hiệu, số thứ tự; tên, địa chỉ, mã số thuế, số điện thoại của tổ chức trả thu nhập; tên, địa chỉ, mã số thuế hoặc số định danh, số điện thoại,
 // quốc tịch của cá nhân; khoản thu nhập, thời điểm trả thu nhập, tổng thu nhập chịu thuế, khoản đóng bảo hiểm bắt buộc, khoản từ thiện, khuyến học,
@@ -14,14 +14,15 @@ export function voucherNumber(sequence) {
 }
 
 // payslips: phiếu lương đã chốt của người lao động ({ month: 'YYYY-MM', gross, exemptIncome, insuranceDeduction, taxDeduction }).
-export function buildPitVoucher({ company, person, payslips, year, fromMonth, toMonth }) {
+// incomeType: 'Tiền lương, tiền công' (phiếu lương) hoặc 'Tiền công, tiền thù lao (thu nhập vãng lai)' (sổ thu nhập vãng lai, không có bảo hiểm bắt buộc).
+export function buildPitVoucher({ company, person, payslips, year, fromMonth, toMonth, incomeType = 'Tiền lương, tiền công' }) {
   if (!Number.isInteger(year) || year < 2024 || year > 2200) throw new Error('Năm trả thu nhập không hợp lệ.');
   if (!Number.isInteger(fromMonth) || !Number.isInteger(toMonth) || fromMonth < 1 || toMonth > 12 || fromMonth > toMonth) throw new Error('Kỳ trả thu nhập phải từ tháng 1 đến tháng 12, tháng bắt đầu không sau tháng kết thúc.');
   const inPeriod = payslips.filter((slip) => {
     const [slipYear, slipMonth] = String(slip.month || '').split('-').map(Number);
     return slipYear === year && slipMonth >= fromMonth && slipMonth <= toMonth;
   });
-  if (!inPeriod.length) throw new Error('Không có phiếu lương đã chốt trong kỳ đã chọn.');
+  if (!inPeriod.length) throw new Error(incomeType === 'Tiền lương, tiền công' ? 'Không có phiếu lương đã chốt trong kỳ đã chọn.' : 'Không có lần chi trả thu nhập vãng lai trong kỳ đã chọn.');
   const totalIncome = inPeriod.reduce((sum, slip) => sum + money(slip.gross), 0);
   const exemptIncome = Math.min(totalIncome, inPeriod.reduce((sum, slip) => sum + money(slip.exemptIncome), 0));
   const contentIssues = [];
@@ -32,7 +33,7 @@ export function buildPitVoucher({ company, person, payslips, year, fromMonth, to
   if (!person.address) contentIssues.push('Người lao động chưa có địa chỉ.');
   return {
     year, fromMonth, toMonth,
-    incomeType: 'Tiền lương, tiền công',
+    incomeType,
     paymentPeriod: `Tháng ${fromMonth}${fromMonth === toMonth ? '' : ` đến tháng ${toMonth}`} năm ${year}`,
     months: inPeriod.length,
     totalIncome,

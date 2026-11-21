@@ -2991,6 +2991,17 @@ test('casual income payments withhold 10% from 2 million, honour 08/CK-TNCN comm
   assert.equal(month.tax, 500_000);
   assert.equal(summary.commitmentWarnings.length, 1);
   await request('/collections/finance_casual_income_payments', 'POST', { record: { key: 'forged' } }, 409);
+  // Chứng từ khấu trừ cho thu nhập vãng lai: lấy các lần chi trả của cùng người nhận trong kỳ.
+  const payee = summary.payees.find((item) => item.name === 'Cộng tác viên A');
+  const monthNumber = Number(today.slice(5, 7));
+  const voucher = (await request('/finance/pit-vouchers', 'POST', { source: 'casual', payeeKey: payee.key, year: Number(today.slice(0, 4)), fromMonth: monthNumber, toMonth: monthNumber, series: 'VL/26E' }, 201)).voucher;
+  assert.equal(voucher.incomeType, 'Tiền công, tiền thù lao (thu nhập vãng lai)');
+  assert.equal(voucher.totalIncome, 3_000_000);
+  assert.equal(voucher.taxWithheld, 300_000);
+  assert.equal(voucher.insurance, 0);
+  assert.equal(voucher.person.identityNumber, '001203004567');
+  await request('/finance/pit-vouchers', 'POST', { source: 'casual', payeeKey: payee.key, year: Number(today.slice(0, 4)), fromMonth: monthNumber, toMonth: monthNumber, series: 'VL/26E' }, 409);
+  await request('/finance/pit-vouchers', 'POST', { source: 'casual', payeeKey: 'không có', year: Number(today.slice(0, 4)), fromMonth: monthNumber, toMonth: monthNumber, series: 'VL/26E' }, 404);
 });
 
 test('holiday calendar includes lunar Tết and Giỗ Tổ, keeps 11 statutory days and feeds deadlines', async () => {

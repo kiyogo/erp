@@ -1419,7 +1419,7 @@ export const pitFinalizationApi = {
 };
 
 export type PitVoucher = {
-  key: string; templateSymbol: string; series: string; number: string; employeeId: string; year: number; fromMonth: number; toMonth: number;
+  key: string; templateSymbol: string; series: string; number: string; source?: 'payroll' | 'casual'; employeeId: string; payeeKey?: string; year: number; fromMonth: number; toMonth: number;
   incomeType: string; paymentPeriod: string; months: number; totalIncome: number; taxableIncome: number; exemptIncome: number; insurance: number; charity: number; taxWithheld: number;
   company: { name: string; taxCode: string; address: string; phone: string };
   person: { name: string; employeeCode: string; taxCode: string; identityNumber: string; address: string; phone: string; nationality: string; resident: boolean };
@@ -1429,7 +1429,7 @@ export type PitVoucher = {
 export const pitVouchersApi = {
   list: () => api.get<{ data: PitVoucher[] }>('/finance/pit-vouchers'),
   mine: () => api.get<{ data: PitVoucher[] }>('/employees/me/pit-vouchers'),
-  issue: (data: { employeeId: string; year: number; fromMonth: number; toMonth: number; series: string; templateSymbol?: string }) => api.post<{ voucher: PitVoucher }>('/finance/pit-vouchers', data),
+  issue: (data: { source?: 'payroll' | 'casual'; employeeId?: string; payeeKey?: string; year: number; fromMonth: number; toMonth: number; series: string; templateSymbol?: string }) => api.post<{ voucher: PitVoucher }>('/finance/pit-vouchers', data),
   cancel: (key: string, reason: string) => api.post<{ voucher: PitVoucher }>(`/finance/pit-vouchers/${encodeURIComponent(key)}/cancel`, { reason }),
 };
 
@@ -1456,7 +1456,7 @@ export type CasualIncomeRecord = {
 export type CasualIncomeInput = { payeeName?: string; taxCode?: string; identityNumber?: string; address?: string; description?: string; contractType?: string; paymentDate: string; amount: number; residency: string; commitment: boolean };
 // Thu nhập vãng lai: máy chủ tính thuế TNCN khấu trừ (10% cư trú từ 2 triệu đồng/lần, 20% không cư trú), tổng hợp theo tháng (cần PIN nếu đã đặt).
 export const casualIncomeApi = {
-  list: (year: number) => api.get<{ year: number; data: CasualIncomeRecord[]; months: Array<{ month: string; payments: number; amount: number; tax: number }>; commitmentWarnings: string[] }>('/finance/casual-income', { params: { year } }),
+  list: (year: number) => api.get<{ year: number; data: CasualIncomeRecord[]; months: Array<{ month: string; payments: number; amount: number; tax: number }>; commitmentWarnings: string[]; payees: Array<{ key: string; name: string; taxCode: string; identityNumber: string }> }>('/finance/casual-income', { params: { year } }),
   preview: (data: CasualIncomeInput) => api.post<{ result: CasualIncomeRecord }>('/finance/casual-income', { ...data, preview: true }),
   create: (data: CasualIncomeInput) => api.post<{ record: CasualIncomeRecord }>('/finance/casual-income', data),
 };

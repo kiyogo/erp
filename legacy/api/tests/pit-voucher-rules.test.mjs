@@ -28,3 +28,10 @@ test('báo thiếu nội dung bắt buộc, chặn kỳ sai hoặc không có ph
   assert.throws(() => buildPitVoucher({ company, person, payslips, year: 2025, fromMonth: 6, toMonth: 12 }), /Không có phiếu lương/);
   assert.equal(voucherNumber(12), '0000012');
 });
+
+test('chứng từ cho thu nhập vãng lai ghi đúng khoản thu nhập và báo lỗi riêng khi không có lần chi trả', () => {
+  const voucher = buildPitVoucher({ company, person, payslips: [{ month: '2025-04', gross: 5_000_000, taxDeduction: 500_000 }], year: 2025, fromMonth: 4, toMonth: 4, incomeType: 'Tiền công, tiền thù lao (thu nhập vãng lai)' });
+  assert.equal(voucher.incomeType, 'Tiền công, tiền thù lao (thu nhập vãng lai)');
+  assert.equal(voucher.taxWithheld, 500_000);
+  assert.throws(() => buildPitVoucher({ company, person, payslips: [], year: 2025, fromMonth: 4, toMonth: 4, incomeType: 'Tiền công, tiền thù lao (thu nhập vãng lai)' }), /vãng lai/);
+});

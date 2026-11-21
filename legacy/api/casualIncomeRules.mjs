@@ -58,3 +58,7 @@ export function calculateCasualIncomeTax({ amount, paymentDate, residency, commi
 export function commitmentOverLimit(totalInYear, personalDeductionYear) {
   return totalInYear > personalDeductionYear;
 }
+
+export const CASUAL_INCOME_TYPE = 'Tiền công, tiền thù lao (thu nhập vãng lai)';
+// Khóa nhận diện một người nhận thu nhập vãng lai: mã số thuế, rồi số định danh, rồi họ tên (viết thường).
+export const casualPayeeKey = (item) => String(item.taxCode || item.identityNumber || item.payeeName || '').trim().toLocaleLowerCase('vi-VN');

@@ -41,7 +41,7 @@ import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiom
 import { annualPitFinalization, authorizationProblems, finalizationDeadline } from './pitFinalizationRules.mjs';
 import { buildPitVoucher, voucherNumber } from './pitVoucherRules.mjs';
 import { CONTRACTOR_BUSINESS_TYPES, calculateContractorTax } from './contractorTaxRules.mjs';
-import { calculateCasualIncomeTax, commitmentOverLimit } from './casualIncomeRules.mjs';
+import { CASUAL_INCOME_TYPE, calculateCasualIncomeTax, casualPayeeKey, commitmentOverLimit } from './casualIncomeRules.mjs';
 import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
@@ -15444,7 +15444,7 @@ async function handleRequest(request, response) {
     const actor = await requireAdmin(request);
     await requireSecurityPin(request, actor);
     const list = async () => (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_casual_income_payments'").all()).map((row) => parseJsonObject(row.payload_json));
-    const payeeKey = (item) => String(item.taxCode || item.identityNumber || item.payeeName || '').trim().toLocaleLowerCase('vi-VN');
+    const payeeKey = casualPayeeKey;
     if (request.method === 'GET') {
       const year = Number(url.searchParams.get('year') || todayInVietnam().slice(0, 4));
       if (!Number.isInteger(year) || year < 2013 || year > 2200) throw new HttpError(422, 'Năm không hợp lệ.');
@@ -15459,7 +15459,8 @@ async function handleRequest(request, response) {
       for (const item of rows) totals.set(payeeKey(item), { name: item.payeeName, total: (totals.get(payeeKey(item))?.total || 0) + item.amount, commitment: (totals.get(payeeKey(item))?.commitment || false) || item.commitment });
       const commitmentWarnings = [...totals.values()].filter((item) => item.commitment && personalDeductionYear && commitmentOverLimit(item.total, personalDeductionYear))
         .map((item) => `${item.name} có cam kết 08/CK-TNCN nhưng đã nhận ${item.total.toLocaleString('vi-VN')} đồng trong năm, vượt mức giảm trừ bản thân cả năm: cần khấu trừ 10% các lần trả tiếp theo.`);
-      sendJson(response, 200, { year, data: rows, months, commitmentWarnings });
+      const payees = [...new Map(rows.map((item) => [payeeKey(item), { key: payeeKey(item), name: item.payeeName, taxCode: item.taxCode || '', identityNumber: item.identityNumber || '' }])).values()];
+      sendJson(response, 200, { year, data: rows, months, commitmentWarnings, payees });
       return;
     }
     if (request.method !== 'POST') throw new HttpError(405, 'Phương thức không hỗ trợ.');
@@ -15590,39 +15591,61 @@ async function handleRequest(request, response) {
     const year = Number(payload.year);
     const templateSymbol = requiredText(payload.templateSymbol || 'CTT56', 'Ký hiệu mẫu chứng từ', 20).toUpperCase();
     const series = requiredText(payload.series, 'Ký hiệu chứng từ', 20).toUpperCase();
-    const employeeId = requiredText(payload.employeeId, 'Người lao động', 160);
-    const row = await db.prepare('SELECT u.*, p.phone, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ?').get(employeeId);
-    if (!row) throw new HttpError(404, 'Không tìm thấy người lao động.');
-    const authorization = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_pit_authorizations' AND record_key = ?").get(`${year}:${employeeId}`);
-    if (authorization && parseJsonObject(authorization.payload_json).authorized) throw new HttpError(409, `Người lao động đã ủy quyền quyết toán thuế năm ${year}: doanh nghiệp không cấp chứng từ khấu trừ cho năm này (Thông tư 111/2013 Điều 25).`);
-    const details = decryptProfileDetails(parseJsonObject(row.details_json));
+    const source = payload.source === 'casual' ? 'casual' : 'payroll';
     const companyProfile = await getCompanyProfile();
+    const company = { name: companyProfile.fullName || companyProfile.companyName, taxCode: companyProfile.taxCode, address: companyProfile.address, phone: companyProfile.phone };
+    let employeeId = '';
+    let payeeKey = '';
     let voucher;
-    try {
-      voucher = buildPitVoucher({
-        year, fromMonth: Number(payload.fromMonth), toMonth: Number(payload.toMonth),
-        payslips: (await closedPayslipsByCode(year)).get(String(row.employee_code || '').toLocaleLowerCase('vi-VN')) || [],
-        company: { name: companyProfile.fullName || companyProfile.companyName, taxCode: companyProfile.taxCode, address: companyProfile.address, phone: companyProfile.phone },
-        person: {
-          name: row.name, employeeCode: row.employee_code, taxCode: details.taxCode || '', identityNumber: details.docNumber || details.idNumber || '',
-          address: details.resAddress || details.hkttAddress || details.currentAddress || '', phone: decryptField(row.phone || '', 'profile'),
-          nationality: details.nationality || 'Việt Nam', resident: details.taxResident !== false,
-        },
-      });
-    } catch (error) { throw new HttpError(422, error.message); }
+    if (source === 'casual') {
+      // Thu nhập vãng lai: lấy các lần chi trả trong sổ của cùng người nhận (theo mã số thuế, số định danh hoặc họ tên).
+      payeeKey = requiredText(payload.payeeKey, 'Người nhận thu nhập vãng lai', 200).toLocaleLowerCase('vi-VN');
+      const payments = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_casual_income_payments'").all())
+        .map((item) => parseJsonObject(item.payload_json)).filter((item) => casualPayeeKey(item) === payeeKey).sort((a, b) => String(b.paymentDate).localeCompare(String(a.paymentDate)));
+      if (!payments.length) throw new HttpError(404, 'Không tìm thấy người nhận trong sổ thu nhập vãng lai.');
+      const latest = payments[0];
+      try {
+        voucher = buildPitVoucher({
+          year, fromMonth: Number(payload.fromMonth), toMonth: Number(payload.toMonth), incomeType: CASUAL_INCOME_TYPE, company,
+          payslips: payments.map((item) => ({ month: String(item.paymentDate).slice(0, 7), gross: item.amount, exemptIncome: 0, insuranceDeduction: 0, taxDeduction: item.tax })),
+          person: { name: latest.payeeName, employeeCode: '', taxCode: latest.taxCode || '', identityNumber: latest.identityNumber || '', address: latest.address || '', phone: '', nationality: latest.residency === 'resident' ? 'Việt Nam' : '', resident: latest.residency === 'resident' },
+        });
+      } catch (error) { throw new HttpError(422, error.message); }
+      if (!latest.address) voucher.contentIssues = [...new Set([...voucher.contentIssues, 'Người nhận chưa có địa chỉ trong sổ thu nhập vãng lai.'])];
+      if (!voucher.taxWithheld) voucher.contentIssues.push('Kỳ đã chọn không có thuế khấu trừ (dưới ngưỡng hoặc có cam kết 08/CK-TNCN).');
+    } else {
+      employeeId = requiredText(payload.employeeId, 'Người lao động', 160);
+      const row = await db.prepare('SELECT u.*, p.phone, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ?').get(employeeId);
+      if (!row) throw new HttpError(404, 'Không tìm thấy người lao động.');
+      const authorization = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_pit_authorizations' AND record_key = ?").get(`${year}:${employeeId}`);
+      if (authorization && parseJsonObject(authorization.payload_json).authorized) throw new HttpError(409, `Người lao động đã ủy quyền quyết toán thuế năm ${year}: doanh nghiệp không cấp chứng từ khấu trừ cho năm này (Thông tư 111/2013 Điều 25).`);
+      const details = decryptProfileDetails(parseJsonObject(row.details_json));
+      try {
+        voucher = buildPitVoucher({
+          year, fromMonth: Number(payload.fromMonth), toMonth: Number(payload.toMonth), company,
+          payslips: (await closedPayslipsByCode(year)).get(String(row.employee_code || '').toLocaleLowerCase('vi-VN')) || [],
+          person: {
+            name: row.name, employeeCode: row.employee_code, taxCode: details.taxCode || '', identityNumber: details.docNumber || details.idNumber || '',
+            address: details.resAddress || details.hkttAddress || details.currentAddress || '', phone: decryptField(row.phone || '', 'profile'),
+            nationality: details.nationality || 'Việt Nam', resident: details.taxResident !== false,
+          },
+        });
+      } catch (error) { throw new HttpError(422, error.message); }
+    }
     let saved;
     await db.transaction(async () => {
       if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_pit_vouchers'))");
       const existing = await list();
-      const overlap = existing.find((item) => item.status !== 'Đã hủy' && item.employeeId === employeeId && item.year === year && item.fromMonth <= voucher.toMonth && item.toMonth >= voucher.fromMonth);
+      const sameSubject = (item) => (source === 'casual' ? item.source === 'casual' && item.payeeKey === payeeKey : item.source !== 'casual' && item.employeeId === employeeId);
+      const overlap = existing.find((item) => item.status !== 'Đã hủy' && sameSubject(item) && item.year === year && item.fromMonth <= voucher.toMonth && item.toMonth >= voucher.fromMonth);
       if (overlap) throw new HttpError(409, `Đã có chứng từ ${overlap.series}-${overlap.number} cho kỳ trùng; hủy chứng từ đó trước khi lập lại.`);
       const sequence = existing.filter((item) => item.templateSymbol === templateSymbol && item.series === series).length + 1;
       const number = voucherNumber(sequence);
       const key = `${templateSymbol}-${series}-${number}`;
-      saved = { key, templateSymbol, series, number, employeeId, ...voucher, issuedAt: now(), issuedBy: actor.name, issuedById: actor.id, status: 'Đã lập, chưa ký số' };
+      saved = { key, templateSymbol, series, number, source, employeeId, payeeKey, ...voucher, issuedAt: now(), issuedBy: actor.name, issuedById: actor.id, status: 'Đã lập, chưa ký số' };
       await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
-        VALUES (?, 'finance_pit_vouchers', ?, ?, ?, ?, ?)`).run(randomUUID(), key, employeeId, JSON.stringify(saved), saved.issuedAt, saved.issuedAt);
-      await recordAuditEvent(actor.id, 'pit_voucher_issue', 'finance_pit_vouchers', key, { employeeId, year, taxWithheld: saved.taxWithheld });
+        VALUES (?, 'finance_pit_vouchers', ?, ?, ?, ?, ?)`).run(randomUUID(), key, employeeId || actor.id, JSON.stringify(saved), saved.issuedAt, saved.issuedAt);
+      await recordAuditEvent(actor.id, 'pit_voucher_issue', 'finance_pit_vouchers', key, { source, employeeId, payeeKey, year, taxWithheld: saved.taxWithheld });
     });
     sendJson(response, 201, { voucher: saved });
     return;
