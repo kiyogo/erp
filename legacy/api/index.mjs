@@ -31,6 +31,7 @@ import { normalizeCertificateLegal } from './digitalSignatureRules.mjs';
 import { settleTermination, wholeMonthsBetween } from './terminationRules.mjs';
 import { validatePlanRecord } from './planRules.mjs';
 import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
+import { assessDiscipline } from './disciplineRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
@@ -2331,9 +2332,9 @@ const accountingOperationScopes = new Set([
 ]);
 
 // Phạm vi dữ liệu mà nhân viên thường không có nghiệp vụ nào cần ghi: chỉ quản trị viên được tạo, sửa, xóa.
-const ADMIN_WRITE_ONLY_SCOPES = new Set(['plan_items', 'plan_milestones', 'plan_progress', 'plan_okrs', 'plan_reports', 'payroll', 'business_org_units', 'contract_templates', 'enterprise_contracts', 'enterprise_services', 'digital_signature_audit_trail']);
+const ADMIN_WRITE_ONLY_SCOPES = new Set(['reports_catalog', 'plan_items', 'plan_milestones', 'plan_progress', 'plan_okrs', 'plan_reports', 'payroll', 'business_org_units', 'contract_templates', 'enterprise_contracts', 'enterprise_services', 'digital_signature_audit_trail']);
 function isAdminWriteOnlyScope(scope) {
-  return /^(finance_|hr_|crm_|admin_|address_)/.test(scope)
+  return /^(finance_|hr_|crm_|admin_|address_|insurance_)/.test(scope)
     || (scope.startsWith('asset_') && scope !== 'asset_todos')
     || /^attendance_(shift|leave_plans|alerts|raw_data|timesheet_summary)/.test(scope)
     || ADMIN_WRITE_ONLY_SCOPES.has(scope);
@@ -4645,6 +4646,22 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     } else {
       delete record.termination;
       delete record.settlement;
+    }
+    // Kỷ luật lao động kèm hồ sơ xử lý: máy chủ kiểm tra thời hiệu, trình tự, hình thức và các trường hợp không được xử lý (disciplineRules.mjs).
+    if (record.type === 'Kỷ luật sự cố' && record.discipline && typeof record.discipline === 'object') {
+      const leaves = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'leave_requests' AND owner_id = ?").all(employee.id)).map((row) => parseJsonObject(row.payload_json));
+      let assessed;
+      try { assessed = assessDiscipline(record.discipline, { today: todayInVietnam(), leaves }); } catch (error) { throw new HttpError(422, error.message); }
+      const sameViolation = (await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_employee_history'").all())
+        .map((row) => ({ key: row.record_key, ...parseJsonObject(row.payload_json) }))
+        .find((item) => item.key !== (current?.key ?? record.key) && item.employeeId === employee.id && item.type === 'Kỷ luật sự cố' && item.discipline?.violationDate === assessed.discipline.violationDate);
+      if (sameViolation) throw new HttpError(409, `Hành vi vi phạm ngày ${assessed.discipline.violationDate} đã có hồ sơ xử lý ${sameViolation.code}; mỗi hành vi vi phạm chỉ bị xử lý một hình thức kỷ luật (Điều 122).`);
+      record.discipline = assessed.discipline;
+      record.disciplineAssessment = assessed.assessment;
+      record.eventDate = assessed.discipline.decisionDate;
+    } else {
+      delete record.discipline;
+      delete record.disciplineAssessment;
     }
     record.code = current?.code || requiredText(record.code, 'Mã lịch sử', 160);
     record.createdAt = current?.createdAt || now(); record.createdBy = current?.createdBy || actor.name;

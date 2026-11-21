@@ -109,7 +109,7 @@ test('không có phiên đăng nhập thì mọi dữ liệu quản trị bị t
 test('nhân viên thường không tạo, sửa hoặc xóa được dữ liệu quản trị trong kho dữ liệu chung', async () => {
   const blocked = ['finance_loans', 'finance_equity', 'finance_budgets', 'hr_employees', 'hr_headcount_quotas', 'hr_training_courses', 'hr_certificates',
     'hr_uniforms', 'asset_items', 'asset_audits', 'business_org_units', 'payroll', 'attendance_shifts', 'attendance_shift_details',
-    'crm_feedback', 'admin_roles', 'contract_templates'];
+    'crm_feedback', 'admin_roles', 'contract_templates', 'insurance_adjustments', 'insurance_regimes', 'plan_items', 'plan_milestones', 'plan_progress', 'reports_catalog'];
   const accepted = [];
   for (const scope of blocked) {
     for (const [method, route, payload] of [['POST', `/collections/${scope}`, { record: { key: 'x', name: 'x' } }], ['PUT', `/collections/${scope}`, { records: [] }], ['PATCH', `/collections/${scope}/x`, { patch: { name: 'y' } }], ['DELETE', `/collections/${scope}/x`]]) {

@@ -2969,3 +2969,18 @@ test('accounting records cannot be purged from the trash within the retention pe
   const logged = (await request(`/admin/audit-logs?q=${marker}`)).data[0];
   assert.equal(logged.details.source, 'client');
 });
+
+test('discipline records are assessed on the server and one violation gets one measure', async () => {
+  const staff = (await request('/users', 'POST', { email: 'discipline@example.test', name: 'Discipline Staff', password: 'Discipline-26!Secure', employeeCode: 'TEST-DISC', role: 'USER' }, 201)).user;
+  const discipline = { form: 'warning', violationKind: 'general', violationDate: '2026-10-01', discoveredDate: '2026-10-02', noticeDate: '2026-10-05', hearingDate: '2026-10-12', decisionDate: '2026-10-13', attendance: 'attended', unionParticipated: true, minutesRecorded: true };
+  const history = (key, patch = {}, disciplinePatch = {}) => ({ key, code: key, employeeId: staff.id, type: 'Kỷ luật sự cố', eventDate: '2000-01-01', newValue: 'Khiển trách', discipline: { ...discipline, ...disciplinePatch }, ...patch });
+  await request('/collections/hr_employee_history', 'POST', { record: history('disc-short-notice', {}, { hearingDate: '2026-10-08' }) }, 422);
+  await request('/collections/hr_employee_history', 'POST', { record: history('disc-expired', {}, { violationDate: '2026-01-01', discoveredDate: '2026-01-02' }) }, 422);
+  await request('/collections/hr_employee_history', 'POST', { record: history('disc-no-minutes', {}, { minutesRecorded: false }) }, 422);
+  const saved = (await request('/collections/hr_employee_history', 'POST', { record: history('disc-ok') }, 201)).record;
+  assert.equal(saved.eventDate, '2026-10-13');
+  assert.equal(saved.disciplineAssessment.limitationDeadline, '2027-04-01');
+  const second = await request('/collections/hr_employee_history', 'POST', { record: history('disc-second', {}, { form: 'delay_raise', delayMonths: 3 }) }, 409);
+  assert.match(second.message, /chỉ bị xử lý một hình thức/);
+  assert.equal((await request('/collections/hr_employee_history', 'POST', { record: history('disc-other-violation', {}, { violationDate: '2026-10-02', discoveredDate: '2026-10-02' }) }, 201)).record.key, 'disc-other-violation');
+});

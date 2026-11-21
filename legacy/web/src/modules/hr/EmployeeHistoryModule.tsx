@@ -34,6 +34,7 @@ import { downloadFile, generateValidXlsxBlob } from '../../utils/fileExporter';
 
 import { terminationApi, type TerminationSettlement } from '../../api/endpoints';
 import { TERMINATION_TYPE_OPTIONS } from './terminationTypes';
+import { DISCIPLINE_ATTENDANCE_OPTIONS, DISCIPLINE_FORMS, DISCIPLINE_FORM_OPTIONS, DISMISSAL_GROUND_OPTIONS, PROTECTED_STATUS_OPTIONS, VIOLATION_KIND_OPTIONS } from './disciplineOptions';
 
 export interface HistoryRecord {
   key: string;
@@ -54,6 +55,8 @@ export interface HistoryRecord {
   updatedBy?: string;
   termination?: Record<string, any>;
   settlement?: TerminationSettlement;
+  discipline?: Record<string, any>;
+  disciplineAssessment?: { limitationMonths: number; limitationDeadline: string; earliestHearingDate: string; formLabel: string };
 }
 
 const INITIAL_HISTORY_DATA: HistoryRecord[] = [];
@@ -427,6 +430,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
   const [editingHistory, setEditingHistory] = useState<HistoryRecord | null>(null);
   const [viewingHistory, setViewingHistory] = useState<HistoryRecord | null>(null);
   const [resignForm, setResignForm] = useState(false);
+  const [disciplineForm, setDisciplineForm] = useState(false);
   const [terminationPreview, setTerminationPreview] = useState<TerminationSettlement | null>(null);
   const [terminationChecking, setTerminationChecking] = useState(false);
   const [historyEmployees, setHistoryEmployees] = useState<Array<{ key: string; name: string; code: string }>>([]);
@@ -620,6 +624,11 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       ? { ...record, terminationType: termination.type, workStartDate: termination.workStartDate, contractKind: termination.contractKind, termMonths: termination.termMonths, noticeGivenDate: termination.noticeGivenDate, exemptFromNotice: termination.exemptFromNotice, averageSalary: termination.averageSalary, unemploymentInsuredMonths: termination.unemploymentInsuredMonths, paidSeveranceMonths: termination.paidSeveranceMonths, unusedLeaveDays: termination.unusedLeaveDays }
       : { type: initialType, eventDate: new Date().toISOString().slice(0, 10), contractKind: 'indefinite', unemploymentInsuredMonths: 0, paidSeveranceMonths: 0, unusedLeaveDays: 0 });
     setResignForm(initialType === 'Nghỉ việc');
+    setDisciplineForm(initialType === 'Kỷ luật sự cố');
+    if (record?.discipline) {
+      const d = record.discipline;
+      form.setFieldsValue({ discForm: d.form, discKind: d.violationKind, discViolationDate: d.violationDate, discDiscoveredDate: d.discoveredDate, discNoticeDate: d.noticeDate, discHearingDate: d.hearingDate, discAttendance: d.attendance, discUnion: d.unionParticipated ? 'yes' : d.noUnionOrganization ? 'none' : undefined, discMinutes: d.minutesRecorded === true, discProtected: d.protectedStatus || 'none', discDelayMonths: d.delayMonths, discGround: d.dismissalGround, discManagerial: d.managerialPosition === true });
+    }
     setTerminationPreview(record?.settlement || null);
     setModalOpen(true);
   };
@@ -630,6 +639,15 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
     contractKind: values.contractKind, termMonths: values.contractKind === 'fixed' ? Number(values.termMonths) : undefined, noticeGivenDate: values.noticeGivenDate || undefined,
     exemptFromNotice: values.exemptFromNotice === true, averageSalary: values.averageSalary === undefined || values.averageSalary === '' ? undefined : Number(values.averageSalary),
     unemploymentInsuredMonths: Number(values.unemploymentInsuredMonths) || 0, paidSeveranceMonths: Number(values.paidSeveranceMonths) || 0, unusedLeaveDays: Number(values.unusedLeaveDays) || 0,
+  });
+
+  // Hồ sơ xử lý kỷ luật lao động gửi lên máy chủ; ngày ở form là ngày ra quyết định. Máy chủ kiểm tra lại toàn bộ.
+  const disciplinePayload = (values: any) => ({
+    form: values.discForm, violationKind: values.discKind, violationDate: values.discViolationDate, discoveredDate: values.discDiscoveredDate,
+    noticeDate: values.discNoticeDate, hearingDate: values.discHearingDate, decisionDate: values.eventDate, attendance: values.discAttendance,
+    unionParticipated: values.discUnion === 'yes', noUnionOrganization: values.discUnion === 'none', minutesRecorded: values.discMinutes === true,
+    protectedStatus: values.discProtected || 'none', delayMonths: values.discDelayMonths === undefined || values.discDelayMonths === '' ? undefined : Number(values.discDelayMonths),
+    dismissalGround: values.discGround, managerialPosition: values.discManagerial === true,
   });
 
   const calculateTermination = async () => {
@@ -670,6 +688,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       signer: String(values.signer || '').trim(),
       note: String(values.note || '').trim(),
       ...(values.type === 'Nghỉ việc' && values.terminationType ? { termination: terminationPayload(values) } : {}),
+      ...(values.type === 'Kỷ luật sự cố' && values.discForm ? { discipline: disciplinePayload(values) } : {}),
     };
     const validation = validateEmployeeHistory(newRec);
     if (validation) { message.error(validation); return; }
@@ -1723,7 +1742,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="type" label="Loại biến động" rules={[{ required: true }]}>
               <Select
-                onChange={(value: string) => { setResignForm(value === 'Nghỉ việc'); if (value !== 'Nghỉ việc') setTerminationPreview(null); }}
+                onChange={(value: string) => { setResignForm(value === 'Nghỉ việc'); setDisciplineForm(value === 'Kỷ luật sự cố'); if (value !== 'Nghỉ việc') setTerminationPreview(null); }}
                 options={[
                   { value: 'Chức vụ', label: 'Chức vụ / Bổ nhiệm' },
                   { value: 'Thuyên chuyển', label: 'Thuyên chuyển phòng ban' },
@@ -1786,6 +1805,27 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
             </div>
           )}
 
+          {disciplineForm && (
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 8 }}>Xử lý kỷ luật lao động (ngày hiệu lực ở trên là ngày ra quyết định; Bộ luật Lao động 2019 Điều 122 đến 125, cấm phạt tiền hoặc cắt lương thay kỷ luật)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Form.Item name="discForm" label="Hình thức kỷ luật"><Select allowClear options={DISCIPLINE_FORM_OPTIONS} placeholder="Chọn để kiểm tra trình tự và thời hiệu" onChange={(value: string) => { if (value && !String(form.getFieldValue('newValue') || '').trim()) form.setFieldsValue({ newValue: DISCIPLINE_FORMS[value] }); }} /></Form.Item>
+                <Form.Item name="discKind" label="Loại hành vi vi phạm"><Select allowClear options={VIOLATION_KIND_OPTIONS} /></Form.Item>
+                <Form.Item name="discViolationDate" label="Ngày xảy ra vi phạm"><Input type="date" /></Form.Item>
+                <Form.Item name="discDiscoveredDate" label="Ngày phát hiện"><Input type="date" /></Form.Item>
+                <Form.Item name="discNoticeDate" label="Ngày thông báo họp xử lý"><Input type="date" /></Form.Item>
+                <Form.Item name="discHearingDate" label="Ngày họp xử lý kỷ luật"><Input type="date" /></Form.Item>
+                <Form.Item name="discAttendance" label="Người lao động tại cuộc họp"><Select allowClear options={DISCIPLINE_ATTENDANCE_OPTIONS} /></Form.Item>
+                <Form.Item name="discUnion" label="Tổ chức đại diện người lao động"><Select allowClear options={[{ value: 'yes', label: 'Có đại diện tham gia cuộc họp' }, { value: 'none', label: 'Doanh nghiệp chưa có tổ chức này' }]} /></Form.Item>
+                <Form.Item name="discProtected" label="Trường hợp được bảo vệ"><Select options={PROTECTED_STATUS_OPTIONS} placeholder="Không thuộc trường hợp được bảo vệ" /></Form.Item>
+                <Form.Item name="discDelayMonths" label="Số tháng kéo dài nâng lương (tối đa 6)"><Input type="number" min={1} max={6} /></Form.Item>
+              </div>
+              <Form.Item name="discGround" label="Căn cứ sa thải (Điều 125)"><Select allowClear options={DISMISSAL_GROUND_OPTIONS} /></Form.Item>
+              <Form.Item name="discMinutes" valuePropName="checked"><Checkbox>Đã lập biên bản cuộc họp xử lý kỷ luật</Checkbox></Form.Item>
+              <Form.Item name="discManagerial" valuePropName="checked"><Checkbox>Người lao động đang giữ chức vụ quản lý (cần khi cách chức)</Checkbox></Form.Item>
+            </div>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
             <Button onClick={() => setModalOpen(false)}>Hủy</Button>
             <Button type="primary" htmlType="submit" loading={historySaving} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
@@ -1800,6 +1840,13 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
           ['Mã hồ sơ', viewingHistory.code], ['Nhân viên', `${viewingHistory.employeeCode} · ${viewingHistory.employeeName}`], ['Loại biến động', viewingHistory.type], ['Ngày hiệu lực', viewingHistory.eventDate],
           ['Giá trị cũ', viewingHistory.oldValue], ['Giá trị mới', viewingHistory.newValue], ['Số quyết định', viewingHistory.decisionNumber], ['Người ký quyết định', viewingHistory.signer], ['Ghi chú', viewingHistory.note],
         ].map(([label, value]) => <div key={label}><span style={{ color: '#64748B', fontSize: 12 }}>{label}</span><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value || '—'}</div></div>)}</div>}
+        {viewingHistory && viewingHistory.disciplineAssessment && viewingHistory.discipline && (
+          <div style={{ marginTop: 12, display: 'grid', gap: 4, fontSize: 12.5 }}>
+            <strong>Xử lý kỷ luật: {viewingHistory.disciplineAssessment.formLabel}</strong>
+            <div>Vi phạm ngày {viewingHistory.discipline.violationDate}, phát hiện {viewingHistory.discipline.discoveredDate}; thời hiệu {viewingHistory.disciplineAssessment.limitationMonths} tháng đến hết {viewingHistory.disciplineAssessment.limitationDeadline}</div>
+            <div>Thông báo họp {viewingHistory.discipline.noticeDate}, họp {viewingHistory.discipline.hearingDate} (sớm nhất được họp {viewingHistory.disciplineAssessment.earliestHearingDate}), quyết định {viewingHistory.discipline.decisionDate}</div>
+          </div>
+        )}
         {viewingHistory && viewingHistory.settlement && (
           <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, fontSize: 12.5, display: 'grid', gap: 4 }}>
             <strong>Chấm dứt hợp đồng: {viewingHistory.settlement.typeLabel}</strong>
