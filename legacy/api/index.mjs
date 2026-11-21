@@ -40,6 +40,7 @@ import { statementPostingProblem } from './bankStatementRules.mjs';
 import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
 import { annualPitFinalization, authorizationProblems, finalizationDeadline } from './pitFinalizationRules.mjs';
 import { buildPitVoucher, voucherNumber } from './pitVoucherRules.mjs';
+import { CONTRACTOR_BUSINESS_TYPES, calculateContractorTax } from './contractorTaxRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -10619,7 +10620,7 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers', 'finance_contractor_taxes'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }
@@ -15431,6 +15432,68 @@ async function handleRequest(request, response) {
   }
 
   // Phiếu lương của chính nhân viên, lấy từ bảng lương đã được duyệt (không lấy bản ghi tự khai của nhân viên).
+  // Thuế nhà thầu nước ngoài (contractorTaxRules.mjs): sổ các lần thanh toán cho nhà thầu, máy chủ tính thuế GTGT, TNDN nộp thay, hạn khai, bút toán
+  // gợi ý; `preview: true` chỉ tính. Phạm vi `finance_contractor_taxes` chỉ ghi qua route; đánh dấu đã nộp bằng /:key/paid.
+  if (resource === '/finance/contractor-taxes' || /^\/finance\/contractor-taxes\/[^/]+\/paid$/.test(resource)) {
+    const actor = await requireAdmin(request);
+    const list = async () => (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_contractor_taxes'").all()).map((row) => parseJsonObject(row.payload_json));
+    if (request.method === 'GET') {
+      sendJson(response, 200, { data: (await list()).sort((a, b) => String(b.paymentDate).localeCompare(String(a.paymentDate))), businessTypes: CONTRACTOR_BUSINESS_TYPES });
+      return;
+    }
+    if (request.method !== 'POST') throw new HttpError(405, 'Phương thức không hỗ trợ.');
+    const payload = await readJson(request, 16 * 1024);
+    const paidMatch = /^\/finance\/contractor-taxes\/([^/]+)\/paid$/.exec(resource);
+    if (paidMatch) {
+      const key = decodeURIComponent(paidMatch[1]);
+      const paidDate = requiredIsoDate(payload.paidDate, 'Ngày nộp thuế');
+      if (paidDate > todayInVietnam()) throw new HttpError(422, 'Ngày nộp thuế không được ở tương lai.');
+      const reference = requiredText(payload.reference, 'Số giấy nộp tiền hoặc chứng từ nộp thuế', 120);
+      let saved;
+      await db.transaction(async () => {
+        const row = await db.prepare("SELECT id, payload_json FROM collection_records WHERE scope = 'finance_contractor_taxes' AND record_key = ?").get(key);
+        if (!row) throw new HttpError(404, 'Không tìm thấy lần thanh toán nhà thầu.');
+        const record = parseJsonObject(row.payload_json);
+        if (record.status === 'Đã nộp thuế') throw new HttpError(409, 'Đã ghi nhận nộp thuế cho lần thanh toán này.');
+        if (paidDate < record.paymentDate) throw new HttpError(422, 'Ngày nộp thuế không được trước ngày thanh toán.');
+        saved = { ...record, status: 'Đã nộp thuế', paidDate, paidReference: reference, paidLate: paidDate > record.deadline, paidBy: actor.name };
+        await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(saved), now(), row.id);
+        await recordAuditEvent(actor.id, 'contractor_tax_paid', 'finance_contractor_taxes', key, { reference, totalTax: record.totalTax });
+      });
+      sendJson(response, 200, { record: saved });
+      return;
+    }
+    let result;
+    try {
+      result = calculateContractorTax({
+        businessType: payload.businessType, amount: Number(payload.amount), priceIncludesTax: payload.priceIncludesTax === true,
+        vatApplicable: payload.vatApplicable !== false, paymentDate: String(payload.paymentDate || ''), filingMode: payload.filingMode || 'occurrence',
+      });
+    } catch (error) { throw new HttpError(422, error.message); }
+    if (result && String(payload.paymentDate) > todayInVietnam()) result.warnings.push('Ngày thanh toán ở tương lai: đây là số dự kiến.');
+    if (payload.preview === true) {
+      sendJson(response, 200, { result });
+      return;
+    }
+    const contractorName = requiredText(payload.contractorName, 'Tên nhà thầu nước ngoài', 300);
+    const country = requiredText(payload.country, 'Quốc gia của nhà thầu', 100);
+    const contractNo = requiredText(payload.contractNo, 'Số hợp đồng', 120);
+    let saved;
+    await db.transaction(async () => {
+      if (db.pool) await db.query("SELECT pg_advisory_xact_lock(hashtext('finance_contractor_taxes'))");
+      const key = `NTNN-${String(payload.paymentDate).replace(/-/g, '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
+      saved = {
+        key, contractorName, country, contractNo, taxIdentification: optionalText(payload.taxIdentification, 'Mã số thuế nước ngoài hoặc mã số thuế nộp thay', 60),
+        paymentDate: payload.paymentDate, ...result, status: 'Chưa nộp thuế', createdBy: actor.name, createdById: actor.id, createdAt: now(),
+      };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_contractor_taxes', ?, ?, ?, ?, ?)`).run(randomUUID(), key, actor.id, JSON.stringify(saved), saved.createdAt, saved.createdAt);
+      await recordAuditEvent(actor.id, 'contractor_tax_record', 'finance_contractor_taxes', key, { contractorName, totalTax: saved.totalTax });
+    });
+    sendJson(response, 201, { record: saved });
+    return;
+  }
+
   // Chứng từ khấu trừ thuế TNCN (pitVoucherRules.mjs): quản trị viên lập từ phiếu lương đã chốt, số tự tăng theo ký hiệu mẫu và ký hiệu,
   // nội dung chụp lại tại thời điểm lập; không xóa, chỉ hủy kèm lý do. Nhân viên xem chứng từ của mình. Phạm vi `finance_pit_vouchers` chỉ ghi qua đây.
   if (resource === '/finance/pit-vouchers' || resource === '/employees/me/pit-vouchers' || /^\/finance\/pit-vouchers\/[^/]+\/cancel$/.test(resource)) {

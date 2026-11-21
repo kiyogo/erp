@@ -1433,6 +1433,21 @@ export const pitVouchersApi = {
   cancel: (key: string, reason: string) => api.post<{ voucher: PitVoucher }>(`/finance/pit-vouchers/${encodeURIComponent(key)}/cancel`, { reason }),
 };
 
+export type ContractorTaxResult = {
+  businessType: string; businessLabel: string; vatRate: number; citRate: number; amount: number; priceIncludesTax: boolean; vatApplicable: boolean;
+  vatRevenue: number; vat: number; citRevenue: number; cit: number; totalTax: number; netPayment: number; filingMode: 'occurrence' | 'monthly'; deadline: string;
+  journal: Array<{ account: string; debit: number; credit: number; note: string }>; warnings: string[];
+};
+export type ContractorTaxRecord = ContractorTaxResult & { key: string; contractorName: string; country: string; contractNo: string; taxIdentification: string; paymentDate: string; status: string; paidDate?: string; paidReference?: string; paidLate?: boolean };
+export type ContractorTaxInput = { contractorName?: string; country?: string; contractNo?: string; taxIdentification?: string; businessType: string; amount: number; priceIncludesTax: boolean; vatApplicable: boolean; paymentDate: string; filingMode: 'occurrence' | 'monthly' };
+// Thuế nhà thầu nước ngoài: máy chủ tính thuế GTGT, TNDN nộp thay, hạn khai và bút toán gợi ý; preview chỉ tính.
+export const contractorTaxApi = {
+  list: () => api.get<{ data: ContractorTaxRecord[]; businessTypes: Record<string, { label: string; vat: number; cit: number }> }>('/finance/contractor-taxes'),
+  preview: (data: ContractorTaxInput) => api.post<{ result: ContractorTaxResult }>('/finance/contractor-taxes', { ...data, preview: true }),
+  create: (data: ContractorTaxInput) => api.post<{ record: ContractorTaxRecord }>('/finance/contractor-taxes', data),
+  markPaid: (key: string, data: { paidDate: string; reference: string }) => api.post<{ record: ContractorTaxRecord }>(`/finance/contractor-taxes/${encodeURIComponent(key)}/paid`, data),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

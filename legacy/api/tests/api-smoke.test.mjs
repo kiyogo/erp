@@ -2951,6 +2951,25 @@ test('PIT withholding vouchers are numbered, snapshot payslips, refuse authorize
   assert.match(refused.message, /ủy quyền quyết toán/);
 });
 
+test('foreign contractor tax records compute VAT and CIT on the server, gross up net prices and track payment', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const body = { contractorName: 'Overseas Software Ltd', country: 'Singapore', contractNo: 'HĐ-NN-01', businessType: 'services', amount: 100_000_000, priceIncludesTax: false, paymentDate: today, vat: 1, cit: 1 };
+  const preview = (await request('/finance/contractor-taxes', 'POST', { ...body, preview: true })).result;
+  assert.equal(preview.netPayment, 100_000_000);
+  assert.equal((await request('/finance/contractor-taxes')).data.length, 0);
+  await request('/finance/contractor-taxes', 'POST', { ...body, businessType: 'unknown' }, 422);
+  await request('/finance/contractor-taxes', 'POST', { ...body, contractorName: '' }, 422);
+  const created = (await request('/finance/contractor-taxes', 'POST', body, 201)).record;
+  assert.equal(created.vat, 5_540_166);
+  assert.equal(created.cit, 5_263_158);
+  assert.equal(created.status, 'Chưa nộp thuế');
+  const route = `/finance/contractor-taxes/${encodeURIComponent(created.key)}/paid`;
+  await request(route, 'POST', { paidDate: today }, 422);
+  assert.equal((await request(route, 'POST', { paidDate: today, reference: 'GNT-01' })).record.status, 'Đã nộp thuế');
+  await request(route, 'POST', { paidDate: today, reference: 'GNT-01' }, 409);
+  await request('/collections/finance_contractor_taxes', 'POST', { record: { key: 'forged' } }, 409);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };
