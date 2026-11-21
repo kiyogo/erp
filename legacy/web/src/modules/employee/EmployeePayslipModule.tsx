@@ -14,7 +14,8 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Input, Button, message, Select } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
-import { employeePayslipsApi } from '../../api/endpoints';
+import { employeePayslipsApi, pitFinalizationApi, type PitFinalizationRow } from '../../api/endpoints';
+import { PIT_YEAR_OPTIONS, PitAuthorizationModal } from '../finance/PitFinalizationModule';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { useAuth } from '../../context/AuthContext';
 
@@ -34,6 +35,19 @@ export const EmployeePayslipModule: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [signedMonths, setSignedMonths] = useState<Record<string, boolean>>({});
   const [bankModalOpen, setBankModalOpen] = useState(false);
+  // Quyết toán thuế TNCN năm của chính nhân viên và ủy quyền cho doanh nghiệp quyết toán thay.
+  const [pitOpen, setPitOpen] = useState(false);
+  const [pitYear, setPitYear] = useState<number>(Number(PIT_YEAR_OPTIONS[Math.min(1, PIT_YEAR_OPTIONS.length - 1)].value));
+  const [pitRow, setPitRow] = useState<PitFinalizationRow | null>(null);
+  const [pitAuthorizing, setPitAuthorizing] = useState(false);
+  const loadPit = async (year: number) => {
+    try {
+      setPitRow((await pitFinalizationApi.mine(year)).data.finalization);
+    } catch (error: any) {
+      setPitRow(null);
+      message.error(error?.response?.data?.message || 'Không tải được số liệu quyết toán thuế.');
+    }
+  };
   const [bankForm, setBankForm] = useState<BankFormState>({
     bankName: '',
     accountNumber: '',
@@ -200,6 +214,7 @@ export const EmployeePayslipModule: React.FC = () => {
           }}>
             Tải Toàn Bộ Phiếu Lương
           </Button>
+          <Button onClick={() => { setPitOpen(true); void loadPit(pitYear); }}>Quyết toán thuế năm</Button>
           <Button
             type="primary"
             icon={<BankOutlined />}
@@ -210,6 +225,50 @@ export const EmployeePayslipModule: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      <Modal title="Quyết toán thuế TNCN năm" open={pitOpen} onCancel={() => setPitOpen(false)} footer={null} width={600}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12, fontSize: 13 }}>
+          <Select value={pitYear} options={PIT_YEAR_OPTIONS} onChange={(value) => { setPitYear(Number(value)); void loadPit(Number(value)); }} style={{ width: 160 }} />
+          {pitRow && (
+            <>
+              {[
+                ['Số tháng có phiếu lương đã chốt', `${pitRow.months} tháng`],
+                ['Tổng thu nhập chịu thuế', pitRow.totalIncome],
+                ['Thu nhập miễn thuế (phần làm thêm giờ cao hơn lương thường...)', pitRow.exemptIncome],
+                ['Bảo hiểm bắt buộc đã đóng', pitRow.insurance],
+                ['Giảm trừ bản thân (12 tháng)', pitRow.personalDeduction],
+                [`Giảm trừ người phụ thuộc (${pitRow.dependentMonths} tháng)`, pitRow.dependentDeduction],
+                ['Thu nhập tính thuế', pitRow.taxableIncome],
+                ['Thuế phải nộp cả năm', pitRow.annualTax],
+                ['Thuế đã khấu trừ', pitRow.withheld],
+              ].map(([label, value]) => (
+                <div key={String(label)} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <span style={{ color: '#64748B' }}>{label}</span>
+                  <span style={{ color: '#0F172A' }}>{typeof value === 'number' ? `${value.toLocaleString('vi-VN')} ₫` : value}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 8 }}>
+                <span>{pitRow.result}</span>
+                <span style={{ color: pitRow.difference > 0 ? '#DC2626' : '#16A34A' }}>{Math.abs(pitRow.difference).toLocaleString('vi-VN')} ₫</span>
+              </div>
+              <div style={{ color: '#64748B', fontSize: 12 }}>
+                {pitRow.authorization?.authorized
+                  ? `Đã ủy quyền cho doanh nghiệp quyết toán thay (${new Date(pitRow.authorization.at).toLocaleDateString('vi-VN')}). Hạn doanh nghiệp nộp hồ sơ: ${pitRow.deadline}.`
+                  : pitRow.authorizationProblems.length
+                    ? `Không ủy quyền được: ${pitRow.authorizationProblems.join(' ')} Bạn tự quyết toán với cơ quan thuế.`
+                    : `Chưa ủy quyền. Doanh nghiệp quyết toán thay nếu bạn ủy quyền trước hạn ${pitRow.deadline}.`}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <Button onClick={() => setPitOpen(false)}>Đóng</Button>
+                <Button type="primary" disabled={pitRow.authorizationProblems.length > 0} onClick={() => setPitAuthorizing(true)} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+                  {pitRow.authorization?.authorized ? 'Xem ủy quyền' : 'Ủy quyền quyết toán'}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+      <PitAuthorizationModal row={pitAuthorizing ? pitRow : null} onClose={() => setPitAuthorizing(false)} onSaved={(row) => setPitRow(row)} />
 
       {/* Payslip Table */}
       <div className="transparent-table-card" style={{ width: '100%' }}>

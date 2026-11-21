@@ -74,6 +74,7 @@ import { FixedAssetsModule } from '../../modules/finance/FixedAssetsModule';
 import { PrepaidExpensesModule } from '../../modules/finance/PrepaidExpensesModule';
 import { EquityModule } from '../../modules/finance/EquityModule';
 import { AdvancesModule } from '../../modules/finance/AdvancesModule';
+import { PitFinalizationModule } from '../../modules/finance/PitFinalizationModule';
 import { GeneralLedgerModule } from '../../modules/finance/GeneralLedgerModule';
 import { PurchasingModule } from '../../modules/finance/PurchasingModule';
 import { SalesModule } from '../../modules/finance/SalesModule';
@@ -343,6 +344,7 @@ export const GenericModulePage: React.FC = () => {
   if (p.startsWith('/finance/payroll')) return <PayrollModule />;
   if (p.startsWith('/finance/e-invoice')) return <EInvoiceModule />;
   if (p.includes('digital-signature')) return <DigitalSignatureModule />;
+  if (p === '/finance/tax/pit-finalization') return <PitFinalizationModule />;
   if (p.startsWith('/finance/tax')) return <TaxModule />;
   if (p.startsWith('/finance/budget')) return <BudgetModule />;
   if (p.startsWith('/finance/costing')) return <CostingModule />;

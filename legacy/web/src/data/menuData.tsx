@@ -244,6 +244,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
           { id: 'fin-tax-decl', title: 'Khai thuế', path: '/admin/finance/tax/declaration' },
           { id: 'fin-tax-orders', title: 'Giấy nộp tiền', path: '/admin/finance/tax/orders' },
           { id: 'fin-tax-risky', title: 'Danh sách NCC có rủi ro', path: '/admin/finance/tax/risky' },
+          { id: 'fin-tax-pit-finalization', title: 'Quyết toán thuế TNCN', path: '/admin/finance/tax/pit-finalization' },
         ],
       },
       {

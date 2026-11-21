@@ -38,6 +38,7 @@ import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
 import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
+import { annualPitFinalization, authorizationProblems, finalizationDeadline } from './pitFinalizationRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -10607,6 +10608,11 @@ async function handleRequest(request, response) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }
 
+  if ((collectionMatch || collectionRecordMatch) && normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])) === 'hr_pit_authorizations') {
+    await requireAdmin(request);
+    if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Ủy quyền quyết toán thuế TNCN phải ghi qua chức năng quyết toán thuế.');
+  }
+
   if ((collectionMatch || collectionRecordMatch) && ['finance_payroll_postings', 'finance_payroll_adjustments'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Bảng đối chiếu lương do chức năng hạch toán quản lý.');
@@ -15409,6 +15415,93 @@ async function handleRequest(request, response) {
   }
 
   // Phiếu lương của chính nhân viên, lấy từ bảng lương đã được duyệt (không lấy bản ghi tự khai của nhân viên).
+  // Quyết toán thuế TNCN năm (pitFinalizationRules.mjs): tổng hợp phiếu lương đã chốt của năm, ủy quyền quyết toán (mẫu 08/UQ-QTT-TNCN).
+  // Ủy quyền lưu ở `hr_pit_authorizations` (khóa năm:mã người dùng), chỉ ghi qua route này; nhân viên tự ủy quyền hoặc quản trị viên ghi nhận.
+  if (resource === '/finance/pit-finalization' || resource === '/employees/me/pit-finalization' || resource === '/finance/pit-finalization/authorizations') {
+    const actor = await requireUser(request);
+    const self = resource === '/employees/me/pit-finalization';
+    if (resource === '/finance/pit-finalization' && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ quản trị viên xem bảng quyết toán thuế của doanh nghiệp.');
+    await requireSecurityPin(request, actor);
+    const params = request.method === 'GET' ? Object.fromEntries(url.searchParams) : await readJson(request, 16 * 1024);
+    const year = Number(params.year || Number(todayInVietnam().slice(0, 4)) - 1);
+    if (!Number.isInteger(year) || year < 2024 || year > 2200) throw new HttpError(422, 'Năm quyết toán không hợp lệ.');
+    const targetId = request.method === 'POST' ? String(params.employeeId || actor.id) : self ? actor.id : '';
+    if (targetId && targetId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Chỉ người lao động hoặc quản trị viên ghi nhận ủy quyền quyết toán.');
+    if (request.method === 'POST' && resource !== '/finance/pit-finalization/authorizations') throw new HttpError(405, 'Phương thức không hỗ trợ.');
+    const employeeRows = await db.prepare(`SELECT u.*, p.employment_status, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id
+      WHERE u.role != 'ADMIN'${targetId ? ' AND u.id = ?' : ''} ORDER BY u.employee_code`).all(...(targetId ? [targetId] : []));
+    if (targetId && !employeeRows.length) throw new HttpError(404, 'Không tìm thấy người lao động.');
+    const payslipsByCode = new Map();
+    for (const record of (await db.prepare("SELECT * FROM collection_records WHERE scope = 'payroll'").all()).map(publicCollectionRecord)) {
+      if (!record || !PAYSLIP_VISIBLE_STATUSES.includes(record.status)) continue;
+      const local = payrollMonth(record.month);
+      const month = local ? `${local.slice(3)}-${local.slice(0, 2)}` : '';
+      if (!month.startsWith(`${year}-`)) continue;
+      const code = String(record.employeeCode || '').toLocaleLowerCase('vi-VN');
+      const gross = Number(record.gross) || (Number(record.baseSalary) || 0) + (Number(record.allowance) || 0) + (Number(record.bonus) || 0) + (Number(record.overtimePay) || 0);
+      payslipsByCode.set(code, [...(payslipsByCode.get(code) || []), { month, gross, exemptIncome: record.exemptIncome, insuranceDeduction: record.insuranceDeduction, taxDeduction: record.taxDeduction }]);
+    }
+    const authorizations = new Map((await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'hr_pit_authorizations'").all()).map((row) => [row.record_key, parseJsonObject(row.payload_json)]));
+    const contractMonthsOf = async (userId) => {
+      const contracts = await db.prepare("SELECT start_date, end_date, contract_type, status FROM contracts WHERE employee_user_id = ? AND contract_category = 'labor'").all(userId);
+      return contracts.filter((contract) => !['Đã hủy', 'Nháp'].includes(contract.status) && !/thử việc/i.test(contract.contract_type || ''))
+        .reduce((best, contract) => Math.max(best, !contract.end_date ? 999 : /^\d{4}-\d{2}-\d{2}$/.test(contract.start_date || '') ? wholeMonthsBetween(contract.start_date, addDaysIso(contract.end_date, 1)) : 0), 0);
+    };
+    const rows = [];
+    for (const row of employeeRows) {
+      const payslips = payslipsByCode.get(String(row.employee_code || '').toLocaleLowerCase('vi-VN')) || [];
+      if (!targetId && !payslips.length) continue;
+      const details = parseJsonObject(row.details_json);
+      const authorization = authorizations.get(`${year}:${row.id}`) || null;
+      const problems = authorizationProblems({
+        employed: Boolean(row.is_active) && row.employment_status !== 'Đã nghỉ việc',
+        contractMonths: await contractMonthsOf(row.id),
+        otherIncomeMonthlyAverage: request.method === 'POST' ? params.otherIncomeMonthlyAverage : authorization?.otherIncomeMonthlyAverage,
+      });
+      rows.push({
+        employeeId: row.id, employeeCode: row.employee_code, employeeName: row.name, authorization, authorizationProblems: problems,
+        ...annualPitFinalization({ year, payslips, familyMembers: details.familyMembers ?? details.familyList }),
+      });
+    }
+    if (request.method === 'POST') {
+      const row = rows[0];
+      const authorized = params.authorized !== false;
+      if (authorized && row.authorizationProblems.length) throw new HttpError(422, row.authorizationProblems.join(' '));
+      if (authorized && params.onlyIncomeConfirmed !== true) throw new HttpError(422, 'Cần xác nhận chỉ có thu nhập tiền lương tại doanh nghiệp (hoặc thu nhập vãng lai nơi khác bình quân không quá 10 triệu đồng một tháng đã khấu trừ 10%).');
+      if (row.deadline < todayInVietnam() && authorized) throw new HttpError(409, `Đã quá hạn quyết toán thay năm ${year} (${row.deadline}); cá nhân tự quyết toán.`);
+      const key = `${year}:${row.employeeId}`;
+      const record = {
+        key, year, employeeId: row.employeeId, employeeCode: row.employeeCode, employeeName: row.employeeName, authorized,
+        otherIncomeMonthlyAverage: Math.max(0, Math.round(Number(params.otherIncomeMonthlyAverage) || 0)),
+        onlyIncomeConfirmed: params.onlyIncomeConfirmed === true,
+        recordedBy: actor.name, recordedById: actor.id, selfAuthorized: actor.id === row.employeeId, at: now(),
+      };
+      await db.transaction(async () => {
+        await db.prepare("DELETE FROM collection_records WHERE scope = 'hr_pit_authorizations' AND record_key = ?").run(key);
+        await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+          VALUES (?, 'hr_pit_authorizations', ?, ?, ?, ?, ?)`).run(randomUUID(), key, row.employeeId, JSON.stringify(record), record.at, record.at);
+        await recordAuditEvent(actor.id, authorized ? 'pit_authorization' : 'pit_authorization_revoked', 'hr_pit_authorizations', key, { year });
+      });
+      sendJson(response, 200, { authorization: record, finalization: { ...row, authorization: record } });
+      return;
+    }
+    if (self) {
+      sendJson(response, 200, { finalization: rows[0] });
+      return;
+    }
+    const authorizedRows = rows.filter((row) => row.authorization?.authorized);
+    sendJson(response, 200, {
+      year, deadline: finalizationDeadline(year), data: rows,
+      summary: {
+        employees: rows.length, authorized: authorizedRows.length,
+        totalIncome: authorizedRows.reduce((sum, row) => sum + row.totalIncome, 0), annualTax: authorizedRows.reduce((sum, row) => sum + row.annualTax, 0),
+        withheld: authorizedRows.reduce((sum, row) => sum + row.withheld, 0),
+        payable: authorizedRows.reduce((sum, row) => sum + Math.max(0, row.difference), 0), refundable: authorizedRows.reduce((sum, row) => sum + Math.max(0, -row.difference), 0),
+      },
+    });
+    return;
+  }
+
   if (request.method === 'GET' && resource === '/employees/me/payslips') {
     const actor = await requireUser(request);
     await requireSecurityPin(request, actor);

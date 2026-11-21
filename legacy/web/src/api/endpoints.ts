@@ -1404,6 +1404,20 @@ export const assetsApi = {
     api.post<{ period: string; count: number; totalAmount: number; records: Record<string, unknown>[] }>('/assets/depreciation-runs', { period, entries }),
 };
 
+export type PitFinalizationRow = {
+  employeeId: string; employeeCode: string; employeeName: string; year: number; months: number; totalIncome: number; exemptIncome: number; insurance: number;
+  personalDeduction: number; dependentMonths: number; dependentDeduction: number; taxableIncome: number; annualTax: number; withheld: number; difference: number;
+  result: 'Nộp thêm' | 'Nộp thừa' | 'Đã nộp đủ'; deadline: string; legalBasis: string; authorizationProblems: string[];
+  authorization: { authorized: boolean; at: string; recordedBy: string; selfAuthorized: boolean; otherIncomeMonthlyAverage: number } | null;
+};
+// Quyết toán thuế TNCN năm: bảng của doanh nghiệp (quản trị viên), của chính nhân viên, và ghi nhận ủy quyền (mẫu 08/UQ-QTT-TNCN).
+export const pitFinalizationApi = {
+  company: (year: number) => api.get<{ year: number; deadline: string; data: PitFinalizationRow[]; summary: { employees: number; authorized: number; totalIncome: number; annualTax: number; withheld: number; payable: number; refundable: number } }>('/finance/pit-finalization', { params: { year } }),
+  mine: (year: number) => api.get<{ finalization: PitFinalizationRow }>('/employees/me/pit-finalization', { params: { year } }),
+  authorize: (data: { year: number; employeeId?: string; authorized?: boolean; onlyIncomeConfirmed?: boolean; otherIncomeMonthlyAverage?: number }) =>
+    api.post<{ finalization: PitFinalizationRow }>('/finance/pit-finalization/authorizations', data),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

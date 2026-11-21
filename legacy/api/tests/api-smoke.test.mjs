@@ -2881,6 +2881,45 @@ test('ekyc sessions only write to the employee who created them, need consent an
   assert.equal(profile.details.livePhotoUrl, undefined);
 });
 
+test('annual PIT finalization sums closed payslips, applies 12-month personal deduction and records authorizations', async () => {
+  const staff = (await request('/users', 'POST', { email: 'pit-staff@example.test', name: 'Nhân viên quyết toán', password: 'Pit-Staff-26!Secure', employeeCode: 'PIT-1', role: 'USER' }, 201)).user;
+  const login = await request('/auth/login', 'POST', { email: 'pit-staff@example.test', password: 'Pit-Staff-26!Secure' });
+  const staffHeaders = { ...headers, Authorization: `Bearer ${login.access_token || login.token}` };
+  for (const month of ['03', '04', '05']) {
+    await request('/collections/payroll', 'POST', { record: { key: `pit-${month}`, employeeCode: 'PIT-1', employeeName: 'Nhân viên quyết toán', month: `2025-${month}`, gross: 30_000_000, exemptIncome: 0, insuranceDeduction: 2_100_000, taxDeduction: 1_000_000, netSalary: 26_900_000, status: 'Chưa chi trả' } }, 201);
+  }
+  await request('/collections/payroll', 'POST', { record: { key: 'pit-draft', employeeCode: 'PIT-1', month: '2025-06', gross: 99_000_000, taxDeduction: 0, status: 'Chờ duyệt' } }, 201);
+  const own = (await request('/employees/me/pit-finalization?year=2025', 'GET', undefined, 200, staffHeaders)).finalization;
+  assert.equal(own.months, 3);
+  assert.equal(own.totalIncome, 90_000_000);
+  assert.equal(own.personalDeduction, 132_000_000);
+  assert.equal(own.annualTax, 0);
+  assert.equal(own.difference, -3_000_000);
+  assert.ok(own.authorizationProblems.some((item) => item.includes('3 tháng')));
+  await request('/finance/pit-finalization?year=2025', 'GET', undefined, 403, staffHeaders);
+  await request('/finance/pit-finalization/authorizations', 'POST', { year: 2025, onlyIncomeConfirmed: true }, 422, staffHeaders);
+  const storage = new DatabaseSync(env.KIYOVN_DB_PATH);
+  const stamp = new Date().toISOString();
+  storage.prepare("INSERT INTO contracts (id, code, name, employee_user_id, contract_category, contract_type, start_date, end_date, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'labor', 'Hợp đồng lao động xác định thời hạn', '2025-01-01', '2026-12-31', 'Đang hiệu lực', ?, ?)")
+    .run('pit-contract', 'HD-PIT-1', 'Hợp đồng quyết toán', staff.id, stamp, stamp);
+  storage.close();
+  await request('/finance/pit-finalization/authorizations', 'POST', { year: 2025, employeeId: session.user.id }, 403, staffHeaders);
+  await request('/finance/pit-finalization/authorizations', 'POST', { year: 2025 }, 422, staffHeaders);
+  await request('/finance/pit-finalization/authorizations', 'POST', { year: 2025, onlyIncomeConfirmed: true, otherIncomeMonthlyAverage: 12_000_000 }, 422, staffHeaders);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const expected = today > '2026-03-31' ? 409 : 200;
+  await request('/finance/pit-finalization/authorizations', 'POST', { year: 2025, onlyIncomeConfirmed: true }, expected, staffHeaders);
+  const thisYear = Number(today.slice(0, 4));
+  await request('/collections/payroll', 'POST', { record: { key: 'pit-current', employeeCode: 'PIT-1', month: `${thisYear}-01`, gross: 20_000_000, insuranceDeduction: 0, taxDeduction: 100_000, status: 'Chưa chi trả' } }, 201);
+  const authorized = await request('/finance/pit-finalization/authorizations', 'POST', { year: thisYear, onlyIncomeConfirmed: true }, 200, staffHeaders);
+  assert.equal(authorized.authorization.selfAuthorized, true);
+  const company = await request(`/finance/pit-finalization?year=${thisYear}`);
+  const row = company.data.find((item) => item.employeeCode === 'PIT-1');
+  assert.equal(row.authorization.authorized, true);
+  assert.equal(company.summary.authorized >= 1, true);
+  await request('/collections/hr_pit_authorizations', 'POST', { record: { key: 'forged' } }, 409);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };
