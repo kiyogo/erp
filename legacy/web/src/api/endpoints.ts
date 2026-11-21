@@ -1477,6 +1477,16 @@ export const timesheetSuggestionApi = {
   }>('/attendance/timesheet-suggestion', { params: { month, employeeCode } }),
 };
 
+export type PitDeclaration = {
+  period: string; year: number; months: string[]; periodEnd: string; filingMethod: 'Tháng' | 'Quý'; mustFile: boolean; deadline: string; deadlineBasis: string;
+  indicators: Record<string, number>; labels: Record<string, string>;
+  rows: Array<{ key: string; name: string; source: 'payroll' | 'casual'; resident: boolean; hasLaborContract: boolean; payments: number; taxable: number; tax: number }>;
+};
+// Tờ khai khấu trừ thuế TNCN 05/KK-TNCN theo tháng (YYYY-MM) hoặc quý (YYYY-Qn), cần PIN nếu đã đặt.
+export const pitDeclarationApi = {
+  get: (period: string) => api.get<PitDeclaration>('/finance/pit-declaration', { params: { period } }),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

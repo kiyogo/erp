@@ -249,6 +249,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
           { id: 'fin-tax-pit-vouchers', title: 'Chứng từ khấu trừ TNCN', path: '/admin/finance/tax/pit-vouchers' },
           { id: 'fin-tax-contractor', title: 'Thuế nhà thầu', path: '/admin/finance/tax/contractor' },
           { id: 'fin-tax-casual-income', title: 'Thu nhập vãng lai', path: '/admin/finance/tax/casual-income' },
+          { id: 'fin-tax-pit-declaration', title: 'Tờ khai 05/KK-TNCN', path: '/admin/finance/tax/pit-declaration' },
         ],
       },
       {

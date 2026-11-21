@@ -44,6 +44,7 @@ import { CONTRACTOR_BUSINESS_TYPES, calculateContractorTax } from './contractorT
 import { CASUAL_INCOME_TYPE, calculateCasualIncomeTax, casualPayeeKey, commitmentOverLimit } from './casualIncomeRules.mjs';
 import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
+import { DECLARATION_LABELS, buildPitDeclaration, declarationPeriod } from './pitDeclarationRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -15648,6 +15649,32 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'pit_voucher_issue', 'finance_pit_vouchers', key, { source, employeeId, payeeKey, year, taxWithheld: saved.taxWithheld });
     });
     sendJson(response, 201, { voucher: saved });
+    return;
+  }
+
+  // Tờ khai khấu trừ thuế TNCN 05/KK-TNCN (pitDeclarationRules.mjs): tổng hợp phiếu lương đã chốt và sổ thu nhập vãng lai của tháng hoặc quý.
+  if (request.method === 'GET' && resource === '/finance/pit-declaration') {
+    const actor = await requireAdmin(request);
+    await requireSecurityPin(request, actor);
+    let info;
+    try { info = declarationPeriod(url.searchParams.get('period')); } catch (error) { throw new HttpError(422, error.message); }
+    const payslips = await closedPayslipsByCode(info.year);
+    const employees = await db.prepare("SELECT u.name, u.employee_code, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.role != 'ADMIN'").all();
+    const people = employees.map((row) => ({
+      key: `payroll:${row.employee_code}`, name: row.name, source: 'payroll', resident: parseJsonObject(row.details_json).taxResident !== false, hasLaborContract: true,
+      lines: payslips.get(String(row.employee_code || '').toLocaleLowerCase('vi-VN')) || [],
+    }));
+    const casual = new Map();
+    for (const item of (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_casual_income_payments'").all()).map((row) => parseJsonObject(row.payload_json))) {
+      const key = casualPayeeKey(item);
+      const person = casual.get(key) || { key: `casual:${key}`, name: item.payeeName, source: 'casual', resident: item.residency === 'resident', hasLaborContract: false, lines: [] };
+      if (item.contractType === 'under_3_months') person.hasLaborContract = true;
+      person.lines.push({ month: String(item.paymentDate).slice(0, 7), gross: item.amount, exemptIncome: 0, taxDeduction: item.tax });
+      casual.set(key, person);
+    }
+    const declaration = buildPitDeclaration({ period: info.period, people: [...people, ...casual.values()] });
+    const { deadline, basis } = taxFilingDeadline({ taxType: TAX_FILING_TYPES.pitWithholding, filingMethod: info.filingMethod, periodEnd: info.periodEnd });
+    sendJson(response, 200, { ...declaration, labels: DECLARATION_LABELS, deadline, deadlineBasis: basis });
     return;
   }
 

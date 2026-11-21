@@ -3002,6 +3002,15 @@ test('casual income payments withhold 10% from 2 million, honour 08/CK-TNCN comm
   assert.equal(voucher.person.identityNumber, '001203004567');
   await request('/finance/pit-vouchers', 'POST', { source: 'casual', payeeKey: payee.key, year: Number(today.slice(0, 4)), fromMonth: monthNumber, toMonth: monthNumber, series: 'VL/26E' }, 409);
   await request('/finance/pit-vouchers', 'POST', { source: 'casual', payeeKey: 'không có', year: Number(today.slice(0, 4)), fromMonth: monthNumber, toMonth: monthNumber, series: 'VL/26E' }, 404);
+  // Tờ khai 05/KK-TNCN của tháng gồm cả thu nhập vãng lai (cư trú và không cư trú).
+  const declaration = await request(`/finance/pit-declaration?period=${today.slice(0, 7)}`);
+  assert.equal(declaration.filingMethod, 'Tháng');
+  assert.ok(declaration.indicators['25'] >= 1);
+  assert.ok(declaration.indicators['35'] >= 200_000);
+  assert.ok(declaration.indicators['33'] >= 500_000);
+  assert.equal(declaration.mustFile, true);
+  assert.match(declaration.deadline, /^\d{4}-\d{2}-\d{2}$/);
+  await request('/finance/pit-declaration?period=2026-13', 'GET', undefined, 422);
 });
 
 test('holiday calendar includes lunar Tết and Giỗ Tổ, keeps 11 statutory days and feeds deadlines', async () => {
