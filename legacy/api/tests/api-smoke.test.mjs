@@ -2860,6 +2860,8 @@ test('ekyc sessions only write to the employee who created them, need consent an
   assert.match(raw.livePhotoUrl, /^ENC:.*"kid":"biometric-v1"/);
   assert.match(raw.docNumber, /^ENC:/);
   assert.equal((await request(`/employees/${staff.id}`)).employee.details.livePhotoUrl, card.livePhotoUrl);
+  // Hồ sơ đã có số căn cước mã hóa vẫn sửa được các trường khác.
+  assert.equal((await request(`/employees/${staff.id}`, 'PATCH', { details: { nationality: 'Việt Nam', gender: 'Nam' } })).employee.details.docNumber, '001203004567');
   const authProfile = (await request('/auth/profile', 'GET', undefined, 200, staffHeaders)).user;
   assert.equal(authProfile.details.ekycVerified, true);
   assert.equal(authProfile.details.livePhotoUrl, undefined);
@@ -3039,6 +3041,19 @@ test('timesheet summaries add paid holidays from the calendar and suggestions cl
   assert.equal(summary.holidayDays, 5);
   assert.equal(summary.totalPayDays, 20);
   await request('/collections/attendance_timesheet_summary', 'POST', { record: { key: 'ts-hol-over', empCode: 'TS-HOL', month: '2026-02', standardDays: 20, actualDays: 24, status: 'Chờ đối soát' } }, 422);
+});
+
+test('foreign workers need a work permit within legal terms and fixed-term contracts no longer than the permit', async () => {
+  const staff = (await request('/users', 'POST', { email: 'foreign@example.test', name: 'Kim Min Su', password: 'Foreign-Staff-26!Secure', employeeCode: 'FW-01', role: 'USER' }, 201)).user;
+  const route = `/employees/${staff.id}`;
+  const permit = { nationality: 'Hàn Quốc', passportNumber: 'M12345678', workPermitStatus: 'permit', workPermitNumber: 'GP-01', workPermitIssueDate: '2026-01-10', workPermitExpiryDate: '2028-01-09' };
+  await request(route, 'PATCH', { details: { ...permit, workPermitExpiryDate: '2029-01-09' } }, 422);
+  await request(route, 'PATCH', { details: { ...permit, passportNumber: '' } }, 422);
+  await request(route, 'PATCH', { details: permit });
+  const contract = { code: 'HD-FW-01', name: 'Hợp đồng chuyên gia', contractCategory: 'labor', contractTemplate: 'Hợp đồng lao động xác định thời hạn', contractType: 'Hợp đồng lao động xác định thời hạn', partyBType: 'employee', partyBName: 'Kim Min Su', employeeCode: 'FW-01', employeeName: 'Kim Min Su', startDate: '2026-02-01', salary: 40_000_000, annualLeaveDays: 12, probationMonths: 0, status: 'Chờ ký' };
+  assert.match((await request('/contracts', 'POST', { ...contract, endDate: '' }, 422)).message, /xác định thời hạn/);
+  assert.match((await request('/contracts', 'POST', { ...contract, endDate: '2028-06-30' }, 422)).message, /không được vượt thời hạn giấy phép/);
+  await request('/contracts', 'POST', { ...contract, endDate: '2027-12-31' }, 201);
 });
 
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {

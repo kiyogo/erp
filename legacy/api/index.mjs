@@ -45,6 +45,7 @@ import { CASUAL_INCOME_TYPE, calculateCasualIncomeTax, casualPayeeKey, commitmen
 import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
 import { DECLARATION_LABELS, buildPitDeclaration, declarationPeriod } from './pitDeclarationRules.mjs';
+import { foreignContractProblem, isForeignNationality, permitExpiryDate, workPermitProblem } from './foreignWorkerRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -256,7 +257,7 @@ async function applyEmployeeDetailRules(details, previousRaw, incoming, trusted,
   const today = todayInVietnam();
   const previous = { ...previousRaw };
   for (const field of ['idNumber', 'taxCode']) if (previous[field]) previous[field] = decryptField(previous[field], 'profile');
-  const problem = identityProblems(details, previous, today);
+  const problem = identityProblems(details, previous, today) || workPermitProblem(details, previous);
   if (problem) throw new HttpError(422, problem);
   if (!Object.hasOwn(incoming, 'familyMembers') && !Object.hasOwn(incoming, 'familyList')) return;
   let members;
@@ -395,7 +396,8 @@ async function updateEmployeeProfileRecord(userId, input, { allowIdentityChanges
   const salaryBase = changes.salaryBase === undefined ? Number(profile.salary_base || 0) : optionalAmount(changes.salaryBase, 'Lương cơ bản');
   const avatar = changes.avatar === undefined ? profile.avatar_url : optionalText(changes.avatar, 'Ảnh đại diện', 25_000_000);
   
-  const currentDetails = parseJsonObject(profile.details_json);
+  // Giải mã trước khi gộp và kiểm tra: số giấy tờ, ảnh eKYC... lưu dạng mã hóa, so với giá trị rõ sẽ bị coi là đã đổi; mã hóa lại khi lưu.
+  const currentDetails = decryptProfileDetails(parseJsonObject(profile.details_json));
   const inputDetails = changes.details === undefined ? currentDetails : { ...currentDetails, ...validateEmployeeProfileDetails(changes.details) };
   let details = { ...inputDetails };
   if (changes.details !== undefined) await applyEmployeeDetailRules(details, currentDetails, changes.details, allowIdentityChanges, realUserId);
@@ -7009,6 +7011,14 @@ async function assertSingleProbation(contract, excludeId) {
 
 // Điều 20 khoản 2: chỉ được ký tối đa hai hợp đồng lao động xác định thời hạn liên tiếp; hợp đồng thứ ba phải không xác định thời hạn.
 // Không tính hợp đồng thử việc hoặc đã hủy; các trường hợp ngoại lệ (Điều 149, 151, 152) chưa được phân biệt.
+// Điều 151 Bộ luật Lao động 2019 (foreignWorkerRules.mjs): hợp đồng của người lao động nước ngoài phải xác định thời hạn, không vượt giấy phép lao động.
+async function assertForeignWorkerContract(contract) {
+  if (contract.contractCategory !== 'labor' || !contract.employeeCode) return;
+  const row = await db.prepare('SELECT p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.employee_code = ? LIMIT 1').get(contract.employeeCode);
+  const problem = row ? foreignContractProblem(parseJsonObject(row.details_json), contract) : '';
+  if (problem) throw new HttpError(422, problem);
+}
+
 async function assertSuccessiveFixedTerm(contract, excludeId) {
   if (contract.contractCategory !== 'labor' || !contract.employeeCode || !contract.endDate || isProbationContract(contract)) return;
   const others = await db.prepare("SELECT code, end_date, contract_type, contract_template, status FROM contracts WHERE contract_category = 'labor' AND employee_code = ? AND id <> ? AND status <> 'Đã hủy' AND status <> 'Dự thảo'").all(contract.employeeCode, excludeId);
@@ -7882,6 +7892,22 @@ async function processExpiryReminders() {
         kind: 'certificate', entityKey: row.record_key, expiry: cert.expireDate, bucket, recipients: await reminderRecipients('hr', owner?.id),
         title: days < 0 ? 'Chứng chỉ đã hết hiệu lực' : 'Chứng chỉ sắp hết hiệu lực', link: '/admin/hr/certificates',
         message: `Chứng chỉ ${cert.certName} của ${cert.employeeName || cert.empCode} hết hiệu lực ngày ${cert.expireDate}, ${describeDays(days)}.`,
+      });
+    }
+
+    // 3b. Giấy phép lao động hoặc xác nhận miễn của người lao động nước ngoài (nhắc thêm mốc 45 ngày để kịp làm hồ sơ gia hạn).
+    for (const row of await db.prepare("SELECT u.id, u.name, u.employee_code, p.details_json FROM users u JOIN employee_profiles p ON p.user_id = u.id WHERE u.is_active = 1").all()) {
+      const details = parseJsonObject(row.details_json);
+      if (!isForeignNationality(details.nationality)) continue;
+      const expiry = permitExpiryDate(details);
+      if (!isIsoDate(expiry)) continue;
+      const days = daysBetween(today, expiry);
+      const bucket = days > 30 && days <= 45 ? 45 : reminderBucket(days);
+      if (bucket === null) continue;
+      created += await sendReminder({
+        kind: 'work_permit', entityKey: row.id, expiry, bucket, recipients: await reminderRecipients('hr', row.id),
+        title: days < 0 ? 'Giấy phép lao động đã hết hạn' : 'Giấy phép lao động sắp hết hạn', link: '/admin/hr/employees',
+        message: `${details.workPermitStatus === 'exempt' ? 'Xác nhận không thuộc diện cấp giấy phép' : `Giấy phép lao động ${details.workPermitNumber || ''}`} của ${row.name} (${row.employee_code}) hết hạn ngày ${expiry}, ${describeDays(days)}. Hợp đồng lao động không được vượt thời hạn này (Điều 151).`,
       });
     }
 
@@ -14235,6 +14261,7 @@ async function handleRequest(request, response) {
           // Đóng bảo hiểm theo lương hợp đồng, không giảm theo ngày công.
           insuranceSalary: extra.insuranceSalary ?? (attendance ? baseSalary : undefined),
           dependents: countActiveDependents(employee.details?.familyMembers, period),
+          unemploymentInsured: !isForeignNationality(employee.details?.nationality),
         });
         const extraWarnings = [...(attendance?.warnings || [])];
         if (timesheet && Number(timesheet.unpaidLeaveDays) >= 14) extraWarnings.push(`Nghỉ không hưởng lương ${timesheet.unpaidLeaveDays} ngày: kiểm tra quy định về đóng bảo hiểm xã hội khi nghỉ không lương từ 14 ngày làm việc trở lên trong tháng.`);
@@ -14898,6 +14925,7 @@ async function handleRequest(request, response) {
     if (await db.prepare('SELECT id FROM contracts WHERE code = ?').get(code)) throw new HttpError(409, 'Mã hợp đồng đã tồn tại.');
     await assertSingleProbation(validated, '');
     await assertSuccessiveFixedTerm(validated, '');
+    await assertForeignWorkerContract(validated);
 
     await db.prepare(`INSERT INTO contracts (
       id, code, name, contract_category, contract_template, party_b_type, party_b_name,
@@ -15017,6 +15045,7 @@ async function handleRequest(request, response) {
       if (db.pool) await db.prepare("SELECT pg_advisory_xact_lock(hashtext('contracts-lifecycle'))").get();
       await assertSingleProbation(validated, contractId);
       if (validated.endDate && validated.endDate !== row.end_date) await assertSuccessiveFixedTerm(validated, contractId);
+      if (validated.endDate !== row.end_date || validated.status !== row.status) await assertForeignWorkerContract(validated);
       await db.prepare(`UPDATE contracts SET
         name = ?, contract_category = ?, contract_template = ?, party_b_type = ?, party_b_name = ?,
         party_b_tax_code = ?, party_b_representative = ?, party_b_position = ?, party_b_id_number = ?,

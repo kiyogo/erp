@@ -219,7 +219,8 @@ export function calculatePayslip(input) {
   if (exemptIncome > gross) throw new Error('Thu nhập miễn thuế không được lớn hơn tổng thu nhập.');
 
   const socialBase = Math.min(insuranceSalary, params.socialHealthCap);
-  const unemploymentBase = Math.min(insuranceSalary, params.unemploymentCap);
+  // Người lao động nước ngoài không thuộc đối tượng bảo hiểm thất nghiệp (Luật Việc làm): unemploymentInsured = false.
+  const unemploymentBase = input.unemploymentInsured === false ? 0 : Math.min(insuranceSalary, params.unemploymentCap);
   const employee = {
     social: Math.round(socialBase * INSURANCE_RATES.employee.social),
     health: Math.round(socialBase * INSURANCE_RATES.employee.health),

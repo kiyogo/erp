@@ -46,6 +46,9 @@ import {
 import { Button, Input as BaseInput, Select as BaseSelect, message, Checkbox as BaseCheckbox, Modal, Tag, InputNumber } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
 import { authApi, collectionsApi, ekycApi, employeesApi } from '../../api/endpoints';
+
+// Khớp isForeignNationality ở legacy/api/foreignWorkerRules.mjs: quốc tịch có ghi và không phải Việt Nam.
+const isForeignNationality = (value: unknown) => { const text = String(value ?? '').trim().toLocaleLowerCase('vi-VN'); return Boolean(text) && !['việt nam', 'viet nam', 'vietnam', 'vn', 'vnm'].includes(text); };
 import { useAuth } from '../../context/AuthContext';
 import { EmployeeProfileWizard } from '../employee/EmployeeProfileWizard';
 import { getEmployeeOnboardingStorage, isEmployeeOnboardingComplete } from '../employee/onboardingStorage';
@@ -3556,6 +3559,56 @@ export const EmployeeFullEditModule: React.FC = () => {
                   <Input type="date" value={formData.docExpiryDate} onChange={e => handleChange('docExpiryDate', e.target.value)} />
                 </div>
               </div>
+              {isForeignNationality(formData.nationality) && (
+                <div style={{ marginTop: 12, padding: '12px', border: '1px solid #E2E8F0', borderRadius: 6 }}>
+                  <div style={{ fontSize: 13, color: '#334155', marginBottom: 8 }}>Giấy phép lao động (người lao động nước ngoài, Điều 151 Bộ luật Lao động 2019, Nghị định 219/2025)</div>
+                  <div className="k-form-grid-3">
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Tình trạng giấy phép</label>
+                      <Select value={formData.workPermitStatus} onChange={val => handleChange('workPermitStatus', val)}
+                        options={[{ label: 'Có giấy phép lao động', value: 'permit' }, { label: 'Không thuộc diện cấp giấy phép', value: 'exempt' }, { label: 'Đang xin giấy phép', value: 'pending' }]} />
+                    </div>
+                    {formData.workPermitStatus === 'permit' && (
+                      <>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Số giấy phép lao động</label>
+                          <Input value={formData.workPermitNumber || ''} onChange={e => handleChange('workPermitNumber', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày cấp</label>
+                          <Input type="date" value={formData.workPermitIssueDate || ''} onChange={e => handleChange('workPermitIssueDate', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày hết hạn (tối đa 2 năm)</label>
+                          <Input type="date" value={formData.workPermitExpiryDate || ''} onChange={e => handleChange('workPermitExpiryDate', e.target.value)} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                          <BaseCheckbox checked={formData.workPermitExtended === true} onChange={(e: any) => handleChange('workPermitExtended', e.target.checked)}>Đã gia hạn (một lần, tối đa 2 năm)</BaseCheckbox>
+                        </div>
+                        {formData.workPermitExtended === true && (
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày hết hạn trước khi gia hạn</label>
+                            <Input type="date" value={formData.workPermitPreviousExpiryDate || ''} onChange={e => handleChange('workPermitPreviousExpiryDate', e.target.value)} />
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {formData.workPermitStatus === 'exempt' && (
+                      <>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Trường hợp miễn và số văn bản xác nhận</label>
+                          <Input value={formData.workPermitExemptReason || ''} onChange={e => handleChange('workPermitExemptReason', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày hết hạn xác nhận</label>
+                          <Input type="date" value={formData.workPermitExemptExpiryDate || ''} onChange={e => handleChange('workPermitExemptExpiryDate', e.target.value)} />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Bắt buộc có số hộ chiếu. Hợp đồng lao động phải xác định thời hạn và không vượt ngày hết hạn này; hệ thống nhắc trước 45, 30, 14, 7, 1 ngày và không tính bảo hiểm thất nghiệp trong bảng lương.</div>
+                </div>
+              )}
               {(biometricState.stored || biometricState.withdrawnAt) && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 12, padding: '10px 12px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 12.5, color: '#475569' }}>
                   <span>
