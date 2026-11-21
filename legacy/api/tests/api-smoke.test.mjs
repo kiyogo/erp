@@ -3001,3 +3001,26 @@ test('insurance records link real employees, respect the regional minimum and be
   await request('/collections/insurance_regimes', 'POST', { record: regime('CD-4', { startDate: '2027-01-04', leaveDays: 1 }) }, 201);
   await request('/collections/insurance_regimes', 'POST', { record: regime('CD-5', { regimeType: 'Dưỡng sức sau sinh', leaveDays: 12 }) }, 422);
 });
+
+test('advances go to real employees, settle before the next advance and keep server computed balances', async () => {
+  const staff = (await request('/users', 'POST', { email: 'advance@example.test', name: 'Advance Staff', password: 'Advance-26!Secure', employeeCode: 'TEST-ADV', role: 'USER' }, 201)).user;
+  const advance = (key, extra = {}) => ({ key, code: key, employeeId: staff.id, employeeName: 'Forged', advanceType: 'Công tác phí', purpose: 'Công tác Hà Nội', advancedAmount: 5_000_000, settleDeadline: '2999-12-31', status: 'Đã quyết toán nội bộ', balance: 99, ...extra });
+  await request('/collections/finance_advances', 'POST', { record: advance('TU-NOEMP', { employeeId: '' }) }, 422);
+  const created = (await request('/collections/finance_advances', 'POST', { record: advance('TU-1') }, 201)).record;
+  assert.equal(created.status, 'Chờ cấp tạm ứng');
+  assert.equal(created.employeeName, 'Advance Staff');
+  assert.equal(created.balance, 0);
+  await request('/collections/finance_advances', 'POST', { record: advance('TU-2') }, 409);
+  const route = '/collections/finance_advances/TU-1';
+  await request(route, 'PATCH', { patch: { status: 'Chờ thanh quyết toán', issuedAmount: 6_000_000, disbursementReference: 'PC-1' } }, 422);
+  const issued = (await request(route, 'PATCH', { patch: { status: 'Chờ thanh quyết toán', issuedAmount: 5_000_000, disbursementReference: 'PC-1' } })).record;
+  assert.equal(issued.balance, 5_000_000);
+  await request(route, 'PATCH', { patch: { advancedAmount: 9_000_000 } }, 422);
+  const partial = (await request(route, 'PATCH', { patch: { spentAmount: 4_200_000, invoicesSummary: 'HĐ 0001, 0002' } })).record;
+  assert.equal(partial.status, 'Chờ thanh quyết toán');
+  assert.equal(partial.balance, 800_000);
+  const settled = (await request(route, 'PATCH', { patch: { spentAmount: 4_200_000, invoicesSummary: 'HĐ 0001, 0002; nộp lại 800.000 đồng PT-9', balanceReconciled: true } })).record;
+  assert.equal(settled.status, 'Đã quyết toán nội bộ');
+  await request(route, 'PATCH', { patch: { spentAmount: 1 } }, 422);
+  await request('/collections/finance_advances', 'POST', { record: advance('TU-3') }, 201);
+});

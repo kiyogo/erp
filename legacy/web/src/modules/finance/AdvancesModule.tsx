@@ -18,6 +18,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip, Alert } from '../../custom-ui';
 import { collectionsApi } from '../../api/endpoints';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { advanceStatus, calculateAdvanceSettlement } from './advanceCalculations';
 
@@ -98,10 +99,9 @@ export const AdvancesModule: React.FC = () => {
 
   const handleCreate = async (values: any) => {
     const adv = Number(values.advancedAmount);
-    const { employeeNumber, ...advanceValues } = values;
-    const empCode = String(employeeNumber || '').trim();
-    if (!empCode) {
-      message.error('Nhập mã nhân viên đã được cấp.');
+    const advanceValues = values;
+    if (!values.employeeId) {
+      message.error('Chọn nhân viên nhận tạm ứng.');
       return;
     }
     if (!Number.isFinite(adv) || adv <= 0) {
@@ -119,7 +119,6 @@ export const AdvancesModule: React.FC = () => {
     }
     const newItem: EnterpriseAdvanceItem = {
       ...advanceValues,
-      empCode,
       key: `advance-${crypto.randomUUID()}`,
       advancedAmount: adv,
       spentAmount: 0,
@@ -462,10 +461,9 @@ export const AdvancesModule: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="employeeName" label="Họ tên nhân viên tạm ứng" rules={[{ required: true }]}>
-              <Input placeholder="Nhập tên nhân viên" />
+            <Form.Item name="employeeId" label="Nhân viên nhận tạm ứng" rules={[{ required: true }]} style={{ gridColumn: 'span 2' }}>
+              <EmployeeSelect valueKey="id" onSelectEmployee={(employee) => { if (employee?.department) form.setFieldsValue({ department: employee.department }); }} />
             </Form.Item>
-            <Form.Item name="employeeNumber" label="Mã nhân viên" rules={[{ required: true }]}><Input placeholder="Nhập mã đã cấp" /></Form.Item>
             <Form.Item name="department" label="Phòng ban" rules={[{ required: true, message: 'Vui lòng chọn phòng ban' }]}>
               <Select
                 placeholder="Chọn phòng ban..."

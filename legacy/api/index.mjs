@@ -34,6 +34,7 @@ import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
+import { isAdvanceSettled, normalizeAdvance } from './advanceRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -5476,6 +5477,22 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (current && [approved, waiting].includes(current.status) && record.status === 'Đã trao giải') { record.awardedBy = actor.name; record.awardedById = actor.id; record.awardedAt = now(); }
     record.createdAt = current?.createdAt || now(); record.updatedAt = now();
   }
+  // Tạm ứng (advanceRules.mjs): người nhận là nhân viên thật, thanh toán dứt điểm tạm ứng kỳ trước mới được tạm ứng tiếp, máy chủ tính chênh lệch.
+  if (scope === 'finance_advances') {
+    if (!current) {
+      const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1').get(requiredText(record.employeeId, 'Nhân viên tạm ứng', 160));
+      if (!employee) throw new HttpError(422, 'Người nhận tạm ứng phải là người lao động đang làm việc tại doanh nghiệp.');
+      record.employeeId = employee.id; record.employeeName = employee.name; record.empCode = employee.employee_code; record.department = record.department || employee.department || '';
+      const unsettled = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_advances'").all())
+        .map((row) => parseJsonObject(row.payload_json)).find((item) => item.employeeId === employee.id && !isAdvanceSettled(item));
+      if (unsettled) throw new HttpError(409, `Nhân viên còn phiếu tạm ứng ${unsettled.code} chưa quyết toán; phải thanh toán dứt điểm tạm ứng kỳ trước mới được nhận tạm ứng kỳ sau.`);
+      const duplicate = await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'finance_advances' AND LOWER(json_extract(payload_json, '$.code')) = LOWER(?) LIMIT 1").get(String(record.code || '').trim());
+      if (duplicate) throw new HttpError(409, 'Mã phiếu tạm ứng đã tồn tại.');
+    } else if (current.employeeId) {
+      record.employeeId = current.employeeId; record.employeeName = current.employeeName; record.empCode = current.empCode;
+    }
+    try { record = normalizeAdvance(record, current, { today: todayInVietnam() }); } catch (error) { throw new HttpError(422, error.message); }
+  }
   // Hồ sơ bảo hiểm (insuranceRules.mjs): gắn nhân viên thật, mức lương đóng theo lương tối thiểu vùng và trần, số ngày hưởng chế độ.
   if (scope === 'insurance_adjustments' || scope === 'insurance_regimes') {
     if (!current || record.employeeId) {
@@ -6577,6 +6594,11 @@ function validateBankAccount(input) {
   if (openedAt && closedAt && closedAt < openedAt) throw new HttpError(422, 'Ngày đóng tài khoản không được trước ngày mở tài khoản.');
   const currency = requiredText(input.currency || 'VND', 'Tiền tệ', 3).toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new HttpError(422, 'Mã tiền tệ phải gồm 3 chữ cái in hoa.');
+  // Số tài khoản chỉ gồm chữ và số (bỏ khoảng trắng, dấu gạch); tài khoản sổ cái của tiền gửi ngân hàng thuộc nhóm 112 (Thông tư 99/2025).
+  const compactNumber = String(input.accountNumber || '').replace(/[\s.-]+/g, '');
+  if (compactNumber && !/^[A-Za-z0-9]{4,34}$/.test(compactNumber)) throw new HttpError(422, 'Số tài khoản ngân hàng chỉ gồm chữ và số, dài 4 đến 34 ký tự (độ dài tối đa của số IBAN).');
+  const ledgerCode = String(input.ledgerAccountCode || '').trim();
+  if (ledgerCode && !/^112/.test(ledgerCode)) throw new HttpError(422, 'Tài khoản sổ cái của tài khoản ngân hàng phải thuộc nhóm 112 (tiền gửi ngân hàng).');
   return {
     bankName: requiredText(input.bankName, 'Tên ngân hàng', 200),
     accountNumber: requiredText(input.accountNumber, 'Số tài khoản', 64),
