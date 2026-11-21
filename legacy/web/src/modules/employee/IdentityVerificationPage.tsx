@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, message, Modal } from '../../custom-ui';
+import { Button, Checkbox, message, Modal } from '../../custom-ui';
 import { FileUploadDialog } from '../../components/FileUploadDialog';
 import { ekycApi } from '../../api/endpoints';
 import {
@@ -42,7 +42,6 @@ export const IdentityVerificationPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const tokenParam = searchParams.get('token');
-  const userIdParam = searchParams.get('userId');
 
   const [subStep, setSubStep] = useState<EkycStep>(1);
   // Token 32 bytes (64 hex) — đủ an toàn và tạo QR gọn (version 7 EC M)
@@ -110,6 +109,8 @@ export const IdentityVerificationPage: React.FC = () => {
   });
 
   const [livePhoto, setLivePhoto] = useState<string | null>(null);
+  // Đồng ý xử lý dữ liệu sinh trắc học và ảnh giấy tờ (dữ liệu cá nhân nhạy cảm), bắt buộc trước khi bật camera.
+  const [biometricConsentAt, setBiometricConsentAt] = useState('');
   const [liveVideo, setLiveVideo] = useState<string | null>(null);
   const [cardFrontPhoto, setCardFrontPhoto] = useState<string | null>(null);
   const [cardBackPhoto, setCardBackPhoto] = useState<string | null>(null);
@@ -320,6 +321,16 @@ export const IdentityVerificationPage: React.FC = () => {
       ekycVerified: true,
     };
 
+    const effectiveSessionToken = tokenParam || ekycQrToken;
+    if (effectiveSessionToken) {
+      try {
+        await ekycApi.verifySession(effectiveSessionToken, { ...finalVerifiedData, biometricConsent: true, biometricConsentAt });
+      } catch (err: any) {
+        setIsProcessing(false);
+        message.error(err?.response?.data?.message || 'Không lưu được kết quả xác minh lên máy chủ. Vui lòng quét lại mã QR trên máy tính.');
+        return;
+      }
+    }
     setEkycData(finalVerifiedData);
     try {
       localStorage.setItem('employee_ekyc_verified', JSON.stringify(finalVerifiedData));
@@ -327,11 +338,6 @@ export const IdentityVerificationPage: React.FC = () => {
       if (effectiveToken) {
         localStorage.setItem(`ekyc_token_verified_${effectiveToken}`, JSON.stringify(finalVerifiedData));
         localStorage.setItem(`ekyc_token_done_${effectiveToken}`, '1');
-        try {
-          await ekycApi.verifySession(effectiveToken, { ...finalVerifiedData, userId: userIdParam || undefined });
-        } catch (err) {
-          console.error('Không thể đồng bộ eKYC session lên server:', err);
-        }
       }
 
       // Tự động đồng bộ sang hồ sơ CMND / Thẻ căn cước / Hộ chiếu
@@ -709,6 +715,12 @@ export const IdentityVerificationPage: React.FC = () => {
                     Không gửi hình ảnh lên máy chủ bên ngoài.
                   </div>
                 </div>
+              </div>
+
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, fontSize: 12.5, color: '#334155', lineHeight: 1.5 }}>
+                <Checkbox checked={!!biometricConsentAt} onChange={(e) => setBiometricConsentAt(e.target.checked ? new Date().toISOString() : '')}>
+                  Tôi đồng ý cho công ty xử lý ảnh khuôn mặt, video xác thực và ảnh hai mặt thẻ căn cước của tôi để xác minh danh tính và lưu vào hồ sơ nhân sự. Đây là dữ liệu cá nhân nhạy cảm; tôi có thể yêu cầu xóa hoặc rút lại sự đồng ý qua bộ phận nhân sự.
+                </Checkbox>
               </div>
 
 
@@ -1215,6 +1227,10 @@ export const IdentityVerificationPage: React.FC = () => {
               type="primary"
               onClick={() => {
                 if (subStep === 1) {
+                  if (!isDesktopDevice && !biometricConsentAt) {
+                    message.warning('Vui lòng đánh dấu đồng ý xử lý dữ liệu sinh trắc học trước khi tiếp tục.');
+                    return;
+                  }
                   setSubStep(2);
                 } else if (subStep === 2) {
                   if (!livePhoto && livenessStage !== 'COMPLETED') {

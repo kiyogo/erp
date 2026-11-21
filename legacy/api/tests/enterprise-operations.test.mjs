@@ -572,3 +572,24 @@ test('SMTP configuration keeps credentials encrypted, supports updates without r
   await request('/system/email-config/test', 'POST', { recipient: 'mailer@example.test' }, 422);
 });
 
+
+test('public share links only render safe file types inline and force a download for HTML or SVG', async () => {
+  const workspace = await request('/files?scope=employee');
+  const upload = async (name, body, mime) => {
+    const response = await fetch(`${base}/files/upload`, { method: 'POST', headers: { Authorization: headers.Authorization, 'Content-Type': mime, 'X-File-Name': encodeURIComponent(name), 'X-Parent-Id': workspace.context.parentId }, body });
+    assert.equal(response.status, 201); return (await response.json()).file;
+  };
+  const shareOf = async (file) => (await request(`/files/${file.id}/share`, 'POST', {})).share;
+  const html = await upload('trang.html', Buffer.from('<script>alert(1)</script>'), 'text/html');
+  const htmlShare = await shareOf(html);
+  const htmlResponse = await fetch(`${base}/files/share/${encodeURIComponent(htmlShare.token)}/download`);
+  assert.equal(htmlResponse.status, 200);
+  assert.equal(htmlResponse.headers.get('content-type'), 'application/octet-stream');
+  assert.match(htmlResponse.headers.get('content-disposition'), /^attachment;/);
+  const svgShare = await shareOf(await upload('hinh.svg', Buffer.from('<svg onload="alert(1)"/>'), 'image/svg+xml'));
+  assert.match((await fetch(`${base}/files/share/${encodeURIComponent(svgShare.token)}/download`)).headers.get('content-disposition'), /^attachment;/);
+  const pdfShare = await shareOf(await upload('tai-lieu.pdf', Buffer.from('%PDF-1.4'), 'application/pdf'));
+  const pdfResponse = await fetch(`${base}/files/share/${encodeURIComponent(pdfShare.token)}/download`);
+  assert.equal(pdfResponse.headers.get('content-type'), 'application/pdf');
+  assert.match(pdfResponse.headers.get('content-disposition'), /^inline;/);
+});

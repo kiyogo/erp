@@ -36,6 +36,7 @@ import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
+import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken } from './ekycRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -9887,162 +9888,123 @@ async function handleRequest(request, response) {
   }
 
   if (request.method === 'POST' && resource === '/ekyc/session') {
-    const payload = await readJson(request).catch(() => ({}));
-    const token = String(payload.token || randomUUID()).trim();
+    // Máy tính đã đăng nhập tạo phiên; mã phiên do trình duyệt sinh (64 hex) được hiện trong mã QR cho điện thoại.
     const actor = await requireUser(request);
-    const userId = payload.userId || actor.id;
+    const payload = await readJson(request).catch(() => ({}));
+    const token = payload.token ? String(payload.token).trim() : randomBytes(32).toString('hex');
+    if (!isEkycToken(token)) throw new HttpError(422, 'Mã phiên xác minh phải gồm 64 ký tự hex.');
+    const userId = String(payload.userId || actor.id);
     if (userId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Bạn không được tạo phiên xác minh cho người khác.');
-    ekycSessions.set(token, {
-      token,
-      userId,
-      status: 'PENDING',
-      data: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    sendJson(response, 200, { token, status: 'PENDING' });
+    if (!await getUserById(userId)) throw new HttpError(404, 'Không tìm thấy nhân viên cần xác minh.');
+    const existing = ekycSessions.get(token);
+    if (existing && existing.userId !== userId) throw new HttpError(409, 'Mã phiên xác minh đã được dùng.');
+    if (existing?.status === 'VERIFIED') {
+      sendJson(response, 200, { token, status: 'VERIFIED' });
+      return;
+    }
+    ekycSessions.set(token, { token, userId, status: existing?.status || 'PENDING', data: null, createdAt: Date.now(), updatedAt: Date.now() });
+    sendJson(response, 200, { token, status: existing?.status || 'PENDING' });
     return;
   }
 
+  // Lấy phiên còn hạn theo mã; điện thoại không đăng nhập nên mã phiên là quyền duy nhất, phiên phải do người đã đăng nhập tạo trước.
+  const liveEkycSession = (token) => {
+    const session = isEkycToken(token) ? ekycSessions.get(token) : null;
+    if (!session) throw new HttpError(404, 'Phiên xác minh không tồn tại; hãy mở lại mã QR trên máy tính.');
+    if (session.status !== 'VERIFIED' && Date.now() - session.createdAt > EKYC_SESSION_TTL_MS) throw new HttpError(410, 'Phiên xác minh đã hết hạn 30 phút; hãy tạo mã QR mới.');
+    return session;
+  };
+
   if (request.method === 'POST' && resource.startsWith('/ekyc/session/') && resource.endsWith('/verify')) {
     const token = decodeURIComponent(resource.slice('/ekyc/session/'.length, -'/verify'.length));
+    const session = liveEkycSession(token);
+    if (session.status === 'VERIFIED') throw new HttpError(409, 'Phiên xác minh đã hoàn tất, không ghi lại được.');
     const payload = await readJson(request);
-    const session = ekycSessions.get(token) || { token, createdAt: Date.now() };
-    session.status = 'VERIFIED';
-    const verifiedData = payload.data || payload;
-    session.data = verifiedData;
-    session.verifiedAt = new Date().toISOString();
-    session.updatedAt = Date.now();
-    ekycSessions.set(token, session);
-
-    // LƯU TRỰC TIẾP VÀO DATABASE (employee_profiles & users)
-    let targetUserId = payload.userId || verifiedData.userId || session.userId;
-    if (!targetUserId) {
-      const fallbackUser = await db.prepare("SELECT id FROM users WHERE role != 'ADMIN' AND is_active = 1 ORDER BY updated_at DESC LIMIT 1").get();
-      if (fallbackUser) targetUserId = fallbackUser.id;
-    }
-
-    if (targetUserId) {
-      try {
-        const userRow = await getUserById(targetUserId);
-        if (userRow) {
-          await ensureEmployeeProfile(userRow);
-          const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(targetUserId);
-          const existingDetails = parseJsonObject(profile?.details_json);
-          const updatedDetails = {
-            ...existingDetails,
-            docType: 'Căn cước công dân',
-            docNumber: verifiedData.idNumber || existingDetails.docNumber || '001095012345',
-            docIssueDate: verifiedData.issueDate || existingDetails.docIssueDate || '2025-03-24',
-            docIssuePlace: verifiedData.issuePlace || existingDetails.docIssuePlace || 'Bộ Công an',
-            docExpiryDate: verifiedData.expiryDate || existingDetails.docExpiryDate || '2035-06-06',
-            name: verifiedData.name || userRow.name,
-            displayName: verifiedData.name || existingDetails.displayName || userRow.name,
-            birthDate: verifiedData.birthDate || existingDetails.birthDate,
-            gender: verifiedData.gender || existingDetails.gender,
-            originPlace: verifiedData.originPlace || existingDetails.originPlace,
-            hkttAddress: verifiedData.residencePlace || existingDetails.hkttAddress,
-            currentAddress: verifiedData.residencePlace || existingDetails.currentAddress,
-            avatarUrl: verifiedData.cardAvatarUrl || verifiedData.livePhotoUrl || profile?.avatar_url,
-            ekycVerified: true,
-            idNumber: verifiedData.idNumber || existingDetails.idNumber || existingDetails.docNumber,
-            residencePlace: verifiedData.residencePlace || existingDetails.residencePlace || existingDetails.hkttAddress,
-            cardFrontUrl: verifiedData.cardFrontUrl || existingDetails.cardFrontUrl,
-            cardBackUrl: verifiedData.cardBackUrl || existingDetails.cardBackUrl,
-            livePhotoUrl: verifiedData.livePhotoUrl || existingDetails.livePhotoUrl,
-            liveVideoUrl: verifiedData.liveVideoUrl || existingDetails.liveVideoUrl,
-            cardAvatarUrl: verifiedData.cardAvatarUrl || existingDetails.cardAvatarUrl,
-            certificateId: verifiedData.certificateId,
-            verifiedAt: verifiedData.verifiedAt || new Date().toISOString(),
-            faceMatchScore: verifiedData.faceMatchScore,
-          };
-
-          const newAvatar = verifiedData.cardAvatarUrl || verifiedData.livePhotoUrl || profile?.avatar_url;
-          await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?')
-            .run(JSON.stringify(updatedDetails), newAvatar, now(), targetUserId);
-          if (verifiedData.name) {
-            await db.prepare('UPDATE users SET name = ?, updated_at = ? WHERE id = ?')
-              .run(verifiedData.name, now(), targetUserId);
-          }
-        }
-      } catch (err) {
-        console.error('Lỗi lưu eKYC vào database:', err);
-      }
-    }
-
-    sendJson(response, 200, { success: true, status: 'VERIFIED', token, data: verifiedData });
+    const verifiedData = payload.data && typeof payload.data === 'object' ? payload.data : payload;
+    if (verifiedData.userId && verifiedData.userId !== session.userId) throw new HttpError(403, 'Kết quả xác minh chỉ được lưu cho nhân viên đã tạo phiên.');
+    const problem = ekycVerificationProblem(verifiedData);
+    if (problem) throw new HttpError(422, problem);
+    const userRow = await getUserById(session.userId);
+    if (!userRow) throw new HttpError(404, 'Không tìm thấy nhân viên cần xác minh.');
+    const text = (value, max = 500) => String(value ?? '').trim().slice(0, max);
+    const timestamp = now();
+    await ensureEmployeeProfile(userRow);
+    const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(session.userId);
+    const existingDetails = parseJsonObject(profile?.details_json);
+    const keep = (value, current) => text(value) || current || '';
+    const idNumber = text(verifiedData.idNumber, 12);
+    const updatedDetails = {
+      ...existingDetails,
+      docType: 'Căn cước công dân',
+      docNumber: idNumber,
+      idNumber,
+      docIssueDate: keep(verifiedData.issueDate, existingDetails.docIssueDate),
+      docIssuePlace: keep(verifiedData.issuePlace, existingDetails.docIssuePlace),
+      docExpiryDate: keep(verifiedData.expiryDate, existingDetails.docExpiryDate),
+      name: text(verifiedData.name, 200),
+      displayName: text(verifiedData.name, 200),
+      birthDate: keep(verifiedData.birthDate, existingDetails.birthDate),
+      gender: keep(verifiedData.gender, existingDetails.gender),
+      originPlace: keep(verifiedData.originPlace, existingDetails.originPlace),
+      hkttAddress: keep(verifiedData.residencePlace, existingDetails.hkttAddress),
+      residencePlace: keep(verifiedData.residencePlace, existingDetails.residencePlace),
+      currentAddress: existingDetails.currentAddress || text(verifiedData.residencePlace),
+      cardFrontUrl: verifiedData.cardFrontUrl || existingDetails.cardFrontUrl,
+      cardBackUrl: verifiedData.cardBackUrl || existingDetails.cardBackUrl,
+      livePhotoUrl: verifiedData.livePhotoUrl || existingDetails.livePhotoUrl,
+      liveVideoUrl: verifiedData.liveVideoUrl || existingDetails.liveVideoUrl,
+      cardAvatarUrl: verifiedData.cardAvatarUrl || existingDetails.cardAvatarUrl,
+      avatarUrl: verifiedData.cardAvatarUrl || verifiedData.livePhotoUrl || existingDetails.avatarUrl || profile?.avatar_url,
+      certificateId: text(verifiedData.certificateId, 200),
+      faceMatchScore: Number.isFinite(Number(verifiedData.faceMatchScore)) ? Number(verifiedData.faceMatchScore) : null,
+      ekycVerified: true,
+      verifiedAt: timestamp,
+      biometricConsent: true,
+      biometricConsentAt: text(verifiedData.biometricConsentAt, 40) || timestamp,
+    };
+    const newAvatar = verifiedData.cardAvatarUrl || verifiedData.livePhotoUrl || profile?.avatar_url;
+    await db.transaction(async () => {
+      await db.prepare('UPDATE employee_profiles SET details_json = ?, avatar_url = ?, updated_at = ? WHERE user_id = ?').run(JSON.stringify(updatedDetails), newAvatar, timestamp, session.userId);
+      await db.prepare('UPDATE users SET name = ?, updated_at = ? WHERE id = ?').run(updatedDetails.name, timestamp, session.userId);
+      await recordAuditEvent(session.userId, 'ekyc_verified', 'employee_profiles', session.userId, { faceMatchScore: updatedDetails.faceMatchScore, certificateId: updatedDetails.certificateId });
+    });
+    Object.assign(session, { status: 'VERIFIED', data: { idNumber, name: updatedDetails.name }, verifiedAt: timestamp, updatedAt: Date.now() });
+    sendJson(response, 200, { success: true, status: 'VERIFIED', token });
     return;
   }
 
   if (request.method === 'POST' && resource.startsWith('/ekyc/session/') && resource.endsWith('/connect')) {
     const token = decodeURIComponent(resource.slice('/ekyc/session/'.length, -'/connect'.length));
-    const session = ekycSessions.get(token) || { token, createdAt: Date.now() };
-    if (session.status !== 'VERIFIED') {
-      session.status = 'CONNECTED';
-      session.connectedAt = new Date().toISOString();
-      session.updatedAt = Date.now();
-      ekycSessions.set(token, session);
-    }
+    const session = liveEkycSession(token);
+    if (session.status !== 'VERIFIED') Object.assign(session, { status: 'CONNECTED', connectedAt: now(), updatedAt: Date.now() });
     sendJson(response, 200, { success: true, status: session.status, token });
     return;
   }
 
+  // Trạng thái phiên: chỉ người được xác minh hoặc quản trị viên (đã đăng nhập) nhận dữ liệu hồ sơ; dữ liệu đọc lại từ hồ sơ đã lưu.
   if (request.method === 'GET' && resource.startsWith('/ekyc/session/') && resource.endsWith('/status')) {
-    if (request.headers.authorization) await requireUser(request);
+    const actor = await requireUser(request);
     const token = decodeURIComponent(resource.slice('/ekyc/session/'.length, -'/status'.length));
-    const session = ekycSessions.get(token);
-    if (session && session.status === 'VERIFIED' && session.data) {
+    const session = isEkycToken(token) ? ekycSessions.get(token) : null;
+    const targetUserId = session?.userId || url.searchParams.get('userId') || actor.id;
+    if (targetUserId !== actor.id && actor.role !== 'ADMIN') throw new HttpError(403, 'Bạn không được xem kết quả xác minh của người khác.');
+    const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(targetUserId);
+    const details = parseJsonObject(profile?.details_json);
+    if (details.ekycVerified === true) {
       sendJson(response, 200, {
-        status: 'VERIFIED',
-        verified: true,
-        data: session.data,
-        verifiedAt: session.verifiedAt,
+        status: 'VERIFIED', verified: true, verifiedAt: details.verifiedAt || profile.updated_at,
+        data: {
+          ...details, idNumber: details.docNumber || details.idNumber, docNumber: details.docNumber || details.idNumber,
+          issueDate: details.docIssueDate, issuePlace: details.docIssuePlace, expiryDate: details.docExpiryDate,
+          cardAvatarUrl: profile.avatar_url || details.avatarUrl,
+        },
       });
       return;
     }
-
-    if (session && session.status === 'CONNECTED') {
-      sendJson(response, 200, {
-        status: 'CONNECTED',
-        verified: false,
-        connected: true,
-        connectedAt: session.connectedAt,
-      });
+    if (session?.status === 'CONNECTED') {
+      sendJson(response, 200, { status: 'CONNECTED', verified: false, connected: true, connectedAt: session.connectedAt });
       return;
     }
-
-    // Kiểm tra trong database theo userId nếu có
-    let targetUserId = session?.userId || url.searchParams.get('userId');
-    if (!targetUserId) {
-      targetUserId = (await requireUser(request)).id;
-    }
-
-    if (targetUserId) {
-      try {
-        const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(targetUserId);
-        if (profile) {
-          const details = parseJsonObject(profile.details_json);
-          if (details && (details.ekycVerified || details.docNumber)) {
-            sendJson(response, 200, {
-              status: 'VERIFIED',
-              verified: true,
-              data: {
-                ...details,
-                idNumber: details.docNumber || details.idNumber,
-                docNumber: details.docNumber || details.idNumber,
-                issueDate: details.docIssueDate || details.issueDate,
-                issuePlace: details.docIssuePlace || details.issuePlace,
-                expiryDate: details.docExpiryDate || details.expiryDate,
-                cardAvatarUrl: profile.avatar_url || details.avatarUrl,
-              },
-              verifiedAt: details.verifiedAt || profile.updated_at,
-            });
-            return;
-          }
-        }
-      } catch {}
-    }
-
     sendJson(response, 200, { status: 'PENDING', verified: false, data: null });
     return;
   }
@@ -11319,12 +11281,17 @@ async function handleRequest(request, response) {
       throw new HttpError(404, 'Không tìm thấy nội dung tệp.');
     }
     const encodedName = encodeURIComponent(node.name).replace(/['()]/g, escape);
+    // Link công khai không cần đăng nhập: chỉ hiển thị trực tiếp loại tệp không chạy được mã (ảnh thường, PDF, video, âm thanh, văn bản thuần);
+    // HTML, SVG, XML... do người tải lên tự khai loại sẽ bị buộc tải về để không chạy mã trên tên miền của hệ thống.
+    const mimeType = String(node.mime_type || 'application/octet-stream').toLowerCase().split(';')[0].trim();
+    const inlineSafe = /^(image\/(png|jpeg|gif|webp|bmp)|application\/pdf|video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|text\/plain)$/.test(mimeType);
     response.writeHead(200, {
-      'Content-Type': node.mime_type || 'application/octet-stream',
+      'Content-Type': inlineSafe ? mimeType : 'application/octet-stream',
       'Content-Length': content.length,
-      'Content-Disposition': `inline; filename="download"; filename*=UTF-8''${encodedName}`,
+      'Content-Disposition': `${inlineSafe ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodedName}`,
       'Cache-Control': 'private, max-age=60',
       'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'",
     });
     response.end(content);
     return;

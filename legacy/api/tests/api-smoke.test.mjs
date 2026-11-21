@@ -2835,6 +2835,35 @@ test('enterprise service catalog validates code, category, status and price', as
   assert.equal((await request('/collections/enterprise_services/svc-1', 'PATCH', { patch: { priceMonthly: 2_000_000 } })).record.priceMonthly, 2_000_000);
 });
 
+test('ekyc sessions only write to the employee who created them, need consent and do not leak identity data', async () => {
+  const staff = (await request('/users', 'POST', { email: 'ekyc-staff@example.test', name: 'Nhân viên eKYC', password: 'Ekyc-Staff-26!Secure', employeeCode: 'EKYC-1', role: 'USER' }, 201)).user;
+  const other = (await request('/users', 'POST', { email: 'ekyc-other@example.test', name: 'Nhân viên khác eKYC', password: 'Ekyc-Other-26!Secure', employeeCode: 'EKYC-2', role: 'USER' }, 201)).user;
+  const login = async (email, password) => { const session = await request('/auth/login', 'POST', { email, password }); return { ...headers, Authorization: `Bearer ${session.access_token || session.token}` }; };
+  const staffHeaders = await login('ekyc-staff@example.test', 'Ekyc-Staff-26!Secure');
+  const otherHeaders = await login('ekyc-other@example.test', 'Ekyc-Other-26!Secure');
+  const token = 'a1'.repeat(32);
+  await request('/ekyc/session', 'POST', { token: 'short' }, 422, staffHeaders);
+  await request('/ekyc/session', 'POST', { token, userId: other.id }, 403, staffHeaders);
+  await request('/ekyc/session', 'POST', { token }, 200, staffHeaders);
+  await request('/ekyc/session', 'POST', { token }, 409, otherHeaders);
+  const anonymous = { 'Content-Type': 'application/json' };
+  const card = { idNumber: '001203004567', name: 'NGUYỄN VĂN EKYC', birthDate: '2000-01-02', biometricConsent: true };
+  await request(`/ekyc/session/${'b2'.repeat(32)}/verify`, 'POST', { data: card }, 404, anonymous);
+  await request(`/ekyc/session/${token}/verify`, 'POST', { data: { ...card, biometricConsent: false } }, 422, anonymous);
+  await request(`/ekyc/session/${token}/verify`, 'POST', { data: { ...card, idNumber: '12345' } }, 422, anonymous);
+  await request(`/ekyc/session/${token}/verify`, 'POST', { data: { ...card, userId: other.id } }, 403, anonymous);
+  await request(`/ekyc/session/${token}/verify`, 'POST', { data: card }, 200, anonymous);
+  await request(`/ekyc/session/${token}/verify`, 'POST', { data: card }, 409, anonymous);
+  await request(`/ekyc/session/${token}/status?userId=${staff.id}`, 'GET', undefined, 401, anonymous);
+  await request(`/ekyc/session/${'c3'.repeat(32)}/status?userId=${staff.id}`, 'GET', undefined, 403, otherHeaders);
+  const status = await request(`/ekyc/session/${token}/status`, 'GET', undefined, 200, staffHeaders);
+  assert.equal(status.verified, true);
+  assert.equal(status.data.docNumber, '001203004567');
+  assert.equal(status.data.biometricConsent, true);
+  const otherStatus = await request(`/ekyc/session/${'d4'.repeat(32)}/status`, 'GET', undefined, 200, otherHeaders);
+  assert.equal(otherStatus.verified, false);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };
