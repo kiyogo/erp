@@ -2970,6 +2970,29 @@ test('foreign contractor tax records compute VAT and CIT on the server, gross up
   await request('/collections/finance_contractor_taxes', 'POST', { record: { key: 'forged' } }, 409);
 });
 
+test('casual income payments withhold 10% from 2 million, honour 08/CK-TNCN commitments and summarise by month', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const base = { payeeName: 'Cộng tác viên A', identityNumber: '001203004567', description: 'Dịch bài viết', contractType: 'none', paymentDate: today, residency: 'resident', amount: 3_000_000, tax: 0 };
+  assert.equal((await request('/finance/casual-income', 'POST', { ...base, preview: true })).result.tax, 300_000);
+  await request('/finance/casual-income', 'POST', { ...base, contractType: 'labor' }, 422);
+  await request('/finance/casual-income', 'POST', { ...base, identityNumber: '123' }, 422);
+  await request('/finance/casual-income', 'POST', { ...base, paymentDate: '2999-01-01' }, 422);
+  const first = (await request('/finance/casual-income', 'POST', base, 201)).record;
+  assert.equal(first.tax, 300_000);
+  assert.equal(first.netPayment, 2_700_000);
+  await request('/finance/casual-income', 'POST', { ...base, payeeName: 'Cộng tác viên B', commitment: true }, 422);
+  const committed = (await request('/finance/casual-income', 'POST', { ...base, payeeName: 'Cộng tác viên B', identityNumber: '', taxCode: '0012345672', commitment: true, amount: 190_000_000 }, 201)).record;
+  assert.equal(committed.tax, 0);
+  const foreign = (await request('/finance/casual-income', 'POST', { ...base, payeeName: 'Foreign Expert', identityNumber: 'P1234567', residency: 'non_resident', amount: 1_000_000 }, 201)).record;
+  assert.equal(foreign.tax, 200_000);
+  const summary = await request(`/finance/casual-income?year=${today.slice(0, 4)}`);
+  const month = summary.months.find((item) => item.month === today.slice(0, 7));
+  assert.equal(month.payments, 3);
+  assert.equal(month.tax, 500_000);
+  assert.equal(summary.commitmentWarnings.length, 1);
+  await request('/collections/finance_casual_income_payments', 'POST', { record: { key: 'forged' } }, 409);
+});
+
 test('costing runs are recalculated by the server, previewed without saving and not overlapping', async () => {
   const input = { method: 'simple', periodStart: '2026-09-01', periodEnd: '2026-09-30', productName: 'Sản phẩm giá thành', unit: 'cái', openingWipMaterial: 0, openingWipConversion: 0,
     materialCost: 60_000_000, laborCost: 20_000_000, variableOverhead: 10_000_000, fixedOverhead: 10_000_000, completedQuantity: 80, wipQuantity: 20, wipCompletionRate: 50, normalCapacity: 200 };

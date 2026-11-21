@@ -1448,6 +1448,19 @@ export const contractorTaxApi = {
   markPaid: (key: string, data: { paidDate: string; reference: string }) => api.post<{ record: ContractorTaxRecord }>(`/finance/contractor-taxes/${encodeURIComponent(key)}/paid`, data),
 };
 
+export type CasualIncomeRecord = {
+  key: string; payeeName: string; taxCode: string; identityNumber: string; address: string; description: string; contractType: 'none' | 'under_3_months'; paymentDate: string;
+  amount: number; residency: 'resident' | 'non_resident'; commitment: boolean; rate: number; tax: number; netPayment: number; basis: string; warnings: string[];
+  journal: Array<{ account: string; debit: number; credit: number; note: string }>;
+};
+export type CasualIncomeInput = { payeeName?: string; taxCode?: string; identityNumber?: string; address?: string; description?: string; contractType?: string; paymentDate: string; amount: number; residency: string; commitment: boolean };
+// Thu nhập vãng lai: máy chủ tính thuế TNCN khấu trừ (10% cư trú từ 2 triệu đồng/lần, 20% không cư trú), tổng hợp theo tháng (cần PIN nếu đã đặt).
+export const casualIncomeApi = {
+  list: (year: number) => api.get<{ year: number; data: CasualIncomeRecord[]; months: Array<{ month: string; payments: number; amount: number; tax: number }>; commitmentWarnings: string[] }>('/finance/casual-income', { params: { year } }),
+  preview: (data: CasualIncomeInput) => api.post<{ result: CasualIncomeRecord }>('/finance/casual-income', { ...data, preview: true }),
+  create: (data: CasualIncomeInput) => api.post<{ record: CasualIncomeRecord }>('/finance/casual-income', data),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

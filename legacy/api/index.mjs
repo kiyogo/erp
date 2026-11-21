@@ -41,6 +41,7 @@ import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiom
 import { annualPitFinalization, authorizationProblems, finalizationDeadline } from './pitFinalizationRules.mjs';
 import { buildPitVoucher, voucherNumber } from './pitVoucherRules.mjs';
 import { CONTRACTOR_BUSINESS_TYPES, calculateContractorTax } from './contractorTaxRules.mjs';
+import { calculateCasualIncomeTax, commitmentOverLimit } from './casualIncomeRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -10620,7 +10621,7 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers', 'finance_contractor_taxes'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers', 'finance_contractor_taxes', 'finance_casual_income_payments'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }
@@ -15432,6 +15433,61 @@ async function handleRequest(request, response) {
   }
 
   // Phiếu lương của chính nhân viên, lấy từ bảng lương đã được duyệt (không lấy bản ghi tự khai của nhân viên).
+  // Thu nhập vãng lai (casualIncomeRules.mjs): sổ các lần trả tiền công, thù lao cho cá nhân không có hợp đồng lao động hoặc hợp đồng dưới 3 tháng;
+  // máy chủ tính thuế TNCN khấu trừ, tổng hợp theo tháng để kê khai và cảnh báo cam kết 08/CK-TNCN vượt mức. Phạm vi chỉ ghi qua route.
+  if (resource === '/finance/casual-income') {
+    const actor = await requireAdmin(request);
+    await requireSecurityPin(request, actor);
+    const list = async () => (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'finance_casual_income_payments'").all()).map((row) => parseJsonObject(row.payload_json));
+    const payeeKey = (item) => String(item.taxCode || item.identityNumber || item.payeeName || '').trim().toLocaleLowerCase('vi-VN');
+    if (request.method === 'GET') {
+      const year = Number(url.searchParams.get('year') || todayInVietnam().slice(0, 4));
+      if (!Number.isInteger(year) || year < 2013 || year > 2200) throw new HttpError(422, 'Năm không hợp lệ.');
+      const rows = (await list()).filter((item) => String(item.paymentDate).startsWith(`${year}-`)).sort((a, b) => String(b.paymentDate).localeCompare(String(a.paymentDate)));
+      const months = Array.from({ length: 12 }, (_, index) => {
+        const month = `${year}-${String(index + 1).padStart(2, '0')}`;
+        const inMonth = rows.filter((item) => item.paymentDate.startsWith(month));
+        return { month, payments: inMonth.length, amount: inMonth.reduce((sum, item) => sum + item.amount, 0), tax: inMonth.reduce((sum, item) => sum + item.tax, 0) };
+      }).filter((item) => item.payments);
+      const personalDeductionYear = year >= 2024 ? payrollParameters(`${year}-12`, 'I').pit.personalDeduction * 12 : 0;
+      const totals = new Map();
+      for (const item of rows) totals.set(payeeKey(item), { name: item.payeeName, total: (totals.get(payeeKey(item))?.total || 0) + item.amount, commitment: (totals.get(payeeKey(item))?.commitment || false) || item.commitment });
+      const commitmentWarnings = [...totals.values()].filter((item) => item.commitment && personalDeductionYear && commitmentOverLimit(item.total, personalDeductionYear))
+        .map((item) => `${item.name} có cam kết 08/CK-TNCN nhưng đã nhận ${item.total.toLocaleString('vi-VN')} đồng trong năm, vượt mức giảm trừ bản thân cả năm: cần khấu trừ 10% các lần trả tiếp theo.`);
+      sendJson(response, 200, { year, data: rows, months, commitmentWarnings });
+      return;
+    }
+    if (request.method !== 'POST') throw new HttpError(405, 'Phương thức không hỗ trợ.');
+    const payload = await readJson(request, 16 * 1024);
+    let result;
+    try {
+      result = calculateCasualIncomeTax({ amount: Number(payload.amount), paymentDate: String(payload.paymentDate || ''), residency: payload.residency, commitment: payload.commitment === true, taxCode: payload.taxCode });
+    } catch (error) { throw new HttpError(422, error.message); }
+    if (payload.preview === true) {
+      sendJson(response, 200, { result });
+      return;
+    }
+    if (String(payload.paymentDate) > todayInVietnam()) throw new HttpError(422, 'Ngày chi trả không được ở tương lai.');
+    const contractType = oneOf(payload.contractType, 'Hình thức thuê', ['none', 'under_3_months']);
+    const record = {
+      payeeName: requiredText(payload.payeeName, 'Họ tên người nhận', 200), taxCode: optionalText(payload.taxCode, 'Mã số thuế', 20),
+      identityNumber: optionalText(payload.identityNumber, 'Số định danh hoặc hộ chiếu', 20), address: optionalText(payload.address, 'Địa chỉ', 500),
+      description: requiredText(payload.description, 'Nội dung công việc', 500), contractType, paymentDate: payload.paymentDate, ...result,
+    };
+    if (record.identityNumber && record.residency === 'resident' && !isPersonalIdNumber(record.identityNumber)) throw new HttpError(422, 'Số định danh cá nhân phải gồm 12 chữ số.');
+    if (record.taxCode && !isValidTaxCode(record.taxCode) && !isPersonalIdNumber(record.taxCode)) throw new HttpError(422, 'Mã số thuế cá nhân không hợp lệ.');
+    let saved;
+    await db.transaction(async () => {
+      const key = `VL-${String(payload.paymentDate).replace(/-/g, '')}-${randomUUID().slice(0, 8).toUpperCase()}`;
+      saved = { key, ...record, createdBy: actor.name, createdById: actor.id, createdAt: now() };
+      await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
+        VALUES (?, 'finance_casual_income_payments', ?, ?, ?, ?, ?)`).run(randomUUID(), key, actor.id, JSON.stringify(saved), saved.createdAt, saved.createdAt);
+      await recordAuditEvent(actor.id, 'casual_income_payment', 'finance_casual_income_payments', key, { amount: saved.amount, tax: saved.tax });
+    });
+    sendJson(response, 201, { record: saved });
+    return;
+  }
+
   // Thuế nhà thầu nước ngoài (contractorTaxRules.mjs): sổ các lần thanh toán cho nhà thầu, máy chủ tính thuế GTGT, TNDN nộp thay, hạn khai, bút toán
   // gợi ý; `preview: true` chỉ tính. Phạm vi `finance_contractor_taxes` chỉ ghi qua route; đánh dấu đã nộp bằng /:key/paid.
   if (resource === '/finance/contractor-taxes' || /^\/finance\/contractor-taxes\/[^/]+\/paid$/.test(resource)) {

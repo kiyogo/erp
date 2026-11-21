@@ -77,6 +77,7 @@ import { AdvancesModule } from '../../modules/finance/AdvancesModule';
 import { PitFinalizationModule } from '../../modules/finance/PitFinalizationModule';
 import { PitVouchersModule } from '../../modules/finance/PitVouchersModule';
 import { ContractorTaxModule } from '../../modules/finance/ContractorTaxModule';
+import { CasualIncomeModule } from '../../modules/finance/CasualIncomeModule';
 import { GeneralLedgerModule } from '../../modules/finance/GeneralLedgerModule';
 import { PurchasingModule } from '../../modules/finance/PurchasingModule';
 import { SalesModule } from '../../modules/finance/SalesModule';
@@ -349,6 +350,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/finance/tax/pit-finalization') return <PitFinalizationModule />;
   if (p === '/finance/tax/pit-vouchers') return <PitVouchersModule />;
   if (p === '/finance/tax/contractor') return <ContractorTaxModule />;
+  if (p === '/finance/tax/casual-income') return <CasualIncomeModule />;
   if (p.startsWith('/finance/tax')) return <TaxModule />;
   if (p.startsWith('/finance/budget')) return <BudgetModule />;
   if (p.startsWith('/finance/costing')) return <CostingModule />;
