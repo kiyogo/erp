@@ -345,7 +345,7 @@ export const AssetsModule: React.FC = () => {
             {totalNetBookValue.toLocaleString('vi-VN')} ₫
           </div>
           <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>
-            Hao mòn: {Math.round((totalAccumulated / totalOriginalPrice) * 100)}% ({totalAccumulated.toLocaleString('vi-VN')} ₫)
+            Hao mòn: {totalOriginalPrice ? Math.round((totalAccumulated / totalOriginalPrice) * 100) : 0}% ({totalAccumulated.toLocaleString('vi-VN')} ₫)
           </div>
         </div>
 

@@ -72,7 +72,6 @@ import { DigitalSignatureModule } from '../../modules/finance/DigitalSignatureMo
 import { TaxModule } from '../../modules/finance/TaxModule';
 import { BudgetModule } from '../../modules/finance/BudgetModule';
 import { CostingModule } from '../../modules/finance/CostingModule';
-import { FixedAssetsModule } from '../../modules/finance/FixedAssetsModule';
 import { PrepaidExpensesModule } from '../../modules/finance/PrepaidExpensesModule';
 import { EquityModule } from '../../modules/finance/EquityModule';
 import { AdvancesModule } from '../../modules/finance/AdvancesModule';
@@ -360,7 +359,8 @@ export const GenericModulePage: React.FC = () => {
   if (p.startsWith('/finance/tax')) return <TaxModule />;
   if (p.startsWith('/finance/budget')) return <BudgetModule />;
   if (p.startsWith('/finance/costing')) return <CostingModule />;
-  if (p.startsWith('/finance/fixed-assets')) return <FixedAssetsModule />;
+  // Sổ tài sản cố định riêng của Tài chính đã gộp vào danh mục tài sản (asset_items).
+  if (p.startsWith('/finance/fixed-assets')) return <Navigate to="/admin/assets/list" replace />;
   if (p.startsWith('/finance/prepaid-expenses')) return <PrepaidExpensesModule />;
   if (p.startsWith('/finance/equity')) return <EquityModule />;
   if (p.startsWith('/finance/advances')) return <AdvancesModule />;

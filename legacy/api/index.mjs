@@ -5129,15 +5129,15 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     delete record.usersCount;
     delete record.scope;
   }
-  if (scope === 'finance_fixed_assets' || scope === 'finance_prepaid') {
-    // Số liệu phái sinh (mức khấu hao hoặc phân bổ hàng tháng, giá trị còn lại, trạng thái) luôn tính lại ở máy chủ từ số liệu gốc.
-    const fixedAsset = scope === 'finance_fixed_assets';
-    record.code = requiredText(record.code, fixedAsset ? 'Mã tài sản cố định' : 'Mã khoản chi phí trả trước', 64).toUpperCase();
+  if (scope === 'finance_fixed_assets') throw new HttpError(409, 'Sổ tài sản cố định đã gộp vào Tài sản > Danh mục tài sản; hãy thêm hoặc sửa tài sản ở đó.');
+  if (scope === 'finance_prepaid') {
+    // Số liệu phái sinh (mức phân bổ hàng tháng, giá trị còn lại, trạng thái) luôn tính lại ở máy chủ từ số liệu gốc.
+    record.code = requiredText(record.code, 'Mã khoản chi phí trả trước', 64).toUpperCase();
     if ((!current || current.code !== record.code)
       && await db.prepare('SELECT 1 FROM collection_records WHERE scope = ? AND json_extract(payload_json, \'$.code\') = ? LIMIT 1').get(scope, record.code)) {
       throw new HttpError(409, 'Mã đã tồn tại.');
     }
-    record.name = requiredText(record.name, fixedAsset ? 'Tên tài sản cố định' : 'Tên khoản chi phí', 200);
+    record.name = requiredText(record.name, 'Tên khoản chi phí', 200);
     record.category = requiredText(record.category, 'Phân loại', 120);
     record.department = requiredText(record.department, 'Bộ phận quản lý', 160);
     const wholeAmount = (value, label, min) => {
@@ -5145,28 +5145,17 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (!Number.isSafeInteger(parsed) || parsed < min) throw new HttpError(422, `${label} phải là số nguyên từ ${min} trở lên.`);
       return parsed;
     };
-    const total = wholeAmount(fixedAsset ? record.originalValue : record.totalAmount, fixedAsset ? 'Nguyên giá' : 'Tổng chi phí trả trước', 1);
-    const months = wholeAmount(fixedAsset ? record.depreciationMonths : record.allocationMonths, fixedAsset ? 'Thời gian khấu hao (tháng)' : 'Số kỳ phân bổ (tháng)', 1);
+    const total = wholeAmount(record.totalAmount, 'Tổng chi phí trả trước', 1);
+    const months = wholeAmount(record.allocationMonths, 'Số kỳ phân bổ (tháng)', 1);
     if (months > 600) throw new HttpError(422, 'Thời gian tối đa là 600 tháng.');
-    const done = wholeAmount(fixedAsset ? record.accumulatedDepreciation : record.allocatedAmount, fixedAsset ? 'Khấu hao lũy kế' : 'Đã phân bổ lũy kế', 0);
-    if (done > total) throw new HttpError(422, fixedAsset ? 'Khấu hao lũy kế không được vượt nguyên giá.' : 'Số đã phân bổ không được vượt tổng chi phí.');
-    const monthly = Math.round(total / months);
-    if (fixedAsset) {
-      Object.assign(record, {
-        originalValue: total, depreciationMonths: months, accumulatedDepreciation: done, monthlyDepreciation: monthly, bookValue: total - done,
-        commissioningDate: requiredIsoDate(record.commissioningDate, 'Ngày đưa vào sử dụng'),
-        serialNumber: optionalText(record.serialNumber, 'Số serial', 120) || '',
-        supplier: optionalText(record.supplier, 'Nhà cung cấp', 200) || '',
-        status: total - done <= 0 ? 'Đã khấu hao hết' : 'Đang trích khấu hao',
-      });
-    } else {
-      Object.assign(record, {
-        totalAmount: total, allocationMonths: months, allocatedAmount: done, monthlyAmount: monthly, remainingAmount: total - done,
-        startDate: requiredIsoDate(record.startDate, 'Ngày bắt đầu phân bổ'),
-        accountCode: '242',
-        status: total - done <= 0 ? 'Đã phân bổ hết' : 'Đang phân bổ',
-      });
-    }
+    const done = wholeAmount(record.allocatedAmount, 'Đã phân bổ lũy kế', 0);
+    if (done > total) throw new HttpError(422, 'Số đã phân bổ không được vượt tổng chi phí.');
+    Object.assign(record, {
+      totalAmount: total, allocationMonths: months, allocatedAmount: done, monthlyAmount: Math.round(total / months), remainingAmount: total - done,
+      startDate: requiredIsoDate(record.startDate, 'Ngày bắt đầu phân bổ'),
+      accountCode: '242',
+      status: total - done <= 0 ? 'Đã phân bổ hết' : 'Đang phân bổ',
+    });
   }
   if (scope === 'finance_digital_signatures') {
     // Trạng thái hiệu lực suy ra từ ngày hết hạn khi hiển thị nên không lưu; lịch sử gia hạn chỉ được thêm, không sửa hay xóa.
@@ -16762,6 +16751,41 @@ async function seedAdmin() {
   console.log(`Created admin account ${user.email} (${user.employeeCode}).`);
 }
 
+// Sổ tài sản cố định riêng của Tài chính (finance_fixed_assets) gộp vào danh mục tài sản (asset_items), nơi có các quy tắc theo Thông tư 45/2013
+// (phân loại, khung khấu hao, ô tô trên 1,6 tỷ) và nối với khấu hao, thanh lý, ghi sổ cái. Chạy một lần khi khởi động: chép từng bản ghi sang
+// asset_items (mã trùng với tài sản đã có thì bỏ qua và ghi lại), giữ nguyên bản ghi cũ (không xóa dữ liệu), sổ cũ bị khóa ghi.
+async function mergeFinanceFixedAssets() {
+  if (await getSystemSetting('finance_fixed_assets_merged_v1')) return;
+  const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_fixed_assets'").all();
+  const merged = [];
+  const skipped = [];
+  await db.transaction(async () => {
+    for (const row of rows) {
+      const old = parseJsonObject(row.payload_json);
+      const code = String(old.code || '').trim().toUpperCase();
+      const duplicate = code && await db.prepare("SELECT record_key FROM collection_records WHERE scope = 'asset_items' AND UPPER(json_extract(payload_json, '$.code')) = ? LIMIT 1").get(code);
+      if (!code || duplicate) { skipped.push(code || row.record_key); continue; }
+      const originalPrice = Number(old.originalValue) || 0;
+      const accumulatedDepreciation = Math.min(originalPrice, Number(old.accumulatedDepreciation) || 0);
+      const key = `ffa-${row.record_key}`;
+      const timestamp = now();
+      const item = {
+        key, code, name: old.name || code, category: old.category || '', department: old.department || '',
+        originalPrice, depreciationMonths: Number(old.depreciationMonths) || undefined, accumulatedDepreciation, netBookValue: originalPrice - accumulatedDepreciation,
+        inUseDate: old.commissioningDate || '', serialNumber: old.serialNumber || '', supplier: old.supplier || '',
+        assetClass: originalPrice >= 30_000_000 ? 'Tài sản cố định hữu hình' : 'Công cụ dụng cụ',
+        status: 'Đang sử dụng', notes: old.notes || '', mergedFrom: 'finance_fixed_assets',
+        history: [{ key: randomUUID(), date: timestamp, action: 'Chuyển từ sổ tài sản cố định của Tài chính', actor: 'Hệ thống', note: `Mã cũ ${old.code || ''}.` }],
+      };
+      await db.prepare('INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(randomUUID(), 'asset_items', key, row.owner_id, JSON.stringify(item), row.created_at || timestamp, timestamp);
+      merged.push(code);
+    }
+    await setSystemSetting('finance_fixed_assets_merged_v1', JSON.stringify({ at: now(), merged, skipped }));
+  });
+  if (rows.length) console.log(`Đã gộp ${merged.length} tài sản cố định của Tài chính vào danh mục tài sản${skipped.length ? `, bỏ qua mã trùng: ${skipped.join(', ')}` : ''}.`);
+}
+
 async function migrateAttendanceCollections() {
   if (await getSystemSetting('attendance_canonical_scopes_v1')) return;
   let migrated = 0;
@@ -16831,6 +16855,7 @@ async function encryptLegacyProfileDetails() {
 
 setHolidayOverrides(parseJsonObject(await getSystemSetting('holiday_calendar')));
 await migrateAttendanceCollections();
+await mergeFinanceFixedAssets();
 await encryptLegacyProfileDetails();
 await ensureAllEmployeeWorkspaces();
 if (process.env.SEED_DEMO_DATA === 'true') await seedDefaultContracts();

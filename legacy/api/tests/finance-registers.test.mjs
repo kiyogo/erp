@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 
 const directory = mkdtempSync(path.join(tmpdir(), 'kiyovn-registers-test-'));
 const probe = createServer();
@@ -20,6 +21,14 @@ const env = {
 };
 const seed = spawnSync(process.execPath, ['index.mjs', '--seed-admin'], { cwd, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
 assert.equal(seed.status, 0, seed.stderr);
+// Bản ghi của sổ tài sản cố định cũ (finance_fixed_assets) có trước khi gộp: lần khởi động sau phải chép sang danh mục tài sản.
+{
+  const seeded = new DatabaseSync(env.KIYOVN_DB_PATH);
+  const legacyAsset = { key: 'old-1', code: 'TSCD-OLD', name: 'Máy chủ cũ', category: 'Máy móc và thiết bị', department: 'Kỹ thuật', originalValue: 36_000_000, depreciationMonths: 36, accumulatedDepreciation: 3_000_000, commissioningDate: '2026-01-01', serialNumber: 'SN-1' };
+  seeded.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES ('ffa-row-1', 'finance_fixed_assets', 'old-1', ?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')").run(seeded.prepare('SELECT id FROM users LIMIT 1').get().id, JSON.stringify(legacyAsset));
+  seeded.prepare("DELETE FROM system_settings WHERE setting_key = 'finance_fixed_assets_merged_v1'").run();
+  seeded.close();
+}
 const server = spawn(process.execPath, ['index.mjs'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 let logs = '';
 server.stdout.on('data', chunk => { logs += chunk; });
@@ -69,16 +78,12 @@ test('sổ cổ đông: vốn góp là số cổ phần nhân mệnh giá, khôn
   }
 });
 
-test('tài sản cố định và chi phí trả trước: số phái sinh do máy chủ tính, tài khoản trả trước là 242', async () => {
-  const asset = await create('finance_fixed_assets', { code: 'tscd-1', name: 'Máy chủ', category: 'Máy móc và thiết bị', department: 'Kỹ thuật', originalValue: 36_000_000, depreciationMonths: 36, accumulatedDepreciation: 3_000_000, commissioningDate: '2026-01-01', bookValue: 1, monthlyDepreciation: 1, status: 'Sai' });
-  assert.equal(asset.status, 201, JSON.stringify(asset.body));
-  assert.equal(asset.body.record.monthlyDepreciation, 1_000_000);
-  assert.equal(asset.body.record.bookValue, 33_000_000);
-  assert.equal(asset.body.record.status, 'Đang trích khấu hao');
-  const finished = await patch('finance_fixed_assets', asset.body.record.key, { accumulatedDepreciation: 36_000_000 });
-  assert.equal(finished.body.record.status, 'Đã khấu hao hết');
-  assert.equal((await patch('finance_fixed_assets', asset.body.record.key, { accumulatedDepreciation: 37_000_000 })).status, 422);
-  assert.equal((await create('finance_fixed_assets', { code: 'TSCD-1', name: 'Trùng', category: 'x', department: 'x', originalValue: 1, depreciationMonths: 1, commissioningDate: '2026-01-01' })).status, 409);
+test('sổ tài sản cố định của Tài chính đã gộp vào danh mục tài sản; chi phí trả trước: số phái sinh do máy chủ tính, tài khoản 242', async () => {
+  const items = (await (await fetch(`${base}/collections/asset_items`, { headers })).json()).data;
+  const moved = items.find((item) => item.code === 'TSCD-OLD');
+  assert.ok(moved, JSON.stringify(items));
+  assert.deepEqual([moved.originalPrice, moved.accumulatedDepreciation, moved.netBookValue, moved.depreciationMonths, moved.inUseDate, moved.assetClass, moved.status, moved.mergedFrom], [36_000_000, 3_000_000, 33_000_000, 36, '2026-01-01', 'Tài sản cố định hữu hình', 'Đang sử dụng', 'finance_fixed_assets']);
+  assert.equal((await create('finance_fixed_assets', { code: 'tscd-1', name: 'Máy chủ', category: 'Máy móc và thiết bị', department: 'Kỹ thuật', originalValue: 36_000_000, depreciationMonths: 36, commissioningDate: '2026-01-01' })).status, 409);
 
   const prepaid = await create('finance_prepaid', { code: 'cptt-1', name: 'Thuê văn phòng', category: 'Chi phí thuê địa điểm', department: 'Hành chính', totalAmount: 100_000_000, allocationMonths: 24, allocatedAmount: 0, startDate: '2026-02-01', accountCode: 'TK 2422' });
   assert.equal(prepaid.status, 201, JSON.stringify(prepaid.body));
