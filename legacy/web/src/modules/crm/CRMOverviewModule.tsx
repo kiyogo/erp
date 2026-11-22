@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Modal, Select, message } from '../../custom-ui';
 import { collectionsApi, financeDocumentsApi, crmContactsApi, systemApi, FinanceDocument, type CrmContact } from '../../api/endpoints';
-import { NO_DEPARTMENT, activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, salesByDepartment, salesBySalesperson, targetPeriodsForFilter, targetProgress, topCustomers } from './crmOverviewRules';
+import { NO_DEPARTMENT, activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, salesByDepartment, salesByItem, salesBySalesperson, targetPeriodsForFilter, targetProgress, topCustomers } from './crmOverviewRules';
 
 // ===== Standard SVG Empty State Illustrations =====
 const EmptyLineChartSvg: React.FC = () => (
@@ -117,7 +117,7 @@ interface ChartCardProps {
 }
 
 const CRM_HIDDEN_WIDGETS_KEY = 'kiyovn_crm_overview_hidden_widgets';
-const CRM_OVERVIEW_WIDGETS = ['Doanh số theo thời gian', 'Doanh số theo loại khách hàng', 'Khách hàng có doanh số cao nhất', 'Tình hình thực hiện hoạt động', 'Mục tiêu doanh số', 'Doanh số theo nhân viên bán hàng', 'Doanh số theo đơn vị'];
+const CRM_OVERVIEW_WIDGETS = ['Doanh số theo thời gian', 'Doanh số theo loại khách hàng', 'Khách hàng có doanh số cao nhất', 'Tình hình thực hiện hoạt động', 'Mục tiêu doanh số', 'Doanh số theo nhân viên bán hàng', 'Doanh số theo đơn vị', 'Doanh số theo hàng hóa'];
 
 // Biểu đồ cột 12 tháng và danh sách thanh ngang vẽ bằng thẻ div (dự án không dùng thư viện biểu đồ).
 const MonthBars: React.FC<{ values: number[]; targets?: number[] }> = ({ values, targets }) => {
@@ -381,6 +381,7 @@ export const CRMOverviewModule: React.FC = () => {
   const companyMonths = useMemo(() => monthlySales(salesDocuments, chartYear), [salesDocuments, chartYear]);
   const bySeller = useMemo(() => salesBySalesperson(periodDocs), [periodDocs]);
   const byDepartment = useMemo(() => salesByDepartment(periodDocs), [periodDocs]);
+  const byItem = useMemo(() => salesByItem(periodDocs).slice(0, 10), [periodDocs]);
   const money = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
   // Mục tiêu đặt cho toàn doanh nghiệp nên luôn so với doanh số toàn doanh nghiệp.
   const progress = useMemo(() => targetProgress(companyMonths, targets, chartYear), [companyMonths, targets, chartYear]);
@@ -653,6 +654,9 @@ export const CRMOverviewModule: React.FC = () => {
         </ChartCard>)}
         {showWidget('Doanh số theo đơn vị') && (<ChartCard title="Doanh số theo đơn vị" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chưa có doanh số trong kỳ">
           {byDepartment.length ? <BarList rows={byDepartment.map((row) => ({ label: row.label, value: row.value, note: money(row.value) }))} /> : undefined}
+        </ChartCard>)}
+        {showWidget('Doanh số theo hàng hóa') && (<ChartCard title="Doanh số theo hàng hóa" subtitle="Chưa thuế GTGT" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chưa có doanh số trong kỳ">
+          {byItem.length ? <BarList rows={byItem.map((row) => ({ label: row.label, value: row.value, note: `${money(row.value)}${row.quantity ? ` · ${row.quantity.toLocaleString('vi-VN')}${row.unit ? ` ${row.unit}` : ''}` : ''} · ${row.count} chứng từ` }))} /> : undefined}
         </ChartCard>)}
       </div>
 

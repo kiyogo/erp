@@ -69,3 +69,23 @@ test('doanh số theo nhân viên bán hàng và đơn vị của nhân viên', 
     { label: 'Chưa gán nhân viên bán', value: 2_000_000 },
   ]);
 });
+
+test('doanh số chưa thuế theo hàng hóa: chia doanh số chứng từ theo dòng, gộp theo mặt hàng', async () => {
+  const { salesByItem, preTaxSaleNet, NO_LINES } = await import('../src/modules/crm/crmOverviewRules.ts');
+  const lineDocs = [
+    // 1.100.000 gồm 10% thuế, đã trả lại 220.000 (gồm thuế) -> chưa thuế 800.000, chia theo dòng 700.000 : 300.000.
+    { key: 'a', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 1_100_000, vatAmount: 100_000, adjustedAmount: 220_000,
+      lines: [{ itemKey: 'i1', sku: 'A4', name: 'Giấy A4', unit: 'Ram', quantity: 10, amount: 700_000 }, { name: 'Lắp đặt', unit: '', quantity: 1.5, amount: 300_000 }] },
+    { key: 'b', subtype: 'Hợp đồng bán', status: 'Đang triển khai', amount: 220_000, vatAmount: 20_000,
+      lines: [{ itemKey: 'i1', sku: 'A4', name: 'Giấy A4 loại 1', unit: 'Ram', quantity: 2.5, amount: 200_000 }] },
+    { key: 'c', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 500_000, vatAmount: 0 },
+    { key: 'd', subtype: 'Báo giá', status: 'Báo giá', amount: 999_000, vatAmount: 0, lines: [{ name: 'X', quantity: 1, amount: 999_000 }] },
+    { key: 'e', subtype: 'Hàng bán bị trả lại', status: 'Đã ghi nhận', amount: 220_000, vatAmount: 20_000, adjustsDocumentId: 'a' },
+  ];
+  assert.equal(preTaxSaleNet(lineDocs[0]), 800_000);
+  assert.deepEqual(salesByItem(lineDocs), [
+    { label: 'A4 · Giấy A4', value: 760_000, quantity: 12.5, unit: 'Ram', count: 2 },
+    { label: NO_LINES, value: 500_000, quantity: 0, unit: '', count: 1 },
+    { label: 'Lắp đặt', value: 240_000, quantity: 1.5, unit: '', count: 1 },
+  ]);
+});

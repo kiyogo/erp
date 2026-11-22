@@ -131,3 +131,50 @@ export function salesByDepartment(docs: SellerDoc[]): Array<{ label: string; val
   }
   return [...totals.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
 }
+
+export interface LineDoc extends SaleDoc { vatAmount?: number; lines?: Array<{ itemKey?: string; sku?: string; name: string; unit?: string; quantity: number; amount: number }> }
+
+export const NO_LINES = 'Chứng từ chưa có dòng hàng';
+
+/** Doanh số chưa thuế GTGT của chứng từ sau khi trừ hàng trả lại, giảm giá (bỏ phần thuế theo tỷ lệ thuế của chứng từ). */
+export function preTaxSaleNet(doc: LineDoc) {
+  const amount = Number(doc.amount) || 0;
+  if (amount <= 0) return 0;
+  const vatShare = Math.min(1, Math.max(0, (Number(doc.vatAmount) || 0) / amount));
+  return Math.round(saleNet(doc) * (1 - vatShare));
+}
+
+/**
+ * Doanh số chưa thuế theo hàng hóa, dịch vụ từ dòng hàng của chứng từ bán. Doanh số chưa thuế của chứng từ (đã trừ trả lại, giảm giá, khuyến mại)
+ * được chia cho các dòng theo tỷ lệ thành tiền; số lượng giữ nguyên theo dòng. Gộp theo mặt hàng kho, không có thì theo tên và đơn vị tính.
+ * Chứng từ không có dòng hàng xếp chung một dòng riêng.
+ */
+export function salesByItem(docs: LineDoc[]): Array<{ label: string; value: number; quantity: number; unit: string; count: number }> {
+  const totals = new Map<string, { label: string; value: number; quantity: number; unit: string; docs: Set<string> }>();
+  const add = (key: string, label: string, unit: string, value: number, quantity: number, docKey: string) => {
+    const current = totals.get(key) || { label, value: 0, quantity: 0, unit, docs: new Set<string>() };
+    current.value += value;
+    current.quantity += quantity;
+    current.docs.add(docKey);
+    totals.set(key, current);
+  };
+  for (const doc of revenueDocs(docs) as LineDoc[]) {
+    const net = preTaxSaleNet(doc);
+    const lines = doc.lines || [];
+    const linesTotal = lines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+    if (!lines.length || linesTotal <= 0) { add('', NO_LINES, '', net, 0, doc.key); continue; }
+    let allocated = 0;
+    lines.forEach((line, index) => {
+      // Dòng cuối nhận phần chênh làm tròn để tổng các dòng bằng doanh số chưa thuế của chứng từ.
+      const value = index === lines.length - 1 ? net - allocated : Math.round((net * (Number(line.amount) || 0)) / linesTotal);
+      allocated += value;
+      const name = String(line.name || '').trim();
+      const unit = String(line.unit || '').trim();
+      const key = line.itemKey ? `item:${line.itemKey}` : `name:${name.toLocaleLowerCase('vi-VN')}|${unit.toLocaleLowerCase('vi-VN')}`;
+      add(key, line.sku ? `${line.sku} · ${name}` : name, unit, value, Number(line.quantity) || 0, doc.key);
+    });
+  }
+  return [...totals.values()]
+    .map(({ docs: keys, quantity, ...row }) => ({ ...row, quantity: Math.round(quantity * 1000) / 1000, count: keys.size }))
+    .sort((a, b) => b.value - a.value);
+}
