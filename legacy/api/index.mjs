@@ -2499,6 +2499,14 @@ async function annualLeaveRemaining(employeeId, year) {
   return { row: null, summary: null, entitlement, remaining: entitlement.entitled, entitled: entitlement.entitled };
 }
 
+// Số ngày của các đơn nghỉ phép năm đang chờ duyệt bắt đầu trong năm (trừ đơn excludeKey), để không gửi nhiều đơn chờ cộng lại vượt số phép còn lại.
+async function pendingAnnualLeaveDays(employeeId, year, excludeKey = null) {
+  const rows = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'leave_requests' AND json_extract(payload_json, '$.employeeId') = ?").all(employeeId);
+  return rows.filter((row) => row.record_key !== excludeKey).map((row) => parseJsonObject(row.payload_json))
+    .filter((leave) => leave.status === 'Chờ duyệt' && leave.leaveType === annualLeaveLabel && String(leave.startDate || '').startsWith(`${year}-`))
+    .reduce((sum, leave) => sum + (Number(leave.daysCount) || 0), 0);
+}
+
 // Duyệt đơn nghỉ phép năm: trừ vào sổ phép của năm bắt đầu nghỉ, tạo sổ theo luật nếu chưa có; không cho vượt số phép còn lại.
 async function consumeAnnualLeave(leave) {
   const year = Number(String(leave.startDate).slice(0, 4));
@@ -5782,10 +5790,16 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       record.leaveType = leaveType;
       const problem = leaveDaysProblem(leaveType, record.daysCount);
       if (problem) throw new HttpError(422, problem);
-      if (!current && leaveType === annualLeaveLabel) {
+      if (leaveType === annualLeaveLabel && (!current || record.status === 'Chờ duyệt')) {
         const year = Number(record.startDate.slice(0, 4));
         const balance = await annualLeaveRemaining(record.employeeId, year);
-        if (record.daysCount > balance.remaining + 0.001) throw new HttpError(422, `Nhân viên chỉ còn ${balance.remaining} ngày phép năm ${year}, không đủ cho đơn ${record.daysCount} ngày.`);
+        const pending = await pendingAnnualLeaveDays(record.employeeId, year, current?.key ?? record.key ?? null);
+        const available = balance.remaining - pending;
+        if (record.daysCount > available + 0.001) {
+          throw new HttpError(422, pending
+            ? `Nhân viên còn ${balance.remaining} ngày phép năm ${year}, trong đó ${pending} ngày đang chờ duyệt ở đơn khác, chỉ gửi thêm được ${Math.max(0, available)} ngày.`
+            : `Nhân viên chỉ còn ${balance.remaining} ngày phép năm ${year}, không đủ cho đơn ${record.daysCount} ngày.`);
+        }
       }
     }
   }
@@ -14934,10 +14948,7 @@ async function handleRequest(request, response) {
     const year = Number(new URL(request.url, 'http://localhost').searchParams.get('year') || todayInVietnam().slice(0, 4));
     if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new HttpError(422, 'Năm phép không hợp lệ.');
     const balance = await annualLeaveRemaining(actor.id, year);
-    const pendingRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'leave_requests' AND json_extract(payload_json, '$.employeeId') = ?").all(actor.id);
-    const pendingDays = pendingRows.map((row) => parseJsonObject(row.payload_json))
-      .filter((leave) => leave.status === 'Chờ duyệt' && leave.leaveType === annualLeaveLabel && String(leave.startDate || '').startsWith(`${year}-`))
-      .reduce((sum, leave) => sum + (Number(leave.daysCount) || 0), 0);
+    const pendingDays = await pendingAnnualLeaveDays(actor.id, year);
     const source = balance.summary || balance.entitlement;
     sendJson(response, 200, {
       year,
