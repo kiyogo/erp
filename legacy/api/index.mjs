@@ -14928,6 +14928,32 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Quỹ phép năm của chính nhân viên: sổ phép nếu nhân sự đã lập, chưa có thì hạn mức theo luật (cùng nguồn với kiểm tra khi tạo và duyệt đơn).
+  if (request.method === 'GET' && resource === '/employees/me/leave-balance') {
+    const actor = await requireUser(request);
+    const year = Number(new URL(request.url, 'http://localhost').searchParams.get('year') || todayInVietnam().slice(0, 4));
+    if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new HttpError(422, 'Năm phép không hợp lệ.');
+    const balance = await annualLeaveRemaining(actor.id, year);
+    const pendingRows = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'leave_requests' AND json_extract(payload_json, '$.employeeId') = ?").all(actor.id);
+    const pendingDays = pendingRows.map((row) => parseJsonObject(row.payload_json))
+      .filter((leave) => leave.status === 'Chờ duyệt' && leave.leaveType === annualLeaveLabel && String(leave.startDate || '').startsWith(`${year}-`))
+      .reduce((sum, leave) => sum + (Number(leave.daysCount) || 0), 0);
+    const source = balance.summary || balance.entitlement;
+    sendJson(response, 200, {
+      year,
+      source: balance.summary ? 'ledger' : 'law',
+      standardQuota: Number(source.standardQuota) || 0,
+      seniorityQuota: Number(source.seniorityQuota) || 0,
+      carriedOver: Number(balance.summary?.carriedOver) || 0,
+      entitled: balance.entitled,
+      used: Number(balance.summary?.usedLeaves) || 0,
+      remaining: balance.remaining,
+      pendingDays,
+      joinDate: balance.entitlement?.joinDate || '',
+    });
+    return;
+  }
+
   if (request.method === 'POST' && resource === '/contracts/termination-settlement') {
     await requireAdmin(request);
     const payload = await readJson(request, 64 * 1024);

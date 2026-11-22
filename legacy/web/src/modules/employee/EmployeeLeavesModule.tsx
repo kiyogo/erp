@@ -17,6 +17,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Card, Tooltip } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
+import { leaveBalanceApi, type LeaveBalance } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile, generateValidPdfBlob } from '../../utils/fileExporter';
 import { leaveDays } from '../attendance/attendanceRules';
@@ -26,7 +27,10 @@ export const EmployeeLeavesModule: React.FC = () => {
   const { user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<any[]>([]);
-  const [quota, setQuota] = useState<any | null>(null);
+  // Quỹ phép năm do máy chủ tính: sổ phép nếu nhân sự đã lập, chưa có thì hạn mức theo luật (Điều 113, 114 Bộ luật Lao động 2019).
+  const [balance, setBalance] = useState<LeaveBalance | null>(null);
+  const [balanceError, setBalanceError] = useState(false);
+  const year = new Date().getFullYear();
   const [searchText, setSearchText] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'annual' | 'sick' | 'pending'>('all');
 
@@ -37,12 +41,15 @@ export const EmployeeLeavesModule: React.FC = () => {
 
   const loadData = () => {
     setData(dataService.getEmployeeLeaves().filter((item) => item.employeeId === user?.id || (!!user?.employeeCode && (item.empCode === user.employeeCode || item.employeeCode === user.employeeCode))));
-    const quota = dataService.getGenericData('attendance_leave_summary').find((item) => (item.employeeId === user?.id || (!!user?.employeeCode && item.employeeCode === user.employeeCode)) && (item.year || new Date().getFullYear()) === new Date().getFullYear());
-    setQuota(quota || null);
   };
 
+  const loadBalance = () => leaveBalanceApi.mine(year)
+    .then(({ data: result }) => { setBalance(result); setBalanceError(false); })
+    .catch(() => setBalanceError(true));
+
   useEffect(() => {
-    void Promise.all([dataService.refreshGenericData('leave_requests'), dataService.refreshGenericData('attendance_leave_summary')]).catch(() => message.error('Không thể tải dữ liệu nghỉ phép từ máy chủ.'));
+    void dataService.refreshGenericData('leave_requests').catch(() => message.error('Không thể tải dữ liệu nghỉ phép từ máy chủ.'));
+    void loadBalance();
     loadData();
     const unsub = dataService.subscribe(() => {
       loadData();
@@ -57,15 +64,18 @@ export const EmployeeLeavesModule: React.FC = () => {
       await dataService.addEmployeeLeave({ ...values, employeeId: user?.id, days: leaveDays(values.days, values.fromDate, values.toDate) });
       message.success('Đã gửi đơn xin nghỉ phép thành công! Vui lòng chờ phê duyệt.');
       setModalOpen(false); form.resetFields();
+      void loadBalance();
     } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không thể gửi đơn xin nghỉ phép.'); }
     finally { setSaving(false); }
   };
 
-  const usedDays = data
-    .filter((d) => d.status === 'Đã duyệt' || d.status === 'Đã phê duyệt')
-    .reduce((acc, d) => acc + (Number(d.days) || Number(d.daysCount) || 0), 0);
-  const totalQuota = quota ? Number(quota.totalEntitled) : null;
-  const remainingDays = quota ? Number(quota.remainingLeaves) : null;
+  const balanceText = (value: number | undefined) => (balance ? `${value} Ngày` : balanceError ? 'Chưa tải được' : 'Đang tải');
+  const quotaNote = !balance ? 'Phép năm hưởng nguyên lương' : [
+    balance.source === 'ledger' ? 'Theo sổ phép' : 'Theo luật, chưa có sổ phép',
+    `tiêu chuẩn ${balance.standardQuota}`,
+    balance.seniorityQuota ? `thâm niên ${balance.seniorityQuota}` : '',
+    balance.carriedOver ? `chuyển sang ${balance.carriedOver}` : '',
+  ].filter(Boolean).join(', ');
   const pendingCount = data.filter((d) => d.status === 'Đang xử lý' || d.status === 'Chờ duyệt' || d.status === 'Chờ phê duyệt').length;
 
   const filteredData = data.filter((d) => {
@@ -177,27 +187,27 @@ export const EmployeeLeavesModule: React.FC = () => {
       {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng quỹ phép năm {new Date().getFullYear()}</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tổng quỹ phép năm {year}</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {totalQuota == null ? 'Chưa cấu hình' : `${totalQuota} Ngày`}
+            {balanceText(balance?.entitled)}
           </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Phép hưởng nguyên lương tiêu chuẩn</div>
+          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>{quotaNote}</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số ngày phép đã sử dụng</div>
+          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số ngày phép năm đã nghỉ</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#EA580C', marginTop: 4 }}>
-            {usedDays} Ngày
+            {balanceText(balance?.used)}
           </div>
-          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Đã được Ban Giám Đốc phê duyệt</div>
+          <div style={{ fontSize: 11.5, color: '#EA580C', marginTop: 2 }}>Theo các đơn nghỉ phép năm đã duyệt</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Số ngày phép còn lại</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            {remainingDays == null ? 'Chưa cấu hình' : `${remainingDays} Ngày`}
+            {balanceText(balance?.remaining)}
           </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Theo sổ quỹ phép đã được nhân sự cập nhật</div>
+          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>{balance?.pendingDays ? `${balance.pendingDays} ngày đang chờ duyệt, chưa trừ` : 'Chưa trừ đơn đang chờ duyệt'}</div>
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
@@ -244,7 +254,7 @@ export const EmployeeLeavesModule: React.FC = () => {
             allowClear
           />
 
-          <Button icon={<ReloadOutlined />} onClick={() => Promise.all([dataService.refreshGenericData('leave_requests'), dataService.refreshGenericData('attendance_leave_summary')]).catch(() => message.error('Không thể tải lại dữ liệu nghỉ phép.'))}>
+          <Button icon={<ReloadOutlined />} onClick={() => Promise.all([dataService.refreshGenericData('leave_requests'), loadBalance()]).catch(() => message.error('Không thể tải lại dữ liệu nghỉ phép.'))}>
             Làm mới
           </Button>
 

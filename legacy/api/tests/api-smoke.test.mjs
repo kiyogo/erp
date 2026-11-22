@@ -3186,6 +3186,14 @@ test('leave requests follow legal types, caps and the annual leave balance', asy
   assert.equal(summary.usedLeaves, 10);
   assert.equal(summary.remainingLeaves, 2);
   await create('law-three', { daysCount: 3 }, 422);
+  await create('law-one', { daysCount: 1 });
+  const login = await request('/auth/login', 'POST', { email: 'leave-law@example.test', password: 'Leave-Test-26!Secure' });
+  const staffHeaders = { ...headers, Authorization: `Bearer ${login.access_token || login.token}` };
+  const own = await request('/employees/me/leave-balance?year=2027', 'GET', undefined, 200, staffHeaders);
+  assert.deepEqual([own.source, own.entitled, own.used, own.remaining, own.pendingDays], ['ledger', 12, 10, 2, 1]);
+  const lawOnly = await request('/employees/me/leave-balance?year=2028', 'GET', undefined, 200, staffHeaders);
+  assert.deepEqual([lawOnly.source, lawOnly.entitled, lawOnly.remaining, lawOnly.pendingDays], ['law', 12, 12, 0]);
+  await request('/collections/leave_requests/law-one', 'PATCH', { patch: { status: 'Từ chối' } });
   await create('law-two', { daysCount: 2 });
   await request('/collections/leave_requests/law-two', 'PATCH', { patch: { status: 'Đã duyệt' } });
   assert.equal((await request('/collections/attendance_leave_summary')).data.find(item => item.employeeId === employee.id && item.year === 2027).remainingLeaves, 0);
