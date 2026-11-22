@@ -3628,6 +3628,42 @@ export const EmployeeFullEditModule: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  <div style={{ fontSize: 13, color: '#334155', margin: '12px 0 8px' }}>Thị thực, thẻ tạm trú (hạn hộ chiếu nhập ở ô Ngày hết hạn hộ chiếu phía trên)</div>
+                  <div className="k-form-grid-3">
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ký hiệu thị thực</label>
+                      <Select value={formData.visaType} onChange={val => handleChange('visaType', val)} options={[{ label: 'LĐ1 (không thuộc diện cấp giấy phép)', value: 'LĐ1' }, { label: 'LĐ2 (có giấy phép lao động)', value: 'LĐ2' }, { label: 'Ký hiệu khác', value: 'other' }]} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Số thị thực</label>
+                      <Input value={formData.visaNumber || ''} onChange={e => handleChange('visaNumber', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày cấp thị thực</label>
+                      <Input type="date" value={formData.visaIssueDate || ''} onChange={e => handleChange('visaIssueDate', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày hết hạn thị thực</label>
+                      <Input type="date" value={formData.visaExpiryDate || ''} onChange={e => handleChange('visaExpiryDate', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ký hiệu thẻ tạm trú</label>
+                      <Select value={formData.residenceCardType} onChange={val => handleChange('residenceCardType', val)} options={[{ label: 'LĐ1 (không thuộc diện cấp giấy phép)', value: 'LĐ1' }, { label: 'LĐ2 (có giấy phép lao động)', value: 'LĐ2' }, { label: 'Ký hiệu khác', value: 'other' }]} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Số thẻ tạm trú</label>
+                      <Input value={formData.residenceCardNumber || ''} onChange={e => handleChange('residenceCardNumber', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày cấp thẻ tạm trú</label>
+                      <Input type="date" value={formData.residenceCardIssueDate || ''} onChange={e => handleChange('residenceCardIssueDate', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày hết hạn thẻ tạm trú</label>
+                      <Input type="date" value={formData.residenceCardExpiryDate || ''} onChange={e => handleChange('residenceCardExpiryDate', e.target.value)} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Thị thực, thẻ tạm trú LĐ1, LĐ2 tối đa 02 năm và phải hết hạn trước hộ chiếu ít nhất 30 ngày; người có giấy phép dùng LĐ2, người không thuộc diện cấp giấy phép dùng LĐ1. Hệ thống nhắc trước khi hết hạn.</div>
                   <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Được nghỉ thêm 01 ngày Tết cổ truyền và 01 ngày Quốc khánh của nước mình (Điều 112 khoản 2); trùng ngày nghỉ của Việt Nam thì dời sang ngày làm việc kế tiếp, tự cộng vào bảng công và tính làm thêm 300%.</div>
                   <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Bắt buộc có số hộ chiếu. Hợp đồng lao động phải xác định thời hạn và không vượt ngày hết hạn này; hệ thống nhắc trước 45, 30, 14, 7, 1 ngày và không tính bảo hiểm thất nghiệp trong bảng lương.</div>
                 </div>

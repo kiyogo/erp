@@ -72,3 +72,17 @@ test('báo cáo sử dụng lao động nước ngoài: người làm trong kỳ
   assert.equal(buildForeignWorkerReport(people, '2026').total, 3);
   assert.match(workPermitProblem({ ...permit, foreignJobCategory: 'intern' }), /Vị trí công việc/);
 });
+
+test('thị thực, thẻ tạm trú LĐ1 hoặc LĐ2 tối đa 02 năm, hết hạn trước hộ chiếu ít nhất 30 ngày, đúng ký hiệu với giấy phép', async () => {
+  const { immigrationExpiries, buildForeignWorkerReport } = await import('../foreignWorkerRules.mjs');
+  const withCard = { ...permit, passportExpiryDate: '2031-05-01', residenceCardType: 'LĐ2', residenceCardNumber: 'TT123', residenceCardIssueDate: '2026-02-01', residenceCardExpiryDate: '2028-01-09' };
+  assert.equal(workPermitProblem(withCard), '');
+  assert.match(workPermitProblem({ ...withCard, residenceCardType: 'LĐ1' }), /LĐ2, không phải LĐ1/);
+  assert.match(workPermitProblem({ ...withCard, residenceCardExpiryDate: '2028-03-01' }), /không quá 02 năm/);
+  assert.match(workPermitProblem({ ...withCard, passportExpiryDate: '2028-01-20' }), /trước hộ chiếu ít nhất 30 ngày/);
+  assert.match(workPermitProblem({ ...withCard, visaType: 'LĐ2', visaNumber: '' }), /số thị thực/);
+  assert.match(workPermitProblem({ ...withCard, residenceCardType: 'XX' }), /Chọn ký hiệu thẻ tạm trú/);
+  assert.deepEqual(immigrationExpiries(withCard).map((item) => item.kind), ['passport', 'residence_card']);
+  const report = buildForeignWorkerReport([{ name: 'Kim', employeeCode: 'FW-1', details: { ...permit, foreignJobCategory: 'expert' } }], '2026');
+  assert.ok(report.rows[0].issues.includes('Chưa có thị thực hoặc thẻ tạm trú'));
+});

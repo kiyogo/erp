@@ -3055,11 +3055,15 @@ test('foreign workers need a work permit within legal terms and fixed-term contr
   assert.match((await request('/contracts', 'POST', { ...contract, endDate: '2028-06-30' }, 422)).message, /không được vượt thời hạn giấy phép/);
   await request('/contracts', 'POST', { ...contract, endDate: '2027-12-31' }, 201);
   await request(route, 'PATCH', { details: { foreignJobCategory: 'expert' } });
+  const card = { passportExpiryDate: '2031-05-01', residenceCardType: 'LĐ2', residenceCardNumber: 'TT-01', residenceCardIssueDate: '2026-02-01', residenceCardExpiryDate: '2028-01-09' };
+  assert.match((await request(route, 'PATCH', { details: { ...card, residenceCardType: 'LĐ1' } }, 422)).message, /LĐ2/);
+  await request(route, 'PATCH', { details: card });
   const report = await request('/hr/foreign-workers/report?period=2026');
   const row = report.rows.find((item) => item.employeeCode === 'FW-01');
   assert.equal(row.jobCategory, 'Chuyên gia');
   assert.equal(row.contractEnd, '2027-12-31');
   assert.equal(row.permitExpiryDate, '2028-01-09');
+  assert.equal(row.residenceCard, 'LĐ2 TT-01');
   await request('/hr/foreign-workers/report?period=2026-H3', 'GET', undefined, 422);
 });
 

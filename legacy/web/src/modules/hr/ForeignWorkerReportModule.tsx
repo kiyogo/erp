@@ -41,6 +41,7 @@ export const ForeignWorkerReportModule: React.FC = () => {
             { title: 'Họ tên', dataIndex: 'name' }, { title: 'Mã nhân viên', dataIndex: 'employeeCode' }, { title: 'Quốc tịch', dataIndex: 'nationality' }, { title: 'Số hộ chiếu', dataIndex: 'passportNumber' },
             { title: 'Vị trí công việc', dataIndex: 'jobCategory' }, { title: 'Chức danh', dataIndex: 'position' }, { title: 'Tình trạng giấy phép', dataIndex: 'permitStatus' },
             { title: 'Số giấy phép hoặc căn cứ miễn', dataIndex: 'workPermitNumber' }, { title: 'Ngày cấp', dataIndex: 'permitIssueDate' }, { title: 'Ngày hết hạn', dataIndex: 'permitExpiryDate' },
+            { title: 'Thị thực', dataIndex: 'visa' }, { title: 'Thị thực hết hạn', dataIndex: 'visaExpiryDate' }, { title: 'Thẻ tạm trú', dataIndex: 'residenceCard' }, { title: 'Thẻ tạm trú hết hạn', dataIndex: 'residenceCardExpiryDate' },
             { title: 'Số hợp đồng', dataIndex: 'contractCode' }, { title: 'Hợp đồng từ', dataIndex: 'contractStart' }, { title: 'Hợp đồng đến', dataIndex: 'contractEnd' }, { title: 'Cần xử lý', dataIndex: 'issueText' },
           ], report.rows.map((row) => ({ ...row, issueText: row.issues.join('; ') })));
           message.success(`Đã xuất ${count} người.`);
@@ -57,6 +58,7 @@ export const ForeignWorkerReportModule: React.FC = () => {
           { title: 'Người lao động', key: 'name', render: (_: unknown, row: ForeignWorkerReport['rows'][number]) => <div><div>{row.name}</div><div style={{ fontSize: 12, color: '#64748B' }}>{row.employeeCode} · {row.nationality} · {row.passportNumber || 'chưa có hộ chiếu'}</div></div> },
           { title: 'Vị trí', key: 'job', render: (_: unknown, row: ForeignWorkerReport['rows'][number]) => <div><div>{row.jobCategory}</div><div style={{ fontSize: 12, color: '#64748B' }}>{row.position}</div></div> },
           { title: 'Giấy phép', key: 'permit', render: (_: unknown, row: ForeignWorkerReport['rows'][number]) => <div><div>{row.permitStatus}</div><div style={{ fontSize: 12, color: '#64748B' }}>{row.workPermitNumber} {row.permitExpiryDate ? `· hết hạn ${dateText(row.permitExpiryDate)}` : ''}</div></div> },
+          { title: 'Thị thực, tạm trú', key: 'immigration', render: (_: unknown, row: ForeignWorkerReport['rows'][number]) => <div style={{ fontSize: 12.5 }}>{row.visa && <div>Thị thực {row.visa} · {dateText(row.visaExpiryDate)}</div>}{row.residenceCard && <div>Thẻ tạm trú {row.residenceCard} · {dateText(row.residenceCardExpiryDate)}</div>}{!row.visa && !row.residenceCard && '—'}</div> },
           { title: 'Hợp đồng', key: 'contract', render: (_: unknown, row: ForeignWorkerReport['rows'][number]) => (row.contractCode ? `${row.contractCode}: ${dateText(row.contractStart)} – ${dateText(row.contractEnd)}` : 'Chưa có hợp đồng') },
           { title: 'Cần xử lý', key: 'issues', render: (_: unknown, row: ForeignWorkerReport['rows'][number]) => (row.issues.length ? row.issues.map((issue) => <Tag key={issue} color="warning">{issue}</Tag>) : <Tag color="success">Đủ hồ sơ</Tag>) },
         ]} />

@@ -14,7 +14,8 @@ export const isForeignNationality = (value) => {
 };
 
 export const WORK_PERMIT_STATUSES = { permit: 'Có giấy phép lao động', exempt: 'Không thuộc diện cấp giấy phép (đã có xác nhận)', pending: 'Đang xin giấy phép' };
-const FIELDS = ['foreignJobCategory', 'homeNationalDay', 'homeNewYearRule', 'homeNewYearDate', 'nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
+const IMMIGRATION_FIELDS = ['passportExpiryDate', 'visaType', 'visaNumber', 'visaIssueDate', 'visaExpiryDate', 'residenceCardType', 'residenceCardNumber', 'residenceCardIssueDate', 'residenceCardExpiryDate'];
+const FIELDS = [...IMMIGRATION_FIELDS, 'foreignJobCategory', 'homeNationalDay', 'homeNewYearRule', 'homeNewYearDate', 'nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
 const isoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 const addYears = (iso, years) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y + years, m - 1, d)).toISOString().slice(0, 10); };
 
@@ -23,6 +24,8 @@ export function workPermitProblem(details, previous = {}) {
   if (!isForeignNationality(details.nationality)) return '';
   if (!FIELDS.some((field) => String(details[field] ?? '') !== String(previous[field] ?? ''))) return '';
   if (!String(details.passportNumber || '').trim()) return 'Người lao động nước ngoài phải có số hộ chiếu.';
+  const immigration = immigrationProblem(details);
+  if (immigration) return immigration;
   // Ngày nghỉ thêm Tết cổ truyền và Quốc khánh của nước người lao động (Điều 112 khoản 2): ngày dạng MM-DD.
   if (details.homeNationalDay && !isMonthDay(details.homeNationalDay)) return 'Ngày Quốc khánh của nước người lao động phải có dạng tháng-ngày (MM-DD).';
   if (details.foreignJobCategory && !FOREIGN_JOB_CATEGORIES[details.foreignJobCategory]) return 'Vị trí công việc của người lao động nước ngoài phải là nhà quản lý, giám đốc điều hành, chuyên gia hoặc lao động kỹ thuật.';
@@ -47,6 +50,40 @@ export function workPermitProblem(details, previous = {}) {
     return 'Thời hạn giấy phép lao động tối đa 02 năm; nếu đã gia hạn thì đánh dấu gia hạn và nhập ngày hết hạn trước đó.';
   }
   return '';
+}
+
+// Thị thực và thẻ tạm trú lao động (Luật Nhập cảnh, xuất cảnh, quá cảnh, cư trú của người nước ngoài 47/2014/QH13, sửa đổi bởi Luật 51/2019/QH14 và
+// 23/2023/QH15): ký hiệu LĐ1 cho người không thuộc diện cấp giấy phép lao động, LĐ2 cho người phải có giấy phép; thị thực và thẻ tạm trú LĐ1, LĐ2 thời
+// hạn không quá 02 năm và phải ngắn hơn thời hạn còn lại của hộ chiếu ít nhất 30 ngày. Xác minh qua trí nhớ văn bản, chưa đối chiếu bản gốc.
+export const IMMIGRATION_TYPES = { 'LĐ1': 'LĐ1 (không thuộc diện cấp giấy phép)', 'LĐ2': 'LĐ2 (có giấy phép lao động)', other: 'Ký hiệu khác' };
+const addDays = (iso, days) => { const date = new Date(`${iso}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
+
+export function immigrationProblem(details) {
+  if (details.passportExpiryDate && !isoDate(details.passportExpiryDate)) return 'Ngày hết hạn hộ chiếu không hợp lệ.';
+  const documents = [
+    { label: 'thị thực', type: details.visaType, number: details.visaNumber, issue: details.visaIssueDate, expiry: details.visaExpiryDate },
+    { label: 'thẻ tạm trú', type: details.residenceCardType, number: details.residenceCardNumber, issue: details.residenceCardIssueDate, expiry: details.residenceCardExpiryDate },
+  ];
+  for (const doc of documents) {
+    if (!doc.type && !doc.number && !doc.expiry) continue;
+    if (!IMMIGRATION_TYPES[doc.type]) return `Chọn ký hiệu ${doc.label}: LĐ1, LĐ2 hoặc ký hiệu khác.`;
+    if (!String(doc.number || '').trim()) return `Nhập số ${doc.label}.`;
+    if (!isoDate(doc.issue) || !isoDate(doc.expiry) || doc.expiry <= doc.issue) return `Nhập ngày cấp và ngày hết hạn ${doc.label} hợp lệ.`;
+    if (['LĐ1', 'LĐ2'].includes(doc.type) && doc.expiry > addYears(doc.issue, 2)) return `${doc.label[0].toUpperCase()}${doc.label.slice(1)} ký hiệu ${doc.type} có thời hạn không quá 02 năm.`;
+    if (isoDate(details.passportExpiryDate) && doc.expiry > addDays(details.passportExpiryDate, -30)) return `${doc.label[0].toUpperCase()}${doc.label.slice(1)} phải hết hạn trước hộ chiếu ít nhất 30 ngày.`;
+    if (doc.type === 'LĐ2' && details.workPermitStatus === 'exempt') return `Người không thuộc diện cấp giấy phép dùng ${doc.label} ký hiệu LĐ1, không phải LĐ2.`;
+    if (doc.type === 'LĐ1' && details.workPermitStatus === 'permit') return `Người có giấy phép lao động dùng ${doc.label} ký hiệu LĐ2, không phải LĐ1.`;
+  }
+  return '';
+}
+
+// Các giấy tờ có hạn cần nhắc của người lao động nước ngoài: hộ chiếu, thị thực, thẻ tạm trú (ngày hết hạn đã nhập).
+export function immigrationExpiries(details) {
+  return [
+    { kind: 'passport', label: 'Hộ chiếu', number: details.passportNumber, expiry: details.passportExpiryDate },
+    { kind: 'visa', label: `Thị thực ${details.visaType || ''}`.trim(), number: details.visaNumber, expiry: details.visaExpiryDate },
+    { kind: 'residence_card', label: `Thẻ tạm trú ${details.residenceCardType || ''}`.trim(), number: details.residenceCardNumber, expiry: details.residenceCardExpiryDate },
+  ].filter((item) => isoDate(item.expiry));
 }
 
 // Ngày hết hạn quyền làm việc: giấy phép hoặc xác nhận miễn (nếu có ghi).
@@ -95,12 +132,16 @@ export function buildForeignWorkerReport(people, period) {
         jobCategory: FOREIGN_JOB_CATEGORIES[details.foreignJobCategory] || 'Chưa phân loại', position: person.position || '',
         permitStatus: WORK_PERMIT_STATUSES[details.workPermitStatus] || 'Chưa khai báo', workPermitNumber: details.workPermitNumber || details.workPermitExemptReason || '',
         permitIssueDate: details.workPermitIssueDate || '', permitExpiryDate: expiry,
+        visa: details.visaNumber ? `${details.visaType || ''} ${details.visaNumber}`.trim() : '', visaExpiryDate: details.visaExpiryDate || '',
+        residenceCard: details.residenceCardNumber ? `${details.residenceCardType || ''} ${details.residenceCardNumber}`.trim() : '', residenceCardExpiryDate: details.residenceCardExpiryDate || '',
         contractCode: person.contract?.code || '', contractStart: person.contract?.startDate || '', contractEnd: person.contract?.endDate || '',
         issues: [
           !details.workPermitStatus || details.workPermitStatus === 'pending' ? 'Chưa có giấy phép hoặc xác nhận miễn' : '',
           expiry && expiry < info.end ? `Giấy phép hết hạn ${expiry} trong kỳ` : '',
           person.contract?.endDate && expiry && person.contract.endDate > expiry ? 'Hợp đồng vượt thời hạn giấy phép' : '',
           !details.foreignJobCategory ? 'Chưa phân loại vị trí công việc' : '',
+          !details.visaNumber && !details.residenceCardNumber ? 'Chưa có thị thực hoặc thẻ tạm trú' : '',
+          ...immigrationExpiries(details).filter((item) => item.expiry < info.end).map((item) => `${item.label} hết hạn ${item.expiry} trong kỳ`),
         ].filter(Boolean),
       };
     });

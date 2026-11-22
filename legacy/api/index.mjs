@@ -45,7 +45,7 @@ import { CASUAL_INCOME_TYPE, calculateCasualIncomeTax, casualPayeeKey, commitmen
 import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
 import { DECLARATION_LABELS, buildPitDeclaration, declarationPeriod } from './pitDeclarationRules.mjs';
-import { buildForeignWorkerReport, foreignContractProblem, isForeignNationality, permitExpiryDate, workPermitProblem } from './foreignWorkerRules.mjs';
+import { buildForeignWorkerReport, foreignContractProblem, immigrationExpiries, isForeignNationality, permitExpiryDate, workPermitProblem } from './foreignWorkerRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -7911,6 +7911,21 @@ async function processExpiryReminders() {
         title: days < 0 ? 'Giấy phép lao động đã hết hạn' : 'Giấy phép lao động sắp hết hạn', link: '/admin/hr/employees',
         message: `${details.workPermitStatus === 'exempt' ? 'Xác nhận không thuộc diện cấp giấy phép' : `Giấy phép lao động ${details.workPermitNumber || ''}`} của ${row.name} (${row.employee_code}) hết hạn ngày ${expiry}, ${describeDays(days)}. Hợp đồng lao động không được vượt thời hạn này (Điều 151).`,
       });
+    }
+    // 3c. Hộ chiếu, thị thực, thẻ tạm trú của người lao động nước ngoài (cùng các mốc nhắc giấy phép).
+    for (const row of await db.prepare("SELECT u.id, u.name, u.employee_code, p.details_json FROM users u JOIN employee_profiles p ON p.user_id = u.id WHERE u.is_active = 1").all()) {
+      const details = parseJsonObject(row.details_json);
+      if (!isForeignNationality(details.nationality)) continue;
+      for (const item of immigrationExpiries(details)) {
+        const days = daysBetween(today, item.expiry);
+        const bucket = days > 30 && days <= 45 ? 45 : reminderBucket(days);
+        if (bucket === null) continue;
+        created += await sendReminder({
+          kind: item.kind, entityKey: row.id, expiry: item.expiry, bucket, recipients: await reminderRecipients('hr', row.id),
+          title: days < 0 ? `${item.label} đã hết hạn` : `${item.label} sắp hết hạn`, link: '/admin/hr/foreign-workers',
+          message: `${item.label} ${item.number || ''} của ${row.name} (${row.employee_code}) hết hạn ngày ${item.expiry}, ${describeDays(days)}.`,
+        });
+      }
     }
 
     // 4. Bản quyền phần mềm.
