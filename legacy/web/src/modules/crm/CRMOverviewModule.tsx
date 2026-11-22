@@ -381,7 +381,7 @@ export const CRMOverviewModule: React.FC = () => {
   const companyMonths = useMemo(() => monthlySales(salesDocuments, chartYear), [salesDocuments, chartYear]);
   const bySeller = useMemo(() => salesBySalesperson(periodDocs), [periodDocs]);
   const byDepartment = useMemo(() => salesByDepartment(periodDocs), [periodDocs]);
-  const byItem = useMemo(() => salesByItem(periodDocs).slice(0, 10), [periodDocs]);
+  const byItem = useMemo(() => salesByItem(periodDocs, salesDocuments).slice(0, 10), [periodDocs, salesDocuments]);
   const money = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
   // Mục tiêu đặt cho toàn doanh nghiệp nên luôn so với doanh số toàn doanh nghiệp.
   const progress = useMemo(() => targetProgress(companyMonths, targets, chartYear), [companyMonths, targets, chartYear]);

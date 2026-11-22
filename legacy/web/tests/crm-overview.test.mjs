@@ -89,3 +89,15 @@ test('doanh số chưa thuế theo hàng hóa: chia doanh số chứng từ theo
     { label: 'Lắp đặt', value: 240_000, quantity: 1.5, unit: '', count: 1 },
   ]);
 });
+
+test('doanh số theo hàng hóa trừ đúng dòng bị trả lại theo dòng gốc', async () => {
+  const { salesByItem } = await import('../src/modules/crm/crmOverviewRules.ts');
+  // Gốc 1.100.000 gồm 10% thuế: Giấy A4 700.000 (10 ram), Lắp đặt 300.000; trả 4 ram = 280.000 chưa thuế (308.000 gồm thuế).
+  const sale = { key: 's', subtype: 'Đơn bán hàng', status: 'Đã bàn giao', amount: 1_100_000, vatAmount: 100_000, adjustedAmount: 308_000,
+    lines: [{ itemKey: 'i1', name: 'Giấy A4', unit: 'Ram', quantity: 10, amount: 700_000 }, { name: 'Lắp đặt', unit: '', quantity: 1.5, amount: 300_000 }] };
+  const back = { key: 'r', subtype: 'Hàng bán bị trả lại', status: 'Đã ghi nhận', amount: 308_000, vatAmount: 28_000, adjustsDocumentId: 's',
+    lines: [{ originalLine: 0, itemKey: 'i1', name: 'Giấy A4', unit: 'Ram', quantity: 4, amount: 280_000 }] };
+  assert.deepEqual(salesByItem([sale], [sale, back]).map((row) => [row.label, row.value, row.quantity]), [['Giấy A4', 420_000, 6], ['Lắp đặt', 300_000, 1.5]]);
+  // Không truyền danh sách đầy đủ thì phần trả lại vẫn trừ theo tỷ lệ (không biết dòng nào).
+  assert.deepEqual(salesByItem([sale]).map((row) => row.value), [504_000, 216_000]);
+});

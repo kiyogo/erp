@@ -31,3 +31,19 @@ export function linesDraftProblem(lines: DocumentLineDraft[]) {
   }
   return '';
 }
+
+// Trả lại hàng theo dòng gốc: bản sao `returnLineAmount`, `returnedQuantities` của legacy/api/documentLineRules.mjs.
+type OriginalLine = { quantity: number; unitPrice: number; discount?: number };
+export const returnLineAmount = (original: OriginalLine, quantity: number) =>
+  Math.round(quantity * Number(original.unitPrice)) - Math.round(((Number(original.discount) || 0) * quantity) / Number(original.quantity));
+
+export function returnedQuantities(returnLinesList: Array<Array<{ originalLine?: number; quantity: number }> | undefined>) {
+  const returned = new Map<number, number>();
+  for (const lines of returnLinesList) {
+    for (const line of lines || []) {
+      if (!Number.isInteger(line?.originalLine)) continue;
+      returned.set(line.originalLine as number, Math.round(((returned.get(line.originalLine as number) || 0) + Number(line.quantity || 0)) * 1000) / 1000);
+    }
+  }
+  return returned;
+}

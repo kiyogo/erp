@@ -5,6 +5,8 @@ import { Button, Form, Input, Modal, Select, Tag, message } from '../../custom-u
 import { financeDocumentsApi, type FinanceDocument } from '../../api/endpoints';
 import { adjustableOriginals, adjustmentSubtype, type AdjustmentKind, type AdjustmentSide } from './tradeAdjustments';
 import { termsFromValues, vatOf } from './tradeTerms';
+import { DocumentLinesLink, DocumentLinesModal } from './DocumentLinesEditor';
+import { returnLineAmount, returnedQuantities } from './documentLines';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
 import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
 import type { FinanceDocument as PayableDocument } from '../../api/endpoints';
@@ -35,6 +37,8 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
   const [modalOpen, setModalOpen] = useState(false);
   const [originalKey, setOriginalKey] = useState('');
   const [net, setNet] = useState(0);
+  const [returnQty, setReturnQty] = useState<Record<number, string>>({});
+  const [linesTarget, setLinesTarget] = useState<FinanceDocument | null>(null);
   const [form] = Form.useForm();
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
@@ -56,9 +60,20 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
   const byKey = useMemo(() => new Map(documents.map((document) => [document.key, document])), [documents]);
   const originals = useMemo(() => adjustableOriginals(side, documents), [side, documents]);
   const original = originals.find((item) => item.document.key === originalKey);
+  // Trả lại hàng của chứng từ gốc có dòng hàng: nhập số lượng trả từng dòng, đơn giá và chiết khấu lấy theo dòng gốc (máy chủ tính lại).
+  const originalLines = kind === 'return' ? original?.document.lines || [] : [];
+  const returned = useMemo(() => returnedQuantities(documents
+    .filter((document) => document.adjustsDocumentId === originalKey && document.status !== 'Đã hủy')
+    .map((document) => document.lines)), [documents, originalKey]);
+  const returnEntries = originalLines
+    .map((line, index) => ({ line, index, quantity: Number(String(returnQty[index] ?? '').replace(',', '.')) || 0 }))
+    .filter((entry) => entry.quantity > 0);
+  const byLines = returnEntries.length > 0;
+  const linesNet = returnEntries.reduce((sum, entry) => sum + returnLineAmount(entry.line, entry.quantity), 0);
   const vatRate = original?.document.vatRate || 0;
-  const vatAmount = vatOf(net, vatRate);
-  const total = net + vatAmount;
+  const shownNet = byLines ? linesNet : net;
+  const vatAmount = vatOf(shownNet, vatRate);
+  const total = shownNet + vatAmount;
 
   const rows = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
@@ -73,13 +88,14 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
     form.resetFields();
     setOriginalKey('');
     setNet(0);
+    setReturnQty({});
     form.setFieldsValue({ documentDate: currentBusinessDate() });
     setModalOpen(true);
   };
 
   const handleCreate = async (values: any) => {
     if (saving || !original) return;
-    const netAmount = Number(values.net) || 0;
+    const netAmount = byLines ? linesNet : Number(values.net) || 0;
     const vat = vatOf(netAmount, original.document.vatRate);
     setSaving(true);
     try {
@@ -98,6 +114,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         vatAmount: vat,
         adjustsDocumentId: original.document.key,
         terms: termsFromValues(values),
+        ...(byLines ? { lines: returnEntries.map((entry) => ({ originalLine: entry.index, quantity: entry.quantity })) } : {}),
       });
       message.success(`Đã lưu ${label.title.toLocaleLowerCase('vi-VN')}, công nợ của chứng từ gốc đã giảm tương ứng. Hoàn tiền bằng nút ở cột Thanh toán.`);
       setModalOpen(false);
@@ -118,6 +135,7 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         <div>
           <div>{record.partnerName}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>Gốc: {byKey.get(record.adjustsDocumentId || '')?.code || 'Không còn dữ liệu'}</div>
+          <DocumentLinesLink document={record} onOpen={setLinesTarget} />
           {record.terms?.reason && <div style={{ fontSize: 12, color: '#64748B' }}>Lý do: {record.terms.reason}</div>}
           {record.terms?.invoiceNo && <div style={{ fontSize: 12, color: '#64748B' }}>Hóa đơn điều chỉnh {record.terms.invoiceNo}{record.terms.invoiceSymbol ? `, ký hiệu ${record.terms.invoiceSymbol}` : ''}</div>}
           {(record.termWarnings || []).map((warning) => <div key={warning} style={{ fontSize: 12, color: '#D97706' }}>{warning}</div>)}
@@ -154,28 +172,58 @@ export const TradeAdjustmentsModule: React.FC<{ side: AdjustmentSide; kind: Adju
         </div>
       </div>
 
+      <DocumentLinesModal document={linesTarget} onClose={() => setLinesTarget(null)} />
       <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
-      <Modal title={`Thêm ${label.title.toLocaleLowerCase('vi-VN')}`} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={640}>
+      <Modal title={`Thêm ${label.title.toLocaleLowerCase('vi-VN')}`} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={originalLines.length ? 860 : 640}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
           <Form.Item name="originalKey" label="Chứng từ gốc" rules={[{ required: true, message: 'Chọn chứng từ gốc' }]}>
             <Select
               showSearch
               placeholder="Chọn chứng từ đã ghi nhận"
               options={originals.map((item) => ({ value: item.document.key, label: `${item.document.code} · ${item.document.partnerName} · còn điều chỉnh được ${formatMoney(item.room)}` }))}
-              onChange={(value: string) => setOriginalKey(value)}
+              onChange={(value: string) => { setOriginalKey(value); setReturnQty({}); }}
             />
           </Form.Item>
           {original && <div style={{ marginBottom: 14, color: '#64748B' }}>
             Đối tác {original.document.partnerName}, thuế suất GTGT của chứng từ gốc {original.document.vatRate}%, còn điều chỉnh được {formatMoney(original.room)}.
           </div>}
+          {originalLines.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ marginBottom: 6, color: '#0F172A' }}>Số lượng trả theo dòng hàng của chứng từ gốc</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.9fr 0.9fr 1fr 1fr', gap: 6, fontSize: 12, color: '#64748B', marginBottom: 4 }}>
+                <span>Hàng hóa, dịch vụ</span><span>Đơn vị tính</span><span style={{ textAlign: 'right' }}>Số lượng gốc</span><span style={{ textAlign: 'right' }}>Còn trả được</span><span>Số lượng trả</span><span style={{ textAlign: 'right' }}>Thành tiền</span>
+              </div>
+              {originalLines.map((line, index) => {
+                const remaining = Math.max(0, Math.round((line.quantity - (returned.get(index) || 0)) * 1000) / 1000);
+                const quantity = Number(String(returnQty[index] ?? '').replace(',', '.')) || 0;
+                return (
+                  <div key={index} style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.9fr 0.9fr 1fr 1fr', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                    <span>{line.sku ? `${line.sku} · ` : ''}{line.name}</span>
+                    <span>{line.unit || '—'}</span>
+                    <span style={{ textAlign: 'right' }}>{line.quantity.toLocaleString('vi-VN')}</span>
+                    <span style={{ textAlign: 'right' }}>{remaining.toLocaleString('vi-VN')}</span>
+                    <Input type="number" min={0} max={remaining} step="0.001" disabled={remaining <= 0} value={returnQty[index] ?? ''} onChange={(event) => setReturnQty({ ...returnQty, [index]: event.target.value })} />
+                    <span style={{ textAlign: 'right', color: quantity > remaining ? '#DC2626' : '#0F172A' }}>{quantity > 0 ? formatMoney(returnLineAmount(line, quantity)) : '—'}</span>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 12, color: '#64748B' }}>Đơn giá và chiết khấu lấy theo dòng gốc, chiết khấu chia theo số lượng trả. Để trống mọi dòng nếu chỉ ghi theo giá trị.</div>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="documentDate" label="Ngày điều chỉnh" rules={[{ required: true }]}>
               <Input type="date" />
             </Form.Item>
-            <Form.Item name="net" label="Tiền hàng điều chỉnh chưa thuế" rules={[{ required: true }]}>
-              <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setNet(Number(event.target.value) || 0)} />
-            </Form.Item>
+            {byLines ? (
+              <Form.Item label="Tiền hàng trả lại chưa thuế (tổng các dòng)">
+                <Input value={String(linesNet)} disabled />
+              </Form.Item>
+            ) : (
+              <Form.Item name="net" label="Tiền hàng điều chỉnh chưa thuế" rules={[{ required: true }]}>
+                <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setNet(Number(event.target.value) || 0)} />
+              </Form.Item>
+            )}
           </div>
           <div style={{ marginBottom: 14, color: '#64748B' }}>
             Thuế GTGT {formatMoney(vatAmount)}, tổng điều chỉnh <strong style={{ color: '#0F172A' }}>{formatMoney(total)}</strong>

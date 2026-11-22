@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { documentLinesProblem, lineAmount, normalizeDocumentLines } from '../documentLineRules.mjs';
+import { documentLinesProblem, lineAmount, normalizeDocumentLines, normalizeReturnLines, returnLineAmount, returnedQuantities } from '../documentLineRules.mjs';
 
 test('thành tiền dòng = làm tròn(số lượng × đơn giá) − chiết khấu', () => {
   const { lines, net } = normalizeDocumentLines([{ name: ' Thép ', unit: 'kg', quantity: '2.125', unitPrice: 15_333.5, discount: 1 }, { name: 'Vận chuyển', quantity: 1, unitPrice: 0 }]);
@@ -29,4 +29,23 @@ test('chặn dòng sai', () => {
 test('tổng các dòng phải bằng tiền hàng chưa thuế', () => {
   assert.equal(documentLinesProblem(1_000_000, { amount: 1_100_000, vatAmount: 100_000 }), '');
   assert.match(documentLinesProblem(999_999, { amount: 1_100_000, vatAmount: 100_000 }), /phải bằng tiền hàng chưa thuế 1\.000\.000/);
+});
+
+test('dòng trả lại: lấy theo dòng gốc, chia chiết khấu theo số lượng, không trả quá số còn lại', () => {
+  const original = [
+    { itemKey: 'i1', sku: 'A4', name: 'Giấy A4', unit: 'Ram', quantity: 10, unitPrice: 80_000, discount: 100_000, amount: 700_000 },
+    { name: 'Lắp đặt', unit: '', quantity: 1.5, unitPrice: 200_000, amount: 300_000 },
+  ];
+  const { lines, net } = normalizeReturnLines([{ originalLine: 0, quantity: 3, name: 'bỏ qua', unitPrice: 1 }], original);
+  assert.deepEqual(lines[0], { originalLine: 0, itemKey: 'i1', sku: 'A4', name: 'Giấy A4', unit: 'Ram', quantity: 3, unitPrice: 80_000, discount: 30_000, amount: 210_000 });
+  assert.equal(net, 210_000);
+  assert.equal(returnLineAmount(original[0], 10), 700_000);
+  assert.equal(returnLineAmount(original[1], 1.5), 300_000);
+  const returned = returnedQuantities([lines, undefined, [{ originalLine: 0, quantity: 6.5 }]]);
+  assert.equal(returned.get(0), 9.5);
+  assert.throws(() => normalizeReturnLines([{ originalLine: 0, quantity: 1 }], original, returned), /vượt số còn trả được 0,5/);
+  assert.equal(normalizeReturnLines([{ originalLine: 0, quantity: 0.5 }], original, returned).net, 35_000);
+  assert.throws(() => normalizeReturnLines([{ originalLine: 2, quantity: 1 }], original), /không có dòng tương ứng/);
+  assert.throws(() => normalizeReturnLines([{ originalLine: 1, quantity: 1 }, { originalLine: 1, quantity: 0.5 }], original), /hai lần/);
+  assert.throws(() => normalizeReturnLines([{ originalLine: 0, quantity: 1 }], []), /không có dòng hàng/);
 });

@@ -830,6 +830,15 @@ test('document lines must add up to the pre-tax amount and are returned with the
   assert.deepEqual(created.lines.map((line) => line.amount), [700_000, 300_000]);
   const listed = (await request('/finance/documents?documentType=sale')).data.find((item) => item.key === created.key);
   assert.deepEqual(listed.lines[0], { name: 'Giấy A4', unit: 'Ram', quantity: 10, unitPrice: 80_000, discount: 100_000, amount: 700_000 });
+
+  // Trả lại 4 ram (320.000 − 40.000 chiết khấu = 280.000 chưa thuế, 308.000 gồm thuế), rồi không trả quá 6 ram còn lại.
+  const delivered = (await request('/finance/documents', 'POST', { ...input, status: 'Đã bàn giao', lines }, 201)).document;
+  const returnInput = { documentType: 'sale', subtype: 'Hàng bán bị trả lại', partnerName: '', description: '', amount: 308_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã ghi nhận', taxCode: '', vatRate: 10, vatAmount: 28_000, adjustsDocumentId: delivered.key, terms: { reason: 'Hàng lỗi' } };
+  const returned = (await request('/finance/documents', 'POST', { ...returnInput, lines: [{ originalLine: 0, quantity: 4 }] }, 201)).document;
+  assert.deepEqual([returned.lines[0].originalLine, returned.lines[0].amount, returned.lines[0].discount], [0, 280_000, 40_000]);
+  await request('/finance/documents', 'POST', { ...returnInput, amount: 539_000, vatAmount: 49_000, lines: [{ originalLine: 0, quantity: 7 }] }, 422);
+  await request('/finance/documents', 'POST', { ...returnInput, subtype: 'Giảm giá hàng bán', lines: [{ originalLine: 0, quantity: 1 }] }, 422);
+  await request('/finance/documents', 'POST', { ...returnInput, adjustsDocumentId: (await request('/finance/documents', 'POST', { ...input, status: 'Đã bàn giao' }, 201)).document.key, lines: [{ originalLine: 0, quantity: 1 }] }, 422);
 });
 
 test('sales commissions follow the policy, close once per month and feed the payroll bonus', async () => {

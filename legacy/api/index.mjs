@@ -36,7 +36,7 @@ import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { COMMISSION_BASES, COMMISSION_TIER_MODES, calculateCommissions, commissionBonusByEmployee, commissionPolicyProblem } from './commissionRules.mjs';
-import { documentLinesProblem, normalizeDocumentLines } from './documentLineRules.mjs';
+import { documentLinesProblem, normalizeDocumentLines, normalizeReturnLines, returnedQuantities } from './documentLineRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
 import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
@@ -14433,7 +14433,16 @@ async function handleRequest(request, response) {
         taxCode: original ? original.taxCode : supplier && !String(input.taxCode || '').trim() ? supplier.tax_code : input.taxCode,
       });
       // Dòng hàng (documentLineRules.mjs): mặt hàng chọn từ danh mục kho thì lấy mã, tên, đơn vị tính từ danh mục; tổng thành tiền phải bằng tiền hàng chưa thuế.
-      if (Array.isArray(input.lines) && input.lines.length) {
+      // Chứng từ trả lại hàng: dòng hàng trỏ về dòng của chứng từ gốc, chỉ nhập số lượng trả (không vượt số còn trả được); giảm giá chỉ ghi theo giá trị.
+      if (Array.isArray(input.lines) && input.lines.length && original) {
+        if (!/trả lại/i.test(input.subtype)) throw new HttpError(422, 'Chứng từ giảm giá ghi theo giá trị, không nhập dòng hàng.');
+        const termsByDocument = await financeDocumentTerms();
+        const earlier = await db.prepare("SELECT id FROM finance_documents WHERE adjusts_document_id = ? AND status <> 'Đã hủy'").all(original.key);
+        const returned = returnedQuantities(earlier.map((row) => termsByDocument.get(row.id)?.lines));
+        try { ({ lines } = normalizeReturnLines(input.lines, termsByDocument.get(original.key)?.lines, returned)); } catch (error) { throw new HttpError(422, error.message); }
+        const linesProblem = documentLinesProblem(lines.reduce((sum, line) => sum + line.amount, 0), document);
+        if (linesProblem) throw new HttpError(422, linesProblem);
+      } else if (Array.isArray(input.lines) && input.lines.length) {
         const items = new Map((await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_inventory'").all()).map((row) => [row.record_key, parseJsonObject(row.payload_json)]));
         try { ({ lines } = normalizeDocumentLines(input.lines, items)); } catch (error) { throw new HttpError(422, error.message); }
         const linesProblem = documentLinesProblem(lines.reduce((sum, line) => sum + line.amount, 0), document);

@@ -667,7 +667,7 @@ export type FinanceDocument = {
   paymentMethod?: string;
   termWarnings?: string[];
 };
-export type FinanceDocumentLine = { itemKey?: string; sku?: string; name: string; unit: string; quantity: number; unitPrice: number; discount?: number; amount: number };
+export type FinanceDocumentLine = { originalLine?: number; itemKey?: string; sku?: string; name: string; unit: string; quantity: number; unitPrice: number; discount?: number; amount: number };
 export type FinanceDocumentTerms = {
   reason?: string;
   invoiceNo?: string;
@@ -711,7 +711,7 @@ export const financeOverviewApi = {
 };
 
 export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'code' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions' | 'paymentMethod' | 'termWarnings' | 'adjustedAmount' | 'lines'> & {
-  lines?: Array<Omit<FinanceDocumentLine, 'sku' | 'amount'>>;
+  lines?: Array<Omit<FinanceDocumentLine, 'sku' | 'amount'> | { originalLine: number; quantity: number }>;
   promotionKeys?: string[];
   promotionFingerprint?: string;
   requestId?: string;
