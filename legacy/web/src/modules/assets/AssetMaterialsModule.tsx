@@ -105,11 +105,7 @@ export const AssetMaterialsModule: React.FC = () => {
       materialCode: `LK-2026-0${data.length + 1}`,
       category: 'Linh kiện Máy chủ & Lưu trữ',
       unit: 'Cái',
-      stockQty: 10,
-      minThreshold: 4,
-      maxThreshold: 30,
-      warehouseLocation: 'Tủ Linh Kiện IDC Viettel Duy Tân - Ngăn A3',
-      warrantyMonths: 36,
+      stockQty: 0,
     });
     setModalOpen(true);
   };
@@ -260,9 +256,9 @@ export const AssetMaterialsModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Vị trí kho quản lý tập trung</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            4 kho &amp; tủ Rack IDC
+            {new Set(data.map((item) => item.warehouseLocation).filter(Boolean)).size} vị trí
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Viettel Duy Tân, Keangnam &amp; TP.HCM</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>{[...new Set(data.map((item) => item.warehouseLocation).filter(Boolean))].slice(0, 3).join(', ') || 'Chưa ghi vị trí kho'}</div>
         </div>
       </div>
 

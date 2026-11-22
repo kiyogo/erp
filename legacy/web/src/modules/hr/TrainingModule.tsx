@@ -68,8 +68,9 @@ export const TrainingModule: React.FC = () => {
   const activeCourses = data.filter((d) => d.status === 'Đang diễn ra').length;
 
   const handleCreate = async (values: any) => {
-    const hours = Number(values.durationHours) || 8;
-    const parts = Number(values.participantsCount) || 10;
+    // Không tự điền số giờ, số học viên, ngân sách, địa điểm, ngày kết thúc khi người dùng để trống (trước đây điền 8 giờ, 10 người, 10 triệu, "Hội trường Tầng 3", 30/09/2026).
+    const hours = Number(values.durationHours) || 0;
+    const parts = Number(values.participantsCount) || 0;
     const id = `course-${Date.now()}`;
     const newCourse: EnterpriseTrainingCourse = {
       ...values,
@@ -77,9 +78,9 @@ export const TrainingModule: React.FC = () => {
       durationHours: hours,
       participantsCount: parts,
       completionRate: 0,
-      budget: Number(values.budget) || 10000000,
-      location: values.location || 'Hội trường Tầng 3',
-      endDate: values.endDate || '2026-09-30',
+      budget: Number(values.budget) || 0,
+      location: values.location || '',
+      endDate: values.endDate || '',
       status: 'Sắp khai giảng',
     };
     try {

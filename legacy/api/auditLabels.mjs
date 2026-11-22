@@ -35,6 +35,9 @@ const ACTION_LABELS = {
   ekyc_consent_withdrawn: 'Rút đồng ý, xóa ảnh sinh trắc học',
   verify_workflow_approval_otp: 'Xác minh mã phê duyệt quy trình',
   auto_escalation_alert: 'Cảnh báo leo thang quy trình',
+  move_file: 'Di chuyển tệp',
+  set_storage_quota: 'Đặt hạn mức lưu trữ',
+  copy_file: 'Sao chép tệp',
   // Thông báo
   send_system_broadcast: 'Gửi thông báo hệ thống',
   update_system_broadcast: 'Sửa thông báo hệ thống',
@@ -233,6 +236,7 @@ const SCOPE_LABELS = {
   services_sla: 'Cam kết SLA',
   ticket_incidents: 'Sự cố',
   reports_catalog: 'Báo cáo',
+  file_nodes: 'Thư mục, tệp',
 };
 
 // Phạm vi chưa có tên riêng: lấy theo tiền tố phân hệ.

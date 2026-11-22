@@ -1,466 +1,143 @@
-import { dataService } from '../../services/dataService';
-import React, { useEffect, useState } from 'react';
-import {
-  SettingOutlined,
-  SafetyCertificateOutlined,
-  FileProtectOutlined,
-  SaveOutlined,
-  KeyOutlined,
-  CheckCircleOutlined,
-  BarcodeOutlined,
-  AuditOutlined,
-  LockOutlined,
-  CalendarOutlined,
-  PlusOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  CloudUploadOutlined,
-  ClockCircleOutlined,
-  BankOutlined,
-  InfoCircleOutlined,
-} from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { FileProtectOutlined, SafetyCertificateOutlined, LockOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
-import { Button, Form, Input, Select, message, Tag, Card, Modal, Radio, Alert, Progress } from '../../custom-ui';
+import { Button, Tag, message } from '../../custom-ui';
+import { dataService } from '../../services/dataService';
+import { companyHeading, useCompanyIdentity } from '../../services/companyIdentity';
 
-export interface NumberingRule {
-  key: string;
-  docType: string;
-  prefixPattern: string;
-  sampleResult: string;
-  currentSequence: number;
-  resetYearly: boolean;
-  status: 'Kích hoạt' | 'Tạm dừng';
-}
+// Cài đặt văn thư: trang chỉ đọc, trình bày đúng các quy tắc hệ thống đang áp dụng ở máy chủ (legacy/api/documentRules.mjs, nhánh doc_archives của
+// normalizeCollectionRecord) và chứng thư số thật trong sổ Chữ ký số. Trước đây trang hiện chứng thư, con dấu, quy tắc viết tắt phòng ban bịa và
+// nút "Lưu thiết lập" chỉ báo thành công. Các bộ giá trị dưới đây là bản sao của documentRules.mjs, sửa cùng lúc khi máy chủ đổi.
+const SECURITY_LEVELS = ['Tuyệt mật', 'Tối mật', 'Mật', 'Nội bộ', 'Thường'];
+const STATE_SECRET_LEVELS = ['Tuyệt mật', 'Tối mật', 'Mật'];
+const URGENCY_LEVELS = ['Hỏa tốc', 'Thượng khẩn', 'Khẩn', 'Bình thường'];
+const DOC_TYPE_ABBREVIATIONS: Record<string, string> = { 'Quyết định': 'QĐ', 'Thông báo': 'TB', 'Tờ trình': 'TTr', 'Hợp đồng': 'HĐ', 'Giấy mời': 'GM' };
 
-export interface SecurityAccessRule {
-  key: string;
-  securityLevel: string;
-  allowedRoles: string[];
-  canView: boolean;
-  canDownload: boolean;
-  canPrint: boolean;
-  watermarkRequired: boolean;
-}
+type Tab = 'numbering' | 'signatures' | 'security' | 'retention';
 
-const INITIAL_RULES: NumberingRule[] = [];
-
-const INITIAL_ACCESS_RULES: SecurityAccessRule[] = [];
+const card = (title: string, value: React.ReactNode, note: string, color: string) => (
+  <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
+    <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>{title}</div>
+    <div style={{ fontSize: 24, fontWeight: 800, color, marginTop: 4 }}>{value}</div>
+    <div style={{ fontSize: 11.5, color, marginTop: 2 }}>{note}</div>
+  </div>
+);
 
 export const DocumentSettingsModule: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'numbering' | 'ca_seal' | 'security' | 'retention'>('numbering');
+  const navigate = useNavigate();
+  const company = useCompanyIdentity();
+  const [activeTab, setActiveTab] = useState<Tab>('numbering');
+  const [archives, setArchives] = useState<any[]>([]);
+  const [certs, setCerts] = useState<any[]>([]);
 
-  // Rules state
-  const [rules, setRules] = useState<NumberingRule[]>(INITIAL_RULES);
-  const [accessRules, setAccessRules] = useState<SecurityAccessRule[]>(INITIAL_ACCESS_RULES);
+  useEffect(() => {
+    Promise.all([dataService.refreshGenericData('doc_archives'), dataService.refreshGenericData('finance_digital_signatures')])
+      .then(([archiveRows, certRows]) => { setArchives(archiveRows || []); setCerts(certRows || []); })
+      .catch(() => message.error('Không tải được sổ văn thư hoặc sổ chữ ký số.'));
+  }, []);
 
-  const [form] = Form.useForm();
-  const [caForm] = Form.useForm();
+  const year = new Date().getFullYear();
+  // Số vào sổ do máy chủ cấp: tăng dần theo năm và chiều văn bản, dạng 0001/năm.
+  const books = useMemo(() => ['Văn bản đến', 'Văn bản đi'].map((dispatchType) => {
+    const rows = archives.filter((item) => item.dispatchType === dispatchType && String(item.dateReceivedOrIssued || '').startsWith(String(year)));
+    const last = rows.reduce((max, item) => Math.max(max, Number.parseInt(item.bookNumber, 10) || 0), 0);
+    return { key: dispatchType, dispatchType, count: rows.length, lastNumber: last ? `${String(last).padStart(4, '0')}/${year}` : 'Chưa có', nextNumber: `${String(last + 1).padStart(4, '0')}/${year}` };
+  }), [archives, year]);
+  const today = new Date().toISOString().slice(0, 10);
+  const activeCerts = certs.filter((cert) => !['revoked', 'suspended'].includes(cert.lifecycle) && (!cert.validTo || String(cert.validTo).slice(0, 10) >= today));
+  const secretCount = archives.filter((item) => STATE_SECRET_LEVELS.includes(item.securityLevel)).length;
 
-  const handleSaveAll = () => {
-    message.success('Đã lưu toàn bộ cấu hình quy chế văn thư & thiết lập chữ ký số thành công!');
-  };
+  const tabs: Array<{ key: Tab; label: string; icon: React.ReactNode }> = [
+    { key: 'numbering', label: 'Số và ký hiệu văn bản', icon: <FileProtectOutlined /> },
+    { key: 'signatures', label: 'Chứng thư số doanh nghiệp', icon: <SafetyCertificateOutlined /> },
+    { key: 'security', label: 'Độ mật, độ khẩn', icon: <LockOutlined /> },
+    { key: 'retention', label: 'Lưu trữ', icon: <ClockCircleOutlined /> },
+  ];
+  const box: React.CSSProperties = { background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 18, fontSize: 13, color: '#334155', lineHeight: 1.7 };
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Quy tắc sinh số ký hiệu</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            {rules.length} bộ mẫu quy chuẩn
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Tự động tăng số &amp; reset đầu năm</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chứng thư số CA &amp; Con dấu mộc</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            Viettel-CA HSM
-          </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Khóa chuẩn RSA-2048 · Hạn: 2028</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Chính sách bảo mật tài liệu ISO</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            4 Cấp độ an toàn
-          </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Watermark động &amp; Cấm tải tệp mật</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Máy chủ đóng dấu thời gian (TSA)</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#16A34A', marginTop: 4 }}>
-            RFC 3161 Active
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đồng bộ thời gian chuẩn Bộ TT&amp;TT</div>
-        </div>
+        {card(`Văn bản vào sổ năm ${year}`, books.reduce((sum, book) => sum + book.count, 0), books.map((book) => `${book.dispatchType.replace('Văn bản ', '')}: ${book.count}`).join(' · '), '#009688')}
+        {card('Chứng thư số còn hiệu lực', activeCerts.length, certs.length ? `Trên tổng ${certs.length} chứng thư trong sổ` : 'Chưa có chứng thư trong sổ Chữ ký số', '#2563EB')}
+        {card('Văn bản mang độ mật nhà nước', secretCount, 'Tuyệt mật, Tối mật, Mật trong sổ văn thư', secretCount ? '#DC2626' : '#7C3AED')}
       </div>
 
-      {/* Navigation Sub-Tabs */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button
-            type={activeTab === 'numbering' ? 'primary' : 'default'}
-            icon={<BarcodeOutlined />}
-            onClick={() => setActiveTab('numbering')}
-            style={{
-              backgroundColor: activeTab === 'numbering' ? '#009688' : '#FFFFFF',
-              borderColor: activeTab === 'numbering' ? '#009688' : '#CBD5E1',
-              fontWeight: activeTab === 'numbering' ? 700 : 500,
-            }}
-          >
-            Quy Tắc Sinh Số Ký Hiệu ({rules.length})
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+        {tabs.map((tab) => (
+          <Button key={tab.key} icon={tab.icon} onClick={() => setActiveTab(tab.key)}
+            style={{ backgroundColor: activeTab === tab.key ? '#E0F2F1' : '#FFFFFF', borderColor: activeTab === tab.key ? '#009688' : '#CBD5E1', color: activeTab === tab.key ? '#00796B' : '#475569' }}>
+            {tab.label}
           </Button>
-
-          <Button
-            type={activeTab === 'ca_seal' ? 'primary' : 'default'}
-            icon={<SafetyCertificateOutlined />}
-            onClick={() => setActiveTab('ca_seal')}
-            style={{
-              backgroundColor: activeTab === 'ca_seal' ? '#009688' : '#FFFFFF',
-              borderColor: activeTab === 'ca_seal' ? '#009688' : '#CBD5E1',
-              fontWeight: activeTab === 'ca_seal' ? 700 : 500,
-            }}
-          >
-            Chữ Ký Số CA &amp; Con Dấu Mộc Đỏ
-          </Button>
-
-          <Button
-            type={activeTab === 'security' ? 'primary' : 'default'}
-            icon={<LockOutlined />}
-            onClick={() => setActiveTab('security')}
-            style={{
-              backgroundColor: activeTab === 'security' ? '#009688' : '#FFFFFF',
-              borderColor: activeTab === 'security' ? '#009688' : '#CBD5E1',
-              fontWeight: activeTab === 'security' ? 700 : 500,
-            }}
-          >
-            Phân Quyền Bảo Mật ISO 27001
-          </Button>
-
-          <Button
-            type={activeTab === 'retention' ? 'primary' : 'default'}
-            icon={<CalendarOutlined />}
-            onClick={() => setActiveTab('retention')}
-            style={{
-              backgroundColor: activeTab === 'retention' ? '#009688' : '#FFFFFF',
-              borderColor: activeTab === 'retention' ? '#009688' : '#CBD5E1',
-              fontWeight: activeTab === 'retention' ? 700 : 500,
-            }}
-          >
-            Thời Hạn Bảo Quản &amp; Tiêu Hủy
-          </Button>
-        </div>
-
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          onClick={handleSaveAll}
-          style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-        >
-          Lưu thiết lập toàn hệ thống
-        </Button>
+        ))}
       </div>
 
-      {/* TAB 1: QUY TẮC SINH SỐ KÝ HIỆU VĂN BẢN (NGHỊ ĐỊNH 30/2020) */}
       {activeTab === 'numbering' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="transparent-table-card">
-            <KTable
-              dataSource={rules}
-              columns={[
-                {
-                  title: 'Thể loại văn bản',
-                  dataIndex: 'docType',
-                  key: 'docType',
-                  width: 220,
-                  render: (t: string) => <strong style={{ color: '#0F172A', fontSize: 13.5 }}>{t}</strong>,
-                },
-                {
-                  title: 'Cấu trúc định dạng mẫu',
-                  dataIndex: 'prefixPattern',
-                  key: 'prefixPattern',
-                  render: (p: string) => (
-                    <code style={{ background: '#F1F5F9', color: '#0F766E', padding: '3px 8px', borderRadius: 4, fontWeight: 700 }}>
-                      {p}
-                    </code>
-                  ),
-                },
-                {
-                  title: 'Ví dụ số hiệu thực tế',
-                  dataIndex: 'sampleResult',
-                  key: 'sampleResult',
-                  width: 200,
-                  render: (res: string) => (
-                    <span style={{ fontWeight: 700, color: '#2563EB', fontFamily: 'monospace' }}>
-                      {res}
-                    </span>
-                  ),
-                },
-                {
-                  title: 'Số hiện tại',
-                  dataIndex: 'currentSequence',
-                  key: 'currentSequence',
-                  width: 130,
-                  render: (seq: number) => <Tag color="blue">#{String(seq).padStart(3, '0')}</Tag>,
-                },
-                {
-                  title: 'Reset hàng năm',
-                  dataIndex: 'resetYearly',
-                  key: 'resetYearly',
-                  width: 140,
-                  render: (rst: boolean) => (
-                    <Tag color={rst ? 'green' : 'default'}>{rst ? 'Đầu năm mới' : 'Tăng liên tục'}</Tag>
-                  ),
-                },
-                {
-                  title: 'Trạng thái',
-                  dataIndex: 'status',
-                  key: 'status',
-                  width: 120,
-                  render: (s: string) => <Tag color={s === 'Kích hoạt' ? 'success' : 'default'}>{s}</Tag>,
-                },
-              ]}
-              pagination={false}
-            />
+            <KTable rowKey="key" dataSource={books} pagination={false} columns={[
+              { title: 'Sổ', dataIndex: 'dispatchType', key: 'dispatchType' },
+              { title: `Số đã vào sổ năm ${year}`, dataIndex: 'count', key: 'count', width: 180 },
+              { title: 'Số cuối cùng', dataIndex: 'lastNumber', key: 'lastNumber', width: 160 },
+              { title: 'Số tiếp theo sẽ cấp', dataIndex: 'nextNumber', key: 'nextNumber', width: 180 },
+            ]} />
           </div>
-
-          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 18 }}>
-            <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: '0 0 10px 0', color: '#0F172A' }}>
-              Quy tắc mã hóa tên viết tắt các phòng ban:
-            </h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
-              <div style={{ padding: '8px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
-                Ban Giám Đốc &amp; HĐQT: <strong style={{ color: '#009688' }}>-BOD</strong>
-              </div>
-              <div style={{ padding: '8px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
-                Phòng Tài Chính Kế Toán: <strong style={{ color: '#2563EB' }}>-TC</strong>
-              </div>
-              <div style={{ padding: '8px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
-                Khối Kỹ Thuật &amp; IDC: <strong style={{ color: '#7C3AED' }}>-KT / -IDC</strong>
-              </div>
-              <div style={{ padding: '8px 12px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: 12.5 }}>
-                Phòng Nhân Sự &amp; Hành Chính: <strong style={{ color: '#D97706' }}>-NS / -HC</strong>
-              </div>
+          <div style={box}>
+            <div>Số vào sổ do máy chủ tự cấp khi lưu văn bản ở Sổ văn thư, tăng dần riêng cho văn bản đến và văn bản đi, bắt đầu lại từ 0001 mỗi năm theo ngày vào sổ; không trùng số trong cùng sổ.</div>
+            <div>Số và ký hiệu ghi trên văn bản theo dạng của Nghị định 30/2020/NĐ-CP: số thứ tự/chữ viết tắt loại văn bản-chữ viết tắt cơ quan, ví dụ 12/QĐ-ABC. Hệ thống cảnh báo (không chặn) khi sai dạng hoặc văn bản đi thiếu chữ viết tắt:</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+              {Object.entries(DOC_TYPE_ABBREVIATIONS).map(([type, abbreviation]) => <Tag key={type}>{type}: {abbreviation}</Tag>)}
             </div>
+            <div style={{ color: '#64748B', fontSize: 12, marginTop: 8 }}>Hợp đồng không bị kiểm dạng số vì mỗi doanh nghiệp đánh số riêng. Chữ viết tắt tên cơ quan, phòng ban do doanh nghiệp tự quy định.</div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: CHỮ KÝ SỐ CA & CON DẤU MỘC ĐỎ */}
-      {activeTab === 'ca_seal' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          {/* Certificate Info */}
-          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 14px 0', color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <SafetyCertificateOutlined style={{ color: '#2563EB' }} /> Chứng Thư Số Doanh Nghiệp Pháp Nhân (CA)
-            </h3>
-
-            <div style={{ padding: 14, background: '#F0FDF4', borderRadius: 8, border: '1px solid #BBF7D0', marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontWeight: 800, color: '#166534', fontSize: 14 }}>
-                  CÔNG TY TNHH CÔNG NGHỆ KIYOVN
-                </div>
-                <Tag color="success" icon={<CheckCircleOutlined />}>
-                  Chứng Thư Hợp Chuẩn
-                </Tag>
-              </div>
-              <div style={{ fontSize: 12, color: '#15803D', marginTop: 4 }}>Mã số thuế: 0109988776</div>
-              <div style={{ fontSize: 12, color: '#15803D' }}>
-                Tổ chức cấp phát: <strong>Tập đoàn Viễn thông Quân đội</strong>
-              </div>
-              <div style={{ fontSize: 11.5, color: '#166534', marginTop: 6, fontFamily: 'monospace' }}>
-                Serial: 5404 8892 1102 7741 9901 · Khóa: RSA 2048-bit
-              </div>
-              <div style={{ fontSize: 11.5, color: '#166534' }}>
-                Thời hạn hiệu lực: <strong>2023-01-01 ➔ 2028-12-31</strong>
-              </div>
-            </div>
-
-            <Form form={caForm} layout="vertical" initialValues={{ pkiMode: 'hsm', autoTsa: 'yes', pinTimeout: 15 }}>
-              <Form.Item name="pkiMode" label="Phương thức kết nối chữ ký số doanh nghiệp">
-                <Select
-                  options={[
-                    { label: 'Viettel-CA HSM Server', value: 'hsm' },
-                    { label: 'Viettel-CA USB Token', value: 'token' },
-                    { label: 'VNPT SmartCA Corporate', value: 'vnpt' },
-                  ]}
-                />
-              </Form.Item>
-
-              <Form.Item name="autoTsa" label="Tự động đóng dấu thời gian điện tử">
-                <Select
-                  options={[
-                    { label: 'Bật', value: 'yes' },
-                    { label: 'Tắt', value: 'no' },
-                  ]}
-                />
-              </Form.Item>
-            </Form>
+      {activeTab === 'signatures' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ ...box, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <span>Chứng thư số của {company.companyName ? companyHeading(company) : 'doanh nghiệp'} được quản lý ở sổ Chữ ký số (thêm, gia hạn, tạm dừng, thu hồi). Hợp đồng chỉ cho chọn chứng thư còn hiệu lực trong sổ này.</span>
+            <Button type="primary" onClick={() => navigate('/admin/digital-signature/certs')}>Mở sổ Chữ ký số</Button>
           </div>
-
-          {/* Digital Seal Management */}
-          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 14px 0', color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AuditOutlined style={{ color: '#DC2626' }} /> Con Dấu Mộc Đỏ Điện Tử Đã Số Hóa
-            </h3>
-
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center', padding: 14, background: '#FEF2F2', borderRadius: 8, border: '1px solid #FECACA', marginBottom: 16 }}>
-              <div style={{ width: 80, height: 80, borderRadius: '50%', border: '2px dashed #DC2626', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#FFFFFF', flexShrink: 0 }}>
-                <div style={{ textAlign: 'center', color: '#DC2626', fontSize: 10, fontWeight: 800, lineHeight: 1.2 }}>
-                  <div>★ KIYOVN ★</div>
-                  <div style={{ fontSize: 9 }}>MỘC ĐỎ</div>
-                  <div>2026</div>
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontWeight: 800, color: '#991B1B', fontSize: 13.5 }}>
-                  Con dấu Pháp nhân Doanh nghiệp KIYOVN
-                </div>
-                <div style={{ fontSize: 12, color: '#B91C1C', marginTop: 2 }}>
-                  Tệp: <code>kiyo_official_seal_transparent.png</code> 
-                </div>
-                <div style={{ fontSize: 11.5, color: '#7F1D1D', marginTop: 2 }}>
-                  Tọa độ đóng mộc mặc định: <strong>Góc dưới bên phải chữ ký Người đại diện pháp luật</strong>
-                </div>
-              </div>
-            </div>
-
-            <Form layout="vertical">
-              <Form.Item label="Quy tắc áp dụng con dấu điện tử" initialValue="auto_signed">
-                <Select
-                  options={[
-                    { label: 'Tự động chèn mộc đỏ sau khi Tổng Giám Đốc ký số Token thành công', value: 'auto_signed' },
-                    { label: 'Yêu cầu nhân viên Văn thư xác nhận lần 2 trước khi đóng mộc', value: 'manual_confirm' },
-                  ]}
-                />
-              </Form.Item>
-
-              <Form.Item label="Kích thước con dấu đóng lên tệp PDF xuất bản" initialValue="standard">
-                <Select
-                  options={[
-                    { label: 'Kích thước tiêu chuẩn', value: 'standard' },
-                    { label: 'Kích thước nhỏ', value: 'small' },
-                  ]}
-                />
-              </Form.Item>
-            </Form>
+          <div className="transparent-table-card">
+            <KTable rowKey={(item: any) => item.key || item.certNumber} dataSource={certs} pagination={{ pageSize: 8 }} columns={[
+              { title: 'Chủ thể', dataIndex: 'subjectName', key: 'subjectName' },
+              { title: 'Nhà cung cấp', dataIndex: 'provider', key: 'provider', width: 180 },
+              { title: 'Số serial', dataIndex: 'certNumber', key: 'certNumber', width: 180 },
+              { title: 'Hiệu lực', key: 'validity', width: 210, render: (_: unknown, item: any) => `${String(item.validFrom || '').slice(0, 10)} đến ${String(item.validTo || '').slice(0, 10)}` },
+              { title: 'Trạng thái', key: 'state', width: 140, render: (_: unknown, item: any) => {
+                const active = activeCerts.includes(item);
+                return <Tag color={active ? 'success' : 'default'}>{item.lifecycle === 'revoked' ? 'Đã thu hồi' : item.lifecycle === 'suspended' ? 'Tạm dừng' : active ? 'Còn hiệu lực' : 'Hết hạn'}</Tag>;
+              } },
+            ]} />
           </div>
+          <div style={{ color: '#64748B', fontSize: 12 }}>Hệ thống chưa kết nối dịch vụ ký số (USB token, HSM, ký từ xa) nên chưa ký số thật lên văn bản; con dấu điện tử chưa được hỗ trợ.</div>
         </div>
       )}
 
-      {/* TAB 3: MA TRẬN BẢO MẬT & PHÂN QUYỀN ISO 27001 */}
       {activeTab === 'security' && (
-        <div className="transparent-table-card">
-          <KTable
-            dataSource={accessRules}
-            columns={[
-              {
-                title: 'Cấp độ bảo mật văn bản',
-                dataIndex: 'securityLevel',
-                key: 'securityLevel',
-                width: 220,
-                render: (sec: string) => {
-                  let col = 'success';
-                  if (sec.includes('Mật')) col = 'warning';
-                  if (sec.includes('Tuyệt mật')) col = 'error';
-                  return (
-                    <Tag color={col} icon={<LockOutlined />} style={{ fontSize: 12, padding: '4px 8px' }}>
-                      {sec}
-                    </Tag>
-                  );
-                },
-              },
-              {
-                title: 'Phạm vi chức danh được phép truy cập',
-                dataIndex: 'allowedRoles',
-                key: 'allowedRoles',
-                render: (roles: string[]) => (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {roles.map((r, i) => (
-                      <Tag key={i} color="blue">
-                        {r}
-                      </Tag>
-                    ))}
-                  </div>
-                ),
-              },
-              {
-                title: 'Quyền xem',
-                dataIndex: 'canView',
-                key: 'canView',
-                width: 110,
-                render: (v: boolean) => (v ? <Tag color="green">Cho phép</Tag> : <Tag color="default">Cấm</Tag>),
-              },
-              {
-                title: 'Quyền tải tệp PDF',
-                dataIndex: 'canDownload',
-                key: 'canDownload',
-                width: 140,
-                render: (d: boolean) =>
-                  d ? <Tag color="green">Được tải</Tag> : <Tag color="red">Chỉ đọc trên Web</Tag>,
-              },
-              {
-                title: 'Watermark chống rò rỉ',
-                dataIndex: 'watermarkRequired',
-                key: 'watermarkRequired',
-                width: 180,
-                render: (w: boolean) =>
-                  w ? (
-                    <Tag color="purple">Bắt buộc đóng dấu mờ IP/Email</Tag>
-                  ) : (
-                    <Tag color="default">Không yêu cầu</Tag>
-                  ),
-              },
-            ]}
-            pagination={false}
-          />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+          <div style={box}>
+            <div style={{ marginBottom: 6 }}>Độ mật nhận ở sổ văn thư:</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{SECURITY_LEVELS.map((level) => <Tag key={level} color={STATE_SECRET_LEVELS.includes(level) ? 'error' : 'default'}>{level}</Tag>)}</div>
+            <div style={{ marginTop: 8 }}>Tuyệt mật, Tối mật, Mật là ba độ mật của bí mật nhà nước (Luật Bảo vệ bí mật nhà nước 2018). Luật cấm lưu tài liệu bí mật nhà nước trên thiết bị kết nối mạng: hệ thống cảnh báo khi văn bản mang độ mật này có bản scan trên hệ thống.</div>
+          </div>
+          <div style={box}>
+            <div style={{ marginBottom: 6 }}>Độ khẩn (Nghị định 30/2020/NĐ-CP):</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{URGENCY_LEVELS.map((level) => <Tag key={level}>{level}</Tag>)}</div>
+            <div style={{ marginTop: 8 }}>Ngày vào sổ không ở tương lai; văn bản đến không được vào sổ trước ngày ghi trên văn bản; văn bản đi có ngày văn bản khác ngày vào sổ thì được cảnh báo.</div>
+          </div>
         </div>
       )}
 
-      {/* TAB 4: THỜI HẠN BẢO QUẢN & QUY TRÌNH TIÊU HỦY */}
       {activeTab === 'retention' && (
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 20 }}>
-          <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 14px 0', color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <CalendarOutlined style={{ color: '#009688' }} /> Bảng Thời Hạn Bảo Quản Tài Liệu
-          </h3>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <strong style={{ color: '#0F172A' }}>1. Quyết định thành lập, Quy chế tổ chức, Điều lệ &amp; Nghị quyết HĐQT</strong>
-                <Tag color="purple">Bảo quản vĩnh viễn</Tag>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Lưu trữ song song bản cứng tại Két an toàn Tầng 4 Keangnam và bản mềm mã hóa trên Cloud Vault.
-              </div>
-            </div>
-
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <strong style={{ color: '#0F172A' }}>2. Hợp đồng kinh tế, Hợp đồng thuê hạ tầng IDC &amp; Hồ sơ quyết toán thuế</strong>
-                <Tag color="blue">Bảo quản 10 năm</Tag>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Sau 10 năm chuyển sang kho lưu trữ lịch sử hoặc lập Hội đồng tiêu hủy theo quy định.
-              </div>
-            </div>
-
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <strong style={{ color: '#0F172A' }}>3. Công văn trao đổi nghiệp vụ, Báo cáo giao ban tuần &amp; Giấy mời họp</strong>
-                <Tag color="cyan">Bảo quản 5 năm</Tag>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                Tự động thông báo thanh lý khi hết thời hạn bảo quản.
-              </div>
-            </div>
-          </div>
+        <div style={box}>
+          <div>Chứng từ, sổ kế toán (phạm vi tài chính, bảng lương, phiếu lương) không xóa vĩnh viễn được khỏi thùng rác cho tới hết năm thứ 10 kể từ năm tạo (Luật Kế toán 2015 Điều 41); vẫn khôi phục được.</div>
+          <div>Văn bản đã hoàn tất trong sổ văn thư không mở lại được; nhật ký kiểm toán không có đường xóa hay sửa.</div>
+          <div style={{ color: '#64748B', fontSize: 12, marginTop: 8 }}>Chưa làm: thời hạn bảo quản từng loại tài liệu theo Luật Lưu trữ 2024, nộp lưu và tiêu hủy tài liệu hết giá trị.</div>
         </div>
       )}
     </div>
   );
 };
-

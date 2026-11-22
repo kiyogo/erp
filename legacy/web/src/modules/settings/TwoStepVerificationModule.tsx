@@ -360,18 +360,6 @@ export const TwoStepVerificationModule: React.FC = () => {
     });
   };
 
-  const handleSavePhone = () => {
-    const phoneVal = tempPhone.trim();
-    if (!phoneVal) {
-      message.error('Vui lòng nhập số điện thoại hợp lệ!');
-      return;
-    }
-    setPhoneNumber(phoneVal);
-    setSmsOtpEnabled(true);
-    saveUser2FAState(userKey, { phoneNumber: phoneVal, smsOtpEnabled: true });
-    setIsEditingPhone(false);
-    message.success('Đã lưu số điện thoại và kích hoạt SMS OTP!');
-  };
 
   const maskedEmail = (() => {
     if (!emailAddress) return 'Chưa cập nhật email';
@@ -902,182 +890,22 @@ export const TwoStepVerificationModule: React.FC = () => {
   }
 
   // Render Sub-Route 4: Phone SMS OTP Page
-  if (subRoute === 'phone') {
+  // SMS OTP và Email OTP: hệ thống chưa có cổng gửi SMS, email nên không bật được (trước đây hai trang này chỉ lưu cờ trong trình duyệt và hiện
+  // "mã mô phỏng"). Dùng ứng dụng xác thực hoặc khóa truy cập.
+  if (subRoute === 'phone' || subRoute === 'email') {
     return (
       <div style={centeredContainerStyle}>
-        <div style={{ width: '100%', maxWidth: 680, marginBottom: 12 }}>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate(basePath)}
-            style={{ borderRadius: 8, fontWeight: 500 }}
-          >
-            Quay lại Bước thứ hai
-          </Button>
-        </div>
-
-        <div
-          style={{
-            width: '100%',
-            maxWidth: 680,
-            background: '#FFFFFF',
-            borderRadius: 8,
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
-            padding: 24,
-            boxSizing: 'border-box',
-          }}
-        >
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 20, display: 'flex', alignItems: 'center' }}>
-            <MessageOutlined style={{ color: '#009688', fontSize: 18, marginRight: 8 }} />
-            SMS OTP
+        <div style={{ width: '100%', maxWidth: 680, background: '#FFFFFF', borderRadius: 8, border: '1px solid #E2E8F0', padding: 24, boxSizing: 'border-box' }}>
+          <div style={{ fontSize: 15, color: '#0F172A', marginBottom: 8 }}>{subRoute === 'phone' ? 'Mã xác minh qua SMS' : 'Mã xác minh qua email'}</div>
+          <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.6, marginBottom: 16 }}>
+            Hệ thống chưa kết nối dịch vụ gửi {subRoute === 'phone' ? 'SMS' : 'email'} nên chưa dùng được cách xác minh này. Hãy bật ứng dụng xác thực hoặc đăng ký khóa truy cập.
           </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>Xác thực qua tin nhắn SMS OTP</div>
-              <div style={{ fontSize: 12.5, color: '#64748B', marginTop: 2 }}>Nhận mã OTP 6 số bảo mật qua tin nhắn SMS đến điện thoại</div>
-            </div>
-            <Switch
-              checked={smsOtpEnabled}
-              disabled={!phoneNumber}
-              onChange={(checked) => {
-                if (checked && !phoneNumber) {
-                  message.warning('Vui lòng thêm số điện thoại trước khi bật SMS OTP!');
-                  setIsEditingPhone(true);
-                  return;
-                }
-                setSmsOtpEnabled(checked);
-                saveUser2FAState(userKey, { smsOtpEnabled: checked });
-                message.success(checked ? 'Đã bật xác thực SMS OTP!' : 'Đã tắt xác thực SMS OTP.');
-              }}
-            />
-          </div>
-
-          <div
-            style={{
-              padding: '14px 0',
-              marginBottom: 20,
-            }}
-          >
-            <div style={{ fontSize: 12, color: '#64748B', marginBottom: 6 }}>Số điện thoại OTP:</div>
-            {isEditingPhone || !phoneNumber ? (
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Input
-                  value={tempPhone}
-                  onChange={(e) => setTempPhone(e.target.value)}
-                  placeholder="Nhập số điện thoại..."
-                  style={{ borderRadius: 8 }}
-                />
-                <Button type="primary" onClick={handleSavePhone} style={{ backgroundColor: '#009688', borderColor: '#009688', borderRadius: 8 }}>
-                  Lưu số
-                </Button>
-                {phoneNumber && (
-                  <Button onClick={() => { setIsEditingPhone(false); setTempPhone(phoneNumber); }} style={{ borderRadius: 8 }}>Hủy</Button>
-                )}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>{phoneNumber}</div>
-                <Button icon={<EditOutlined />} size="small" onClick={() => setIsEditingPhone(true)} style={{ borderRadius: 8 }}>
-                  Thay đổi
-                </Button>
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Button
-              icon={<SendOutlined />}
-              disabled={!phoneNumber}
-              onClick={() => {
-                if (!phoneNumber) return;
-                const testCode = String(Math.floor(100000 + Math.random() * 900000));
-                message.success(`Đã gửi SMS thử nghiệm tới ${phoneNumber}! (Mã mô phỏng: ${testCode})`);
-              }}
-              style={{ borderRadius: 8 }}
-            >
-              Gửi SMS thử nghiệm
-            </Button>
-            <Button onClick={() => navigate(basePath)} style={{ borderRadius: 8 }}>Quay lại</Button>
-          </div>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(basePath)}>Quay lại Bước thứ hai</Button>
         </div>
       </div>
     );
   }
 
-  // Render Sub-Route 5: Email OTP Page (Clean Switch without inner text & without gray box)
-  if (subRoute === 'email') {
-    return (
-      <div style={centeredContainerStyle}>
-        <div style={{ width: '100%', maxWidth: 680, marginBottom: 12 }}>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate(basePath)}
-            style={{ borderRadius: 8, fontWeight: 500 }}
-          >
-            Quay lại Bước thứ hai
-          </Button>
-        </div>
-
-        <div
-          style={{
-            width: '100%',
-            maxWidth: 680,
-            background: '#FFFFFF',
-            borderRadius: 8,
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
-            padding: 24,
-            boxSizing: 'border-box',
-          }}
-        >
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 20, display: 'flex', alignItems: 'center' }}>
-            <MailOutlined style={{ color: '#009688', fontSize: 18, marginRight: 8 }} />
-            Email OTP
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '14px 0',
-              marginBottom: 20,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <MailOutlined style={{ fontSize: 22, color: '#009688' }} />
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>
-                Xác thực qua Email ({maskedEmail})
-              </div>
-            </div>
-
-            <Switch
-              checked={emailOtpEnabled}
-              onChange={(checked) => {
-                setEmailOtpEnabled(checked);
-                saveUser2FAState(userKey, { emailOtpEnabled: checked });
-                if (checked) {
-                  message.success('Đã bật xác thực Email OTP!');
-                } else {
-                  message.info('Đã tắt xác thực Email OTP.');
-                }
-              }}
-              style={{ minWidth: 45, height: 22 }}
-            />
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button onClick={() => navigate(basePath)} style={{ borderRadius: 8 }}>
-              Quay lại
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Render Sub-Route 6: Backup Codes Page
   if (subRoute === 'backup-codes') {
     return (
       <div style={centeredContainerStyle}>

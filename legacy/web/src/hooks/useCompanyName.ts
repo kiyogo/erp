@@ -1,15 +1,4 @@
-import { useEffect, useState } from 'react';
-import { systemApi } from '../api/endpoints';
+import { useCompanyIdentity } from '../services/companyIdentity';
 
-/** Tên doanh nghiệp theo hồ sơ công ty; rỗng cho tới khi tải xong hoặc khi chưa khai báo. */
-export const useCompanyName = (): string => {
-  const [name, setName] = useState('');
-  useEffect(() => {
-    let active = true;
-    systemApi.getCompanyProfile()
-      .then((response) => { if (active) setName(String(response.data.profile.companyName || '').normalize('NFC')); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
-  return name;
-};
+/** Tên doanh nghiệp theo hồ sơ công ty (qua thông tin công khai, nhân viên cũng đọc được); rỗng cho tới khi tải xong hoặc khi chưa khai báo. */
+export const useCompanyName = (): string => useCompanyIdentity().companyName.normalize('NFC');

@@ -13,7 +13,6 @@ import {
   CopyOutlined,
   ScissorOutlined,
   FileZipOutlined,
-  UnlockOutlined,
   EyeOutlined,
   SearchOutlined,
   AppstoreOutlined,
@@ -140,16 +139,11 @@ const Files: React.FC = () => {
   const [virtualRootLabel, setVirtualRootLabel] = useState('');
 
   const { user } = useAuth();
-  const userQuotaGB = useMemo(() => {
-    try {
-      const targetId = user?.id || '';
-      if (targetId) {
-        const saved = localStorage.getItem('employee_storage_quota_' + targetId);
-        if (saved) return parseFloat(saved) || 2;
-      }
-    } catch {}
-    return 2;
-  }, [user?.id]);
+  // Hạn mức và dung lượng đã dùng lấy từ máy chủ (máy chủ chặn tải lên khi vượt); quản trị viên không giới hạn.
+  const [quotaInfo, setQuotaInfo] = useState<{ quotaGB: number | null; usedBytes: number; limited: boolean } | null>(null);
+  const refreshQuota = useCallback(() => { filesApi.getStorageQuota().then((response) => setQuotaInfo(response.data)).catch(() => setQuotaInfo(null)); }, []);
+  useEffect(() => { refreshQuota(); }, [user?.id, refreshQuota]);
+  const userQuotaGB = quotaInfo?.quotaGB ?? 0;
 
   const isDraggingRef = useRef(false);
   const nativeFileInputRef = useRef<HTMLInputElement>(null);
@@ -300,6 +294,7 @@ const Files: React.FC = () => {
   const saveFs = (newFs: Record<string, FileItem[]>) => setFs(newFs);
 
   const userUsedBytes = useMemo(() => {
+    if (quotaInfo) return quotaInfo.usedBytes;
     let total = 0;
     Object.values(fs).forEach(fileList => {
       fileList.forEach(f => {
@@ -309,7 +304,7 @@ const Files: React.FC = () => {
       });
     });
     return total;
-  }, [fs]);
+  }, [fs, quotaInfo]);
 
   const userUsedDisplay = useMemo(() => {
     if (userUsedBytes < 1024 * 1024) {
@@ -319,7 +314,7 @@ const Files: React.FC = () => {
   }, [userUsedBytes]);
 
   const userQuotaBytes = userQuotaGB * 1024 * 1024 * 1024;
-  const userUsedPercent = Math.min(100, parseFloat(((userUsedBytes / userQuotaBytes) * 100).toFixed(1)));
+  const userUsedPercent = userQuotaBytes ? Math.min(100, parseFloat(((userUsedBytes / userQuotaBytes) * 100).toFixed(1))) : 0;
 
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
 
@@ -617,7 +612,7 @@ const Files: React.FC = () => {
             name: rootFolderName,
             type: 'dir',
             size: '—',
-            modified: '2026-08-29',
+            modified: '',
             isProtected: true,
             isSystem: true,
           };
@@ -636,6 +631,8 @@ const Files: React.FC = () => {
       message.error(messageText);
     }
   }, [currentDirectoryId, currentPathStr, isEmployeeFilesRoute, showHidden]);
+  // Tải lại thư mục (sau tải lên, dán, xóa) thì cập nhật dung lượng đã dùng.
+  useEffect(() => { refreshQuota(); }, [fs, refreshQuota]);
 
   const revealStoredItem = useCallback(async (_item: StoredFileNode) => {
     // Keep the user in the directory where they chose to upload or create an
@@ -858,20 +855,14 @@ const Files: React.FC = () => {
     });
   };
 
-  const handleCompress = () => {
-    if (!selectedRowKeys.length && !selectedFile) { message.warning(t('files.msgSelectAtLeastOne')); return; }
-    message.loading({ content: t('files.msgLoadingCompress'), key: 'compress' });
-    setTimeout(() => message.success({ content: t('files.msgSuccessCompress'), key: 'compress', duration: 2 }), 1500);
+  // Các mục đang chọn; mở menu chuột phải trên một dòng mà chưa chọn dòng nào thì lấy chính dòng đó.
+  const clipboardItems = (row?: FileItem) => {
+    const selected = selectedRowKeys.map(k => currentFiles.find(f => f.key === k)!).filter(Boolean);
+    return selected.length ? selected : row ? [row] : selectedFile ? [selectedFile] : [];
   };
 
-  const handleExtract = () => {
-    if (!selectedFile) return;
-    message.loading({ content: t('files.msgLoadingExtract').replace('{name}', selectedFile.name), key: 'extract' });
-    setTimeout(() => message.success({ content: t('files.msgSuccessExtract'), key: 'extract', duration: 2 }), 1500);
-  };
-
-  const handleCopy = () => {
-    const items = selectedRowKeys.map(k => currentFiles.find(f => f.key === k)!).filter(Boolean);
+  const handleCopy = (row?: FileItem) => {
+    const items = clipboardItems(row);
     if (items.some(item => item.isProtected)) {
       message.error('Không thể sao chép thư mục hệ thống được bảo vệ.');
       return;
@@ -879,8 +870,8 @@ const Files: React.FC = () => {
     if (items.length) { setClipboard({ action: 'copy', items }); message.success(t('files.msgClipboardCopied')); }
   };
 
-  const handleCut = () => {
-    const items = selectedRowKeys.map(k => currentFiles.find(f => f.key === k)!).filter(Boolean);
+  const handleCut = (row?: FileItem) => {
+    const items = clipboardItems(row);
     if (items.some(item => item.isProtected)) {
       message.error('Không thể di chuyển thư mục hệ thống được bảo vệ.');
       return;
@@ -899,34 +890,30 @@ const Files: React.FC = () => {
     }
     if (batchAction === 'copy') handleCopy();
     else if (batchAction === 'cut') handleCut();
-    else if (batchAction === 'compress') handleCompress();
     else if (batchAction === 'delete') handleDeleteBatch();
   };
 
-  const handlePaste = () => {
+  // Dán: sao chép hoặc di chuyển từng mục vào thư mục đang mở trên máy chủ (trước đây chỉ báo "sẽ làm ở bước mở rộng tiếp theo").
+  const handlePaste = async () => {
     if (!clipboard) return;
-    message.info('Sao chép và di chuyển tệp sẽ được thực hiện trực tiếp trên máy chủ ở bước mở rộng tiếp theo.');
+    if (!currentDirectoryId) { message.error('Mở một thư mục để dán vào.'); return; }
+    let done = 0;
+    const failures: string[] = [];
+    for (const item of clipboard.items) {
+      try {
+        if (clipboard.action === 'copy') await filesApi.copy(item.key, currentDirectoryId);
+        else await filesApi.move(item.key, currentDirectoryId);
+        done += 1;
+      } catch (error: any) {
+        failures.push(`${item.name}: ${error?.response?.data?.message || 'không thực hiện được'}`);
+      }
+    }
+    if (clipboard.action === 'cut') setClipboard(null);
+    await loadDirectory();
+    if (done) message.success(`Đã ${clipboard.action === 'copy' ? 'sao chép' : 'di chuyển'} ${done} mục vào thư mục này.`);
+    if (failures.length) message.error(failures.join('; '));
   };
 
-  const getDefaultContentForFile = (name: string) => {
-    const clean = name.replace(/_/g, ' ');
-    if (name.endsWith('.pdf')) {
-      return `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n---------------------------------------------\n\n${clean.replace(/\.pdf$/i, '').toUpperCase()}\n\nCăn cứ theo Luật Doanh Nghiệp 2020 và Điều lệ Công ty Cổ phần Công nghệ KIYOVN.\nHồ sơ số: KIYO-DOC-2026/0889\nĐơn vị ban hành: Ban Giám Đốc Công ty Cổ phần Công nghệ KIYOVN\nNgày hiệu lực: 01/01/2026\n\nNỘI DUNG VĂN BẢN:\n1. Phê duyệt và áp dụng chính thức quy trình nghiệp vụ số hóa và chữ ký số trên toàn hệ thống.\n2. Tất cả các văn bản, hợp đồng, chứng từ được lưu trữ và mã hóa SHA-256 an toàn.\n3. Văn bản có giá trị pháp lý nội bộ và báo cáo cơ quan ban ngành theo quy định.\n\n[ĐÃ XÁC THỰC CHỮ KÝ SỐ DOANH NGHIỆP - ROOT CA KIYOVN]`;
-    }
-    if (name.endsWith('.xlsx')) {
-      return `BẢNG TỔNG HỢP SỐ LIỆU DOANH NGHIỆP - ${clean.replace(/\.xlsx$/i, '')}\n========================================================================================\nSTT | MÃ MỤC | DANH MỤC NGHIỆP VỤ | ĐƠN VỊ | SỐ LƯỢNG | ĐƠN GIÁ (VNĐ) | THÀNH TIỀN (VNĐ)\n01  | REV-01 | Doanh thu Dịch vụ Cloud | Gói | 120 | 25,000,000 | 3,000,000,000\n02  | REV-02 | Bản quyền phần mềm ERP | License | 450 | 4,500,000 | 2,025,000,000\n03  | EXP-01 | Chi phí hạ tầng Data Center | Tháng | 12 | 120,000,000 | 1,440,000,000\n04  | EXP-02 | Chi phí lương & BHXH nhân sự | Tháng | 12 | 680,000,000 | 8,160,000,000\n----------------------------------------------------------------------------------------\nTỔNG CỘNG DOANH THU THỰC TẾ: 18,450,000,000 VNĐ`;
-    }
-    if (name.endsWith('.docx')) {
-      return `CÔNG TY CỔ PHẦN CÔNG NGHỆ KIYOVN\nSố: 108/2026/QĐ-KIYO\n\n${clean.replace(/\.docx?$/i, '').toUpperCase()}\n\nĐiều 1. Ban hành quy chuẩn quản lý và vận hành thông tin doanh nghiệp điện tử.\nĐiều 2. Các phòng ban chức năng: Kỹ thuật, Kế toán, Nhân sự, Pháp chế chịu trách nhiệm thi hành.\nĐiều 3. Quyết định có hiệu lực thi hành kể từ ngày ký.`;
-    }
-    if (name.endsWith('.cer')) {
-      return `-----BEGIN CERTIFICATE-----\nMIIFdzCCA1+gAwIBAgIUQi81q1f6bY...KIYOVN.ENTERPRISE.ROOT.CA\nIssuer: C=VN, O=KIYOVN Technology JSC, CN=KIYO Internal Root CA\nSubject: C=VN, O=KIYOVN Technology JSC, CN=KIYO Enterprise Secure Digital Signature\nValidity:\n  Not Before: Jan  1 00:00:00 2026 GMT\n  Not After : Jan  1 00:00:00 2036 GMT\n-----END CERTIFICATE-----`;
-    }
-    if (name.endsWith('.log')) {
-      return `[2026-08-27 00:00:01] [INFO] [SecurityEngine] System audit log initialized.\n[2026-08-27 00:00:05] [INFO] [AuthService] SuperAdmin authentication verified with FIDO2 Passkey.\n[2026-08-27 00:15:22] [INFO] [Database] Daily backup snapshot completed successfully (SHA256 locked).\n[2026-08-27 00:20:10] [INFO] [DigitalSignature] Document signed and verified with PKI CA.`;
-    }
-    return `// KIYOVN Enterprise System File\n// File: ${name}\n// Last Modified: ${new Date().toLocaleString()}\n\n{\n  "system": "KIYOVN ERP Core",\n  "status": "active",\n  "encrypted": true,\n  "version": "3.5.0"\n}`;
-  };
 
   const handlePreview = async (file: FileItem) => {
     if (file.type === 'dir') return;
@@ -1125,10 +1112,8 @@ const Files: React.FC = () => {
                 { key: 'share', icon: <LinkOutlined style={{ color: '#0EA5E9' }} />, label: 'Chia sẻ', onClick: () => handleOpenShare(r), disabled: r.type === 'dir' },
                 { key: 'sign', icon: <SafetyCertificateOutlined style={{ color: '#009688' }} />, label: 'Ký số', onClick: () => { setSelectedFile(r); setSignFile(r); setSignPin(''); setSignOpen(true); }, disabled: r.type === 'dir' },
                 { key: 'rename', icon: <EditOutlined />, label: t('files.rename'), onClick: () => { setSelectedFile(r); renameForm.setFieldsValue({ newName: r.name }); setRenameOpen(true); }, disabled: r.isProtected },
-                { key: 'copy', icon: <CopyOutlined />, label: t('files.copy'), onClick: handleCopy, disabled: r.isProtected },
-                { key: 'cut', icon: <ScissorOutlined />, label: t('files.cut'), onClick: handleCut, disabled: r.isProtected },
-                { key: 'compress', icon: <FileZipOutlined />, label: t('files.compress'), onClick: () => { setSelectedFile(r); handleCompress(); } },
-                r.name.endsWith('.zip') ? { key: 'extract', icon: <UnlockOutlined />, label: t('files.extract'), onClick: () => { setSelectedFile(r); handleExtract(); } } : null,
+                { key: 'copy', icon: <CopyOutlined />, label: t('files.copy'), onClick: () => handleCopy(r), disabled: r.isProtected || r.type === 'dir' },
+                { key: 'cut', icon: <ScissorOutlined />, label: t('files.cut'), onClick: () => handleCut(r), disabled: r.isProtected },
                 { key: 'permission', icon: <InfoCircleOutlined />, label: t('files.modalPermTitle'), onClick: () => { setSelectedFile(r); permForm.setFieldsValue({ permission: r.permission, owner: r.owner, group: r.group }); setPermOpen(true); } },
                 { type: 'divider' },
                 { key: 'download', icon: <DownloadOutlined />, label: t('files.download'), onClick: () => handleDownload(r.name, r.key), disabled: r.type === 'dir' },
@@ -1241,9 +1226,9 @@ const Files: React.FC = () => {
           </Dropdown>
         </div>
         <div className="win11-cmd-group">
-          <button className={`win11-cmd-btn ${(!selectedRowKeys.length && !selectedFile) || selectionContainsProtected ? 'disabled' : ''}`} onClick={handleCut}><ScissorOutlined /> {t('files.cut')}</button>
-          <button className={`win11-cmd-btn ${(!selectedRowKeys.length && !selectedFile) || selectionContainsProtected ? 'disabled' : ''}`} onClick={handleCopy}><CopyOutlined /> {t('files.copy')}</button>
-          <button className={`win11-cmd-btn ${!clipboard ? 'disabled' : ''}`} onClick={handlePaste}><SnippetsOutlined /> {t('files.paste')}</button>
+          <button className={`win11-cmd-btn ${(!selectedRowKeys.length && !selectedFile) || selectionContainsProtected ? 'disabled' : ''}`} onClick={() => handleCut()}><ScissorOutlined /> {t('files.cut')}</button>
+          <button className={`win11-cmd-btn ${(!selectedRowKeys.length && !selectedFile) || selectionContainsProtected ? 'disabled' : ''}`} onClick={() => handleCopy()}><CopyOutlined /> {t('files.copy')}</button>
+          <button className={`win11-cmd-btn ${!clipboard ? 'disabled' : ''}`} onClick={() => void handlePaste()}><SnippetsOutlined /> {t('files.paste')}</button>
         </div>
         <div className="win11-cmd-group">
           <button className={`win11-cmd-btn ${(selectedRowKeys.length !== 1 && !selectedFile) || selectionContainsProtected ? 'disabled' : ''}`} onClick={() => {
@@ -1268,10 +1253,10 @@ const Files: React.FC = () => {
           </Popconfirm>
         </div>
         <div className="win11-cmd-group" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Tooltip title={`Đã dùng ${userUsedDisplay} trên tổng số ${userQuotaGB} GB hạn mức tài khoản`}>
+          <Tooltip title={quotaInfo?.limited ? `Đã dùng ${userUsedDisplay} trên tổng số ${userQuotaGB} GB hạn mức tài khoản` : 'Tài khoản quản trị không giới hạn dung lượng'}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569', background: '#F8FAFC', padding: '3px 9px', borderRadius: 4, border: '1px solid #E2E8F0', userSelect: 'none' }}>
               <HddOutlined style={{ color: '#009688', fontSize: 13 }} />
-              <span>Dung lượng {userUsedDisplay} / {userQuotaGB} GB</span>
+              <span>Dung lượng {userUsedDisplay}{quotaInfo?.limited ? ` / ${userQuotaGB} GB` : ''}</span>
             </div>
           </Tooltip>
         </div>
@@ -1605,7 +1590,6 @@ const Files: React.FC = () => {
             options={[
               { value: 'copy', label: <Space><CopyOutlined /> {t('files.copy')}</Space> },
               { value: 'cut', label: <Space><ScissorOutlined /> {t('files.cut')}</Space> },
-              { value: 'compress', label: <Space><FileZipOutlined /> {t('files.compress')}</Space> },
               { value: 'delete', label: <Space><DeleteOutlined /> {t('files.delete')}</Space> }
             ]}
           />
@@ -1800,10 +1784,8 @@ const Files: React.FC = () => {
               { key: 'share', icon: <LinkOutlined style={{ color: '#0EA5E9' }} />, label: 'Chia sẻ', onClick: () => handleOpenShare(selectedFile), disabled: selectedFile.type === 'dir' },
               { key: 'sign', icon: <SafetyCertificateOutlined style={{ color: '#009688' }} />, label: 'Ký số', onClick: () => { setSignFile(selectedFile); setSignPin(''); setSignOpen(true); }, disabled: selectedFile.type === 'dir' },
               { key: 'rename', icon: <EditOutlined />, label: t('files.rename'), onClick: () => { renameForm.setFieldsValue({ newName: selectedFile.name }); setRenameOpen(true); }, disabled: selectedFile.isProtected },
-              { key: 'copy', icon: <CopyOutlined />, label: t('files.copy'), onClick: handleCopy, disabled: selectedFile.isProtected },
-              { key: 'cut', icon: <ScissorOutlined />, label: t('files.cut'), onClick: handleCut, disabled: selectedFile.isProtected },
-              { key: 'compress', icon: <FileZipOutlined />, label: t('files.compress'), onClick: handleCompress },
-              selectedFile.name.endsWith('.zip') ? { key: 'extract', icon: <UnlockOutlined />, label: t('files.extract'), onClick: handleExtract } : null,
+              { key: 'copy', icon: <CopyOutlined />, label: t('files.copy'), onClick: () => handleCopy(selectedFile), disabled: selectedFile.isProtected || selectedFile.type === 'dir' },
+              { key: 'cut', icon: <ScissorOutlined />, label: t('files.cut'), onClick: () => handleCut(selectedFile), disabled: selectedFile.isProtected },
               { key: 'permission', icon: <InfoCircleOutlined />, label: t('files.modalPermTitle'), onClick: () => { permForm.setFieldsValue({ permission: selectedFile.permission, owner: selectedFile.owner, group: selectedFile.group }); setPermOpen(true); } },
               { type: 'divider' },
               { key: 'download', icon: <DownloadOutlined />, label: t('files.download'), onClick: () => handleDownload(selectedFile.name, selectedFile.key), disabled: selectedFile.type === 'dir' },

@@ -20,6 +20,7 @@ import {
   FilePdfOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
+import { companyHeading, useCompanyIdentity } from '../../services/companyIdentity';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Table, Progress, Checkbox } from '../../custom-ui';
 import { ASSET_CLASS_OPTIONS, assetLifeGroupOptions } from './assetLifeGroups';
 import { dataService } from '../../services/dataService';
@@ -59,6 +60,7 @@ export interface ComprehensiveAsset {
 const INITIAL_EXTENDED_ASSETS: ComprehensiveAsset[] = [];
 
 export const AssetsModule: React.FC = () => {
+  const company = useCompanyIdentity();
   const location = useLocation();
   const currentPath = location.pathname.replace(/^\/admin/, '');
 
@@ -178,7 +180,7 @@ export const AssetsModule: React.FC = () => {
       message.error('Trình duyệt đã chặn cửa sổ in. Cho phép cửa sổ bật lên rồi thử lại.');
       return;
     }
-    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Tem tài sản ${escapeHtml(qrTarget.code)}</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#0f172a}.label{width:320px;border:1px solid #334155;padding:16px;text-align:center}.qr{width:150px;height:150px;margin:14px auto}.qr svg{width:100%;height:100%}.code{font-size:20px;font-weight:bold;letter-spacing:1px}.meta{font-size:12px;margin-top:6px}</style></head><body><main class="label"><div style="font-size:12px;font-weight:bold">CÔNG TY CP CÔNG NGHỆ KIYOVN</div><div class="qr">${qrSvg}</div><div class="code">${escapeHtml(qrTarget.code)}</div><div class="meta">${escapeHtml(qrTarget.name)}</div><div class="meta">${escapeHtml(qrTarget.department)} · ${escapeHtml(qrTarget.location)}</div></main></body></html>`);
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Tem tài sản ${escapeHtml(qrTarget.code)}</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#0f172a}.label{width:320px;border:1px solid #334155;padding:16px;text-align:center}.qr{width:150px;height:150px;margin:14px auto}.qr svg{width:100%;height:100%}.code{font-size:20px;font-weight:bold;letter-spacing:1px}.meta{font-size:12px;margin-top:6px}</style></head><body><main class="label"><div style="font-size:12px;font-weight:bold">${escapeHtml(companyHeading(company))}</div><div class="qr">${qrSvg}</div><div class="code">${escapeHtml(qrTarget.code)}</div><div class="meta">${escapeHtml(qrTarget.name)}</div><div class="meta">${escapeHtml(qrTarget.department)} · ${escapeHtml(qrTarget.location)}</div></main></body></html>`);
     printWindow.document.close();
     printWindow.focus();
     printWindow.setTimeout(() => printWindow.print(), 250);
@@ -903,8 +905,8 @@ export const AssetsModule: React.FC = () => {
         {qrTarget && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '16px 0' }}>
             <div style={{ width: 280, border: '2px dashed #009688', padding: 16, borderRadius: 8, textAlign: 'center', background: '#FAFAFA' }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#009688', letterSpacing: 0.5 }}>CÔNG TY CP CÔNG NGHỆ KIYOVN</div>
-              <div style={{ fontSize: 10, color: '#64748B', marginBottom: 12 }}>ASSET MANAGEMENT TAG</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#009688', letterSpacing: 0.5 }}>{companyHeading(company)}</div>
+              <div style={{ fontSize: 10, color: '#64748B', marginBottom: 12 }}>TEM QUẢN LÝ TÀI SẢN</div>
 
               <div style={{ width: 150, height: 150, margin: '0 auto', background: '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 {qrSvg ? <div role="img" aria-label={`QR tài sản ${qrTarget.code}`} style={{ width: 140, height: 140 }} dangerouslySetInnerHTML={{ __html: qrSvg }} /> : <span style={{ color: '#DC2626', fontSize: 12 }}>Mã QR hỗ trợ tối đa 32 byte. Hãy rút gọn mã tài sản.</span>}

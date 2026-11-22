@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, verify as verifySignature } from 'node:crypto';
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import net from 'node:net';
@@ -7659,6 +7659,22 @@ function validatePassword(value) {
   return password;
 }
 
+// Hạn mức dung lượng kho tệp của nhân viên: mặc định 2 GB, quản trị viên đặt riêng (storageQuotaGB trong hồ sơ). Chỉ áp cho tài khoản nhân viên;
+// trước đây hạn mức chỉ lưu trong trình duyệt và máy chủ không giới hạn.
+const DEFAULT_STORAGE_QUOTA_GB = 2;
+async function storageQuotaOf(employeeId) {
+  const user = await getUserById(employeeId);
+  if (!user || user.role === 'ADMIN') return null;
+  const row = await db.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(employeeId);
+  const quotaGB = Number(parseJsonObject(row?.details_json).storageQuotaGB) || DEFAULT_STORAGE_QUOTA_GB;
+  const used = Number((await db.prepare("SELECT COALESCE(SUM(size), 0) AS total FROM file_nodes WHERE employee_id = ? AND node_type = 'file' AND deleted_at IS NULL").get(employeeId))?.total || 0);
+  return { quotaGB, quotaBytes: Math.round(quotaGB * 1024 * 1024 * 1024), usedBytes: used };
+}
+async function assertStorageQuota(employeeId, addBytes) {
+  const quota = employeeId ? await storageQuotaOf(employeeId) : null;
+  if (quota && quota.usedBytes + addBytes > quota.quotaBytes) throw new HttpError(413, `Vượt hạn mức lưu trữ ${quota.quotaGB} GB của tài khoản (đã dùng ${(quota.usedBytes / 1024 / 1024).toFixed(1)} MB). Xóa bớt tệp hoặc đề nghị quản trị viên tăng hạn mức.`);
+}
+
 async function readJson(request, maxBytes = 50 * 1024 * 1024) {
   let body = '';
   for await (const chunk of request) {
@@ -11710,6 +11726,7 @@ async function handleRequest(request, response) {
       name = `${base} (${counter})${ext}`;
     }
     const content = await readBinary(request);
+    await assertStorageQuota(parent.employee_id || actor.id, content.length);
     const id = randomUUID();
     const storageKey = `${id}.bin`;
     await writeFile(fileStoragePath(storageKey), content, { flag: 'wx' });
@@ -11749,6 +11766,53 @@ async function handleRequest(request, response) {
     }
     await db.prepare('UPDATE file_nodes SET name = ?, updated_at = ? WHERE id = ?').run(name, now(), node.id);
     sendJson(response, 200, { file: publicFileNode(await fileNodeById(node.id)) });
+    return;
+  }
+
+  // Di chuyển (cắt, dán) và sao chép tệp sang thư mục khác mà người dùng có quyền ghi. Di chuyển giữ nguyên mã tệp (liên kết đính kèm không đổi);
+  // sao chép chỉ áp dụng cho tệp, tạo bản ghi và nội dung mới. Tên trùng ở thư mục đích được đánh số "(1)", "(2)" như khi tải lên.
+  const fileTransferMatch = /^\/files\/([^/]+)\/(move|copy)$/.exec(resource);
+  if (fileTransferMatch && request.method === 'POST') {
+    const actor = await requireUser(request);
+    const node = requireFileAccess(actor, await fileNodeById(decodeURIComponent(fileTransferMatch[1])));
+    const action = fileTransferMatch[2];
+    const payload = await readJson(request, 16 * 1024);
+    const target = ensureDirectoryWriteAccess(actor, await fileNodeById(requiredText(payload.parentId, 'Thư mục đích', 160)));
+    if (target.parent_id === null) throw new HttpError(403, 'Không thể lưu tệp trực tiếp vào thư mục hệ thống này.');
+    if (action === 'move') {
+      if (node.is_protected || node.is_system) throw new HttpError(403, 'Không thể di chuyển thư mục hoặc tệp hệ thống được bảo vệ.');
+      if (target.id === node.parent_id) throw new HttpError(422, 'Tệp đã ở thư mục này.');
+      for (let cursor = target; cursor; cursor = cursor.parent_id ? await fileNodeById(cursor.parent_id) : null) {
+        if (cursor.id === node.id) throw new HttpError(422, 'Không thể di chuyển thư mục vào chính nó hoặc thư mục con của nó.');
+        if (!cursor.parent_id) break;
+      }
+    } else if (node.node_type !== 'file') {
+      throw new HttpError(422, 'Chỉ sao chép được tệp, chưa sao chép được cả thư mục.');
+    }
+    const extMatch = node.name.match(/^(.*?)(\.[^.]*)?$/);
+    const base = extMatch ? extMatch[1] : node.name;
+    const ext = node.node_type === 'file' && extMatch?.[2] ? extMatch[2] : '';
+    let name = node.name;
+    for (let counter = 1; await db.prepare('SELECT 1 FROM file_nodes WHERE parent_id = ? AND name = ? AND deleted_at IS NULL').get(target.id, name); counter++) {
+      name = node.node_type === 'file' ? `${base} (${counter})${ext}` : `${node.name} (${counter})`;
+    }
+    const timestamp = now();
+    let resultId = node.id;
+    if (action === 'move') {
+      await db.prepare('UPDATE file_nodes SET parent_id = ?, employee_id = ?, name = ?, updated_at = ? WHERE id = ?').run(target.id, target.employee_id || node.employee_id, name, timestamp, node.id);
+    } else {
+      await assertStorageQuota(target.employee_id || actor.id, Number(node.size) || 0);
+      resultId = randomUUID();
+      const storageKey = `${resultId}.bin`;
+      await copyFile(fileStoragePath(node.storage_key), fileStoragePath(storageKey));
+      await db.prepare(`INSERT INTO file_nodes (
+        id, parent_id, employee_id, owner_id, name, node_type, mime_type, size, storage_key,
+        origin_module, is_hidden, is_system, is_protected, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'file', ?, ?, ?, ?, 0, 0, 0, ?, ?)`)
+        .run(resultId, target.id, target.employee_id || actor.id, actor.id, name, node.mime_type, node.size, storageKey, node.origin_module || 'files', timestamp, timestamp);
+    }
+    await recordAuditEvent(actor.id, action === 'move' ? 'move_file' : 'copy_file', 'file_nodes', resultId, { from: node.parent_id, to: target.id });
+    sendJson(response, 200, { file: publicFileNode(await fileNodeById(resultId)) });
     return;
   }
 
@@ -15504,6 +15568,15 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Thông tin công khai của doanh nghiệp (tên, mã số thuế, địa chỉ, người đại diện) cho mọi người đã đăng nhập: dùng làm Bên A trên hợp đồng nhân viên
+  // tải về, tiêu đề biên bản, tem tài sản. Hồ sơ đầy đủ vẫn chỉ quản trị viên đọc qua /system/company-profile.
+  if (request.method === 'GET' && resource === '/system/company-identity') {
+    await requireUser(request);
+    const profile = await getCompanyProfile();
+    sendJson(response, 200, { companyName: profile.companyName || profile.fullName || '', taxCode: profile.taxCode || '', address: profile.address || '', representative: profile.representative || '', representativeTitle: profile.representativeTitle || '' });
+    return;
+  }
+
   if (resource === '/system/company-profile' && ['GET', 'PUT'].includes(request.method)) {
     const actor = await requireAdmin(request);
     if (request.method === 'GET') { sendJson(response, 200, { profile: await getCompanyProfile() }); return; }
@@ -16137,6 +16210,26 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'payslip_confirm', 'payroll', key, { period: record.month });
     }
     sendJson(response, 200, { data: (await ownPayslips(actor)).find(item => item.key === key) });
+    return;
+  }
+
+  const storageQuotaMatch = /^\/employees\/([^/]+)\/storage-quota$/.exec(resource);
+  if (storageQuotaMatch && ['GET', 'PUT'].includes(request.method)) {
+    const actor = await requireUser(request);
+    const employeeId = decodeURIComponent(storageQuotaMatch[1]) === 'me' ? actor.id : decodeURIComponent(storageQuotaMatch[1]);
+    if (request.method === 'PUT' || employeeId !== actor.id) await requireAdmin(request);
+    if (request.method === 'PUT') {
+      const quotaGB = Number((await readJson(request, 4096)).quotaGB);
+      if (!Number.isFinite(quotaGB) || quotaGB < 0.1 || quotaGB > 10000) throw new HttpError(422, 'Hạn mức lưu trữ phải từ 0,1 đến 10.000 GB.');
+      const row = await db.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(employeeId);
+      if (!row) throw new HttpError(404, 'Không tìm thấy hồ sơ nhân viên.');
+      const details = parseJsonObject(row.details_json);
+      details.storageQuotaGB = Math.round(quotaGB * 10) / 10;
+      await db.prepare('UPDATE employee_profiles SET details_json = ? WHERE user_id = ?').run(JSON.stringify(details), employeeId);
+      await recordAuditEvent(actor.id, 'set_storage_quota', 'employee_profiles', employeeId, { quotaGB: details.storageQuotaGB });
+    }
+    const quota = await storageQuotaOf(employeeId);
+    sendJson(response, 200, quota ? { quotaGB: quota.quotaGB, usedBytes: quota.usedBytes, limited: true } : { quotaGB: null, usedBytes: 0, limited: false });
     return;
   }
 

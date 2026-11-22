@@ -765,7 +765,13 @@ export const ShiftRegistrationModule: React.FC = () => {
               </Button>
               <Button
                 onClick={() => {
-                  message.success(`Đã xuất danh sách phiếu đăng ký ca của đợt ${selectedCampaign.code}`);
+                  // Xuất tệp Excel thật của đợt đăng ký (trước đây chỉ báo thành công, không tạo tệp).
+                  const rows = [
+                    ['Mã đợt', 'Tên đợt', 'Đơn vị', 'Kỳ', 'Từ ngày', 'Đến ngày', 'Hạn đăng ký', 'Số phiếu đã nộp', 'Số người cần đăng ký', 'Trạng thái'],
+                    [selectedCampaign.code, selectedCampaign.name, selectedCampaign.orgUnit, selectedCampaign.periodType, selectedCampaign.startDate, selectedCampaign.endDate, `${selectedCampaign.deadlineDate} ${selectedCampaign.deadlineTime || ''}`.trim(), selectedCampaign.totalSubmissions, selectedCampaign.totalTarget, selectedCampaign.status],
+                  ];
+                  downloadFile(`Dang_ky_ca_${selectedCampaign.code}.xlsx`, generateValidXlsxBlob(rows));
+                  message.success(`Đã xuất tệp Excel của đợt ${selectedCampaign.code}.`);
                 }}
                 style={{ flex: 1, height: 32 }}
               >

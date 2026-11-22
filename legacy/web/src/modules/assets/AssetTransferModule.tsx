@@ -20,6 +20,7 @@ import {
   SendOutlined,
 } from '@ant-design/icons';
 import { KTable } from '../../components/KTable';
+import { companyHeading, useCompanyIdentity } from '../../services/companyIdentity';
 import { Modal, Drawer, Form, Input, Select, Button, message, Card, Tag, Alert, Steps } from '../../custom-ui';
 import { collectionsApi, assetTransfersApi } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
@@ -57,6 +58,7 @@ export interface TransferItem {
 const INITIAL_TRANSFERS: TransferItem[] = [];
 
 export const AssetTransferModule: React.FC = () => {
+  const company = useCompanyIdentity();
   const [data, setData] = useState<TransferItem[]>(INITIAL_TRANSFERS);
   const [assets, setAssets] = useState<any[]>([]);
   const [originLocation, setOriginLocation] = useState('');
@@ -444,16 +446,7 @@ export const AssetTransferModule: React.FC = () => {
             <div style={{ background: '#FEF2F2', padding: 12, borderRadius: 8, border: '1px solid #FECACA' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#991B1B', marginBottom: 8 }}>ĐƠN VỊ XUẤT ĐI:</div>
               <Form.Item name="fromLocation" label="Địa điểm gửi" rules={[{ required: true }]}>
-                <Select
-                  options={[
-                    ...(originLocation ? [{ label: originLocation, value: originLocation }] : []),
-                    { label: 'Trụ sở chính Hà Nội', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
-                    { label: 'IDC Viettel Duy Tân Hà Nội', value: 'IDC Viettel Duy Tân Hà Nội' },
-                    { label: 'Chi nhánh TP.HCM', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
-                    { label: 'IDC FPT Tân Thuận Q7', value: 'IDC FPT Tân Thuận Q7' },
-                    { label: 'Chi nhánh Đà Nẵng', value: 'Chi nhánh Đà Nẵng (Bạch Đằng Complex)' },
-                  ]}
-                />
+                <Input placeholder="Vị trí hiện tại của tài sản" />
               </Form.Item>
             <Form.Item name="fromDepartment" label="Phòng ban gửi" rules={[{ required: true }]}>
                 <Input placeholder="Ví dụ: Khối Vận Hành & Hạ Tầng" />
@@ -466,15 +459,7 @@ export const AssetTransferModule: React.FC = () => {
             <div style={{ background: '#F0FDF4', padding: 12, borderRadius: 8, border: '1px solid #BBF7D0' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 8 }}>ĐƠN VỊ TIẾP NHẬN:</div>
               <Form.Item name="toLocation" label="Địa điểm nhận" rules={[{ required: true }]}>
-                <Select
-                  options={[
-                    { label: 'Chi nhánh TP.HCM', value: 'Chi nhánh TP.HCM (Tòa nhà Bitexco)' },
-                    { label: 'IDC FPT Tân Thuận Q7', value: 'IDC FPT Tân Thuận Q7' },
-                    { label: 'Chi nhánh Đà Nẵng', value: 'Chi nhánh Đà Nẵng (Bạch Đằng Complex)' },
-                    { label: 'Trụ sở chính Hà Nội', value: 'Trụ sở chính Hà Nội (Keangnam Landmark)' },
-                    { label: 'IDC Viettel Duy Tân Hà Nội', value: 'IDC Viettel Duy Tân Hà Nội' },
-                  ]}
-                />
+                <Input placeholder="Ví dụ: Chi nhánh, kho, phòng nhận tài sản" />
               </Form.Item>
             <Form.Item name="toDepartment" label="Phòng ban nhận" rules={[{ required: true }]}>
                 <Input placeholder="Ví dụ: Khối Kinh Doanh TP.HCM" />
@@ -534,7 +519,7 @@ export const AssetTransferModule: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Header Document */}
             <div style={{ textAlign: 'center', borderBottom: '2px solid #009688', paddingBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', letterSpacing: 0.5 }}>CÔNG TY CP CÔNG NGHỆ KIYOVN</div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', letterSpacing: 0.5 }}>{companyHeading(company)}</div>
               <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
                 LỆNH ĐIỀU CHUYỂN TÀI SẢN NỘI BỘ
               </div>

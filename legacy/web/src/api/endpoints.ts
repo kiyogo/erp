@@ -188,6 +188,7 @@ export type MarketingOnboarding = {
 
 export const systemApi = {
   getCompanyProfile: () => api.get<{ profile: CompanyProfile }>('/system/company-profile'),
+  getCompanyIdentity: () => api.get<CompanyIdentity>('/system/company-identity'),
   saveCompanyProfile: (profile: CompanyProfile) => api.put<{ profile: CompanyProfile }>('/system/company-profile', profile),
   getGoogleConfig: () => api.get<{ clientKey: string; clientSecret: string; redirectUri: string; allowedDomain: string; enforceGoogleLogin: string; configured: boolean }>('/auth/google/config'),
   saveGoogleConfig: (data: { clientKey: string; redirectUri: string; allowedDomain: string; enforceGoogleLogin: string }) => api.put<{ config: { clientKey: string; clientSecret: string; redirectUri: string; allowedDomain: string; enforceGoogleLogin: string; configured: boolean } }>('/system/google-config', data),
@@ -214,6 +215,7 @@ export const marketingApi = {
     api.put<{ onboarding: MarketingOnboarding }>('/marketing/onboarding', data),
 };
 
+export type CompanyIdentity = { companyName: string; taxCode: string; address: string; representative: string; representativeTitle: string };
 export type CompanyProfile = {
   companyName: string; fullName: string; shortName: string; companyCode: string; taxCode: string; businessType: string;
   establishedDate: string; registrationDate: string; registrationNo: string; registrationIssuer: string;
@@ -283,6 +285,11 @@ export const filesApi = {
     maxBodyLength: 50 * 1024 * 1024,
   }),
   update: (id: string, name: string) => api.patch<{ file: StoredFileNode }>(`/files/${id}`, { name }),
+  move: (id: string, parentId: string) => api.post<{ file: StoredFileNode }>(`/files/${encodeURIComponent(id)}/move`, { parentId }),
+  copy: (id: string, parentId: string) => api.post<{ file: StoredFileNode }>(`/files/${encodeURIComponent(id)}/copy`, { parentId }),
+  /** Hạn mức kho tệp của nhân viên (mặc định 2 GB); quản trị viên không giới hạn (limited false). */
+  getStorageQuota: (employeeId = 'me') => api.get<{ quotaGB: number | null; usedBytes: number; limited: boolean }>(`/employees/${encodeURIComponent(employeeId)}/storage-quota`),
+  setStorageQuota: (employeeId: string, quotaGB: number) => api.put<{ quotaGB: number | null; usedBytes: number; limited: boolean }>(`/employees/${encodeURIComponent(employeeId)}/storage-quota`, { quotaGB }),
   updateContent: (id: string, content: Blob) => api.put<{ file: StoredFileNode }>(`/files/${id}/content`, content, {
     headers: { 'Content-Type': content.type || 'application/octet-stream' },
     maxContentLength: 50 * 1024 * 1024,

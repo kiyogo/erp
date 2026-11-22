@@ -101,13 +101,7 @@ export const ConsumablesModule: React.FC = () => {
       itemCode: `VPP-SKU-0${data.length + 1}`,
       category: 'Văn phòng phẩm tiêu hao',
       unit: 'Hộp',
-      stockQty: 20,
-      minThreshold: 5,
-      maxThreshold: 50,
-      unitPrice: 150000,
-      location: 'Kho Hành Chính Keangnam - Tầng 4',
-      supplier: 'Công ty Cổ Phần Văn Phòng Phẩm Hồng Hà',
-      monthlyUsageAvg: 5,
+      stockQty: 0,
     });
     setModalOpen(true);
   };
@@ -261,9 +255,9 @@ export const ConsumablesModule: React.FC = () => {
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 16 }}>
           <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Vị trí kho lưu trữ phân phối</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 4 }}>
-            3 Điểm kho
+            {new Set(data.map((item) => item.location).filter(Boolean)).size} điểm kho
           </div>
-          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>Keangnam Tầng 4, Tầng 14 &amp; Chi nhánh</div>
+          <div style={{ fontSize: 11.5, color: '#2563EB', marginTop: 2 }}>{[...new Set(data.map((item) => item.location).filter(Boolean))].slice(0, 3).join(', ') || 'Chưa ghi vị trí kho'}</div>
         </div>
       </div>
 

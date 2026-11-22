@@ -45,7 +45,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input as BaseInput, Select as BaseSelect, message, Checkbox as BaseCheckbox, Modal, Tag, InputNumber } from '../../custom-ui';
 import { dataService } from '../../services/dataService';
-import { authApi, collectionsApi, ekycApi, employeesApi } from '../../api/endpoints';
+import { authApi, collectionsApi, ekycApi, employeesApi, filesApi } from '../../api/endpoints';
 
 // Khớp isForeignNationality ở legacy/api/foreignWorkerRules.mjs: quốc tịch có ghi và không phải Việt Nam.
 const isForeignNationality = (value: unknown) => { const text = String(value ?? '').trim().toLocaleLowerCase('vi-VN'); return Boolean(text) && !['việt nam', 'viet nam', 'vietnam', 'vn', 'vnm'].includes(text); };
@@ -1167,42 +1167,23 @@ export const EmployeeFullEditModule: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const [storageQuotaGB, setStorageQuotaGB] = useState<number>(() => {
-    try {
-      const targetId = id || user?.id || '';
-      if (targetId) {
-        const saved = localStorage.getItem('employee_storage_quota_' + targetId);
-        if (saved) return parseFloat(saved) || 2;
-      }
-    } catch {}
-    return 2;
-  });
-
+  // Hạn mức kho tệp lưu ở máy chủ (mặc định 2 GB, máy chủ chặn tải lên khi vượt); trước đây chỉ lưu trong trình duyệt.
+  const [storageQuotaGB, setStorageQuotaGB] = useState<number>(2);
   useEffect(() => {
     const targetId = id || user?.id || '';
-    try {
-      if (targetId) {
-        const saved = localStorage.getItem('employee_storage_quota_' + targetId);
-        if (saved) {
-          setStorageQuotaGB(parseFloat(saved) || 2);
-          return;
-        }
-      }
-      setStorageQuotaGB(2);
-    } catch {
-      setStorageQuotaGB(2);
-    }
+    if (!targetId) return;
+    filesApi.getStorageQuota(id ? targetId : 'me').then((response) => setStorageQuotaGB(response.data.quotaGB ?? 2)).catch(() => undefined);
   }, [id, user?.id]);
 
-  const handleSaveStorageQuota = () => {
+  const handleSaveStorageQuota = async () => {
     const targetId = id || user?.id || '';
+    if (!targetId) return;
     try {
-      if (targetId) {
-        localStorage.setItem('employee_storage_quota_' + targetId, String(storageQuotaGB));
-      }
-      message.success(`Đã lưu hạn mức dung lượng lưu trữ ${storageQuotaGB} GB cho tài khoản thành công!`);
-    } catch (err) {
-      message.error('Không thể lưu dung lượng lưu trữ.');
+      const response = await filesApi.setStorageQuota(targetId, storageQuotaGB);
+      setStorageQuotaGB(response.data.quotaGB ?? storageQuotaGB);
+      message.success(`Đã lưu hạn mức dung lượng lưu trữ ${response.data.quotaGB ?? storageQuotaGB} GB cho tài khoản.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không thể lưu hạn mức dung lượng lưu trữ.');
     }
   };
 

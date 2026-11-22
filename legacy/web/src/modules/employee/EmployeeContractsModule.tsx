@@ -26,6 +26,7 @@ import { dataService } from '../../services/dataService';
 import { contractsApi } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { downloadFile } from '../../utils/fileExporter';
+import { useCompanyIdentity } from '../../services/companyIdentity';
 
 export interface EnterpriseContractItem {
   key: string;
@@ -94,6 +95,7 @@ export interface EnterpriseContractItem {
 export const EmployeeContractsModule: React.FC = () => {
   const { user } = useAuth();
   const [contracts, setContracts] = useState<EnterpriseContractItem[]>([]);
+  const companyName = useCompanyIdentity().companyName;
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -202,7 +204,7 @@ export const EmployeeContractsModule: React.FC = () => {
   };
 
   const handleDownloadContract = (contract: EnterpriseContractItem) => {
-    const content = `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\n${(contract.name || 'HỢP ĐỒNG LAO ĐỘNG').toUpperCase()}\nSố: ${contract.code}\n\nBÊN A: CÔNG TY CỔ PHẦN KIYOVN\nĐại diện: ${contract.signerName || 'Ban Giám Đốc'} - Chức vụ: ${contract.signerPosition || 'Đại diện Doanh Nghiệp'}\n\nBÊN B: ${contract.partyBName || contract.employeeName || currentUserName}\nĐại diện: ${contract.partyBRepresentative || contract.employeeName || currentUserName}\nĐiện thoại: ${contract.partyBPhone || contract.employeePhone || 'Chưa cập nhật'}\nEmail: ${contract.partyBEmail || contract.employeeEmail || user?.email || 'Chưa cập nhật'}\n\nĐIỀU 1: VỊ TRÍ & THỜI HẠN\n- Đơn vị: ${contract.department || 'Chưa cập nhật'}\n- Chức vụ / Vị trí: ${contract.position || 'Chưa cập nhật'}\n- Thời hạn: Từ ${contract.startDate || '---'} đến ${contract.endDate || '---'}\n\nĐIỀU 2: GIÁ TRỊ HỢP ĐỒNG / LƯƠNG & CỔ PHẦN\n- Lương cơ bản / Giá trị hợp đồng: ${(contract.contractValue || contract.salary || 0).toLocaleString('vi-VN')} VNĐ\n- Phụ cấp: ${(contract.allowance || 0).toLocaleString('vi-VN')} VNĐ\n- Quyền lợi cổ phần ESOP: ${contract.stockSharesPercent || 'Không áp dụng'}\n\nĐIỀU 3: CHỨNG THỰC CHỮ KÝ SỐ\n- Bên B (Người lao động): ${contract.employeeSignStatus === 'Đã ký' ? `ĐÃ KÝ SỐ (${contract.employeeCertName || 'Chứng thư số điện tử'})` : 'CHƯA KÝ'}\n- Bên A (Doanh nghiệp): ${contract.companySignStatus === 'Đã ký' ? `ĐÃ KÝ SỐ DOANH NGHIỆP (${contract.companyCertName || 'Ban Giám Đốc'})` : 'CHƯA KÝ'}`;
+    const content = `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\n${(contract.name || 'HỢP ĐỒNG LAO ĐỘNG').toUpperCase()}\nSố: ${contract.code}\n\nBÊN A: ${companyName || 'Chưa khai báo tên doanh nghiệp trong hồ sơ doanh nghiệp'}\nĐại diện: ${contract.signerName || 'Chưa khai báo'} - Chức vụ: ${contract.signerPosition || 'Đại diện Doanh Nghiệp'}\n\nBÊN B: ${contract.partyBName || contract.employeeName || currentUserName}\nĐại diện: ${contract.partyBRepresentative || contract.employeeName || currentUserName}\nĐiện thoại: ${contract.partyBPhone || contract.employeePhone || 'Chưa cập nhật'}\nEmail: ${contract.partyBEmail || contract.employeeEmail || user?.email || 'Chưa cập nhật'}\n\nĐIỀU 1: VỊ TRÍ & THỜI HẠN\n- Đơn vị: ${contract.department || 'Chưa cập nhật'}\n- Chức vụ / Vị trí: ${contract.position || 'Chưa cập nhật'}\n- Thời hạn: Từ ${contract.startDate || '---'} đến ${contract.endDate || '---'}\n\nĐIỀU 2: GIÁ TRỊ HỢP ĐỒNG / LƯƠNG & CỔ PHẦN\n- Lương cơ bản / Giá trị hợp đồng: ${(contract.contractValue || contract.salary || 0).toLocaleString('vi-VN')} VNĐ\n- Phụ cấp: ${(contract.allowance || 0).toLocaleString('vi-VN')} VNĐ\n- Quyền lợi cổ phần ESOP: ${contract.stockSharesPercent || 'Không áp dụng'}\n\nĐIỀU 3: CHỨNG THỰC CHỮ KÝ SỐ\n- Bên B (Người lao động): ${contract.employeeSignStatus === 'Đã ký' ? `ĐÃ KÝ SỐ (${contract.employeeCertName || 'Chứng thư số điện tử'})` : 'CHƯA KÝ'}\n- Bên A (Doanh nghiệp): ${contract.companySignStatus === 'Đã ký' ? `ĐÃ KÝ SỐ DOANH NGHIỆP (${contract.companyCertName || 'Ban Giám Đốc'})` : 'CHƯA KÝ'}`;
 
     downloadFile(`${contract.code}_${(contract.partyBName || contract.employeeName || currentUserName).replace(/\s+/g, '_')}.txt`, content);
   };
@@ -667,7 +669,7 @@ export const EmployeeContractsModule: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748B' }}>Địa điểm làm việc / thực hiện</span>
-                  <span style={{ fontWeight: 600, color: '#0F172A' }}>{selectedContract.workLocation || 'Tòa nhà Landmark 72 Keangnam, Hà Nội'}</span>
+                  <span style={{ fontWeight: 600, color: '#0F172A' }}>{selectedContract.workLocation || 'Chưa ghi'}</span>
                 </div>
               </div>
             </div>

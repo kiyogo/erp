@@ -26,7 +26,8 @@ import {
   type StoredFileNode,
 } from '../../api/endpoints';
 
-const TODAY = '2026-08-29';
+// Ngày hôm nay theo giờ Việt Nam (trước đây viết cứng 2026-08-29).
+const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
 const formatMoney = (amount: number) => {
   if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(2)} tỷ ₫`;

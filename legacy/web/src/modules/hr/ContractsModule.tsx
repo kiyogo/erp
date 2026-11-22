@@ -22,7 +22,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Drawer, Radio, Upload, Checkbox } from '../../custom-ui';
 import { ContractTemplate, dataService } from '../../services/dataService';
-import { contractsApi, filesApi } from '../../api/endpoints';
+import { contractsApi, filesApi, systemApi } from '../../api/endpoints';
 import { downloadFile, exportRowsToXlsx } from '../../utils/fileExporter';
 
 export interface EnterpriseContractItem {
@@ -112,20 +112,17 @@ const BANK_OPTIONS = [
   { value: 'Ngân hàng TNHH MTV Shinhan Việt Nam', label: 'Shinhan Bank Việt Nam' },
 ];
 
-const COMPANY_SIGNATURE_OPTIONS = [
-  {
-    value: 'CÔNG TY CỔ PHẦN KIYOVN Serial 54:02:FA:19:9C:20:26 Ban Cơ yếu Chính phủ',
-    label: 'CÔNG TY CP KIYOVN Ban Cơ yếu Chính phủ',
-  },
-  {
-    value: 'Trần Tuấn Anh - Tổng Giám Đốc Token USB CA-2026',
-    label: 'Trần Tuấn Anh - Tổng Giám Đốc USB Token',
-  },
-  {
-    value: 'KIYOVN Enterprise Root CA v3 Khóa bảo mật HSM Cloud',
-    label: 'KIYOVN Enterprise Root CA v3 HSM Cloud',
-  },
-];
+// Chứng thư ký của doanh nghiệp lấy từ sổ Chữ ký số (finance_digital_signatures): chỉ chứng thư đang hoạt động, chưa hết hạn.
+// Trước đây là danh sách chứng thư bịa (số serial giả, "Ban Cơ yếu Chính phủ") và mặc định chọn sẵn nên mọi lần lưu đều đánh dấu doanh nghiệp đã ký.
+const activeCompanyCertOptions = () => {
+  const today = new Date().toISOString().slice(0, 10);
+  return (dataService.getGenericData('finance_digital_signatures') as any[])
+    .filter((cert) => cert && !['revoked', 'suspended'].includes(cert.lifecycle) && (!cert.validTo || String(cert.validTo).slice(0, 10) >= today))
+    .map((cert) => {
+      const label = [cert.subjectName, cert.provider, cert.certNumber && `Serial ${cert.certNumber}`, cert.validTo && `hiệu lực đến ${String(cert.validTo).slice(0, 10)}`].filter(Boolean).join(' · ');
+      return { value: label, label };
+    });
+};
 
 interface ContractsModuleProps {
   scope?: 'hr' | 'documents';
@@ -213,7 +210,10 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
 
   // Company Signature in Edit Modal
   const [companySignMethod, setCompanySignMethod] = useState<'digital' | 'upload'>('digital');
-  const [selectedCompanyCert, setSelectedCompanyCert] = useState(COMPANY_SIGNATURE_OPTIONS[0].value);
+  const [selectedCompanyCert, setSelectedCompanyCert] = useState('');
+  const [companyCertOptions, setCompanyCertOptions] = useState<Array<{ value: string; label: string }>>([]);
+  // Bên A của hợp đồng: tên doanh nghiệp, người đại diện theo pháp luật và chức danh lấy từ hồ sơ doanh nghiệp.
+  const [company, setCompany] = useState<{ name: string; representative: string; title: string }>({ name: '', representative: '', title: '' });
   const [uploadedCompanyFile, setUploadedCompanyFile] = useState<string | null>(null);
   const [orgUnitOptions, setOrgUnitOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [positionOptions, setPositionOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -226,6 +226,8 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
         dataService.fetchOrgUnitsList(),
         dataService.fetchDropdownOptions('positions'),
       ]);
+      void dataService.refreshGenericData('finance_digital_signatures').then(() => setCompanyCertOptions(activeCompanyCertOptions())).catch(() => setCompanyCertOptions(activeCompanyCertOptions()));
+      void systemApi.getCompanyProfile().then((res) => { const profile: any = res.data.profile || {}; setCompany({ name: profile.companyName || profile.fullName || '', representative: profile.representative || '', title: profile.representativeTitle || '' }); }).catch(() => undefined);
       setOrgUnitOptions(units.map((u) => ({ label: u, value: u })));
       setPositionOptions(posOpts.filter((p) => p.isActive !== false).map((p) => ({ label: p.name, value: p.name })));
       if (response.data?.data && Array.isArray(response.data.data)) {
@@ -350,8 +352,8 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
       paymentMethod: 'Chuyển khoản ngân hàng',
       workLocation: '',
       status: 'Chờ duyệt',
-      signerName: 'Trần Tuấn Anh',
-      signerPosition: 'Tổng Giám Đốc',
+      signerName: company.representative,
+      signerPosition: company.title,
     });
     setModalOpen(true);
   };
@@ -407,8 +409,8 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
       paymentMethod: undefined,
       paymentDay: 10,
       status: 'Chờ duyệt',
-      signerName: 'Trần Tuấn Anh',
-      signerPosition: 'Tổng Giám Đốc',
+      signerName: company.representative,
+      signerPosition: company.title,
     });
     setModalOpen(true);
   };
@@ -425,7 +427,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
     setUploadedTemplateFiles(uploadedFiles);
     setPartyBType(record.partyBType || (record.employeeCode?.startsWith('NV') ? 'employee' : 'organization'));
     setCompanySignMethod(record.companySignMethod || 'digital');
-    setSelectedCompanyCert(record.companyCertName || COMPANY_SIGNATURE_OPTIONS[0].value);
+    setSelectedCompanyCert('');
     setUploadedCompanyFile(record.companySignedFileName || null);
 
     form.setFieldsValue({
@@ -562,7 +564,8 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
 
   const handleSaveContract = () => {
     form.validateFields().then((values) => {
-      const isCompanySigning = companySignMethod === 'digital' || !!uploadedCompanyFile;
+      // Chỉ ghi nhận doanh nghiệp ký khi đã chọn chứng thư còn hiệu lực hoặc tải tệp đã ký; hợp đồng đã ký giữ nguyên thông tin ký cũ.
+      const isCompanySigning = (companySignMethod === 'digital' && !!selectedCompanyCert) || (companySignMethod === 'upload' && !!uploadedCompanyFile);
       
       let updatedCompanySignStatus = editingContract?.companySignStatus || 'Chưa ký';
       let updatedCompanySignDate = editingContract?.companySignDate;
@@ -724,7 +727,7 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
     const tpl = contractTemplates.find((item) => item.name === contract.contractTemplate);
     const content = tpl
       ? renderTemplateContent(tpl.content, { ...contract, ...(contract.customFieldValues || {}) })
-      : `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\n${contract.name.toUpperCase()}\nSố: ${contract.code}\n\nBÊN A: CÔNG TY CỔ PHẦN KIYOVN\nĐại diện: ${contract.signerName || 'Chưa khai báo'} - Chức vụ: ${contract.signerPosition || 'Chưa khai báo'}\n\nBÊN B: ${contract.partyBName || contract.employeeName}\nĐại diện: ${contract.partyBRepresentative || contract.employeeName}\nSố điện thoại: ${contract.partyBPhone || contract.employeePhone}\nEmail: ${contract.partyBEmail || contract.employeeEmail}\n\nĐIỀU 1: NỘI DUNG VÀ THỜI HẠN\n- Danh mục: ${contract.type}\n- Thời hạn: Từ ${contract.startDate} đến ${contract.endDate}\n\nĐIỀU 2: GIÁ TRỊ HỢP ĐỒNG & THANH TOÁN\n- Giá trị hợp đồng: ${(contract.contractValue || contract.salary || 0).toLocaleString('vi-VN')} VNĐ\n- Hình thức chi trả: ${contract.paymentMethod || 'Chuyển khoản ngân hàng'}\n\nĐIỀU 3: THÔNG TIN GHI NHẬN KÝ\n- Phía Bên B: ${contract.employeeSignStatus === 'Đã ký' ? `ĐÃ GHI NHẬN KÝ (${contract.employeeCertName})` : 'CHƯA KÝ'}\n- Phía Bên A: ${contract.companySignStatus === 'Đã ký' ? `ĐÃ GHI NHẬN KÝ DOANH NGHIỆP (${contract.companyCertName})` : 'CHƯA KÝ'}`;
+      : `CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\n${contract.name.toUpperCase()}\nSố: ${contract.code}\n\nBÊN A: ${company.name || 'Chưa khai báo tên doanh nghiệp trong hồ sơ doanh nghiệp'}\nĐại diện: ${contract.signerName || 'Chưa khai báo'} - Chức vụ: ${contract.signerPosition || 'Chưa khai báo'}\n\nBÊN B: ${contract.partyBName || contract.employeeName}\nĐại diện: ${contract.partyBRepresentative || contract.employeeName}\nSố điện thoại: ${contract.partyBPhone || contract.employeePhone}\nEmail: ${contract.partyBEmail || contract.employeeEmail}\n\nĐIỀU 1: NỘI DUNG VÀ THỜI HẠN\n- Danh mục: ${contract.type}\n- Thời hạn: Từ ${contract.startDate} đến ${contract.endDate}\n\nĐIỀU 2: GIÁ TRỊ HỢP ĐỒNG & THANH TOÁN\n- Giá trị hợp đồng: ${(contract.contractValue || contract.salary || 0).toLocaleString('vi-VN')} VNĐ\n- Hình thức chi trả: ${contract.paymentMethod || 'Chuyển khoản ngân hàng'}\n\nĐIỀU 3: THÔNG TIN GHI NHẬN KÝ\n- Phía Bên B: ${contract.employeeSignStatus === 'Đã ký' ? `ĐÃ GHI NHẬN KÝ (${contract.employeeCertName})` : 'CHƯA KÝ'}\n- Phía Bên A: ${contract.companySignStatus === 'Đã ký' ? `ĐÃ GHI NHẬN KÝ DOANH NGHIỆP (${contract.companyCertName})` : 'CHƯA KÝ'}`;
 
     downloadFile(`${contract.code}_${(contract.partyBName || contract.employeeName).replace(/\s+/g, '_')}.txt`, content);
     message.success(`Đã tải xuống hợp đồng ${contract.code}`);
@@ -1676,7 +1679,9 @@ export const ContractsModule: React.FC<ContractsModuleProps> = ({ scope = 'docum
                   <Select
                     value={selectedCompanyCert}
                     onChange={(val) => setSelectedCompanyCert(val)}
-                    options={COMPANY_SIGNATURE_OPTIONS}
+                    options={companyCertOptions}
+                    allowClear
+                    placeholder={companyCertOptions.length ? 'Chọn chứng thư để ký (để trống nếu chưa ký)' : 'Chưa có chứng thư số còn hiệu lực trong sổ Chữ ký số'}
                     style={{ width: '100%' }}
                   />
                 </div>

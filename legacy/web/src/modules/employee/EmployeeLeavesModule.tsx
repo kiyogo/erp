@@ -215,7 +215,7 @@ export const EmployeeLeavesModule: React.FC = () => {
           <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
             {pendingCount} Đơn
           </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Xử lý trong vòng 24 giờ làm việc</div>
+          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Chờ quản trị viên duyệt</div>
         </div>
       </div>
 

@@ -264,6 +264,26 @@ test('supplier tax reviews require a real CRM supplier and evidence before recor
   await request(`/collections/finance_tax_supplier_reviews/${key}`, 'DELETE', {}, 405);
 });
 
+test('files can be copied and moved between folders the user can write to', async () => {
+  const stamp = Date.now();
+  const workspace = await request('/files?scope=employee');
+  const folder = (name) => request('/files/folders', 'POST', { name: `${name}-${stamp}`, parentId: workspace.context.parentId }, 201).then((result) => result.file);
+  const source = await folder('nguon');
+  const target = await folder('dich');
+  const upload = await fetch(`${base}/files/upload`, { method: 'POST', headers: { Authorization: headers.Authorization, 'Content-Type': 'text/plain', 'X-File-Name': 'ghi-chu.txt', 'X-Parent-Id': source.id }, body: Buffer.from('noi dung') });
+  const file = (await upload.json()).file;
+  const copied = (await request(`/files/${file.id}/copy`, 'POST', { parentId: target.id })).file;
+  assert.notEqual(copied.id, file.id);
+  assert.equal(copied.name, 'ghi-chu.txt');
+  assert.equal((await request(`/files/${file.id}/copy`, 'POST', { parentId: target.id })).file.name, 'ghi-chu (1).txt');
+  const moved = (await request(`/files/${file.id}/move`, 'POST', { parentId: target.id })).file;
+  assert.deepEqual([moved.id, moved.name], [file.id, 'ghi-chu (2).txt']);
+  await request(`/files/${target.id}/move`, 'POST', { parentId: target.id }, 422);
+  await request(`/files/${source.id}/copy`, 'POST', { parentId: target.id }, 422);
+  const downloaded = await fetch(`${base}/files/${copied.id}/download`, { headers: { Authorization: headers.Authorization } });
+  assert.equal(await downloaded.text(), 'noi dung');
+});
+
 test('purchase requests validate real departments and suppliers and preserve supplier-selection history', async () => {
   const departmentKey = `purchase-dept-${Date.now()}`;
   await request('/collections/business_org_units', 'POST', {
@@ -3259,6 +3279,16 @@ test('employees cannot approve their own payroll bank account and see their real
   assert.notEqual(rowId, 'ba-self-2');
   assert.equal((await request(`/collections/employee_bank_accounts/${rowId}`, 'PATCH', { patch: { note: 'theo mã dòng' } }, 200, staff)).record.key, 'ba-self-2');
 
+  // Hạn mức lưu trữ: mặc định 2 GB, quản trị viên đặt riêng, nhân viên chỉ xem của mình.
+  assert.deepEqual([(await request('/employees/me/storage-quota', 'GET', undefined, 200, staff)).quotaGB], [2]);
+  const staffId = (await request('/auth/profile', 'GET', undefined, 200, staff)).user.id;
+  await request(`/employees/${staffId}/storage-quota`, 'PUT', { quotaGB: 5 }, 403, staff);
+  await request(`/employees/${staffId}/storage-quota`, 'PUT', { quotaGB: 0 }, 422);
+  assert.equal((await request(`/employees/${staffId}/storage-quota`, 'PUT', { quotaGB: 5.25 })).quotaGB, 5.3);
+  assert.equal((await request('/employees/me/storage-quota', 'GET', undefined, 200, staff)).quotaGB, 5.3);
+  const identity = await request('/system/company-identity', 'GET', undefined, 200, staff);
+  assert.deepEqual(Object.keys(identity).sort(), ['address', 'companyName', 'representative', 'representativeTitle', 'taxCode']);
+  await request('/system/company-profile', 'GET', undefined, 403, staff);
   const overview = await request('/auth/account-overview', 'GET', undefined, 200, staff);
   assert.deepEqual([overview.role, overview.twoFactorEnabled, overview.passkeyCount, overview.securityPinConfigured], ['USER', false, 0, false]);
   assert.ok(overview.currentSession?.loginTime);
