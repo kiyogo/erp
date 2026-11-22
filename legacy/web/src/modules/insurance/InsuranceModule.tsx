@@ -159,7 +159,7 @@ export const InsuranceModule: React.FC = () => {
           .map((item) => {
             const contract = contractByEmployeeCode.get(item.employeeCode || item.code);
             return {
-              key: item.id || item.key,
+              key: item.key || item.id,
               empCode: item.employeeCode || item.code,
               fullName: item.name || item.fullName,
               dept: item.department || 'Chưa phân bổ',

@@ -87,6 +87,9 @@ export const LeaveSummaryModule: React.FC = () => {
   const [carryRows, setCarryRows] = useState<LeaveCarryOverRow[] | null>(null);
   const [carrying, setCarrying] = useState(false);
 
+  // Đổi năm, mức tối đa hay căn cứ thì kết quả xem trước cũ không còn đúng: xóa để phải xem trước lại.
+  useEffect(() => (carryForm as any).subscribe(() => setCarryRows(null)), [carryForm]);
+
   const carryPayload = () => {
     const values = carryForm.getFieldsValue();
     const fromYear = attendanceNumber(values.fromYear, 'Năm chuyển phép', 2000, 2200);
@@ -422,7 +425,7 @@ export const LeaveSummaryModule: React.FC = () => {
         <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.6, marginBottom: 12 }}>
           Phép năm không tự chuyển sang năm sau. Người lao động và doanh nghiệp thỏa thuận nghỉ gộp, tối đa 03 năm một lần (Điều 113 khoản 4 Bộ luật Lao động 2019), nên số ngày chuyển không vượt phép của năm chuyển cộng phần chuyển tiếp còn gốc từ năm liền trước. Ngày đang chờ duyệt không được chuyển. Phần không chuyển do doanh nghiệp quyết định theo quy chế.
         </div>
-        <Form form={carryForm} layout="vertical" onValuesChange={() => setCarryRows(null)}>
+        <Form form={carryForm} layout="vertical">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="fromYear" label="Năm chuyển phép" rules={[{ required: true }]}>
               <Input type="number" min={2000} max={2200} />

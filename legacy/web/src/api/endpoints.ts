@@ -21,6 +21,8 @@ export const authApi = {
   getProfile:     ()                                 => api.get('/auth/profile'),
   getAccountOverview: () => api.get<AccountOverview>('/auth/account-overview'),
   getActivity: (limit = 200) => api.get<{ data: AccountActivity[] }>('/auth/activity', { params: { limit } }),
+  getSessions: () => api.get<{ data: Array<{ key: string; device: string; browser: string; ip: string; loginTime: string; lastActive: string; status: string; current: boolean }> }>('/auth/sessions'),
+  revokeSession: (key: string) => api.post<{ revoked: boolean }>(`/auth/sessions/${encodeURIComponent(key)}/revoke`, {}),
   changePassword: (data: { oldPassword?: string; currentPassword?: string; newPassword: string; confirmPassword?: string }) =>
     api.post<{ success: boolean; message: string }>('/auth/change-password', data),
 };

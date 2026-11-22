@@ -82,7 +82,7 @@ export const AssetMaterialsModule: React.FC = () => {
         dataService.fetchOrgUnitsList(),
       ]);
       const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id })));
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
     } catch {
       setData([]);

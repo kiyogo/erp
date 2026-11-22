@@ -118,6 +118,9 @@ interface ChartCardProps {
   topMetric?: string | number;
 }
 
+const CRM_HIDDEN_WIDGETS_KEY = 'kiyovn_crm_overview_hidden_widgets';
+const CRM_OVERVIEW_WIDGETS = ['Mục tiêu doanh số theo thời gian', 'Doanh số theo đơn vị', 'Doanh số theo hàng hóa', 'Mục tiêu doanh số theo đơn vị', 'Doanh số theo thời gian', 'Nhân viên xuất sắc', 'Tình hình thực hiện mục tiêu doanh số', 'Hàng hóa bán chạy theo giá trị', 'Tình hình thực hiện hoạt động', 'Doanh số theo loại khách hàng'];
+
 const ChartCard: React.FC<ChartCardProps> = ({
   title,
   subtitle,
@@ -255,6 +258,10 @@ export const CRMOverviewModule: React.FC = () => {
   const [timestamp, setTimestamp] = useState<string>('');
   const [aiModalVisible, setAiModalVisible] = useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  // Thẻ ẩn trên bàn làm việc, lưu theo trình duyệt (trước đây nút Lưu chỉ báo thành công, không ẩn hay hiện được thẻ nào).
+  const [hiddenWidgets, setHiddenWidgets] = useState<string[]>(() => { try { const saved = JSON.parse(localStorage.getItem(CRM_HIDDEN_WIDGETS_KEY) || '[]'); return Array.isArray(saved) ? saved : []; } catch { return []; } });
+  const [draftHidden, setDraftHidden] = useState<string[]>([]);
+  const showWidget = (title: string) => !hiddenWidgets.includes(title);
 
   // Real data state
   const [salesDocuments, setSalesDocuments] = useState<FinanceDocument[]>([]);
@@ -421,7 +428,7 @@ export const CRMOverviewModule: React.FC = () => {
           </Button>
 
           <Button
-            onClick={() => setEditModalVisible(true)}
+            onClick={() => { setDraftHidden(hiddenWidgets); setEditModalVisible(true); }}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -526,27 +533,27 @@ export const CRMOverviewModule: React.FC = () => {
           marginBottom: 20,
         }}
       >
-        <ChartCard
+        {showWidget('Mục tiêu doanh số theo thời gian') && (<ChartCard
           title="Mục tiêu doanh số theo thời gian"
           subtitle="2026"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="line"
-        />
+        />)}
 
-        <ChartCard
+        {showWidget('Doanh số theo đơn vị') && (<ChartCard
           title="Doanh số theo đơn vị"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="bar"
-        />
+        />)}
 
-        <ChartCard
+        {showWidget('Doanh số theo hàng hóa') && (<ChartCard
           title="Doanh số theo hàng hóa"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="pie"
-        />
+        />)}
       </div>
 
       {/* Grid Row 3: 3 Cards (Mục tiêu đơn vị, Doanh số thời gian, Nhân viên xuất sắc) */}
@@ -558,7 +565,7 @@ export const CRMOverviewModule: React.FC = () => {
           marginBottom: 20,
         }}
       >
-        <ChartCard
+        {showWidget('Mục tiêu doanh số theo đơn vị') && (<ChartCard
           title="Mục tiêu doanh số theo đơn vị"
           extraHeader={
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94A3B8', fontSize: 12 }}>
@@ -570,22 +577,22 @@ export const CRMOverviewModule: React.FC = () => {
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="bar"
-        />
+        />)}
 
-        <ChartCard
+        {showWidget('Doanh số theo thời gian') && (<ChartCard
           title="Doanh số theo thời gian"
           subtitle="2026"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="bar"
-        />
+        />)}
 
-        <ChartCard
+        {showWidget('Nhân viên xuất sắc') && (<ChartCard
           title="Nhân viên xuất sắc"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="doc"
-        />
+        />)}
       </div>
 
       {/* Grid Row 4: 2 Cards (Tình hình thực hiện mục tiêu doanh số, Hàng hóa bán chạy theo giá trị) */}
@@ -597,7 +604,7 @@ export const CRMOverviewModule: React.FC = () => {
           marginBottom: 20,
         }}
       >
-        <ChartCard
+        {showWidget('Tình hình thực hiện mục tiêu doanh số') && (<ChartCard
           title="Tình hình thực hiện mục tiêu doanh số"
           extraHeader={
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94A3B8', fontSize: 12 }}>
@@ -653,14 +660,14 @@ export const CRMOverviewModule: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
             <span style={{ fontSize: 12, color: '#2563EB', cursor: 'pointer' }}>Xem thêm</span>
           </div>
-        </ChartCard>
+        </ChartCard>)}
 
-        <ChartCard
+        {showWidget('Hàng hóa bán chạy theo giá trị') && (<ChartCard
           title="Hàng hóa bán chạy theo giá trị"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="doc"
-        />
+        />)}
       </div>
 
       {/* Grid Row 5: 2 Cards (Tình hình thực hiện hoạt động, Doanh số theo loại khách hàng) */}
@@ -672,7 +679,7 @@ export const CRMOverviewModule: React.FC = () => {
           marginBottom: 20,
         }}
       >
-        <ChartCard
+        {showWidget('Tình hình thực hiện hoạt động') && (<ChartCard
           title="Tình hình thực hiện hoạt động"
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
@@ -785,15 +792,15 @@ export const CRMOverviewModule: React.FC = () => {
             <div>Doanh số đề nghị ghi: <strong>0</strong></div>
             <div>DS đã ghi: <strong>0</strong></div>
           </div>
-        </ChartCard>
+        </ChartCard>)}
 
-        <ChartCard
+        {showWidget('Doanh số theo loại khách hàng') && (<ChartCard
           title="Doanh số theo loại khách hàng"
           topMetric={0}
           timestamp={timestamp}
           onReload={() => void loadDashboardData()}
           emptyType="pie"
-        />
+        />)}
       </div>
 
       {/* AI Analysis Modal */}
@@ -828,7 +835,7 @@ export const CRMOverviewModule: React.FC = () => {
           <Button key="cancel" onClick={() => setEditModalVisible(false)}>
             Hủy
           </Button>,
-          <Button key="save" type="primary" onClick={() => { setEditModalVisible(false); message.success('Đã lưu cấu hình bàn làm việc.'); }}>
+          <Button key="save" type="primary" onClick={() => { setHiddenWidgets(draftHidden); try { localStorage.setItem(CRM_HIDDEN_WIDGETS_KEY, JSON.stringify(draftHidden)); } catch { /* bộ nhớ trình duyệt đầy hoặc bị chặn: cấu hình chỉ giữ trong phiên */ } setEditModalVisible(false); message.success('Đã lưu cấu hình bàn làm việc trên trình duyệt này.'); }}>
             Lưu thay đổi
           </Button>,
         ]}
@@ -837,20 +844,9 @@ export const CRMOverviewModule: React.FC = () => {
           <p style={{ margin: 0, color: '#64748B' }}>
             Chọn các thẻ biểu đồ và tiện ích muốn hiển thị trên trang Tổng quan tình hình kinh doanh:
           </p>
-          {[
-            'Mục tiêu doanh số theo thời gian',
-            'Doanh số theo đơn vị',
-            'Doanh số theo hàng hóa',
-            'Mục tiêu doanh số theo đơn vị',
-            'Doanh số theo thời gian',
-            'Nhân viên xuất sắc',
-            'Tình hình thực hiện mục tiêu doanh số',
-            'Hàng hóa bán chạy theo giá trị',
-            'Tình hình thực hiện hoạt động',
-            'Doanh số theo loại khách hàng',
-          ].map((item) => (
+          {CRM_OVERVIEW_WIDGETS.map((item) => (
             <label key={item} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-              <input type="checkbox" defaultChecked />
+              <input type="checkbox" checked={!draftHidden.includes(item)} onChange={(event) => setDraftHidden((current) => event.target.checked ? current.filter((title) => title !== item) : [...current, item])} />
               <span style={{ color: '#1E293B', fontWeight: 500 }}>{item}</span>
             </label>
           ))}

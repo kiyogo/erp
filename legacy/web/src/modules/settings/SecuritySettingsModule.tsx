@@ -55,12 +55,6 @@ export const SecuritySettingsModule: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSubmittingPassword, setIsSubmittingPassword] = useState(false);
 
-  // Passkey State
-  const [passkeyData, setPasskeyData] = useState<any>(() => dataService.getEmployeePasskey(empCodeKey));
-  const [isPasskeyRegisterModalOpen, setIsPasskeyRegisterModalOpen] = useState(false);
-  const [newPasskeyDeviceName, setNewPasskeyDeviceName] = useState('');
-  const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
-
   // Security PIN State
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [currentSecurityPin, setCurrentSecurityPin] = useState('');
@@ -71,10 +65,6 @@ export const SecuritySettingsModule: React.FC = () => {
 
   // Guide Dialog State
   const [isGuideModalOpen, setIsGuideModalOpen] = useState(false);
-
-  useEffect(() => {
-    setPasskeyData(dataService.getEmployeePasskey(empCodeKey));
-  }, [empCodeKey]);
 
   const handlePasswordChange = async () => {
     if (!oldPassword) {
@@ -147,108 +137,6 @@ export const SecuritySettingsModule: React.FC = () => {
     } finally {
       setIsSavingSecurityPin(false);
     }
-  };
-
-  // Đăng ký Passkey thực tế qua WebAuthn FIDO2 API của trình duyệt
-  const handleRegisterPasskey = async () => {
-    const devName = newPasskeyDeviceName.trim() || 'Thiết bị này';
-    setIsPasskeyLoading(true);
-
-    if (window.PublicKeyCredential) {
-      try {
-        const challenge = new Uint8Array(32);
-        crypto.getRandomValues(challenge);
-        const userId = new Uint8Array(16);
-        crypto.getRandomValues(userId);
-
-        const credential = (await navigator.credentials.create({
-          publicKey: {
-            challenge,
-            rp: {
-              name: 'KIYOVN Enterprise',
-              id: window.location.hostname || 'localhost',
-            },
-            user: {
-              id: userId,
-              name: authUser?.email || authUser?.employeeCode || 'user',
-              displayName: authUser?.name || authUser?.email || 'user',
-            },
-            pubKeyCredParams: [
-              { alg: -7, type: 'public-key' },
-              { alg: -257, type: 'public-key' },
-            ],
-            authenticatorSelection: {
-              userVerification: 'preferred',
-              residentKey: 'preferred',
-            },
-            timeout: 60000,
-            attestation: 'none',
-          },
-        })) as any;
-
-        if (credential) {
-          try {
-            localStorage.setItem('kiyovn_webauthn_cred_id', credential.id);
-            localStorage.setItem('kiyovn_webauthn_device', devName);
-          } catch (e) {}
-        }
-      } catch (err: any) {
-        if (err.name === 'NotAllowedError') {
-          message.info('Bạn đã đóng cửa sổ xác thực thiết bị.');
-          setIsPasskeyLoading(false);
-          return;
-        }
-        // Vẫn lưu thiết bị nếu môi trường không có phần cứng TPM/vân tay
-      }
-    }
-
-    const updated = dataService.saveEmployeePasskey(empCodeKey, '', devName);
-    setPasskeyData(updated);
-    setIsPasskeyLoading(false);
-    setIsPasskeyRegisterModalOpen(false);
-    setNewPasskeyDeviceName('');
-    message.success(`Đã đăng ký Passkey thành công trên thiết bị: ${devName}`);
-  };
-
-  // Xác thực thử nghiệm Passkey thực tế qua WebAuthn API
-  const handleTestPasskeyAuth = async () => {
-    if (window.PublicKeyCredential) {
-      try {
-        const challenge = new Uint8Array(32);
-        crypto.getRandomValues(challenge);
-        const savedCredId = localStorage.getItem('kiyovn_webauthn_cred_id');
-
-        await navigator.credentials.get({
-          publicKey: {
-            challenge,
-            rpId: window.location.hostname || 'localhost',
-            userVerification: 'preferred',
-            allowCredentials: savedCredId
-              ? [
-                  {
-                    id: new TextEncoder().encode(savedCredId),
-                    type: 'public-key',
-                  },
-                ]
-              : [],
-            timeout: 60000,
-          },
-        });
-
-        const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-        setPasskeyData({ ...passkeyData, lastUsed: nowStr });
-        message.success('Xác thực sinh trắc học Passkey thành công 100%!');
-        return;
-      } catch (err: any) {
-        if (err.name === 'NotAllowedError') {
-          message.info('Đã hủy thao tác xác thực Passkey.');
-          return;
-        }
-      }
-    }
-    const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    setPasskeyData({ ...passkeyData, lastUsed: nowStr });
-    message.success('Xác thực sinh trắc học Passkey thành công 100%!');
   };
 
   return (
@@ -455,46 +343,6 @@ export const SecuritySettingsModule: React.FC = () => {
               maxLength={6}
               value={confirmSecurityPin}
               onChange={e => setConfirmSecurityPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-            />
-          </div>
-        </div>
-      </Modal>
-
-      {/* MODAL 2: ĐĂNG KÝ PASSKEY THIẾT BỊ MỚI */}
-      <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <SafetyCertificateOutlined style={{ color: '#009688' }} />
-            <span>Đăng ký Passkey</span>
-          </div>
-        }
-        open={isPasskeyRegisterModalOpen}
-        onCancel={() => setIsPasskeyRegisterModalOpen(false)}
-        footer={
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <Button onClick={() => setIsPasskeyRegisterModalOpen(false)}>Hủy</Button>
-            <Button
-              type="primary"
-              loading={isPasskeyLoading}
-              onClick={handleRegisterPasskey}
-              style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-            >
-              Đăng ký Passkey
-            </Button>
-          </div>
-        }
-        width={440}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 6 }}>
-          <div>
-            <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4, fontWeight: 500 }}>
-              Tên thiết bị
-            </label>
-            <Input
-              value={newPasskeyDeviceName}
-              onChange={e => setNewPasskeyDeviceName(e.target.value)}
-              placeholder="Nhập tên thiết bị..."
-              autoFocus
             />
           </div>
         </div>

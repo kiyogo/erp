@@ -412,7 +412,7 @@ export const EmployeeHistoryModule: React.FC<{ defaultType?: HistoryRecord['type
       const activeEmps = rawList.filter((item: any) => item?.role !== 'ADMIN' && item?.status !== 'Đã nghỉ việc');
       setEmployees(
         activeEmps.map((item: any) => ({
-          key: item.id || item.key,
+          key: item.key || item.id,
           code: item.code || item.employeeCode,
           name: item.name || item.fullName,
           email: item.email,

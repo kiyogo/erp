@@ -101,7 +101,7 @@ export const UniformsModule: React.FC = () => {
         employeesApi.getAll().then((response) => response.data.data || []).catch(() => [] as EnterpriseEmployee[]),
       ]);
       const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id })));
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
 
       const loadedEmps = empRes;

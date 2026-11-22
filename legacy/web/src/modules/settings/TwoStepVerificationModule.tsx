@@ -69,7 +69,17 @@ export const TwoStepVerificationModule: React.FC = () => {
   const [securityLoading, setSecurityLoading] = useState(false);
   const [passkeys, setPasskeys] = useState<PasskeyItem[]>([]);
   const [passkeySaving, setPasskeySaving] = useState(false);
-  const [devices, setDevices] = useState<TwoFactorDevice[]>(initialState.devices);
+  // Thiết bị tin cậy là các phiên đăng nhập còn hiệu lực của tài khoản trên máy chủ (trước đây là danh sách lưu trong trình duyệt, nút Đăng xuất không thu hồi phiên nào).
+  const [devices, setDevices] = useState<Array<TwoFactorDevice & { current?: boolean }>>([]);
+  const loadDevices = () => authApi.getSessions().then((response) => setDevices(response.data.data.map((session) => ({
+    id: session.key,
+    name: `${session.browser} trên ${session.device}${session.current ? ' (thiết bị này)' : ''}`,
+    location: [session.ip && `IP ${session.ip}`, session.loginTime && `đăng nhập ${new Date(session.loginTime).toLocaleString('vi-VN', { hour12: false })}`].filter(Boolean).join(' · '),
+    status: session.status,
+    iconType: /Android|iOS/.test(session.device) ? 'mobile' : 'desktop',
+    current: session.current,
+  })))).catch(() => message.error('Không tải được danh sách phiên đăng nhập.'));
+  useEffect(() => { void loadDevices(); }, []);
   const [phoneNumber, setPhoneNumber] = useState<string>(initialState.phoneNumber);
   const [smsOtpEnabled, setSmsOtpEnabled] = useState<boolean>(initialState.smsOtpEnabled);
   const [emailOtpEnabled, setEmailOtpEnabled] = useState<boolean>(initialState.emailOtpEnabled);
@@ -338,11 +348,14 @@ export const TwoStepVerificationModule: React.FC = () => {
       cancelText: 'Hủy',
       okButtonProps: { danger: true, style: { borderRadius: 8 } },
       cancelButtonProps: { style: { borderRadius: 8 } },
-      onOk: () => {
-        const updated = devices.filter((d) => d.id !== deviceItem.id);
-        setDevices(updated);
-        saveUser2FAState(userKey, { devices: updated });
-        message.success('Đã đăng xuất khỏi thiết bị.');
+      onOk: async () => {
+        try {
+          await authApi.revokeSession(deviceItem.id);
+          message.success('Đã đăng xuất khỏi thiết bị.');
+          await loadDevices();
+        } catch (error: any) {
+          message.error(error?.response?.data?.message || 'Không đăng xuất được thiết bị.');
+        }
       },
     });
   };
@@ -391,7 +404,7 @@ export const TwoStepVerificationModule: React.FC = () => {
     {
       key: 'devices',
       icon: <MobileOutlined style={{ fontSize: 18, color: '#009688' }} />,
-      title: 'Thiết bị tin cậy',
+      title: 'Thiết bị đang đăng nhập',
       status: (
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#1E293B', fontWeight: 500, fontSize: 12.5 }}>
           <CheckCircleFilled style={{ color: '#16A34A', fontSize: 14 }} />
@@ -663,7 +676,7 @@ export const TwoStepVerificationModule: React.FC = () => {
         >
           <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 20, display: 'flex', alignItems: 'center' }}>
             <MobileOutlined style={{ color: '#009688', fontSize: 18, marginRight: 8 }} />
-            Thiết Bị Tin Cậy
+            Thiết bị đang đăng nhập
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -692,13 +705,11 @@ export const TwoStepVerificationModule: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                <Button
-                  size="small"
-                  onClick={() => handleRemoveDevice(d)}
-                  style={{ borderRadius: 8 }}
-                >
-                  Đăng xuất
-                </Button>
+                {!d.current && (
+                  <Button onClick={() => handleRemoveDevice(d)} style={{ borderRadius: 8 }}>
+                    Đăng xuất
+                  </Button>
+                )}
               </div>
             ))}
           </div>
@@ -1214,7 +1225,7 @@ export const TwoStepVerificationModule: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {securityItems.filter((item) => ['passkeys', 'authenticator', 'backup-codes'].includes(item.key)).map((item) => (
+          {securityItems.filter((item) => ['passkeys', 'authenticator', 'backup-codes', 'devices'].includes(item.key)).map((item) => (
             <div
               key={item.key}
               onClick={() => navigate(item.path)}

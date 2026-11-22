@@ -53,7 +53,7 @@ export const TrainingModule: React.FC = () => {
     try {
       const res = await collectionsApi.get<EnterpriseTrainingCourse>('hr_training_courses', { limit: 500 });
       const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id })));
     } catch {
       setData([]);
     }

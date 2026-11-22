@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -35,6 +36,7 @@ export interface EnterpriseHeadcountQuota {
 }
 
 export const HeadcountModule: React.FC = () => {
+  const navigate = useNavigate();
   const [data, setData] = useState<EnterpriseHeadcountQuota[]>([]);
   const [deptOptions, setDeptOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [posOptions, setPosOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -60,7 +62,7 @@ export const HeadcountModule: React.FC = () => {
       } else {
         list = dataService.getGenericData('hr_headcount_quotas');
       }
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id })));
       if (orgUnits.status === 'fulfilled' && orgUnits.value) {
         setDeptOptions(orgUnits.value.map((u) => ({ label: u, value: u })));
       } else {
@@ -73,7 +75,7 @@ export const HeadcountModule: React.FC = () => {
       }
     } catch {
       const fallbackList = dataService.getGenericData('hr_headcount_quotas');
-      setData(fallbackList.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(fallbackList.map((item: any) => ({ ...item, key: item.key || item.id })));
     }
   };
 
@@ -443,9 +445,7 @@ export const HeadcountModule: React.FC = () => {
                 type="primary"
                 icon={<UserAddOutlined />}
                 style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-                onClick={() => {
-                  message.success(`Đã chuyển hướng tạo đề xuất tuyển dụng cho ${selectedQuota.position}`);
-                }}
+                onClick={() => navigate('/admin/hr/recruitment')}
               >
                 Mở Đăng Tin Tuyển Dụng Vị Trí Này
               </Button>

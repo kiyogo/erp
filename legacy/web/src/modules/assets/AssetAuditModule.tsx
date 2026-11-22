@@ -62,8 +62,10 @@ export interface AuditItem {
 }
 
 import { useEffect } from 'react';
-import { collectionsApi } from '../../api/endpoints';
+import { collectionsApi, systemApi } from '../../api/endpoints';
 import { dataService } from '../../services/dataService';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
+import { WHOLE_COMPANY_SCOPE, applyAuditScan, auditBook, auditSummary, missingAssets, type AuditAsset } from './assetAuditRules';
 
 export const AssetAuditModule: React.FC = () => {
   const [data, setData] = useState<AuditItem[]>([]);
@@ -81,18 +83,25 @@ export const AssetAuditModule: React.FC = () => {
   const [activeAuditTarget, setActiveAuditTarget] = useState<AuditItem | null>(null);
   const [resolveModalOpen, setResolveModalOpen] = useState(false);
   const [resolveText, setResolveText] = useState('');
+  const [assets, setAssets] = useState<AuditAsset[]>([]);
+  const [companyName, setCompanyName] = useState('');
+  const [scanDamaged, setScanDamaged] = useState(false);
+  const [createScope, setCreateScope] = useState(WHOLE_COMPANY_SCOPE);
 
   const [form] = Form.useForm();
 
   const loadData = async () => {
     try {
-      const [res, orgUnits] = await Promise.all([
+      const [res, orgUnits, assetRes] = await Promise.all([
         collectionsApi.get<AuditItem>('asset_audits', { limit: 500 }),
         dataService.fetchOrgUnitsList(),
+        collectionsApi.get<AuditAsset>('asset_items', { limit: 5000 }),
       ]);
       const list = res.data?.data || [];
-      setData(list.map((item: any) => ({ ...item, key: item.id || item.key })));
+      setData(list.map((item: any) => ({ ...item, key: item.key || item.id })));
       setDeptOptions(orgUnits.map((u) => ({ label: u, value: u })));
+      setAssets(assetRes.data?.data || []);
+      systemApi.getCompanyProfile().then((response) => setCompanyName(response.data.profile?.companyName || response.data.profile?.fullName || '')).catch(() => undefined);
     } catch {
       setData([]);
     }
@@ -110,40 +119,37 @@ export const AssetAuditModule: React.FC = () => {
 
   const handleOpenCreate = () => {
     form.resetFields();
+    const year = new Date().getFullYear();
     form.setFieldsValue({
-      auditCode: `KK-2026-Q${data.length + 1}-0${data.length + 1}`,
+      auditCode: `KK-${year}-${String(data.filter((item) => String(item.auditCode || '').startsWith(`KK-${year}-`)).length + 1).padStart(3, '0')}`,
       auditType: 'Định kỳ quý/năm',
-      scope: 'Trụ sở chính Hà Nội',
-      location: 'Tòa nhà Keangnam Landmark 72',
-      department: 'Toàn bộ công ty',
+      scope: WHOLE_COMPANY_SCOPE,
       startDate: new Date().toISOString().substring(0, 10),
       endDate: new Date(Date.now() + 5 * 86400000).toISOString().substring(0, 10),
-      auditorLeader: 'Trần Tuấn Anh (CTO)',
-      auditorMembers: 'Nguyễn Thị Mai, Lê Hoàng Yến (HR)',
-      bookCount: 80,
-      actualCount: 0,
-      bookValue: 1800000000,
     });
+    setCreateScope(WHOLE_COMPANY_SCOPE);
     setModalOpen(true);
   };
 
   const handleCreate = async (values: any) => {
-    const book = Number(values.bookCount) || 50;
+    // Số theo sổ lấy từ danh mục tài sản của phạm vi kiểm kê, không nhập tay.
+    const book = auditBook(assets, values.scope);
     const id = `audit-${Date.now()}`;
     const newItem: AuditItem = {
       ...values,
+      auditorMembers: Array.isArray(values.auditorMembers) ? values.auditorMembers.join(', ') : values.auditorMembers || '',
       key: id,
-      bookCount: book,
+      bookCount: book.bookCount,
       actualCount: 0,
       matchedCount: 0,
       surplusCount: 0,
       missingCount: 0,
       damagedCount: 0,
       discrepancy: 0,
-      bookValue: Number(values.bookValue) || 1000000000,
+      bookValue: book.bookValue,
       actualValue: 0,
       diffValue: 0,
-      resolutionProposal: 'Mới khởi tạo đợt kiểm kê, sẵn sàng quét mã vạch Barcode.',
+      resolutionProposal: '',
       status: 'Đang tiến hành kiểm đếm',
       itemsList: [],
     };
@@ -164,46 +170,29 @@ export const AssetAuditModule: React.FC = () => {
     setScannerModalOpen(true);
   };
 
-  const handleScanSubmit = () => {
-    if (!scannedBarcode.trim()) {
-      message.warning('Vui lòng nhập hoặc quét mã Barcode/QR Code');
-      return;
-    }
+  // Lưu đợt kiểm kê đã cập nhật lên máy chủ rồi mới đổi trên màn hình.
+  const saveAudit = async (updated: AuditItem) => {
+    await collectionsApi.update('asset_audits', updated.key, updated);
+    setData((prev) => prev.map((d) => (d.key === updated.key ? updated : d)));
+    if (activeAuditTarget?.key === updated.key) setActiveAuditTarget(updated);
+    if (detailItem?.key === updated.key) setDetailItem(updated);
+  };
 
-    if (activeAuditTarget) {
-      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-      const newScanned: ScannedItemDetail = {
-        code: `TS-IT-0${String(Date.now()).slice(-2)}`,
-        name: `Thiết bị kiểm đếm QR: ${scannedBarcode}`,
-        barcode: scannedBarcode,
-        category: 'Thiết bị IT / Mạng',
-        holder: 'Cán bộ đang sử dụng',
-        location: activeAuditTarget.location,
-        auditStatus: 'Khớp chuẩn',
-        scannedAt: nowStr,
-      };
-
-      setData((prev) =>
-        prev.map((d) => {
-          if (d.key === activeAuditTarget.key) {
-            const updatedActual = d.actualCount + 1;
-            const updatedMatched = d.matchedCount + 1;
-            const diff = updatedActual - d.bookCount;
-            return {
-              ...d,
-              actualCount: updatedActual,
-              matchedCount: updatedMatched,
-              discrepancy: diff,
-              actualValue: d.actualValue + 25000000,
-              itemsList: [newScanned, ...(d.itemsList || [])],
-            };
-          }
-          return d;
-        })
-      );
-
-      message.success(`⚡ Đã quét nhận diện thành công mã: [${scannedBarcode}] - Khớp 100%!`);
+  const handleScanSubmit = async () => {
+    if (!activeAuditTarget) return;
+    try {
+      const scan = applyAuditScan(activeAuditTarget, assets, scannedBarcode, new Date().toLocaleString('vi-VN', { hour12: false }), scanDamaged);
+      if (scan.outcome === 'duplicate') { message.warning(`Mã ${scannedBarcode.trim()} đã được ghi nhận trong đợt này.`); return; }
+      const updated: AuditItem = { ...activeAuditTarget, itemsList: scan.itemsList as AuditItem['itemsList'] };
+      Object.assign(updated, auditSummary(updated));
+      await saveAudit(updated);
+      if (scan.outcome === 'matched') message.success(`Đã ghi nhận ${scan.line?.code} ${scan.line?.name}${scanDamaged ? ' (hỏng hóc)' : ''}.`);
+      else if (scan.outcome === 'surplus') message.warning(`${scan.line?.code} ${scan.line?.name} thuộc đơn vị khác, ghi nhận là tài sản thừa.`);
+      else message.warning(`Mã ${scannedBarcode.trim()} không có trong danh mục tài sản, ghi nhận là tài sản thừa.`);
       setScannedBarcode('');
+      setScanDamaged(false);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || 'Không ghi nhận được lần quét.');
     }
   };
 
@@ -213,28 +202,15 @@ export const AssetAuditModule: React.FC = () => {
     setResolveModalOpen(true);
   };
 
-  const handleConfirmResolve = () => {
-    if (activeAuditTarget) {
-      setData((prev) =>
-        prev.map((d) =>
-          d.key === activeAuditTarget.key
-            ? {
-                ...d,
-                status: 'Đã trình HĐQT phê duyệt' as const,
-                resolutionProposal: resolveText,
-              }
-            : d
-        )
-      );
-      message.success(`Đã gửi phương án xử lý chênh lệch đợt ${activeAuditTarget.auditCode} lên Ban Giám Đốc!`);
+  const handleConfirmResolve = async () => {
+    if (!activeAuditTarget) return;
+    if (!resolveText.trim()) { message.error('Vui lòng nhập phương án xử lý chênh lệch.'); return; }
+    try {
+      await saveAudit({ ...activeAuditTarget, status: 'Đã trình HĐQT phê duyệt', resolutionProposal: resolveText.trim() });
+      message.success(`Đã lưu phương án xử lý chênh lệch đợt ${activeAuditTarget.auditCode}.`);
       setResolveModalOpen(false);
-      if (detailItem && detailItem.key === activeAuditTarget.key) {
-        setDetailItem({
-          ...detailItem,
-          status: 'Đã trình HĐQT phê duyệt',
-          resolutionProposal: resolveText,
-        });
-      }
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được phương án xử lý.');
     }
   };
 
@@ -507,14 +483,10 @@ export const AssetAuditModule: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="scope" label="Phạm vi kiểm kê" rules={[{ required: true }]}>
+            <Form.Item name="scope" label="Phạm vi kiểm kê (đơn vị quản lý tài sản)" rules={[{ required: true }]}>
               <Select
-                options={[
-                  { label: 'Toàn bộ công ty', value: 'Toàn bộ công ty' },
-                  { label: 'Trụ sở chính Hà Nội', value: 'Trụ sở chính Hà Nội' },
-                  { label: 'Chi nhánh TP.HCM', value: 'Chi nhánh TP.HCM' },
-                  { label: 'Data Center IDC Viettel & FPT', value: 'Data Center IDC Viettel & FPT' },
-                ]}
+                onChange={(value: string) => setCreateScope(value)}
+                options={[{ label: WHOLE_COMPANY_SCOPE, value: WHOLE_COMPANY_SCOPE }, ...deptOptions.filter((option) => option.value !== WHOLE_COMPANY_SCOPE)]}
               />
             </Form.Item>
           </div>
@@ -525,13 +497,11 @@ export const AssetAuditModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 12 }}>
             <Form.Item name="location" label="Địa điểm kiểm kê cụ thể" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Tòa nhà Keangnam Landmark 72 - Tầng 12 & 14" />
+              <Input placeholder="Ví dụ: Trụ sở chính, tầng 3" />
             </Form.Item>
             <Form.Item name="department" label="Phòng ban chịu trách nhiệm">
               <Select
-                options={deptOptions.length > 0 ? deptOptions : [
-                  { label: 'Ban Giám Đốc', value: 'Ban Giám Đốc' },
-                ]}
+                options={deptOptions}
                 placeholder="Chọn phòng ban..."
               />
             </Form.Item>
@@ -539,19 +509,19 @@ export const AssetAuditModule: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="auditorLeader" label="Trưởng ban kiểm kê" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Trần Tuấn Anh (CTO)" />
+              <EmployeeSelect valueKey="name" placeholder="Chọn trưởng ban kiểm kê" />
             </Form.Item>
             <Form.Item name="auditorMembers" label="Thành viên ban kiểm kê" rules={[{ required: true }]}>
-              <Input placeholder="Ví dụ: Nguyễn Thị Mai, Lê Hoàng Yến (HR)" />
+              <EmployeeSelect valueKey="name" multiple placeholder="Chọn thành viên ban kiểm kê" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
-            <Form.Item name="bookCount" label="Số lượng theo sổ" rules={[{ required: true }]}>
-              <Input type="number" min={1} placeholder="Ví dụ: 120" />
+            <Form.Item label="Số lượng theo sổ">
+              <Input readOnly value={`${auditBook(assets, createScope).bookCount} tài sản`} />
             </Form.Item>
-            <Form.Item name="bookValue" label="Tổng nguyên giá sổ (VNĐ)">
-              <Input type="number" min={0} step={10000000} placeholder="Ví dụ: 1800000000" />
+            <Form.Item label="Giá trị còn lại theo sổ">
+              <Input readOnly value={`${auditBook(assets, createScope).bookValue.toLocaleString('vi-VN')} ₫`} />
             </Form.Item>
             <Form.Item name="startDate" label="Ngày bắt đầu" rules={[{ required: true }]}>
               <Input type="date" />
@@ -606,7 +576,7 @@ export const AssetAuditModule: React.FC = () => {
                 Nhập hoặc bắn mã Barcode / QR Code:
               </label>
               <Input
-                placeholder="Ví dụ: 893850100201 hoặc TS-IT-001"
+                placeholder="Mã barcode hoặc mã tài sản"
                 value={scannedBarcode}
                 onChange={(e) => setScannedBarcode(e.target.value)}
                 onPressEnter={handleScanSubmit}
@@ -615,6 +585,16 @@ export const AssetAuditModule: React.FC = () => {
                 suffix={<BarcodeOutlined style={{ color: '#009688' }} />}
               />
             </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: '#334155' }}>
+              <input type="checkbox" checked={scanDamaged} onChange={(event) => setScanDamaged(event.target.checked)} />
+              Tài sản đang hỏng hóc
+            </label>
+            {missingAssets(activeAuditTarget, assets).length > 0 && (
+              <div style={{ fontSize: 12, color: '#64748B' }}>
+                Chưa quét: {missingAssets(activeAuditTarget, assets).slice(0, 8).map((asset) => asset.code).join(', ')}{missingAssets(activeAuditTarget, assets).length > 8 ? '...' : ''}
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <span style={{ fontSize: 12, color: '#64748B' }}>Ấn <strong>Enter</strong> để ghi nhận tức thì</span>
@@ -637,7 +617,7 @@ export const AssetAuditModule: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Header Document */}
             <div style={{ textAlign: 'center', borderBottom: '2px solid #009688', paddingBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', letterSpacing: 0.5 }}>CÔNG TY CP CÔNG NGHỆ KIYOVN</div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', letterSpacing: 0.5 }}>{(companyName || 'Chưa có tên đơn vị trong hồ sơ doanh nghiệp').toUpperCase()}</div>
               <div style={{ fontSize: 10, color: '#64748B' }}>Mẫu số 05 - TSCĐ</div>
               <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
                 BIÊN BẢN KIỂM KÊ TÀI SẢN CỐ ĐỊNH &amp; CCDC

@@ -9920,6 +9920,32 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Phiên đăng nhập của chính người dùng (Cài đặt > Xác minh 2 bước > Thiết bị tin cậy): xem các phiên còn hiệu lực và tự đăng xuất phiên ở thiết bị khác.
+  if (request.method === 'GET' && resource === '/auth/sessions') {
+    const actor = await requireUser(request);
+    const user = await getUserById(actor.id);
+    const rows = await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND owner_id = ? ORDER BY created_at DESC").all(actor.id);
+    const data = rows.map((row) => publicCollectionRecord(row)).filter((session) => session?.kind === 'auth_session' && !session.revokedAt && Date.parse(session.expiresAt) > Date.now())
+      .map((session) => publicAuthSession(session, user, request.authSession.key));
+    sendJson(response, 200, { data });
+    return;
+  }
+
+  const ownSessionRevokeMatch = /^\/auth\/sessions\/([^/]+)\/revoke$/.exec(resource);
+  if (request.method === 'POST' && ownSessionRevokeMatch) {
+    const actor = await requireUser(request);
+    const key = requiredText(decodeURIComponent(ownSessionRevokeMatch[1]), 'Mã phiên', 160);
+    if (key === request.authSession.key) throw new HttpError(409, 'Đây là phiên đang dùng; hãy dùng nút Đăng xuất.');
+    await db.transaction(async () => {
+      const row = await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND record_key = ? AND owner_id = ?").get(key, actor.id);
+      if (!row || publicCollectionRecord(row)?.kind !== 'auth_session') throw new HttpError(404, 'Không tìm thấy phiên đăng nhập.');
+      await revokeAuthSession(row, actor.id, 'Người dùng tự đăng xuất thiết bị');
+      await recordAuditEvent(actor.id, 'revoke_session', 'admin_sessions', key, { self: true });
+    });
+    sendJson(response, 200, { revoked: true });
+    return;
+  }
+
   const sessionRevokeMatch = /^\/admin\/sessions\/([^/]+)\/revoke$/.exec(resource);
   if (request.method === 'POST' && sessionRevokeMatch) {
     const actor = await requireAdmin(request);
@@ -11002,7 +11028,7 @@ async function handleRequest(request, response) {
 
   if (collectionRecordMatch) {
     const scope = normalizeCollectionScope(decodeURIComponent(collectionRecordMatch[1]));
-    const recordKey = requiredText(decodeURIComponent(collectionRecordMatch[2]), 'Khóa bản ghi', 160);
+    let recordKey = requiredText(decodeURIComponent(collectionRecordMatch[2]), 'Khóa bản ghi', 160);
     const actor = await requireCollectionActor(request, scope);
     if (['payroll', 'employee_payslips'].includes(scope) && request.method === 'GET') await requireSecurityPin(request, actor);
     const SHARED_READ_SCOPES = new Set([
@@ -11030,8 +11056,13 @@ async function handleRequest(request, response) {
     const assignedAssetTodoAccess = scope === 'asset_todos' && actor.role !== 'ADMIN';
     const ownershipSql = sharedAccess || workflowRequestAccess || assignedAssetTodoAccess ? '' : ' AND owner_id = ?';
     const ownershipParams = sharedAccess || workflowRequestAccess || assignedAssetTodoAccess ? [] : [actor.id];
-    const existing = await db.prepare(`SELECT * FROM collection_records WHERE scope = ? AND record_key = ?${ownershipSql} ORDER BY updated_at DESC LIMIT 1`)
+    let existing = await db.prepare(`SELECT * FROM collection_records WHERE scope = ? AND record_key = ?${ownershipSql} ORDER BY updated_at DESC LIMIT 1`)
       .get(scope, recordKey, ...ownershipParams);
+    // Một số màn trước đây gửi mã dòng (trường id do máy chủ trả) thay cho khóa bản ghi: nhận cả mã dòng rồi dùng khóa thật của bản ghi đó.
+    if (!existing) {
+      existing = await db.prepare(`SELECT * FROM collection_records WHERE scope = ? AND id = ?${ownershipSql} LIMIT 1`).get(scope, recordKey, ...ownershipParams);
+      if (existing) recordKey = existing.record_key;
+    }
     if (!existing) throw new HttpError(404, 'Không tìm thấy bản ghi.');
 
     if (assignedAssetTodoAccess && publicCollectionRecord(existing)?.assignedStaffId !== actor.id) {

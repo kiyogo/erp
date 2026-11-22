@@ -469,10 +469,15 @@ export const ShiftDetailModule: React.FC = () => {
             key: 'toggle_status',
             label: record.status === 'Đang áp dụng' ? 'Tạm ngưng phân ca' : 'Kích hoạt lại phân ca',
             icon: <CheckCircleOutlined style={{ color: '#D97706' }} />,
-            onClick: () => {
+            onClick: async () => {
               const newStatus = record.status === 'Đang áp dụng' ? 'Tạm ngưng' : 'Đang áp dụng';
-              setData((prev) => prev.map((p) => (p.key === record.key ? { ...p, status: newStatus } : p)));
-              message.success(`Đã cập nhật trạng thái bảng phân ca: ${newStatus}`);
+              try {
+                await collectionsApi.update('attendance_shift_details', record.key, { ...record, status: newStatus });
+                setData((prev) => prev.map((p) => (p.key === record.key ? { ...p, status: newStatus } : p)));
+                message.success(`Đã cập nhật trạng thái bảng phân ca: ${newStatus}`);
+              } catch (error: any) {
+                message.error(error?.response?.data?.message || 'Không lưu được trạng thái bảng phân ca.');
+              }
             },
           },
           {
@@ -1109,15 +1114,6 @@ export const ShiftDetailModule: React.FC = () => {
                 style={{ flex: 1, height: 32 }}
               >
                 Chỉnh sửa phân ca
-              </Button>
-              <Button
-                type="primary"
-                onClick={() => {
-                  message.success(`Đã đồng bộ phân ca "${selectedPlan.name}" vào bảng chấm công.`);
-                }}
-                style={{ flex: 1, backgroundColor: '#009688', borderColor: '#009688', height: 32 }}
-              >
-                Đồng bộ vào chấm công
               </Button>
             </div>
           </div>

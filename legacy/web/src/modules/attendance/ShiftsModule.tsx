@@ -830,15 +830,6 @@ export const ShiftsModule: React.FC = () => {
             >
               Chỉnh sửa ca làm việc
             </Button>
-            <Button
-              type="primary"
-              style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-              onClick={() => {
-                message.success(`Đã đồng bộ chính sách ca "${selectedShift.shiftName}" xuống máy chấm công.`);
-              }}
-            >
-              Đồng Bộ Chính Sách Xuống Máy Chấm Công
-            </Button>
           </div>
         )}
       </Drawer>

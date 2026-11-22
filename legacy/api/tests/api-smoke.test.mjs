@@ -3238,11 +3238,27 @@ test('employees cannot approve their own payroll bank account and see their real
   await request('/collections/employee_bank_accounts/ba-self-1', 'PATCH', { patch: { status: 'Đã duyệt' } });
   assert.equal((await request('/collections/employee_bank_accounts/ba-self-1', 'PATCH', { patch: { note: 'x', status: 'Từ chối' } }, 200, staff)).record.status, 'Đã duyệt');
   assert.equal((await request('/collections/employee_bank_accounts/ba-self-1', 'PATCH', { patch: { accountNumber: '0011009999999' } }, 200, staff)).record.status, 'Chờ duyệt');
+  // Sửa theo mã dòng (trường id) cũng tìm đúng bản ghi và giữ khóa thật.
+  await request('/collections/employee_bank_accounts', 'POST', { record: { key: 'ba-self-2', bankName: 'BIDV', accountNumber: '1200001111', accountHolder: 'BANK SELF' } }, 201, staff);
+  const rowId = (await request('/collections/employee_bank_accounts', 'GET', undefined, 200, staff)).data.find((item) => item.key === 'ba-self-2').id;
+  assert.notEqual(rowId, 'ba-self-2');
+  assert.equal((await request(`/collections/employee_bank_accounts/${rowId}`, 'PATCH', { patch: { note: 'theo mã dòng' } }, 200, staff)).record.key, 'ba-self-2');
 
   const overview = await request('/auth/account-overview', 'GET', undefined, 200, staff);
   assert.deepEqual([overview.role, overview.twoFactorEnabled, overview.passkeyCount, overview.securityPinConfigured], ['USER', false, 0, false]);
   assert.ok(overview.currentSession?.loginTime);
   assert.ok(Array.isArray((await request('/auth/activity', 'GET', undefined, 200, staff)).data));
+  // Thiết bị tin cậy: phiên thật của chính người dùng, đăng xuất được phiên ở thiết bị khác, không đăng xuất phiên đang dùng qua route này.
+  const second = await request('/auth/login', 'POST', { email: 'bank-self@example.test', password: 'Bank-Self-26!Secure' });
+  const secondHeaders = { ...headers, Authorization: `Bearer ${second.access_token || second.token}` };
+  const sessions = (await request('/auth/sessions', 'GET', undefined, 200, staff)).data;
+  assert.equal(sessions.length, 2);
+  const current = sessions.find((item) => item.current);
+  const other = sessions.find((item) => !item.current);
+  await request(`/auth/sessions/${encodeURIComponent(current.key)}/revoke`, 'POST', {}, 409, staff);
+  await request(`/auth/sessions/${encodeURIComponent(other.key)}/revoke`, 'POST', {}, 200, staff);
+  await request('/auth/account-overview', 'GET', undefined, 401, secondHeaders);
+  assert.equal((await request('/auth/sessions', 'GET', undefined, 200, staff)).data.length, 1);
 });
 
 test('shifts need a legal break and night pay, and consecutive shifts need 12 hours of rest', async () => {

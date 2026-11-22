@@ -64,7 +64,7 @@ export const EnterpriseServicesModule: React.FC = () => {
       setLoading(true);
       try {
         const response = await collectionsApi.get<EnterpriseServicePackage>('enterprise_services');
-        setServices(Array.isArray(response.data.data) ? response.data.data.map((item: any) => ({ ...item, id: item.id || item.key, features: item.features || [], specs: item.specs || [] })) : []);
+        setServices(Array.isArray(response.data.data) ? response.data.data.map((item: any) => ({ ...item, id: item.key || item.id, features: item.features || [], specs: item.specs || [] })) : []);
       } catch (error: any) {
         message.error(error?.response?.data?.message || 'Không thể tải dữ liệu dịch vụ doanh nghiệp.');
       } finally {

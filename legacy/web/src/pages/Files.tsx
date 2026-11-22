@@ -1793,7 +1793,7 @@ const Files: React.FC = () => {
               { type: 'divider' },
               { key: 'paste', icon: <SnippetsOutlined />, label: t('files.paste'), disabled: !clipboard, onClick: handlePaste },
               { type: 'divider' },
-              { key: 'refresh', icon: <ReloadOutlined />, label: t('files.refresh'), onClick: () => message.success(t('files.msgSuccessRefresh')) }
+              { key: 'refresh', icon: <ReloadOutlined />, label: t('files.refresh'), onClick: () => { void loadDirectory(); } }
             ] : selectedFile ? [
               { key: 'preview', icon: <EyeOutlined />, label: t('files.preview'), onClick: () => handlePreview(selectedFile) },
               selectedFile.name.match(/\.docx?$/i) ? { key: 'edit-doc', icon: <FileWordOutlined style={{ color: '#2B579A' }} />, label: 'Mở Word (.docx)', onClick: () => handleOpenDocxEditor(selectedFile) } : null,

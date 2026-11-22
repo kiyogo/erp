@@ -186,12 +186,20 @@ export const ShiftRegistrationModule: React.FC = () => {
     }
   };
 
+  // Đổi trạng thái đợt đăng ký và lưu máy chủ (trước đây chỉ đổi trên màn hình, tải lại là mất).
+  const saveCampaignStatus = async (record: ShiftRegistrationCampaign, status: ShiftRegistrationCampaign['status'], successText: string) => {
+    try {
+      await collectionsApi.update('attendance_shift_registrations', record.key, { ...record, status });
+      setData((prev) => prev.map((item) => (item.key === record.key ? { ...item, status } : item)));
+      message.success(successText);
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được trạng thái đợt đăng ký.');
+    }
+  };
+
   const handleToggleStatus = (record: ShiftRegistrationCampaign) => {
     const nextStatus = record.status === 'Đang mở' ? 'Đã đóng' : 'Đang mở';
-    setData((prev) =>
-      prev.map((item) => (item.key === record.key ? { ...item, status: nextStatus } : item))
-    );
-    message.success(`Đã chuyển trạng thái đợt đăng ký sang: ${nextStatus}`);
+    void saveCampaignStatus(record, nextStatus, `Đã chuyển trạng thái đợt đăng ký sang: ${nextStatus}`);
   };
 
   const handleDeleteCampaign = (record: ShiftRegistrationCampaign) => {
@@ -364,10 +372,7 @@ export const ShiftRegistrationModule: React.FC = () => {
             key: 'approve',
             label: 'Phê duyệt toàn bộ phiếu',
             icon: <CheckCircleOutlined style={{ color: '#10B981' }} />,
-            onClick: () => {
-              setData((prev) => prev.map((p) => (p.key === record.key ? { ...p, status: 'Đã duyệt' } : p)));
-              message.success(`Đã phê duyệt các phiếu đăng ký ca của đợt: ${record.code}`);
-            },
+            onClick: () => { void saveCampaignStatus(record, 'Đã duyệt', `Đã phê duyệt các phiếu đăng ký ca của đợt: ${record.code}`); },
           },
           {
             key: 'delete',
