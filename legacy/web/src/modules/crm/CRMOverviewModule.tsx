@@ -1,18 +1,16 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  DownOutlined,
   ReloadOutlined,
   EditOutlined,
-  SettingOutlined,
-  EllipsisOutlined,
   InfoCircleOutlined,
   ApartmentOutlined,
-  RobotOutlined,
+  FileTextOutlined,
   ShopOutlined,
   RiseOutlined,
 } from '@ant-design/icons';
 import { Button, Modal, Select, message } from '../../custom-ui';
-import { financeDocumentsApi, crmContactsApi, systemApi, FinanceDocument } from '../../api/endpoints';
+import { financeDocumentsApi, crmContactsApi, systemApi, FinanceDocument, type CrmContact } from '../../api/endpoints';
+import { activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, topCustomers } from './crmOverviewRules';
 
 // ===== Standard SVG Empty State Illustrations =====
 const EmptyLineChartSvg: React.FC = () => (
@@ -85,7 +83,7 @@ const MetricCard: React.FC<MetricCardProps> = ({ title, value, badge, bgColor, t
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 10 }}>
         <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>{value}</span>
-        <div
+        {badge && <div
           style={{
             backgroundColor: 'rgba(255, 255, 255, 0.22)',
             borderRadius: 4,
@@ -100,7 +98,7 @@ const MetricCard: React.FC<MetricCardProps> = ({ title, value, badge, bgColor, t
         >
           <RiseOutlined style={{ fontSize: 10 }} />
           <span>{badge}</span>
-        </div>
+        </div>}
       </div>
     </div>
   );
@@ -119,7 +117,42 @@ interface ChartCardProps {
 }
 
 const CRM_HIDDEN_WIDGETS_KEY = 'kiyovn_crm_overview_hidden_widgets';
-const CRM_OVERVIEW_WIDGETS = ['Mục tiêu doanh số theo thời gian', 'Doanh số theo đơn vị', 'Doanh số theo hàng hóa', 'Mục tiêu doanh số theo đơn vị', 'Doanh số theo thời gian', 'Nhân viên xuất sắc', 'Tình hình thực hiện mục tiêu doanh số', 'Hàng hóa bán chạy theo giá trị', 'Tình hình thực hiện hoạt động', 'Doanh số theo loại khách hàng'];
+const CRM_OVERVIEW_WIDGETS = ['Doanh số theo thời gian', 'Doanh số theo loại khách hàng', 'Khách hàng có doanh số cao nhất', 'Tình hình thực hiện hoạt động', 'Mục tiêu doanh số', 'Doanh số theo đơn vị, hàng hóa'];
+
+// Biểu đồ cột 12 tháng và danh sách thanh ngang vẽ bằng thẻ div (dự án không dùng thư viện biểu đồ).
+const MonthBars: React.FC<{ values: number[] }> = ({ values }) => {
+  const max = Math.max(...values, 0);
+  if (!max) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 150, paddingTop: 8 }}>
+      {values.map((value, index) => (
+        <div key={index} title={`Tháng ${index + 1}: ${value.toLocaleString('vi-VN')} ₫`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+          <div style={{ width: '100%', height: `${Math.max(2, Math.round(value / max * 120))}px`, background: value ? '#2563EB' : '#E2E8F0', borderRadius: 3 }} />
+          <span style={{ fontSize: 10.5, color: '#64748B' }}>T{index + 1}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const BarList: React.FC<{ rows: Array<{ label: string; value: number; note: string }> }> = ({ rows }) => {
+  const max = Math.max(...rows.map((row) => row.value), 0) || 1;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {rows.map((row) => (
+        <div key={row.label}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12.5, color: '#334155', marginBottom: 4 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.label}</span>
+            <span style={{ color: '#64748B', whiteSpace: 'nowrap' }}>{row.note}</span>
+          </div>
+          <div style={{ height: 8, background: '#F1F5F9', borderRadius: 4 }}>
+            <div style={{ width: `${Math.round(row.value / max * 100)}%`, height: '100%', background: '#2563EB', borderRadius: 4 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const ChartCard: React.FC<ChartCardProps> = ({
   title,
@@ -250,7 +283,6 @@ const inTimeRange = (dateText: string, filter: string, now = new Date()): boolea
 };
 
 export const CRMOverviewModule: React.FC = () => {
-  const [activeActivityTab, setActiveActivityTab] = useState<'count' | 'opportunity' | 'order'>('count');
   const [timeFilter, setTimeFilter] = useState<string>('this_month');
   const [companyName, setCompanyName] = useState<string>('');
   const [orgUnit, setOrgUnit] = useState<string>('all');
@@ -265,7 +297,7 @@ export const CRMOverviewModule: React.FC = () => {
 
   // Real data state
   const [salesDocuments, setSalesDocuments] = useState<FinanceDocument[]>([]);
-  const [totalCustomers, setTotalCustomers] = useState<number>(0);
+  const [customers, setCustomers] = useState<CrmContact[]>([]);
 
   const getCurrentTimeString = useCallback(() => {
     const now = new Date();
@@ -291,7 +323,7 @@ export const CRMOverviewModule: React.FC = () => {
       }
 
       if (contactsRes.status === 'fulfilled' && contactsRes.value.data?.data) {
-        setTotalCustomers(contactsRes.value.data.data.length);
+        setCustomers(contactsRes.value.data.data);
       }
 
       if (profileRes.status === 'fulfilled' && profileRes.value.data?.profile?.companyName) {
@@ -310,22 +342,23 @@ export const CRMOverviewModule: React.FC = () => {
     void loadDashboardData();
   }, [loadDashboardData]);
 
-  // Aggregate stats
+  // Số liệu trong kỳ lọc: doanh số chỉ tính đơn, hợp đồng bán còn hiệu lực (không tính báo giá, chứng từ đã hủy và chứng từ điều chỉnh giảm).
+  const periodDocs = useMemo(() => salesDocuments.filter((doc) => inTimeRange(doc.documentDate, timeFilter)), [salesDocuments, timeFilter]);
   const stats = useMemo(() => {
-    // Hàng bán bị trả lại, giảm giá không phải đơn hàng; trừ vào giá trị đơn gốc.
-    const documents = salesDocuments.filter((doc) => !doc.adjustsDocumentId && inTimeRange(doc.documentDate, timeFilter));
-    const orderCount = documents.length;
-    const orderValue = documents.reduce((sum, doc) => sum + (doc.amount || 0) - (doc.adjustedAmount || 0), 0);
-    const collectedValue = documents.reduce((sum, doc) => sum + Math.max(0, (doc.amount || 0) - (doc.adjustedAmount || 0) - (doc.remainingAmount || 0)), 0);
+    const documents = revenueDocs(periodDocs);
+    const orderValue = documents.reduce((sum, doc) => sum + saleNet(doc), 0);
     const remainingValue = documents.reduce((sum, doc) => sum + (doc.remainingAmount || 0), 0);
-
-    return {
-      orderCount,
-      orderValue: orderValue > 0 ? orderValue.toLocaleString('vi-VN') : '0',
-      collectedValue: collectedValue > 0 ? collectedValue.toLocaleString('vi-VN') : '0',
-      remainingValue: remainingValue > 0 ? remainingValue.toLocaleString('vi-VN') : '0',
-    };
-  }, [salesDocuments, timeFilter]);
+    const collectedValue = Math.max(0, orderValue - remainingValue);
+    return { orderCount: documents.length, orderValue, collectedValue, remainingValue };
+  }, [periodDocs]);
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = useMemo(() => overdueReceivables(salesDocuments, today), [salesDocuments, today]);
+  const activity = useMemo(() => activitySummary(periodDocs), [periodDocs]);
+  const byKind = useMemo(() => salesByCustomerKind(periodDocs, customers), [periodDocs, customers]);
+  const top = useMemo(() => topCustomers(periodDocs, customers, 5), [periodDocs, customers]);
+  const chartYear = /^\d{4}$/.test(timeFilter) ? Number(timeFilter) : new Date().getFullYear();
+  const months = useMemo(() => monthlySales(salesDocuments, chartYear), [salesDocuments, chartYear]);
+  const money = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
 
   return (
     <div style={{ backgroundColor: '#F8FAFC', minHeight: '100vh', padding: '16px 20px 40px' }}>
@@ -344,7 +377,6 @@ export const CRMOverviewModule: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
             <span>Tình hình kinh doanh</span>
-            <DownOutlined style={{ fontSize: 12, color: '#64748B' }} />
           </h2>
           <button
             onClick={() => void loadDashboardData()}
@@ -423,8 +455,8 @@ export const CRMOverviewModule: React.FC = () => {
               fontWeight: 600,
             }}
           >
-            <RobotOutlined />
-            <span>Phân tích với AI</span>
+            <FileTextOutlined />
+            <span>Tóm tắt kinh doanh</span>
           </Button>
 
           <Button
@@ -441,19 +473,6 @@ export const CRMOverviewModule: React.FC = () => {
             <span>Sửa</span>
           </Button>
 
-          <Button
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 6,
-              color: '#334155',
-              width: 36,
-              padding: 0,
-            }}
-          >
-            <EllipsisOutlined style={{ fontSize: 16 }} />
-          </Button>
         </div>
       </div>
 
@@ -497,315 +516,77 @@ export const CRMOverviewModule: React.FC = () => {
         <MetricCard
           title="Số lượng đơn hàng"
           value={stats.orderCount}
-          badge="▲ -"
+          badge={activity.quotes.count ? `${activity.quotes.count} báo giá` : ''}
           bgColor="#5E48E8"
-          tooltipText="Tổng số lượng đơn hàng ghi nhận trong kỳ báo cáo"
+          tooltipText="Số đơn bán, hợp đồng bán trong kỳ (không tính báo giá, chứng từ đã hủy)"
         />
         <MetricCard
           title="Giá trị đơn hàng"
-          value={stats.orderValue}
-          badge="▲ -"
+          value={stats.orderValue.toLocaleString('vi-VN')}
+          badge=""
           bgColor="#2563EB"
-          tooltipText="Tổng giá trị hợp đồng / đơn bán hàng đã xác nhận"
+          tooltipText="Giá trị đơn bán, hợp đồng bán trong kỳ, đã trừ hàng trả lại và giảm giá"
         />
         <MetricCard
           title="Thực thu đơn hàng"
-          value={stats.collectedValue}
-          badge="▲ -"
+          value={stats.collectedValue.toLocaleString('vi-VN')}
+          badge={stats.orderValue ? `${Math.round(stats.collectedValue / stats.orderValue * 100)}%` : ''}
           bgColor="#0EA5E9"
           tooltipText="Số tiền khách hàng đã thanh toán thực tế"
         />
         <MetricCard
           title="Còn phải thu đơn hàng"
-          value={stats.remainingValue}
-          badge="▲ -"
+          value={stats.remainingValue.toLocaleString('vi-VN')}
+          badge={overdue.count ? `${overdue.count} quá hạn` : ''}
           bgColor="#F97316"
           tooltipText="Công nợ còn phải thu của các đơn hàng"
         />
       </div>
 
-      {/* Grid Row 2: 3 Cards (Mục tiêu thời gian, Doanh số đơn vị, Doanh số hàng hóa) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          gap: 16,
-          marginBottom: 20,
-        }}
-      >
-        {showWidget('Mục tiêu doanh số theo thời gian') && (<ChartCard
-          title="Mục tiêu doanh số theo thời gian"
-          subtitle="2026"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="line"
-        />)}
-
-        {showWidget('Doanh số theo đơn vị') && (<ChartCard
-          title="Doanh số theo đơn vị"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="bar"
-        />)}
-
-        {showWidget('Doanh số theo hàng hóa') && (<ChartCard
-          title="Doanh số theo hàng hóa"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="pie"
-        />)}
-      </div>
-
-      {/* Grid Row 3: 3 Cards (Mục tiêu đơn vị, Doanh số thời gian, Nhân viên xuất sắc) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          gap: 16,
-          marginBottom: 20,
-        }}
-      >
-        {showWidget('Mục tiêu doanh số theo đơn vị') && (<ChartCard
-          title="Mục tiêu doanh số theo đơn vị"
-          extraHeader={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94A3B8', fontSize: 12 }}>
-              <EditOutlined style={{ cursor: 'pointer' }} />
-              <ReloadOutlined style={{ cursor: 'pointer' }} onClick={() => void loadDashboardData()} />
-              <SettingOutlined style={{ cursor: 'pointer' }} />
-            </div>
-          }
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="bar"
-        />)}
-
-        {showWidget('Doanh số theo thời gian') && (<ChartCard
-          title="Doanh số theo thời gian"
-          subtitle="2026"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="bar"
-        />)}
-
-        {showWidget('Nhân viên xuất sắc') && (<ChartCard
-          title="Nhân viên xuất sắc"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="doc"
-        />)}
-      </div>
-
-      {/* Grid Row 4: 2 Cards (Tình hình thực hiện mục tiêu doanh số, Hàng hóa bán chạy theo giá trị) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
-          gap: 16,
-          marginBottom: 20,
-        }}
-      >
-        {showWidget('Tình hình thực hiện mục tiêu doanh số') && (<ChartCard
-          title="Tình hình thực hiện mục tiêu doanh số"
-          extraHeader={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94A3B8', fontSize: 12 }}>
-              <EditOutlined style={{ cursor: 'pointer' }} />
-              <ReloadOutlined style={{ cursor: 'pointer' }} onClick={() => void loadDashboardData()} />
-              <SettingOutlined style={{ cursor: 'pointer' }} />
-            </div>
-          }
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="doc"
-        >
-          {/* Table Header Summary */}
-          <div
-            style={{
-              backgroundColor: '#F8FAFC',
-              borderRadius: 6,
-              padding: '10px 12px',
-              fontSize: 12,
-              fontWeight: 600,
-              color: '#475569',
-              display: 'grid',
-              gridTemplateColumns: 'repeat(5, 1fr)',
-              textAlign: 'center',
-              borderBottom: '1px solid #E2E8F0',
-              marginBottom: 12,
-            }}
-          >
-            <span>Mục tiêu doanh số</span>
-            <span>Đã thực hiện</span>
-            <span>% Đã thực hiện</span>
-            <span>Còn thực hiện</span>
-            <span>% Còn thực hiện</span>
-          </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(5, 1fr)',
-              textAlign: 'center',
-              fontSize: 13,
-              fontWeight: 500,
-              color: '#64748B',
-              padding: '4px 12px 12px',
-              borderBottom: '1px dashed #CBD5E1',
-            }}
-          >
-            <span style={{ fontWeight: 600, color: '#1E293B' }}>Tổng</span>
-            <span>-</span>
-            <span>-</span>
-            <span>-</span>
-            <span>-</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-            <span style={{ fontSize: 12, color: '#2563EB', cursor: 'pointer' }}>Xem thêm</span>
-          </div>
+      {/* Các thẻ biểu đồ: số liệu tính từ chứng từ bán hàng và hồ sơ khách hàng. Thẻ cần dữ liệu hệ thống chưa có (mục tiêu doanh số, đơn vị bán, dòng
+          hàng hóa trên chứng từ) ghi rõ lý do thay vì số liệu giả. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 20 }}>
+        {showWidget('Doanh số theo thời gian') && (<ChartCard title="Doanh số theo thời gian" subtitle={String(chartYear)} topMetric={money(months.reduce((sum, value) => sum + value, 0))} timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText={`Chưa có doanh số năm ${chartYear}`}>
+          {months.some(Boolean) ? <MonthBars values={months} /> : undefined}
         </ChartCard>)}
-
-        {showWidget('Hàng hóa bán chạy theo giá trị') && (<ChartCard
-          title="Hàng hóa bán chạy theo giá trị"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="doc"
-        />)}
+        {showWidget('Doanh số theo loại khách hàng') && (<ChartCard title="Doanh số theo loại khách hàng" topMetric={money(stats.orderValue)} timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="pie" emptyText="Chưa có doanh số trong kỳ">
+          {byKind.length ? <BarList rows={byKind.map((row) => ({ label: row.label, value: row.value, note: money(row.value) }))} /> : undefined}
+        </ChartCard>)}
+        {showWidget('Khách hàng có doanh số cao nhất') && (<ChartCard title="Khách hàng có doanh số cao nhất" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="doc" emptyText="Chưa có doanh số trong kỳ">
+          {top.length ? <BarList rows={top.map((row) => ({ label: row.label, value: row.value, note: `${money(row.value)} · ${row.count} chứng từ` }))} /> : undefined}
+        </ChartCard>)}
       </div>
 
-      {/* Grid Row 5: 2 Cards (Tình hình thực hiện hoạt động, Doanh số theo loại khách hàng) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
-          gap: 16,
-          marginBottom: 20,
-        }}
-      >
-        {showWidget('Tình hình thực hiện hoạt động') && (<ChartCard
-          title="Tình hình thực hiện hoạt động"
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="doc"
-        >
-          {/* Sub-tabs for activity status */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              borderBottom: '1px solid #F1F5F9',
-              paddingBottom: 8,
-              marginBottom: 12,
-            }}
-          >
-            <button
-              onClick={() => setActiveActivityTab('count')}
-              style={{
-                background: activeActivityTab === 'count' ? '#EFF6FF' : 'none',
-                color: activeActivityTab === 'count' ? '#2563EB' : '#64748B',
-                border: 'none',
-                borderRadius: 4,
-                padding: '4px 10px',
-                fontSize: 12,
-                fontWeight: activeActivityTab === 'count' ? 600 : 500,
-                cursor: 'pointer',
-              }}
-            >
-              SL hoạt động
-            </button>
-            <button
-              onClick={() => setActiveActivityTab('opportunity')}
-              style={{
-                background: activeActivityTab === 'opportunity' ? '#EFF6FF' : 'none',
-                color: activeActivityTab === 'opportunity' ? '#2563EB' : '#64748B',
-                border: 'none',
-                borderRadius: 4,
-                padding: '4px 10px',
-                fontSize: 12,
-                fontWeight: activeActivityTab === 'opportunity' ? 600 : 500,
-                cursor: 'pointer',
-              }}
-            >
-              Cơ hội
-            </button>
-            <button
-              onClick={() => setActiveActivityTab('order')}
-              style={{
-                background: activeActivityTab === 'order' ? '#EFF6FF' : 'none',
-                color: activeActivityTab === 'order' ? '#2563EB' : '#64748B',
-                border: 'none',
-                borderRadius: 4,
-                padding: '4px 10px',
-                fontSize: 12,
-                fontWeight: activeActivityTab === 'order' ? 600 : 500,
-                cursor: 'pointer',
-              }}
-            >
-              Đơn hàng
-            </button>
-          </div>
-
-          {/* Activity Category badges */}
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 6,
-              marginBottom: 14,
-            }}
-          >
-            {['Hoạt động', 'Nhiệm vụ', 'Lịch hẹn', 'Cuộc gọi', 'Đi tuyến'].map((cat) => (
-              <span
-                key={cat}
-                style={{
-                  backgroundColor: '#F1F5F9',
-                  borderRadius: 4,
-                  padding: '2px 8px',
-                  fontSize: 11,
-                  color: '#475569',
-                  fontWeight: 500,
-                }}
-              >
-                {cat}
-              </span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 20 }}>
+        {showWidget('Tình hình thực hiện hoạt động') && (<ChartCard title="Tình hình thực hiện hoạt động" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="doc">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+            {[
+              ['Báo giá trong kỳ', activity.quotes],
+              ['Đơn, hợp đồng đang triển khai', activity.inProgress],
+              ['Đơn, hợp đồng đã bàn giao', activity.delivered],
+            ].map(([label, item]: any) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: '#F8FAFC', borderRadius: 6 }}>
+                <span style={{ color: '#475569' }}>{label}</span>
+                <span style={{ color: '#0F172A' }}>{item.count} chứng từ · {money(item.value)}</span>
+              </div>
             ))}
-          </div>
-
-          {/* Metrics summary list */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-              gap: 8,
-              fontSize: 11,
-              color: '#64748B',
-              backgroundColor: '#FAFAFA',
-              padding: 10,
-              borderRadius: 6,
-              marginBottom: 10,
-            }}
-          >
-            <div>SL cơ hội: <strong>0</strong></div>
-            <div>SL thua: <strong>0</strong></div>
-            <div>SL thắng: <strong>0</strong></div>
-            <div>DS thắng: <strong>0</strong></div>
-            <div>SL đơn hàng: <strong>{stats.orderCount}</strong></div>
-            <div>SL khách hàng: <strong>{totalCustomers}</strong></div>
-            <div>Doanh số đề nghị ghi: <strong>0</strong></div>
-            <div>DS đã ghi: <strong>0</strong></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: overdue.count ? '#FEF2F2' : '#F8FAFC', borderRadius: 6 }}>
+              <span style={{ color: '#475569' }}>Công nợ quá hạn (tất cả kỳ)</span>
+              <span style={{ color: overdue.count ? '#DC2626' : '#0F172A' }}>{overdue.count} chứng từ · {money(overdue.value)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: '#F8FAFC', borderRadius: 6 }}>
+              <span style={{ color: '#475569' }}>Khách hàng trong danh bạ</span>
+              <span style={{ color: '#0F172A' }}>{customers.length}</span>
+            </div>
           </div>
         </ChartCard>)}
-
-        {showWidget('Doanh số theo loại khách hàng') && (<ChartCard
-          title="Doanh số theo loại khách hàng"
-          topMetric={0}
-          timestamp={timestamp}
-          onReload={() => void loadDashboardData()}
-          emptyType="pie"
-        />)}
+        {showWidget('Mục tiêu doanh số') && (<ChartCard title="Mục tiêu doanh số" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="line" emptyText="Hệ thống chưa có chức năng đặt mục tiêu doanh số" />)}
+        {showWidget('Doanh số theo đơn vị, hàng hóa') && (<ChartCard title="Doanh số theo đơn vị, hàng hóa" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chứng từ bán hàng chưa ghi đơn vị bán và dòng hàng hóa" />)}
       </div>
 
-      {/* AI Analysis Modal */}
+      {/* Tóm tắt tình hình kinh doanh: tính từ số liệu thật của kỳ đang lọc (trước đây là hộp thoại "Phân tích với AI" với chữ cố định). */}
       <Modal
-        title="Trợ thủ Phân tích Kinh doanh với AI"
+        title="Tóm tắt tình hình kinh doanh"
         open={aiModalVisible}
         onCancel={() => setAiModalVisible(false)}
         footer={[
@@ -814,16 +595,12 @@ export const CRMOverviewModule: React.FC = () => {
           </Button>,
         ]}
       >
-        <div style={{ padding: 14, fontSize: 13, lineHeight: 1.6, color: '#334155' }}>
-          <p style={{ fontWeight: 600, color: '#1E293B', marginBottom: 10 }}>
-            Tóm tắt đánh giá tình hình kinh doanh tháng này:
-          </p>
-          <ul style={{ paddingLeft: 18, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <li>Hệ thống đang ở trạng thái mới khởi tạo, chưa ghi nhận đơn bán hàng trong kỳ.</li>
-            <li>Đơn hàng cần xử lý: 0 đơn. Công nợ cần thu hồi: 0 đ.</li>
-            <li>Khuyến nghị: Bổ sung khách hàng tiềm năng, tạo báo giá và xác nhận đơn hàng đầu tiên để kích hoạt biểu đồ phân tích tự động.</li>
-          </ul>
-        </div>
+        <ul style={{ paddingLeft: 18, margin: '8px 0', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
+          <li>Trong kỳ có {stats.orderCount} đơn, hợp đồng bán, giá trị {money(stats.orderValue)}; đã thu {money(stats.collectedValue)}, còn phải thu {money(stats.remainingValue)}.</li>
+          <li>{activity.quotes.count} báo giá trị giá {money(activity.quotes.value)}; {activity.inProgress.count} chứng từ đang triển khai, {activity.delivered.count} chứng từ đã bàn giao.</li>
+          <li>{overdue.count ? `Có ${overdue.count} chứng từ quá hạn thanh toán, tổng ${money(overdue.value)} cần thu hồi.` : 'Không có công nợ quá hạn.'}</li>
+          <li>{top.length ? `Khách hàng doanh số cao nhất: ${top.slice(0, 3).map((row) => `${row.label} (${money(row.value)})`).join(', ')}.` : 'Chưa có doanh số theo khách hàng trong kỳ.'}</li>
+        </ul>
       </Modal>
 
       {/* Edit Dashboard Layout Modal */}
