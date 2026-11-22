@@ -783,6 +783,21 @@ test('CRM promotion campaigns validate their rules and keep server-owned history
   await request('/collections/crm_promotions', 'GET', undefined, 403, staffHeaders);
 });
 
+test('sale documents record a salesperson snapshot and it can be reassigned', async () => {
+  const seller = (await request('/users', 'POST', { email: 'seller@example.test', name: 'Người Bán', password: 'Seller-Test-26!Secure', employeeCode: 'TEST-SELLER', role: 'USER', department: 'Kinh doanh' }, 201)).user;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const saleInput = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách bán lẻ', description: 'Có nhân viên bán', amount: 300000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 0, vatAmount: 0 };
+  await request('/finance/documents', 'POST', { ...saleInput, documentType: 'purchase', salespersonId: seller.id }, 422);
+  await request('/finance/documents', 'POST', { ...saleInput, salespersonId: 'khong-co' }, 422);
+  const sale = (await request('/finance/documents', 'POST', { ...saleInput, salespersonId: seller.id }, 201)).document;
+  const listed = (await request('/finance/documents?documentType=sale')).data.find((item) => item.key === sale.key);
+  assert.deepEqual([listed.salespersonId, listed.salespersonName, listed.salespersonCode], [seller.id, 'Người Bán', 'TEST-SELLER']);
+  const plain = (await request('/finance/documents', 'POST', saleInput, 201)).document;
+  assert.equal((await request(`/finance/documents/${plain.key}/salesperson`, 'POST', { salespersonId: seller.id })).document.salespersonName, 'Người Bán');
+  assert.equal((await request(`/finance/documents/${plain.key}/salesperson`, 'POST', { salespersonId: '' })).document.salespersonId, undefined);
+  assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === plain.key).salespersonId, undefined);
+});
+
 test('loyalty points can reference only completed sales linked to the same CRM customer', async () => {
   const customer = (await request('/crm/contacts', 'POST', { name: 'Khách hàng liên kết chứng từ', type: 'customer' }, 201)).contact;
   const other = (await request('/crm/contacts', 'POST', { name: 'Khách hàng khác', type: 'customer' }, 201)).contact;

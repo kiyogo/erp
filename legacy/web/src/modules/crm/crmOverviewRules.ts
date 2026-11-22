@@ -105,3 +105,29 @@ export function targetPeriodsForFilter(filter: string, now = new Date()): string
   if (/^\d{4}$/.test(filter)) return Array.from({ length: 12 }, (_, i) => key(Number(filter), i + 1));
   return [];
 }
+
+export interface SellerDoc extends SaleDoc { salespersonId?: string; salespersonName?: string; salespersonDepartment?: string }
+
+export const NO_SALESPERSON = 'Chưa gán nhân viên bán';
+export const NO_DEPARTMENT = 'Chưa xác định đơn vị';
+
+/** Doanh số theo nhân viên bán hàng ghi trên chứng từ (chụp lại lúc gán). */
+export function salesBySalesperson(docs: SellerDoc[]): Array<{ label: string; value: number; count: number }> {
+  const totals = new Map<string, { label: string; value: number; count: number }>();
+  for (const doc of revenueDocs(docs) as SellerDoc[]) {
+    const id = doc.salespersonId || '';
+    const current = totals.get(id) || { label: id ? doc.salespersonName || id : NO_SALESPERSON, value: 0, count: 0 };
+    totals.set(id, { ...current, value: current.value + saleNet(doc), count: current.count + 1 });
+  }
+  return [...totals.values()].sort((a, b) => b.value - a.value);
+}
+
+/** Doanh số theo đơn vị: phòng ban của nhân viên bán hàng tại thời điểm gán. */
+export function salesByDepartment(docs: SellerDoc[]): Array<{ label: string; value: number }> {
+  const totals = new Map<string, number>();
+  for (const doc of revenueDocs(docs) as SellerDoc[]) {
+    const label = doc.salespersonId ? doc.salespersonDepartment || NO_DEPARTMENT : NO_SALESPERSON;
+    totals.set(label, (totals.get(label) || 0) + saleNet(doc));
+  }
+  return [...totals.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+}

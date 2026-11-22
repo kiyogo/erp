@@ -6099,9 +6099,17 @@ function withDocumentTerms(document, record) {
     ...document,
     terms,
     ...(record?.supplierId ? { supplierId: record.supplierId } : {}),
+    ...(record?.salespersonId ? { salespersonId: record.salespersonId, salespersonName: record.salespersonName || '', salespersonCode: record.salespersonCode || '', salespersonDepartment: record.salespersonDepartment || '' } : {}),
     paymentMethod: terms.paymentMethod || '',
     termWarnings: tradeWarnings(document, terms),
   };
+}
+
+// Nhân viên bán hàng của chứng từ bán: chụp lại họ tên, mã, phòng ban tại thời điểm gán để doanh số theo nhân viên, đơn vị không đổi khi nhân viên chuyển phòng.
+async function salespersonSnapshot(salespersonId) {
+  const row = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1').get(salespersonId);
+  if (!row) throw new HttpError(422, 'Nhân viên bán hàng không tồn tại hoặc đã khóa.');
+  return { salespersonId: row.id, salespersonName: row.name, salespersonCode: row.employee_code || '', salespersonDepartment: row.department || '' };
 }
 
 function publicSalePromotion(snapshot) {
@@ -13001,6 +13009,35 @@ async function handleRequest(request, response) {
   }
 
   // Thanh toán theo chứng từ công nợ: lập phiếu thu hoặc chi thật, ghi sổ cái và cộng vào số đã thanh toán của chứng từ.
+  // Gán hoặc đổi nhân viên bán hàng cho chứng từ bán đã lập (chứng từ cũ chưa có); gửi salespersonId rỗng để bỏ gán.
+  const salespersonMatch = /^\/finance\/documents\/([^/]+)\/salesperson$/.exec(resource);
+  if (request.method === 'POST' && salespersonMatch) {
+    const actor = await requireAdmin(request);
+    const id = decodeURIComponent(salespersonMatch[1]);
+    const input = await readJson(request, 16 * 1024);
+    const salespersonId = optionalText(input.salespersonId, 'Nhân viên bán hàng', 160);
+    let result;
+    await db.transaction(async () => {
+      const row = await db.prepare('SELECT * FROM finance_documents WHERE id = ?').get(id);
+      const document = row && publicFinanceDocument(row);
+      if (!document) throw new HttpError(404, 'Không tìm thấy chứng từ.');
+      if (document.documentType !== 'sale' || document.adjustsDocumentId) throw new HttpError(422, 'Nhân viên bán hàng chỉ ghi cho chứng từ bán (không phải chứng từ trả lại, giảm giá).');
+      if (document.status === 'Đã hủy') throw new HttpError(409, 'Chứng từ đã hủy.');
+      const salesperson = salespersonId ? await salespersonSnapshot(salespersonId) : null;
+      const termsRow = await db.prepare("SELECT * FROM collection_records WHERE scope = 'finance_document_terms' AND record_key = ?").get(id);
+      const current = termsRow ? parseJsonObject(termsRow.payload_json) : { key: id, documentCode: document.code, terms: {} };
+      for (const field of ['salespersonId', 'salespersonName', 'salespersonCode', 'salespersonDepartment']) delete current[field];
+      const next = { ...current, ...(salesperson || {}) };
+      const timestamp = now();
+      if (termsRow) await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(next), timestamp, termsRow.id);
+      else await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'finance_document_terms', ?, ?, ?, ?, ?)").run(randomUUID(), id, actor.id, JSON.stringify(next), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'assign_salesperson', 'finance_documents', id, { salespersonId: salesperson?.salespersonId || '' });
+      result = withDocumentTerms(document, next);
+    });
+    sendJson(response, 200, { document: result });
+    return;
+  }
+
   const documentPaymentMatch = /^\/finance\/documents\/([^/]+)\/payments$/.exec(resource);
   if (request.method === 'POST' && documentPaymentMatch) {
     const actor = await requireAdmin(request);
@@ -14225,6 +14262,9 @@ async function handleRequest(request, response) {
     if (isAdjustment && (customerId || optionalText(input.supplierId, 'Nhà cung cấp', 160) || promotionKeys.length)) throw new HttpError(422, 'Chứng từ điều chỉnh lấy đối tác từ chứng từ gốc, không chọn khách hàng, nhà cung cấp hay khuyến mại.');
     const supplierId = optionalText(input.supplierId, 'Nhà cung cấp', 160);
     if (supplierId && input.documentType !== 'purchase') throw new HttpError(422, 'Liên kết nhà cung cấp chỉ áp dụng cho chứng từ mua hàng.');
+    const salespersonId = optionalText(input.salespersonId, 'Nhân viên bán hàng', 160);
+    if (salespersonId && (input.documentType !== 'sale' || isAdjustment)) throw new HttpError(422, 'Nhân viên bán hàng chỉ ghi cho chứng từ bán (không phải chứng từ trả lại, giảm giá).');
+    const salesperson = salespersonId ? await salespersonSnapshot(salespersonId) : null;
     let terms;
     try { terms = normalizeTradeTerms(input.terms); } catch (error) { throw new HttpError(422, error.message); }
     const requestId = promotionKeys.length ? requiredText(input.requestId, 'Mã yêu cầu', 160) : '';
@@ -14317,10 +14357,10 @@ async function handleRequest(request, response) {
         original ? original.key : null,
       );
       if (customer) link = await insertSaleCustomerLink(id, document.code, customer, actor, timestamp);
-      if (supplier || Object.keys(terms).length) {
+      if (supplier || salesperson || Object.keys(terms).length) {
         await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
           VALUES (?, 'finance_document_terms', ?, ?, ?, ?, ?)`)
-          .run(randomUUID(), id, actor.id, JSON.stringify({ key: id, documentCode: document.code, terms, ...(supplier ? { supplierId: supplier.id, supplierCode: supplier.code } : {}) }), timestamp, timestamp);
+          .run(randomUUID(), id, actor.id, JSON.stringify({ key: id, documentCode: document.code, terms, ...(supplier ? { supplierId: supplier.id, supplierCode: supplier.code } : {}), ...(salesperson || {}) }), timestamp, timestamp);
       }
       if (snapshot) {
         await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)

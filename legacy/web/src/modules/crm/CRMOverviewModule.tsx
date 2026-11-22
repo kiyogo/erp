@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Modal, Select, message } from '../../custom-ui';
 import { collectionsApi, financeDocumentsApi, crmContactsApi, systemApi, FinanceDocument, type CrmContact } from '../../api/endpoints';
-import { activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, targetPeriodsForFilter, targetProgress, topCustomers } from './crmOverviewRules';
+import { NO_DEPARTMENT, activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, salesByDepartment, salesBySalesperson, targetPeriodsForFilter, targetProgress, topCustomers } from './crmOverviewRules';
 
 // ===== Standard SVG Empty State Illustrations =====
 const EmptyLineChartSvg: React.FC = () => (
@@ -117,7 +117,7 @@ interface ChartCardProps {
 }
 
 const CRM_HIDDEN_WIDGETS_KEY = 'kiyovn_crm_overview_hidden_widgets';
-const CRM_OVERVIEW_WIDGETS = ['Doanh số theo thời gian', 'Doanh số theo loại khách hàng', 'Khách hàng có doanh số cao nhất', 'Tình hình thực hiện hoạt động', 'Mục tiêu doanh số', 'Doanh số theo đơn vị, hàng hóa'];
+const CRM_OVERVIEW_WIDGETS = ['Doanh số theo thời gian', 'Doanh số theo loại khách hàng', 'Khách hàng có doanh số cao nhất', 'Tình hình thực hiện hoạt động', 'Mục tiêu doanh số', 'Doanh số theo nhân viên bán hàng', 'Doanh số theo đơn vị'];
 
 // Biểu đồ cột 12 tháng và danh sách thanh ngang vẽ bằng thẻ div (dự án không dùng thư viện biểu đồ).
 const MonthBars: React.FC<{ values: number[]; targets?: number[] }> = ({ values, targets }) => {
@@ -360,7 +360,10 @@ export const CRMOverviewModule: React.FC = () => {
   }, [loadDashboardData]);
 
   // Số liệu trong kỳ lọc: doanh số chỉ tính đơn, hợp đồng bán còn hiệu lực (không tính báo giá, chứng từ đã hủy và chứng từ điều chỉnh giảm).
-  const periodDocs = useMemo(() => salesDocuments.filter((doc) => inTimeRange(doc.documentDate, timeFilter)), [salesDocuments, timeFilter]);
+  // Lọc theo đơn vị: phòng ban của nhân viên bán hàng ghi trên chứng từ.
+  const departmentOptions = useMemo(() => [...new Set(salesDocuments.filter((doc) => doc.salespersonId).map((doc) => doc.salespersonDepartment || NO_DEPARTMENT))].sort(), [salesDocuments]);
+  const unitDocs = useMemo(() => orgUnit === 'all' ? salesDocuments : salesDocuments.filter((doc) => doc.salespersonId && (doc.salespersonDepartment || NO_DEPARTMENT) === orgUnit), [salesDocuments, orgUnit]);
+  const periodDocs = useMemo(() => unitDocs.filter((doc) => inTimeRange(doc.documentDate, timeFilter)), [unitDocs, timeFilter]);
   const stats = useMemo(() => {
     const documents = revenueDocs(periodDocs);
     const orderValue = documents.reduce((sum, doc) => sum + saleNet(doc), 0);
@@ -369,17 +372,21 @@ export const CRMOverviewModule: React.FC = () => {
     return { orderCount: documents.length, orderValue, collectedValue, remainingValue };
   }, [periodDocs]);
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = useMemo(() => overdueReceivables(salesDocuments, today), [salesDocuments, today]);
+  const overdue = useMemo(() => overdueReceivables(unitDocs, today), [unitDocs, today]);
   const activity = useMemo(() => activitySummary(periodDocs), [periodDocs]);
   const byKind = useMemo(() => salesByCustomerKind(periodDocs, customers), [periodDocs, customers]);
   const top = useMemo(() => topCustomers(periodDocs, customers, 5), [periodDocs, customers]);
   const chartYear = /^\d{4}$/.test(timeFilter) ? Number(timeFilter) : new Date().getFullYear();
-  const months = useMemo(() => monthlySales(salesDocuments, chartYear), [salesDocuments, chartYear]);
+  const months = useMemo(() => monthlySales(unitDocs, chartYear), [unitDocs, chartYear]);
+  const companyMonths = useMemo(() => monthlySales(salesDocuments, chartYear), [salesDocuments, chartYear]);
+  const bySeller = useMemo(() => salesBySalesperson(periodDocs), [periodDocs]);
+  const byDepartment = useMemo(() => salesByDepartment(periodDocs), [periodDocs]);
   const money = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
-  const progress = useMemo(() => targetProgress(months, targets, chartYear), [months, targets, chartYear]);
+  // Mục tiêu đặt cho toàn doanh nghiệp nên luôn so với doanh số toàn doanh nghiệp.
+  const progress = useMemo(() => targetProgress(companyMonths, targets, chartYear), [companyMonths, targets, chartYear]);
   const periodTargetKeys = targetPeriodsForFilter(timeFilter);
   const periodTarget = periodTargetKeys.reduce((sum, key) => sum + (targets[key] || 0), 0);
-  const periodTargetText = !periodTargetKeys.length ? 'Không so với mục tiêu tháng khi lọc theo ngày, tuần' : periodTarget ? `${money(stats.orderValue)} / ${money(periodTarget)} (${Math.round(stats.orderValue / periodTarget * 1000) / 10}%)` : 'Chưa đặt mục tiêu cho kỳ này';
+  const periodTargetText = orgUnit !== 'all' ? 'Mục tiêu đặt cho toàn doanh nghiệp, không so theo đơn vị' : !periodTargetKeys.length ? 'Không so với mục tiêu tháng khi lọc theo ngày, tuần' : periodTarget ? `${money(stats.orderValue)} / ${money(periodTarget)} (${Math.round(stats.orderValue / periodTarget * 1000) / 10}%)` : 'Chưa đặt mục tiêu cho kỳ này';
 
   const openTargetModal = (year: number) => {
     setTargetYear(year);
@@ -448,13 +455,12 @@ export const CRMOverviewModule: React.FC = () => {
 
         {/* Right filter controls */}
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          {/* Chứng từ bán hàng chưa gắn đơn vị tổ chức nên chưa lọc được theo đơn vị. */}
+          {/* Lọc theo phòng ban của nhân viên bán hàng ghi trên chứng từ; chứng từ chưa gán nhân viên chỉ tính khi chọn toàn doanh nghiệp. */}
           <Select
-            disabled
             value={orgUnit}
             onChange={(val) => setOrgUnit(String(val))}
-            style={{ width: 150 }}
-            options={[{ value: 'all', label: 'Cơ cấu tổ chức' }]}
+            style={{ width: 180 }}
+            options={[{ value: 'all', label: 'Toàn doanh nghiệp' }, ...departmentOptions.map((value) => ({ value, label: value }))]}
           />
 
           <div
@@ -638,11 +644,16 @@ export const CRMOverviewModule: React.FC = () => {
           {progress.targetTotal ? (
             <div>
               <div style={{ fontSize: 12.5, color: '#64748B', marginBottom: 4 }}>Thực hiện {money(progress.actualTotal)} / mục tiêu {money(progress.targetTotal)}</div>
-              <MonthBars values={months} targets={progress.rows.map((row) => row.target)} />
+              <MonthBars values={companyMonths} targets={progress.rows.map((row) => row.target)} />
             </div>
           ) : undefined}
         </ChartCard>)}
-        {showWidget('Doanh số theo đơn vị, hàng hóa') && (<ChartCard title="Doanh số theo đơn vị, hàng hóa" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chứng từ bán hàng chưa ghi đơn vị bán và dòng hàng hóa" />)}
+        {showWidget('Doanh số theo nhân viên bán hàng') && (<ChartCard title="Doanh số theo nhân viên bán hàng" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chưa có doanh số trong kỳ">
+          {bySeller.length ? <BarList rows={bySeller.map((row) => ({ label: row.label, value: row.value, note: `${money(row.value)} · ${row.count} chứng từ` }))} /> : undefined}
+        </ChartCard>)}
+        {showWidget('Doanh số theo đơn vị') && (<ChartCard title="Doanh số theo đơn vị" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chưa có doanh số trong kỳ">
+          {byDepartment.length ? <BarList rows={byDepartment.map((row) => ({ label: row.label, value: row.value, note: money(row.value) }))} /> : undefined}
+        </ChartCard>)}
       </div>
 
       {/* Tóm tắt tình hình kinh doanh: tính từ số liệu thật của kỳ đang lọc (trước đây là hộp thoại "Phân tích với AI" với chữ cố định). */}

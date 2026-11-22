@@ -70,6 +70,7 @@ const ACTION_LABELS = {
   inventory_shipment_return: 'Nhận hàng trả lại',
   inventory_provision: 'Lập dự phòng giảm giá hàng tồn kho',
   link_sale_customer: 'Gắn khách hàng vào chứng từ bán',
+  assign_salesperson: 'Gán nhân viên bán hàng',
   apply_sale_promotions: 'Áp dụng khuyến mại',
   // Thuế và lương
   post_payroll: 'Hạch toán bảng lương',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activitySummary, monthlySales, overdueReceivables, salesByCustomerKind, targetPeriodsForFilter, targetProgress, topCustomers } from '../src/modules/crm/crmOverviewRules.ts';
+import { activitySummary, monthlySales, overdueReceivables, salesByCustomerKind, salesByDepartment, salesBySalesperson, targetPeriodsForFilter, targetProgress, topCustomers } from '../src/modules/crm/crmOverviewRules.ts';
 
 const customers = [
   { key: 'c1', name: 'Công ty A', details: { entityKind: 'organization' } },
@@ -50,4 +50,22 @@ test('mục tiêu doanh số theo tháng và kỳ của bộ lọc', () => {
   assert.deepEqual(targetPeriodsForFilter('this_quarter', now), ['2026-10', '2026-11', '2026-12']);
   assert.equal(targetPeriodsForFilter('2025', now).length, 12);
   assert.deepEqual(targetPeriodsForFilter('this_week', now), []);
+});
+
+test('doanh số theo nhân viên bán hàng và đơn vị của nhân viên', () => {
+  const sellerDocs = [
+    { ...docs[0], salespersonId: 'u1', salespersonName: 'Lan', salespersonDepartment: 'Kinh doanh 1' },
+    { ...docs[1], salespersonId: 'u2', salespersonName: 'Minh', salespersonDepartment: '' },
+    docs[2], docs[5],
+  ];
+  assert.deepEqual(salesBySalesperson(sellerDocs), [
+    { label: 'Lan', value: 9_000_000, count: 1 },
+    { label: 'Minh', value: 5_000_000, count: 1 },
+    { label: 'Chưa gán nhân viên bán', value: 2_000_000, count: 1 },
+  ]);
+  assert.deepEqual(salesByDepartment(sellerDocs), [
+    { label: 'Kinh doanh 1', value: 9_000_000 },
+    { label: 'Chưa xác định đơn vị', value: 5_000_000 },
+    { label: 'Chưa gán nhân viên bán', value: 2_000_000 },
+  ]);
 });

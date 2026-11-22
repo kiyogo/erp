@@ -647,6 +647,11 @@ export type FinanceDocument = {
   discountAmount?: number;
   appliedPromotions?: SalePromotionApplication[];
   supplierId?: string;
+  /** Nhân viên bán hàng của chứng từ bán (máy chủ chụp lại họ tên, mã, phòng ban lúc gán). */
+  salespersonId?: string;
+  salespersonName?: string;
+  salespersonCode?: string;
+  salespersonDepartment?: string;
   adjustsDocumentId?: string;
   adjustedAmount?: number;
   terms?: FinanceDocumentTerms;
@@ -712,6 +717,7 @@ export const financeDocumentsApi = {
     api.post<SalePromotionPreview>('/finance/sales/promotion-preview', data),
   pay: (key: string, data: { amount: number; date: string; sourceAccountId: string; reference?: string; note?: string }) => api.post<{ document: FinanceDocument; transaction: { code: string; type: 'Thu' | 'Chi' } }>(`/finance/documents/${encodeURIComponent(key)}/payments`, data),
   linkSaleCustomer: (key: string, customerId: string) => api.post<{ replayed: boolean }>(`/finance/sales/${encodeURIComponent(key)}/customer`, { customerId }),
+  setSalesperson: (key: string, salespersonId: string) => api.post<{ document: FinanceDocument }>(`/finance/documents/${encodeURIComponent(key)}/salesperson`, { salespersonId }),
 };
 
 // Tạm ứng: cấp tiền lập phiếu chi Nợ 141; quyết toán ghi Nợ chi phí, 1331, Có 141 và lập phiếu thu hoặc chi phần chênh lệch (cần PIN nếu đã đặt).

@@ -12,6 +12,7 @@ import {
 import { KTable } from '../../components/KTable';
 import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../../custom-ui';
 import { ContactSelect } from '../crm/ContactSelect';
+import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
 import { TradeTermsFields } from './TradeTermsFields';
 import { isAdjustment, netTradeTotals } from './tradeAdjustments';
@@ -185,6 +186,7 @@ const SalesDocumentsModule: React.FC = () => {
         vatAmount: context.vatAmount,
         terms: termsFromValues(values),
         ...(values.customerId ? { customerId: values.customerId } : {}),
+        ...(values.salespersonId ? { salespersonId: values.salespersonId } : {}),
         ...(context.promotionKeys.length && promotionPreview ? { promotionKeys: context.promotionKeys, promotionFingerprint: promotionPreview.fingerprint, requestId } : {}),
       });
       message.success('Đã lưu chứng từ bán hàng. Thu tiền bằng nút Thu tiền ở cột Thanh toán.');
@@ -214,6 +216,24 @@ const SalesDocumentsModule: React.FC = () => {
       message.success('Đã liên kết chứng từ với khách hàng.');
     } catch (error: any) {
       message.error(error?.response?.data?.message || 'Không thể liên kết khách hàng với chứng từ.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Gán hoặc đổi nhân viên bán hàng cho chứng từ đã lập (doanh số theo nhân viên, đơn vị ở CRM Tổng quan).
+  const [sellerTarget, setSellerTarget] = useState<FinanceDocument | null>(null);
+  const [sellerId, setSellerId] = useState('');
+  const saveSalesperson = async () => {
+    if (!sellerTarget || saving) return;
+    setSaving(true);
+    try {
+      await financeDocumentsApi.setSalesperson(sellerTarget.key, sellerId);
+      setSellerTarget(null);
+      await loadData();
+      message.success(sellerId ? 'Đã gán nhân viên bán hàng.' : 'Đã bỏ nhân viên bán hàng của chứng từ.');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được nhân viên bán hàng.');
     } finally {
       setSaving(false);
     }
@@ -250,6 +270,12 @@ const SalesDocumentsModule: React.FC = () => {
     { title: 'Đã thu', dataIndex: 'paidAmount', key: 'paidAmount', width: 150, render: (value: number) => <span style={{ color: '#16A34A', fontWeight: 700 }}>{formatMoney(value)}</span> },
     { title: 'Còn phải thu', dataIndex: 'remainingAmount', key: 'remainingAmount', width: 150, render: (value: number) => <strong style={{ color: value > 0 ? '#DC2626' : '#16A34A' }}>{formatMoney(value)}</strong> },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 140, render: (value: string) => <Tag color={value === 'Đã hủy' ? 'error' : value === 'Đã bàn giao' ? 'success' : 'processing'}>{value}</Tag> },
+    { title: 'Nhân viên bán', key: 'salesperson', width: 170, render: (_: unknown, record: FinanceDocument) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span>{record.salespersonName || '—'}</span>
+        {record.status !== 'Đã hủy' && <Button onClick={() => { setSellerId(record.salespersonId || ''); setSellerTarget(record); }}>{record.salespersonId ? 'Đổi' : 'Gán'}</Button>}
+      </span>
+    ) },
     { title: 'Khách hàng CRM', key: 'customerLink', width: 150, render: (_: unknown, record: FinanceDocument) => record.customerId ? 'Đã liên kết' : record.status !== 'Đã hủy' ? <Button size="small" onClick={() => { linkForm.resetFields(); setLinkTarget(record); }}>Liên kết</Button> : '—' },
     documentPaymentColumn((record) => setPayTarget(record)),
     ledgerPostingColumn('documents', ledgerPosted, (key, title) => setLedgerTarget({ kind: 'documents', key, title }), (record) => record.code),
@@ -355,6 +381,9 @@ const SalesDocumentsModule: React.FC = () => {
                 if (selected) form.setFieldsValue({ partnerName: selected.name, taxCode: selected.taxCode || '' });
               }} />
           </Form.Item>
+          <Form.Item name="salespersonId" label="Nhân viên bán hàng">
+            <EmployeeSelect valueKey="id" allowClear placeholder="Chọn nhân viên phụ trách chứng từ" />
+          </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Form.Item name="partnerName" label="Tên khách hàng" rules={[{ required: true, whitespace: true }]}>
               <Input disabled={!!selectedCustomerId} />
@@ -407,6 +436,15 @@ const SalesDocumentsModule: React.FC = () => {
             </Button>
           </div>
         </Form>
+      </Modal>
+      <Modal title="Nhân viên bán hàng của chứng từ" open={!!sellerTarget} onCancel={() => setSellerTarget(null)} footer={null} width={520}>
+        <div style={{ margin: '14px 0' }}>{sellerTarget?.code} · {sellerTarget?.partnerName}</div>
+        <EmployeeSelect valueKey="id" allowClear value={sellerId} onChange={(value: string) => setSellerId(value || '')} placeholder="Chọn nhân viên bán hàng" />
+        <div style={{ color: '#64748B', fontSize: 12, marginTop: 8 }}>Để trống rồi lưu để bỏ nhân viên bán hàng của chứng từ.</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 16 }}>
+          <Button onClick={() => setSellerTarget(null)}>Hủy</Button>
+          <Button type="primary" loading={saving} onClick={() => void saveSalesperson()} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>Lưu</Button>
+        </div>
       </Modal>
       <Modal title="Liên kết khách hàng với chứng từ" open={!!linkTarget} onCancel={() => setLinkTarget(null)} footer={null} width={560}>
         <Form form={linkForm} layout="vertical" onFinish={linkCustomer} style={{ marginTop: 14 }}>
