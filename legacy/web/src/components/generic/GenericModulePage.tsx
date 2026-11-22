@@ -442,6 +442,7 @@ export const GenericModulePage: React.FC = () => {
   if (p.startsWith('/services')) return <EnterpriseServicesModule />;
   if (p === '/chat/admin') return <ChatAdminModule />;
   if (p.startsWith('/chat')) return <InternalChatModule />;
+  if (p === '/reports') return <ReportsModule />;
   if (p === '/tickets/incidents') return <IncidentsModule />;
   if (p === '/tickets') return <TicketsModule />;
   if (p === '/notifications/system' || p === '/notifications/broadcast' || p === '/system/notifications') return <AdminSystemNotificationsModule />;

@@ -75,6 +75,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
         lockedName: true,
         path: '/admin/business/org-chart',
       },
+      { id: 'business-travel', title: 'Công tác', path: '/admin/business/travel' },
     ],
   },
   {
@@ -91,6 +92,12 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'hr-proposals', title: 'Đề xuất', path: '/admin/hr/proposals' },
       { id: 'hr-headcount', title: 'Định biên', path: '/admin/hr/headcount' },
       { id: 'hr-foreign-workers', title: 'Lao động nước ngoài', path: '/admin/hr/foreign-workers' },
+      // Các màn dưới đây có route và nghiệp vụ từ trước nhưng chưa từng có mục menu.
+      { id: 'hr-recruitment', title: 'Tuyển dụng', path: '/admin/hr/recruitment' },
+      { id: 'hr-training', title: 'Đào tạo', path: '/admin/hr/training' },
+      { id: 'hr-performance', title: 'Đánh giá nhân sự', path: '/admin/hr/performance' },
+      { id: 'hr-certificates', title: 'Chứng chỉ', path: '/admin/hr/certificates' },
+      { id: 'hr-rewards', title: 'Quyết định khen thưởng', path: '/admin/hr/rewards' },
       {
         id: 'hr-history',
         title: 'Lịch sử nhân viên',
@@ -174,6 +181,13 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
     path: '/admin/crm/overview',
     children: [
       { id: 'crm-overview', title: 'Tổng quan', path: '/admin/crm/overview' },
+      { id: 'crm-customers', title: 'Khách hàng', path: '/admin/crm/customers' },
+      { id: 'crm-suppliers', title: 'Nhà cung cấp', path: '/admin/crm/suppliers' },
+      { id: 'crm-partners', title: 'Đối tác', path: '/admin/crm/partners' },
+      { id: 'crm-promotions', title: 'Khuyến mại', path: '/admin/crm/promotions' },
+      { id: 'crm-loyalty', title: 'Khách hàng thân thiết', path: '/admin/crm/loyalty' },
+      { id: 'crm-feedback', title: 'Phản hồi khách hàng', path: '/admin/crm/feedback' },
+      { id: 'crm-suppliers-eval', title: 'Đánh giá nhà cung cấp', path: '/admin/crm/suppliers-eval' },
     ],
   },
   {
@@ -329,6 +343,9 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
           { id: 'fin-gen-fs', title: 'Báo cáo tài chính', path: '/admin/finance/general/statements' },
         ],
       },
+      { id: 'fin-advances', title: 'Tạm ứng', path: '/admin/finance/advances' },
+      { id: 'fin-prepaid', title: 'Chi phí trả trước', path: '/admin/finance/prepaid-expenses' },
+      { id: 'fin-equity', title: 'Sổ cổ đông', path: '/admin/finance/equity' },
       {
         id: 'fin-budget',
         title: 'Ngân sách',
@@ -369,6 +386,8 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'ast-repairs', title: 'Sửa chữa', path: '/admin/assets/repairs' },
       { id: 'ast-maint', title: 'Bảo dưỡng', path: '/admin/assets/maintenance' },
       { id: 'ast-disposal', title: 'Mất, hủy, thanh lý', path: '/admin/assets/disposal' },
+      { id: 'ast-licenses', title: 'Bản quyền phần mềm', path: '/admin/assets/licenses' },
+      { id: 'ast-consumables', title: 'Vật phẩm tiêu hao', path: '/admin/assets/consumables' },
       { id: 'ast-todo', title: 'Việc cần làm', path: '/admin/assets/todo' },
       { id: 'ast-audit', title: 'Kiểm kê', path: '/admin/assets/audit' },
       { id: 'ast-count', title: 'Kiểm đếm', path: '/admin/assets/count' },
@@ -460,6 +479,10 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
     title: 'Ticket',
     icon: <CustomerServiceOutlined />,
     path: '/admin/tickets',
+    children: [
+      { id: 'ticket-list', title: 'Danh sách ticket', path: '/admin/tickets' },
+      { id: 'ticket-incidents', title: 'Sự cố', path: '/admin/tickets/incidents' },
+    ],
   },
   {
     id: 'plans',
@@ -472,6 +495,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'plan-progress', title: 'Tiến độ thực hiện', path: '/admin/plans/progress' },
       { id: 'plan-milestones', title: 'Mốc quan trọng', path: '/admin/plans/milestones' },
       { id: 'plan-reports', title: 'Báo cáo', path: '/admin/plans/reports' },
+      { id: 'plan-okr', title: 'OKR, lộ trình', path: '/admin/plans/okr' },
     ],
   },
   {
