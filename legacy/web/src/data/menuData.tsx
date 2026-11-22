@@ -567,6 +567,25 @@ export const EMPLOYEE_PORTAL_MENU_ITEMS: MenuItem[] = [
     icon: <DollarOutlined />,
     path: '/employee/payslip',
   },
+  // Chấm công, nghỉ phép, làm thêm của chính nhân viên: các màn đã có route nhưng trước đây thiếu mục menu nên nhân viên không vào được.
+  {
+    id: 'emp-timesheet',
+    title: 'Chấm công',
+    icon: <ClockCircleOutlined />,
+    path: '/employee/timesheet',
+  },
+  {
+    id: 'emp-leaves',
+    title: 'Nghỉ phép',
+    icon: <CalendarOutlined />,
+    path: '/employee/leaves',
+  },
+  {
+    id: 'emp-overtime',
+    title: 'Làm thêm giờ',
+    icon: <ClockCircleOutlined />,
+    path: '/employee/overtime',
+  },
   {
     id: 'emp-contracts',
     title: 'Hợp đồng',
