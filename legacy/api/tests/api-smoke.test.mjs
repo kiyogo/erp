@@ -3228,6 +3228,23 @@ test('unused annual leave carries over to the next year by agreement within the 
   assert.equal((await request('/collections/attendance_leave_summary')).data.find((item) => item.key === from.key).carriedForward, 5);
 });
 
+test('employees cannot approve their own payroll bank account and see their real account overview', async () => {
+  await request('/users', 'POST', { email: 'bank-self@example.test', name: 'Bank Self', password: 'Bank-Self-26!Secure', employeeCode: 'TEST-BANK-SELF', role: 'USER' }, 201);
+  const login = await request('/auth/login', 'POST', { email: 'bank-self@example.test', password: 'Bank-Self-26!Secure' });
+  const staff = { ...headers, Authorization: `Bearer ${login.access_token || login.token}` };
+  const account = { id: 'ba-self-1', bankName: 'Vietcombank', accountNumber: '0011001234567', accountHolder: 'BANK SELF', status: 'Đã duyệt', approvedAt: '2026-01-01' };
+  const created = (await request('/collections/employee_bank_accounts', 'POST', { record: account }, 201, staff)).record;
+  assert.deepEqual([created.status, created.approvedAt], ['Chờ duyệt', undefined]);
+  await request('/collections/employee_bank_accounts/ba-self-1', 'PATCH', { patch: { status: 'Đã duyệt' } });
+  assert.equal((await request('/collections/employee_bank_accounts/ba-self-1', 'PATCH', { patch: { note: 'x', status: 'Từ chối' } }, 200, staff)).record.status, 'Đã duyệt');
+  assert.equal((await request('/collections/employee_bank_accounts/ba-self-1', 'PATCH', { patch: { accountNumber: '0011009999999' } }, 200, staff)).record.status, 'Chờ duyệt');
+
+  const overview = await request('/auth/account-overview', 'GET', undefined, 200, staff);
+  assert.deepEqual([overview.role, overview.twoFactorEnabled, overview.passkeyCount, overview.securityPinConfigured], ['USER', false, 0, false]);
+  assert.ok(overview.currentSession?.loginTime);
+  assert.ok(Array.isArray((await request('/auth/activity', 'GET', undefined, 200, staff)).data));
+});
+
 test('shifts need a legal break and night pay, and consecutive shifts need 12 hours of rest', async () => {
   const employee = (await request('/users', 'POST', { email: 'rest-law@example.test', name: 'Rest Law', password: 'Rest-Test-26!Secure', employeeCode: 'TEST-REST-LAW', role: 'USER' }, 201)).user;
   const shift = (key, startTime, endTime, extra = {}) => ({ key, shiftCode: key, shiftName: key, startTime, endTime, timeRange: `${startTime} - ${endTime}`, workingHours: 8, workUnits: 1, status: 'Đang áp dụng', ...extra });

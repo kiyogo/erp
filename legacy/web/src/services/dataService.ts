@@ -1366,10 +1366,6 @@ class DataService {
     return accounts.find((a) => a?.isPrimary) || accounts[0] || null;
   }
 
-  public updateEmployeeBankAccount(bankData: any): any[] {
-    return this.saveEmployeeBankAccount(bankData, false);
-  }
-
   public getEmployeeBankAccounts(): any[] {
     const data = this.getGenericData('employee_bank_accounts');
     return Array.isArray(data) ? data.filter(Boolean) : [];

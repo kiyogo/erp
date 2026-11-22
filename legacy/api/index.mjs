@@ -5304,6 +5304,17 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     throw new HttpError(422, 'Khóa bản ghi không hợp lệ.');
   }
   if (record.key === undefined) record.key = recordKey;
+  // Tài khoản nhận lương: nhân viên thêm hoặc đổi thông tin tài khoản thì luôn ở trạng thái chờ duyệt, chỉ quản trị viên (hoặc vai trò được ủy quyền
+  // nhân sự) duyệt hay từ chối; trước đây trang Phiếu lương gửi thẳng trạng thái Đã duyệt nên nhân viên tự đổi được tài khoản nhận lương.
+  if (scope === 'employee_bank_accounts' && actor.role !== 'ADMIN') {
+    const stored = current ? null : await db.prepare("SELECT * FROM collection_records WHERE scope = 'employee_bank_accounts' AND record_key = ? AND owner_id = ?").get(recordKey, actor.id);
+    const previous = current || (stored ? publicCollectionRecord(stored) : null);
+    const unchanged = previous && ['bankName', 'accountNumber', 'accountHolder', 'branch'].every((field) => String(previous[field] ?? '').trim() === String(record[field] ?? '').trim());
+    record.status = unchanged ? (previous.status || 'Chờ duyệt') : 'Chờ duyệt';
+    for (const field of ['approvedAt', 'approvedBy', 'rejectReason']) {
+      if (unchanged && previous[field] !== undefined) record[field] = previous[field]; else delete record[field];
+    }
+  }
   if (scope === 'finance_cash_counts') {
     if (current?.status === 'Đã phê duyệt') throw new HttpError(409, 'Biên bản đã được phê duyệt và không thể sửa.');
     record.code = requiredText(record.code, 'Mã kiểm kê', 80);
@@ -9459,6 +9470,44 @@ async function handleRequest(request, response) {
     const profile = await db.prepare('SELECT * FROM employee_profiles WHERE user_id = ?').get(user.id);
     const token = await createToken(user, request, method, true);
     sendJson(response, 200, { token, access_token: token, token_type: 'Bearer', expires_in: TOKEN_TTL_SECONDS, user: await publicUserWithAccess(user, profile) });
+    return;
+  }
+
+  // Tổng quan tài khoản của chính người dùng (trang Cài đặt tài khoản): vai trò, các lớp bảo mật đã bật, phiên hiện tại và lần đăng nhập trước, đều lấy
+  // từ dữ liệu thật thay cho số liệu trình bày cố định trước đây.
+  if (request.method === 'GET' && resource === '/auth/account-overview') {
+    const actor = await requireUser(request);
+    const user = await getUserById(actor.id);
+    const role = user.role_code && user.role !== 'ADMIN' ? await loadRoleRecord(user.role_code) : null;
+    const sessions = (await db.prepare("SELECT * FROM collection_records WHERE scope = 'admin_sessions' AND owner_id = ?").all(actor.id))
+      .map((row) => publicCollectionRecord(row)).filter((item) => item?.kind === 'auth_session')
+      .sort((a, b) => String(b.loginTime).localeCompare(String(a.loginTime)));
+    const currentKey = request.authSession?.key || '';
+    const sessionView = (item) => item ? { loginTime: item.loginTime || '', ip: item.ip || '', userAgent: item.userAgent || '', method: item.method || '', mfaVerified: item.mfaVerified === true } : null;
+    const twoFactor = await getUserTwoFactor(actor.id);
+    const pin = await getUserSecurityPin(actor.id);
+    sendJson(response, 200, {
+      role: user.role,
+      roleName: role?.name || role?.roleName || '',
+      twoFactorEnabled: twoFactor.enabled === true,
+      passkeyCount: (await userPasskeys(actor.id)).length,
+      securityPinConfigured: Boolean(pin.pinHash),
+      currentSession: sessionView(sessions.find((item) => item.key === currentKey)),
+      previousLogin: sessionView(sessions.find((item) => item.key !== currentKey)),
+      activeSessions: sessions.filter((item) => !item.revokedAt && Date.parse(item.expiresAt) > Date.now()).length,
+    });
+    return;
+  }
+
+  // Nhật ký thao tác của chính người dùng (trang Cài đặt > Nhật ký), đọc từ audit_events của máy chủ.
+  if (request.method === 'GET' && resource === '/auth/activity') {
+    const actor = await requireUser(request);
+    const limit = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+    const rows = await db.prepare("SELECT * FROM audit_events WHERE actor_id = ? AND action <> 'view_application' ORDER BY created_at DESC LIMIT ?").all(actor.id, limit);
+    sendJson(response, 200, { data: rows.map((row) => {
+      const details = parseJsonObject(row.details_json);
+      return { key: row.id, timestamp: String(row.created_at || '').replace('T', ' ').slice(0, 19), action: row.action, module: details.moduleLabel || row.resource_scope, resourceId: row.resource_id || '', detail: details.detail || (row.resource_id ? `Đối tượng: ${row.resource_id}` : '') };
+    }) });
     return;
   }
 

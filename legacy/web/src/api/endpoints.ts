@@ -1,5 +1,8 @@
 import api from './axios';
 
+export interface AccountSessionInfo { loginTime: string; ip: string; userAgent: string; method: string; mfaVerified: boolean }
+export interface AccountOverview { role: 'ADMIN' | 'USER'; roleName: string; twoFactorEnabled: boolean; passkeyCount: number; securityPinConfigured: boolean; currentSession: AccountSessionInfo | null; previousLogin: AccountSessionInfo | null; activeSessions: number }
+export interface AccountActivity { key: string; timestamp: string; action: string; module: string; resourceId: string; detail: string }
 export const authApi = {
   login:          (email: string, password: string) => api.post('/auth/login', { email, password }),
   loginGoogle:    (data?: any)                      => api.post('/auth/google', data || {}),
@@ -16,6 +19,8 @@ export const authApi = {
   getGoogleConfig: () => api.get<{ configured: boolean; clientId: string; allowedDomain: string }>('/auth/google/config'),
   logout: (token: string) => api.post<{ loggedOut: boolean }>('/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } }),
   getProfile:     ()                                 => api.get('/auth/profile'),
+  getAccountOverview: () => api.get<AccountOverview>('/auth/account-overview'),
+  getActivity: (limit = 200) => api.get<{ data: AccountActivity[] }>('/auth/activity', { params: { limit } }),
   changePassword: (data: { oldPassword?: string; currentPassword?: string; newPassword: string; confirmPassword?: string }) =>
     api.post<{ success: boolean; message: string }>('/auth/change-password', data),
 };

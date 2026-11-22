@@ -403,8 +403,9 @@ export const EmployeePayslipModule: React.FC = () => {
                 message.error('Vui lòng điền đầy đủ Tên ngân hàng, Số tài khoản và Tên chủ tài khoản!');
                 return;
               }
-              dataService.updateEmployeeBankAccount(bankForm);
-              message.success('Cập nhật thông tin tài khoản ngân hàng nhận lương thành công!');
+              // Tài khoản nhận lương do nhân viên khai luôn chờ quản trị viên duyệt (máy chủ cũng bắt buộc như vậy).
+              dataService.saveEmployeeBankAccount(bankForm, true);
+              message.success('Đã gửi tài khoản nhận lương, chờ quản trị viên duyệt.');
               setBankModalOpen(false);
             }}
           >

@@ -8,14 +8,17 @@ import {
 import { KTable } from '../../components/KTable';
 import { Button, Input, message } from '../../custom-ui';
 import { exportRowsToXlsx } from '../../utils/fileExporter';
-import { dataService, AuditLog } from '../../services/dataService';
+import { authApi, type AccountActivity } from '../../api/endpoints';
 
 export const LogsSettingsModule: React.FC = () => {
-  const [data, setData] = useState<AuditLog[]>([]);
+  // Nhật ký thao tác của chính tài khoản, đọc từ máy chủ (trước đây đọc bộ nhớ trình duyệt và luôn ghi người thực hiện là "Quản trị viên").
+  const [data, setData] = useState<AccountActivity[]>([]);
   const [searchText, setSearchText] = useState('');
 
   const loadData = () => {
-    setData(dataService.getAuditLogs());
+    authApi.getActivity(500)
+      .then((response) => setData(response.data.data))
+      .catch((error: any) => message.error(error?.response?.data?.message || 'Không tải được nhật ký.'));
   };
 
   useEffect(() => {
@@ -27,7 +30,7 @@ export const LogsSettingsModule: React.FC = () => {
       (l.action || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (l.module || '').toLowerCase().includes(searchText.toLowerCase()) ||
       (l.detail || '').toLowerCase().includes(searchText.toLowerCase()) ||
-      (l.user || '').toLowerCase().includes(searchText.toLowerCase())
+      (l.resourceId || '').toLowerCase().includes(searchText.toLowerCase())
   );
 
   const columns = [
@@ -36,12 +39,6 @@ export const LogsSettingsModule: React.FC = () => {
       dataIndex: 'timestamp',
       key: 'timestamp',
       render: (t: string) => <span style={{ fontWeight: 600, color: '#009688', fontSize: 12.5 }}>{t}</span>,
-    },
-    {
-      title: 'Người thực hiện',
-      dataIndex: 'user',
-      key: 'user',
-      render: (u: string) => <span style={{ fontWeight: 500, color: '#212121' }}>{u}</span>,
     },
     {
       title: 'Hành động',
@@ -88,7 +85,7 @@ export const LogsSettingsModule: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <Input
           prefix={<SearchOutlined style={{ color: '#bbb' }} />}
-          placeholder="Tìm theo hành động, người thực hiện, phân hệ, nội dung..."
+          placeholder="Tìm theo hành động, phân hệ, nội dung..."
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           style={{ width: 360, borderRadius: 6 }}
@@ -98,7 +95,7 @@ export const LogsSettingsModule: React.FC = () => {
           <Button icon={<ReloadOutlined />} onClick={loadData}>
           Làm mới
         </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => { if (!data.length) { message.warning('Không có bản ghi nhật ký để xuất.'); return; } const count = exportRowsToXlsx('Nhat_ky_he_thong', [{ title: 'Thời gian', dataIndex: 'timestamp' }, { title: 'Người dùng', dataIndex: 'user' }, { title: 'Vai trò', dataIndex: 'role' }, { title: 'Hành động', dataIndex: 'action' }, { title: 'Phân hệ', dataIndex: 'module' }, { title: 'Chi tiết', dataIndex: 'detail' }, { title: 'Mã đối tượng', dataIndex: 'resourceId' }], data); message.success(`Đã xuất ${count} bản ghi nhật ký ra tệp Excel.`); }}>
+          <Button icon={<DownloadOutlined />} onClick={() => { if (!data.length) { message.warning('Không có bản ghi nhật ký để xuất.'); return; } const count = exportRowsToXlsx('Nhat_ky_he_thong', [{ title: 'Thời gian', dataIndex: 'timestamp' }, { title: 'Hành động', dataIndex: 'action' }, { title: 'Phân hệ', dataIndex: 'module' }, { title: 'Chi tiết', dataIndex: 'detail' }, { title: 'Mã đối tượng', dataIndex: 'resourceId' }], data); message.success(`Đã xuất ${count} bản ghi nhật ký ra tệp Excel.`); }}>
             Xuất Excel
           </Button>
         </div>

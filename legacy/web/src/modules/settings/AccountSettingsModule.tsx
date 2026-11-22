@@ -1,234 +1,175 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   UserOutlined,
-  MailOutlined,
-  PhoneOutlined,
   SafetyCertificateOutlined,
-  SaveOutlined,
   PrinterOutlined,
-  CheckCircleOutlined,
-  KeyOutlined,
-  AuditOutlined,
-  IdcardOutlined,
   FileTextOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
-import { Button, Input, message, Tag, Card, Tooltip, Progress, Form, Select } from '../../custom-ui';
+import { Button, Tag, message } from '../../custom-ui';
 import { exportRecordToPdf } from '../../utils/fileExporter';
-import { dataService } from '../../services/dataService';
+import { authApi, type AccountActivity, type AccountOverview, type AccountSessionInfo } from '../../api/endpoints';
 
+interface AccountProfile {
+  name?: string;
+  email?: string;
+  employeeCode?: string;
+  phone?: string;
+  department?: string;
+  position?: string;
+}
+
+const formatTime = (iso?: string) => {
+  if (!iso) return '';
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('vi-VN', { hour12: false });
+};
+
+const sessionNote = (session: AccountSessionInfo | null) => (session ? [session.ip && `IP ${session.ip}`, session.method === 'passkey' ? 'khóa truy cập' : session.mfaVerified ? 'có xác minh 2 bước' : ''].filter(Boolean).join(' · ') : '');
+
+// Trang Cài đặt tài khoản dùng chung cho quản trị viên và nhân viên. Mọi số liệu lấy từ máy chủ (/auth/profile, /auth/account-overview, /auth/activity);
+// trước đây trang hiện cấp bảo mật, vai trò, chứng thư số, lần đăng nhập và nhật ký cố định không đúng với tài khoản.
 export const AccountSettingsModule: React.FC = () => {
-  const sessionUser = (() => {
-    try {
-      const u = localStorage.getItem('minepanel_user');
-      return u ? JSON.parse(u) : null;
-    } catch {
-      return null;
-    }
-  })();
-  const empProfile = dataService.getEmployeeProfile();
-
-  const [name, setName] = useState(sessionUser?.name || empProfile?.name || 'Quản Trị Viên');
-  const [email, setEmail] = useState(sessionUser?.email || empProfile?.email || '');
-  const [phone, setPhone] = useState(sessionUser?.phone || empProfile?.phone || '');
-  const [department, setDepartment] = useState(empProfile?.department || 'Ban Giám Đốc');
-  const [position, setPosition] = useState(empProfile?.position || sessionUser?.role || 'Quản Trị Hệ Thống');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const portal = location.pathname.startsWith('/employee') ? '/employee' : '/admin';
+  const [profile, setProfile] = useState<AccountProfile | null>(null);
+  const [overview, setOverview] = useState<AccountOverview | null>(null);
+  const [activity, setActivity] = useState<AccountActivity[]>([]);
   const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'activity'>('profile');
 
-  const handleSave = () => {
-    dataService.updateEmployeeProfile({
-      name,
-      email,
-      phone,
-      department,
-      position,
-    });
-    dataService.logAction('Cập nhật', 'Cài đặt', 'Cập nhật thông tin tài khoản cá nhân');
-    message.success('Đã cập nhật và lưu hồ sơ tài khoản thành công!');
-  };
+  useEffect(() => {
+    Promise.all([authApi.getProfile(), authApi.getAccountOverview(), authApi.getActivity(10)])
+      .then(([profileResponse, overviewResponse, activityResponse]) => {
+        setProfile((profileResponse.data as any)?.user || null);
+        setOverview(overviewResponse.data);
+        setActivity(activityResponse.data.data);
+      })
+      .catch((error: any) => message.error(error?.response?.data?.message || 'Không tải được thông tin tài khoản.'));
+  }, []);
+
+  const layers = overview ? [overview.twoFactorEnabled && 'xác minh 2 bước', overview.passkeyCount > 0 && 'khóa truy cập', overview.securityPinConfigured && 'mã PIN bảo mật'].filter(Boolean) as string[] : [];
+  const level = !overview ? 'Đang tải' : layers.length >= 2 ? 'Cao' : layers.length === 1 ? 'Trung bình' : 'Cơ bản';
+  const roleTitle = !overview ? 'Đang tải' : overview.role === 'ADMIN' ? 'Quản trị viên' : 'Nhân viên';
+  const profileRows: Array<[string, string]> = [
+    ['Họ và tên', profile?.name || ''],
+    ['Email đăng nhập', profile?.email || ''],
+    ['Mã nhân viên', profile?.employeeCode || ''],
+    ['Số điện thoại', profile?.phone || ''],
+    ['Phòng ban', profile?.department || ''],
+    ['Chức danh', profile?.position || ''],
+  ];
+  const securityRows = overview ? [
+    { title: 'Xác minh 2 bước', note: 'Nhập mã từ ứng dụng xác thực khi đăng nhập', on: overview.twoFactorEnabled, path: `${portal}/settings/security/twosv` },
+    { title: 'Khóa truy cập (passkey)', note: overview.passkeyCount ? `Đã đăng ký ${overview.passkeyCount} khóa, dùng đăng nhập và xác nhận chữ ký số` : 'Đăng nhập bằng vân tay, khuôn mặt hoặc khóa bảo mật của thiết bị', on: overview.passkeyCount > 0, path: `${portal}/settings/security` },
+    { title: 'Mã PIN bảo mật', note: 'Xác nhận các thao tác nhạy cảm như ghi sổ, quyết toán thuế', on: overview.securityPinConfigured, path: `${portal}/settings/security` },
+  ] : [];
+
+  const card = (title: string, value: string, note: string, color: string) => (
+    <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
+      <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>{title}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color, marginTop: 4 }}>{value}</div>
+      <div style={{ fontSize: 11.5, color, marginTop: 2 }}>{note}</div>
+    </div>
+  );
 
   return (
     <div style={{ padding: '16px 10px', width: '100%', boxSizing: 'border-box' }}>
-      {/* 4 KPI Metric Cards Top Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, marginBottom: 16 }}>
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Cấp độ bảo mật tài khoản</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#16A34A', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <SafetyCertificateOutlined /> Cực Cao
-          </div>
-          <div style={{ fontSize: 11.5, color: '#16A34A', marginTop: 2 }}>Đã xác thực FIDO2 &amp; OTP phần cứng</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Vai trò &amp; Đặc quyền hệ thống</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED', marginTop: 4 }}>
-            Super Admin
-          </div>
-          <div style={{ fontSize: 11.5, color: '#7C3AED', marginTop: 2 }}>Toàn quyền điều phối và ký số HSM</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Tình trạng liên kết Chữ ký số</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#009688', marginTop: 4 }}>
-            VNPT-CA Online
-          </div>
-          <div style={{ fontSize: 11.5, color: '#009688', marginTop: 2 }}>Chứng thư số HSM có hiệu lực đến 2028</div>
-        </div>
-
-        <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: '14px 18px' }}>
-          <div style={{ fontSize: 12.5, color: '#64748B', fontWeight: 500 }}>Lần đăng nhập gần nhất</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1E40AF', marginTop: 4 }}>
-            08:15 Sáng nay
-          </div>
-          <div style={{ fontSize: 11.5, color: '#1E40AF', marginTop: 2 }}>Từ địa chỉ IP Keangnam Landmark 72</div>
-        </div>
+        {card('Mức bảo mật tài khoản', level, layers.length ? `Đã bật ${layers.join(', ')}` : overview ? 'Chỉ dùng mật khẩu' : '', layers.length >= 2 ? '#16A34A' : layers.length ? '#D97706' : '#DC2626')}
+        {card('Vai trò trong hệ thống', roleTitle, overview?.roleName ? `Vai trò nghiệp vụ: ${overview.roleName}` : overview?.role === 'ADMIN' ? 'Toàn quyền quản trị' : overview ? 'Quyền của tài khoản nhân viên' : '', '#7C3AED')}
+        {card('Phiên đăng nhập đang mở', overview ? `${overview.activeSessions} phiên` : 'Đang tải', overview?.currentSession ? `Phiên này từ ${formatTime(overview.currentSession.loginTime)}` : '', '#009688')}
+        {card('Lần đăng nhập trước', overview ? (overview.previousLogin ? formatTime(overview.previousLogin.loginTime) : 'Chưa có') : 'Đang tải', sessionNote(overview?.previousLogin || null), '#1E40AF')}
       </div>
 
-      {/* Filter Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
-            { key: 'profile', label: 'Hồ sơ cá nhân & Chức danh', icon: <UserOutlined style={{ color: '#3B82F6' }} /> },
-            { key: 'security', label: 'Thiết lập an toàn & Ký số', icon: <SafetyCertificateOutlined style={{ color: '#10B981' }} /> },
-            { key: 'activity', label: 'Nhật ký hoạt động gần đây', icon: <FileTextOutlined style={{ color: '#3B82F6' }} /> },
+            { key: 'profile', label: 'Thông tin tài khoản', icon: <UserOutlined style={{ color: '#3B82F6' }} /> },
+            { key: 'security', label: 'Bảo mật', icon: <SafetyCertificateOutlined style={{ color: '#10B981' }} /> },
+            { key: 'activity', label: 'Hoạt động gần đây', icon: <FileTextOutlined style={{ color: '#3B82F6' }} /> },
           ].map((tab) => (
             <Button
               key={tab.key}
-              size="small"
-              onClick={() => setActiveTab(tab.key as any)}
+              icon={tab.icon}
+              onClick={() => setActiveTab(tab.key as typeof activeTab)}
               style={{
                 backgroundColor: activeTab === tab.key ? '#E0F2F1' : '#FFFFFF',
                 borderColor: activeTab === tab.key ? '#009688' : '#CBD5E1',
                 color: activeTab === tab.key ? '#00796B' : '#475569',
-                fontWeight: activeTab === tab.key ? 700 : 500,
               }}
             >
               {tab.label}
             </Button>
           ))}
         </div>
-
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button
-            icon={<PrinterOutlined />}
-            onClick={() => exportRecordToPdf('Ho_so_can_bo', 'HO SO CAN BO NHAN SU', [['Họ và tên', name], ['Email', email], ['Điện thoại', phone], ['Đơn vị', department], ['Chức danh', position]])}
-          >
-            In Hồ Sơ Cán Bộ (A4)
+          <Button icon={<PrinterOutlined />} disabled={!profile} onClick={() => exportRecordToPdf('Thong_tin_tai_khoan', 'THONG TIN TAI KHOAN', profileRows)}>
+            In thông tin tài khoản
           </Button>
-
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            onClick={handleSave}
-            style={{ backgroundColor: '#009688', borderColor: '#009688' }}
-          >
-            Lưu thay đổi hồ sơ
-          </Button>
+          {portal === '/employee' && (
+            <Button type="primary" icon={<EditOutlined />} onClick={() => navigate('/employee/profile')} style={{ backgroundColor: '#009688', borderColor: '#009688' }}>
+              Sửa hồ sơ cá nhân
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Main Tab Content */}
       <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, padding: 24, maxWidth: 880 }}>
         {activeTab === 'profile' && (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, paddingBottom: 20, borderBottom: '1px solid #F1F5F9' }}>
-              <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #009688, #004D40)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 800, boxShadow: '0 4px 12px rgba(0, 150, 136, 0.25)' }}>
-                {name.charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A' }}>{name}</div>
-                <div style={{ fontSize: 13, color: '#64748B', marginTop: 2 }}>Mã cán bộ: <strong style={{ color: '#009688' }}>{sessionUser?.employee_code || sessionUser?.code || empProfile?.code || 'NV-001'}</strong> · Vai trò: <strong>{sessionUser?.role || 'Thành viên'}</strong></div>
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <Tag color="success">Đang hoạt động</Tag>
-                  <Tag color="purple">{position}</Tag>
-                </div>
-              </div>
-            </div>
-
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-              <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Họ và tên hiển thị</label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Email doanh nghiệp</label>
-                <Input value={email} onChange={(e) => setEmail(e.target.value)} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Số điện thoại hotline</label>
-                <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Phòng ban công tác</label>
-                <Input value={department} onChange={(e) => setDepartment(e.target.value)} />
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ fontSize: 12.5, fontWeight: 600, color: '#334155', display: 'block', marginBottom: 6 }}>Chức vụ &amp; Nhiệm vụ quản lý</label>
-                <Input value={position} onChange={(e) => setPosition(e.target.value)} />
-              </div>
+              {profileRows.map(([label, value]) => (
+                <div key={label}>
+                  <div style={{ fontSize: 12.5, color: '#64748B', marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 13.5, color: '#0F172A' }}>{value || 'Chưa có'}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 18 }}>
+              {portal === '/employee'
+                ? 'Họ tên, điện thoại và các thông tin cá nhân khác sửa ở Hồ sơ cá nhân; email đăng nhập, mã nhân viên, phòng ban, chức danh do quản trị viên cập nhật.'
+                : 'Email đăng nhập, mã nhân viên, phòng ban, chức danh cập nhật ở Quản trị hệ thống, Quản lý người dùng.'}
             </div>
           </div>
         )}
 
         {activeTab === 'security' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <SafetyCertificateOutlined style={{ color: '#009688' }} /> Chính Sách An Toàn &amp; Chữ Ký Số Pháp Lý
-            </div>
-
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Xác thực 2 bước</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>Bắt buộc nhập mã OTP hoặc vân tay khi đăng nhập từ thiết bị mới</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {securityRows.map((row) => (
+              <div key={row.title} style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 13.5, color: '#0F172A' }}>{row.title}</div>
+                  <div style={{ fontSize: 12, color: '#64748B' }}>{row.note}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Tag color={row.on ? 'success' : 'default'}>{row.on ? 'Đã bật' : 'Chưa bật'}</Tag>
+                  <Button onClick={() => navigate(row.path)}>Thiết lập</Button>
+                </div>
               </div>
-              <Tag color="success">Đã kích hoạt</Tag>
-            </div>
-
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            ))}
+            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Chữ ký số Cloud HSM</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>Dùng ký duyệt văn bản điện tử và ủy nhiệm chi ngân hàng tự động</div>
+                <div style={{ fontSize: 13.5, color: '#0F172A' }}>Mật khẩu đăng nhập</div>
+                <div style={{ fontSize: 12, color: '#64748B' }}>Đổi mật khẩu ở trang Bảo mật</div>
               </div>
-              <Tag color="cyan">Sẵn sàng ký số</Tag>
-            </div>
-
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: '#0F172A' }}>Chính sách đổi mật khẩu định kỳ</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>Đã đổi mật khẩu 14 ngày trước · Còn 76 ngày cho chu kỳ tiếp theo</div>
-              </div>
-              <Button size="small" onClick={() => setActiveTab('security')}>Đổi ngay</Button>
+              <Button onClick={() => navigate(`${portal}/settings/security`)}>Đổi mật khẩu</Button>
             </div>
           </div>
         )}
 
         {activeTab === 'activity' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AuditOutlined style={{ color: '#009688' }} /> Lịch Sử Đăng Nhập &amp; Thao Tác Gần Đây
-            </div>
-
-            <div style={{ padding: '10px 14px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#0F172A' }}>Đăng nhập thành công từ Chrome Enterprise macOS</div>
-                <div style={{ fontSize: 11.5, color: '#64748B' }}>IP: 113.190.234.12 · Văn phòng Keangnam 72 · Hôm nay 08:15:20</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {!activity.length && <div style={{ fontSize: 12.5, color: '#64748B' }}>Chưa có hoạt động nào được ghi nhận.</div>}
+            {activity.map((item) => (
+              <div key={item.key} style={{ padding: '10px 14px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
+                <div style={{ fontSize: 13, color: '#0F172A' }}>{item.action}</div>
+                <div style={{ fontSize: 11.5, color: '#64748B' }}>{[item.timestamp, item.module, item.detail].filter(Boolean).join(' · ')}</div>
               </div>
-              <Tag color="success">Hợp lệ</Tag>
-            </div>
-
-            <div style={{ padding: '10px 14px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#0F172A' }}>Ký số phê duyệt Hợp đồng HD-2026-ACB-01</div>
-                <div style={{ fontSize: 11.5, color: '#64748B' }}>IP: 113.190.234.12 · Token HSM Verified · Hôm nay 15:12:45</div>
-              </div>
-              <Tag color="blue">Ký số HSM</Tag>
-            </div>
-
-            <div style={{ padding: '10px 14px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#0F172A' }}>Xuất bảng cân đối số phát sinh Q3/2026 ra Excel</div>
-                <div style={{ fontSize: 11.5, color: '#64748B' }}>IP: 113.190.234.12 · Hôm qua 16:45:00</div>
-              </div>
-              <Tag color="cyan">Xuất tệp</Tag>
+            ))}
+            <div>
+              <Button onClick={() => navigate(`${portal}/settings/logs`)}>Xem toàn bộ nhật ký</Button>
             </div>
           </div>
         )}
@@ -236,4 +177,3 @@ export const AccountSettingsModule: React.FC = () => {
     </div>
   );
 };
-
