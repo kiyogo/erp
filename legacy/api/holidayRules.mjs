@@ -67,3 +67,23 @@ export const isNonWorkingDay = (iso) => [0, 6].includes(weekday(iso)) || isHolid
 // của doanh nghiệp vì lịch nghỉ hằng tuần có thể khác).
 export const isPublicNonWorkingDay = (iso) => [0, 6].includes(weekday(iso))
   || holidaysOf(Number(String(iso).slice(0, 4))).some((item) => item.date === iso && item.kind !== 'compensation');
+
+// Người lao động nước ngoài được nghỉ thêm 01 ngày Tết cổ truyền và 01 ngày Quốc khánh của nước họ (Bộ luật Lao động 2019 Điều 112 khoản 2).
+// Hồ sơ ghi `homeNationalDay` (MM-DD) và `homeNewYearRule` ('lunar' theo mùng 1 âm lịch, 'fixed' theo `homeNewYearDate` MM-DD). Ngày trùng ngày lễ
+// của Việt Nam hoặc ngày nghỉ hằng tuần thì dời sang ngày làm việc kế tiếp để vẫn được nghỉ thêm.
+const MONTH_DAY = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+export const isMonthDay = (value) => MONTH_DAY.test(String(value || '')) && !Number.isNaN(Date.parse(`2024-${value}T00:00:00Z`)) && new Date(`2024-${value}T00:00:00Z`).toISOString().slice(5, 10) === value;
+
+export function personalHolidays(details, year) {
+  const wanted = [];
+  if (details?.homeNewYearRule === 'lunar') wanted.push({ date: lunarToSolar(1, 1, year), name: 'Tết cổ truyền của nước người lao động' });
+  else if (details?.homeNewYearRule === 'fixed' && isMonthDay(details.homeNewYearDate)) wanted.push({ date: `${year}-${details.homeNewYearDate}`, name: 'Tết cổ truyền của nước người lao động' });
+  if (isMonthDay(details?.homeNationalDay)) wanted.push({ date: `${year}-${details.homeNationalDay}`, name: 'Quốc khánh của nước người lao động' });
+  const taken = new Set(holidaysOf(year).map((item) => item.date));
+  return wanted.filter((item) => item.date.startsWith(`${year}-`) && !Number.isNaN(Date.parse(item.date))).map((item) => {
+    let day = item.date;
+    while (taken.has(day) || isWeeklyRestDay(day)) day = addDays(day, 1);
+    taken.add(day);
+    return { date: day, name: day === item.date ? item.name : `${item.name} (dời do trùng ngày nghỉ)`, kind: 'foreign' };
+  });
+}

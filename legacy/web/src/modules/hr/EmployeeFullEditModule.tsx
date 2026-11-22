@@ -3606,6 +3606,24 @@ export const EmployeeFullEditModule: React.FC = () => {
                       </>
                     )}
                   </div>
+                  <div className="k-form-grid-3" style={{ marginTop: 10 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Quốc khánh nước mình (tháng-ngày)</label>
+                      <Input placeholder="Ví dụ: 10-03" value={formData.homeNationalDay || ''} onChange={e => handleChange('homeNationalDay', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Tết cổ truyền nước mình</label>
+                      <Select value={formData.homeNewYearRule} onChange={val => handleChange('homeNewYearRule', val)}
+                        options={[{ label: 'Theo âm lịch (mùng 1 Tết)', value: 'lunar' }, { label: 'Ngày cố định', value: 'fixed' }]} />
+                    </div>
+                    {formData.homeNewYearRule === 'fixed' && (
+                      <div>
+                        <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Ngày Tết cố định (tháng-ngày)</label>
+                        <Input placeholder="Ví dụ: 04-13" value={formData.homeNewYearDate || ''} onChange={e => handleChange('homeNewYearDate', e.target.value)} />
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Được nghỉ thêm 01 ngày Tết cổ truyền và 01 ngày Quốc khánh của nước mình (Điều 112 khoản 2); trùng ngày nghỉ của Việt Nam thì dời sang ngày làm việc kế tiếp, tự cộng vào bảng công và tính làm thêm 300%.</div>
                   <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Bắt buộc có số hộ chiếu. Hợp đồng lao động phải xác định thời hạn và không vượt ngày hết hạn này; hệ thống nhắc trước 45, 30, 14, 7, 1 ngày và không tính bảo hiểm thất nghiệp trong bảng lương.</div>
                 </div>
               )}

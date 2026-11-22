@@ -5663,7 +5663,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
       if (!Number.isFinite(record[field]) || record[field] < 0 || record[field] > (OVERTIME_HOUR_FIELDS.includes(field) ? days * 24 : days)) throw new HttpError(422, 'Số ngày hoặc giờ công không hợp lệ.');
     }
     // Ngày lễ, tết, nghỉ bù rơi vào ngày làm việc do máy chủ tính từ lịch nghỉ lễ (timesheetRules.mjs) và cộng vào ngày hưởng lương (Điều 112).
-    record.holidayDays = monthCalendar(record.month).holidayDays;
+    const summaryOwner = await db.prepare('SELECT p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.employee_code = ? LIMIT 1').get(String(record.empCode || record.employeeCode || '').toUpperCase());
+    record.holidayDays = monthCalendar(record.month, summaryOwner ? parseJsonObject(summaryOwner.details_json) : null).holidayDays;
     if (!record.standardDays || record.actualDays + record.paidLeaveDays + record.unpaidLeaveDays + record.holidayDays > days) throw new HttpError(422, `Tổng ngày công, nghỉ và ${record.holidayDays} ngày lễ vượt số ngày trong tháng (ngày lễ đã tự cộng, không nhập vào công thực tế hay phép).`);
     if (current?.status === 'Đã khóa công') throw new HttpError(422, 'Bảng công đã khóa không thể thay đổi.');
     record.employeeCode = record.empCode;
@@ -5821,7 +5822,8 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     record.totalAmount = Math.round(record.totalHours * record.multiplier * record.baseHourlyRate);
     record.status = oneOf(record.status || 'Chờ phê duyệt', 'Trạng thái làm thêm', ['Chờ phê duyệt', 'Chờ duyệt', 'Đã duyệt OT', 'Từ chối']);
     // Điều 98: làm thêm được trả ít nhất 150% ngày thường, 200% ngày nghỉ hằng tuần (chủ nhật), 300% ngày lễ, tết (ngày lễ dương lịch cố định).
-    record.minMultiplier = overtimeMinMultiplier(record.otDate);
+    const overtimeOwnerRow = record.employeeId ? await db.prepare('SELECT details_json FROM employee_profiles WHERE user_id = ?').get(record.employeeId) : null;
+    record.minMultiplier = overtimeMinMultiplier(record.otDate, overtimeOwnerRow ? parseJsonObject(overtimeOwnerRow.details_json) : null);
     if (record.status === 'Đã duyệt OT' && record.multiplier < record.minMultiplier) throw new HttpError(422, `Hệ số làm thêm ngày ${record.otDate} tối thiểu ${record.minMultiplier * 100}% theo Điều 98 Bộ luật Lao động 2019.`);
   }
   if (['leave_requests', 'attendance_overtime'].includes(scope)) {
@@ -15713,10 +15715,12 @@ async function handleRequest(request, response) {
     const month = String(url.searchParams.get('month') || '');
     const code = String(url.searchParams.get('employeeCode') || '').trim().toLocaleLowerCase('vi-VN');
     let calendar;
-    try { calendar = monthCalendar(month); } catch (error) { throw new HttpError(422, error.message); }
+    const owner = code ? await db.prepare('SELECT p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE LOWER(u.employee_code) = ? LIMIT 1').get(code) : null;
+    const ownerDetails = owner ? parseJsonObject(owner.details_json) : null;
+    try { calendar = monthCalendar(month, ownerDetails); } catch (error) { throw new HttpError(422, error.message); }
     const overtime = code ? (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'attendance_overtime'").all()).map((row) => parseJsonObject(row.payload_json))
       .filter((item) => item.status === 'Đã duyệt OT' && String(item.employeeCode || item.empCode || '').toLocaleLowerCase('vi-VN') === code) : [];
-    sendJson(response, 200, { calendar, overtime: overtimeBreakdown(overtime, month), approvedOvertimeCount: overtime.filter((item) => String(item.otDate).startsWith(`${month}-`)).length });
+    sendJson(response, 200, { calendar, overtime: overtimeBreakdown(overtime, month, ownerDetails), approvedOvertimeCount: overtime.filter((item) => String(item.otDate).startsWith(`${month}-`)).length });
     return;
   }
 

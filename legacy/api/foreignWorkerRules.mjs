@@ -5,6 +5,8 @@
 // bảo hiểm thất nghiệp (Luật Việc làm). Xác minh qua bài tổng hợp (ey.com, kpmg.com, luatvietan.vn), chưa đối chiếu bản gốc; số ngày phải nộp hồ sơ
 // gia hạn trước khi hết hạn chưa xác nhận nên hệ thống nhắc từ 45 ngày.
 
+import { isMonthDay } from './holidayRules.mjs';
+
 const VIETNAM = new Set(['việt nam', 'viet nam', 'vietnam', 'vn', 'vnm']);
 export const isForeignNationality = (value) => {
   const text = String(value ?? '').trim().toLocaleLowerCase('vi-VN');
@@ -12,7 +14,7 @@ export const isForeignNationality = (value) => {
 };
 
 export const WORK_PERMIT_STATUSES = { permit: 'Có giấy phép lao động', exempt: 'Không thuộc diện cấp giấy phép (đã có xác nhận)', pending: 'Đang xin giấy phép' };
-const FIELDS = ['nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
+const FIELDS = ['homeNationalDay', 'homeNewYearRule', 'homeNewYearDate', 'nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
 const isoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 const addYears = (iso, years) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y + years, m - 1, d)).toISOString().slice(0, 10); };
 
@@ -21,6 +23,10 @@ export function workPermitProblem(details, previous = {}) {
   if (!isForeignNationality(details.nationality)) return '';
   if (!FIELDS.some((field) => String(details[field] ?? '') !== String(previous[field] ?? ''))) return '';
   if (!String(details.passportNumber || '').trim()) return 'Người lao động nước ngoài phải có số hộ chiếu.';
+  // Ngày nghỉ thêm Tết cổ truyền và Quốc khánh của nước người lao động (Điều 112 khoản 2): ngày dạng MM-DD.
+  if (details.homeNationalDay && !isMonthDay(details.homeNationalDay)) return 'Ngày Quốc khánh của nước người lao động phải có dạng tháng-ngày (MM-DD).';
+  if (details.homeNewYearRule && !['lunar', 'fixed'].includes(details.homeNewYearRule)) return 'Tết cổ truyền phải theo âm lịch hoặc ngày cố định.';
+  if (details.homeNewYearRule === 'fixed' && !isMonthDay(details.homeNewYearDate)) return 'Nhập ngày Tết cổ truyền cố định dạng tháng-ngày (MM-DD).';
   const status = details.workPermitStatus;
   if (!WORK_PERMIT_STATUSES[status]) return 'Chọn tình trạng giấy phép lao động: có giấy phép, không thuộc diện cấp giấy phép hoặc đang xin giấy phép.';
   if (status === 'exempt') {

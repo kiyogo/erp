@@ -37,3 +37,18 @@ test('người nước ngoài không đóng bảo hiểm thất nghiệp', () =>
   assert.equal(calculatePayslip({ ...base, unemploymentInsured: false }).employeeInsurance.unemployment, 0);
   assert.equal(calculatePayslip(base).employeeInsurance.unemployment, 300_000);
 });
+
+test('ngày nghỉ thêm của người nước ngoài: Tết cổ truyền và Quốc khánh nước họ, dời khi trùng ngày nghỉ', async () => {
+  const { personalHolidays, setHolidayOverrides } = await import('../holidayRules.mjs');
+  const { monthCalendar } = await import('../timesheetRules.mjs');
+  const { overtimeMinMultiplier } = await import('../attendanceRules.mjs');
+  setHolidayOverrides({});
+  const korean = { ...permit, homeNewYearRule: 'lunar', homeNationalDay: '10-03' };
+  assert.deepEqual(personalHolidays(korean, 2026).map((item) => item.date), ['2026-02-23', '2026-10-05']);
+  assert.equal(monthCalendar('2026-02', korean).holidayDays, 6);
+  assert.equal(monthCalendar('2026-02').holidayDays, 5);
+  assert.equal(overtimeMinMultiplier('2026-10-05', korean), 3);
+  assert.equal(overtimeMinMultiplier('2026-10-05'), 1.5);
+  assert.match(workPermitProblem({ ...permit, homeNationalDay: '13-40' }), /MM-DD/);
+  assert.match(workPermitProblem({ ...permit, homeNewYearRule: 'fixed' }), /cố định/);
+});
