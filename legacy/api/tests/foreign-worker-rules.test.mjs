@@ -52,3 +52,23 @@ test('ngày nghỉ thêm của người nước ngoài: Tết cổ truyền và 
   assert.match(workPermitProblem({ ...permit, homeNationalDay: '13-40' }), /MM-DD/);
   assert.match(workPermitProblem({ ...permit, homeNewYearRule: 'fixed' }), /cố định/);
 });
+
+test('báo cáo sử dụng lao động nước ngoài: người làm trong kỳ, thống kê và các vấn đề cần xử lý', async () => {
+  const { buildForeignWorkerReport, foreignReportPeriod } = await import('../foreignWorkerRules.mjs');
+  assert.equal(foreignReportPeriod('2026-h1').deadline, '2026-07-05');
+  assert.equal(foreignReportPeriod('2026').deadline, '2027-01-05');
+  assert.throws(() => foreignReportPeriod('2026-H3'), /Kỳ báo cáo/);
+  const people = [
+    { name: 'Kim', employeeCode: 'FW-1', details: { ...permit, foreignJobCategory: 'expert' }, joinDate: '2026-02-01', contract: { code: 'HD1', startDate: '2026-02-01', endDate: '2028-06-30' } },
+    { name: 'Tanaka', employeeCode: 'FW-2', details: { nationality: 'Nhật Bản', workPermitStatus: 'pending' }, joinDate: '2026-05-01' },
+    { name: 'Lan', employeeCode: 'VN-1', details: { nationality: 'Việt Nam' } },
+    { name: 'Smith', employeeCode: 'FW-3', details: { nationality: 'Anh', workPermitStatus: 'exempt', workPermitExemptReason: 'Dưới 90 ngày' }, joinDate: '2026-08-01' },
+  ];
+  const report = buildForeignWorkerReport(people, '2026-H1');
+  assert.equal(report.total, 2);
+  assert.deepEqual(report.byNationality.map((item) => item.key).sort(), ['Hàn Quốc', 'Nhật Bản']);
+  assert.ok(report.rows[0].issues.includes('Hợp đồng vượt thời hạn giấy phép'));
+  assert.ok(report.rows[1].issues.includes('Chưa có giấy phép hoặc xác nhận miễn'));
+  assert.equal(buildForeignWorkerReport(people, '2026').total, 3);
+  assert.match(workPermitProblem({ ...permit, foreignJobCategory: 'intern' }), /Vị trí công việc/);
+});

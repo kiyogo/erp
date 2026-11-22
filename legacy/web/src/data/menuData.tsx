@@ -90,6 +90,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'hr-uniforms', title: 'Đồng phục', path: '/admin/hr/uniforms' },
       { id: 'hr-proposals', title: 'Đề xuất', path: '/admin/hr/proposals' },
       { id: 'hr-headcount', title: 'Định biên', path: '/admin/hr/headcount' },
+      { id: 'hr-foreign-workers', title: 'Lao động nước ngoài', path: '/admin/hr/foreign-workers' },
       {
         id: 'hr-history',
         title: 'Lịch sử nhân viên',

@@ -14,7 +14,7 @@ export const isForeignNationality = (value) => {
 };
 
 export const WORK_PERMIT_STATUSES = { permit: 'Có giấy phép lao động', exempt: 'Không thuộc diện cấp giấy phép (đã có xác nhận)', pending: 'Đang xin giấy phép' };
-const FIELDS = ['homeNationalDay', 'homeNewYearRule', 'homeNewYearDate', 'nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
+const FIELDS = ['foreignJobCategory', 'homeNationalDay', 'homeNewYearRule', 'homeNewYearDate', 'nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
 const isoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 const addYears = (iso, years) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y + years, m - 1, d)).toISOString().slice(0, 10); };
 
@@ -25,6 +25,7 @@ export function workPermitProblem(details, previous = {}) {
   if (!String(details.passportNumber || '').trim()) return 'Người lao động nước ngoài phải có số hộ chiếu.';
   // Ngày nghỉ thêm Tết cổ truyền và Quốc khánh của nước người lao động (Điều 112 khoản 2): ngày dạng MM-DD.
   if (details.homeNationalDay && !isMonthDay(details.homeNationalDay)) return 'Ngày Quốc khánh của nước người lao động phải có dạng tháng-ngày (MM-DD).';
+  if (details.foreignJobCategory && !FOREIGN_JOB_CATEGORIES[details.foreignJobCategory]) return 'Vị trí công việc của người lao động nước ngoài phải là nhà quản lý, giám đốc điều hành, chuyên gia hoặc lao động kỹ thuật.';
   if (details.homeNewYearRule && !['lunar', 'fixed'].includes(details.homeNewYearRule)) return 'Tết cổ truyền phải theo âm lịch hoặc ngày cố định.';
   if (details.homeNewYearRule === 'fixed' && !isMonthDay(details.homeNewYearDate)) return 'Nhập ngày Tết cổ truyền cố định dạng tháng-ngày (MM-DD).';
   const status = details.workPermitStatus;
@@ -63,4 +64,46 @@ export function foreignContractProblem(details, contract) {
   const expiry = permitExpiryDate(details);
   if (expiry && contract.endDate > expiry) return `Thời hạn hợp đồng không được vượt thời hạn giấy phép lao động (${expiry}) theo Điều 151 Bộ luật Lao động 2019.`;
   return '';
+}
+
+// Vị trí công việc của người lao động nước ngoài (Nghị định 219/2025: nhà quản lý, giám đốc điều hành, chuyên gia, lao động kỹ thuật).
+export const FOREIGN_JOB_CATEGORIES = { manager: 'Nhà quản lý', executive: 'Giám đốc điều hành', expert: 'Chuyên gia', technical: 'Lao động kỹ thuật' };
+
+// Kỳ báo cáo tình hình sử dụng lao động nước ngoài: 'YYYY-H1' (6 tháng đầu năm) hoặc 'YYYY' (cả năm). Hạn theo Nghị định 152/2020 trước đây (trước 05/7 và
+// trước 05/01 năm sau); chưa xác nhận Nghị định 219/2025 có giữ kỳ và hạn này không.
+export function foreignReportPeriod(period) {
+  const text = String(period || '').trim().toUpperCase();
+  const half = /^(\d{4})-H1$/.exec(text);
+  const year = /^(\d{4})$/.exec(text);
+  if (!half && !year) throw new Error('Kỳ báo cáo phải có dạng YYYY-H1 (6 tháng đầu năm) hoặc YYYY (cả năm).');
+  const y = Number((half || year)[1]);
+  return half
+    ? { period: text, start: `${y}-01-01`, end: `${y}-06-30`, deadline: `${y}-07-05`, label: `6 tháng đầu năm ${y}` }
+    : { period: text, start: `${y}-01-01`, end: `${y}-12-31`, deadline: `${y + 1}-01-05`, label: `Năm ${y}` };
+}
+
+// people: [{ name, employeeCode, details, joinDate, leftDate, contract: { code, startDate, endDate } }]. Chỉ tính người nước ngoài có làm việc trong kỳ.
+export function buildForeignWorkerReport(people, period) {
+  const info = foreignReportPeriod(period);
+  const rows = people.filter((person) => isForeignNationality(person.details?.nationality))
+    .filter((person) => (!person.joinDate || person.joinDate <= info.end) && (!person.leftDate || person.leftDate >= info.start))
+    .map((person) => {
+      const details = person.details || {};
+      const expiry = permitExpiryDate(details);
+      return {
+        name: person.name, employeeCode: person.employeeCode, nationality: details.nationality, passportNumber: details.passportNumber || '',
+        jobCategory: FOREIGN_JOB_CATEGORIES[details.foreignJobCategory] || 'Chưa phân loại', position: person.position || '',
+        permitStatus: WORK_PERMIT_STATUSES[details.workPermitStatus] || 'Chưa khai báo', workPermitNumber: details.workPermitNumber || details.workPermitExemptReason || '',
+        permitIssueDate: details.workPermitIssueDate || '', permitExpiryDate: expiry,
+        contractCode: person.contract?.code || '', contractStart: person.contract?.startDate || '', contractEnd: person.contract?.endDate || '',
+        issues: [
+          !details.workPermitStatus || details.workPermitStatus === 'pending' ? 'Chưa có giấy phép hoặc xác nhận miễn' : '',
+          expiry && expiry < info.end ? `Giấy phép hết hạn ${expiry} trong kỳ` : '',
+          person.contract?.endDate && expiry && person.contract.endDate > expiry ? 'Hợp đồng vượt thời hạn giấy phép' : '',
+          !details.foreignJobCategory ? 'Chưa phân loại vị trí công việc' : '',
+        ].filter(Boolean),
+      };
+    });
+  const count = (field) => Object.entries(rows.reduce((acc, row) => ({ ...acc, [row[field]]: (acc[row[field]] || 0) + 1 }), {})).map(([key, total]) => ({ key, total }));
+  return { ...info, total: rows.length, byNationality: count('nationality'), byJobCategory: count('jobCategory'), byPermitStatus: count('permitStatus'), rows };
 }

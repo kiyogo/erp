@@ -41,6 +41,7 @@ import { EmployeeFullEditModule } from '../../modules/hr/EmployeeFullEditModule'
 import { AttendanceOverviewModule } from '../../modules/attendance/AttendanceOverviewModule';
 import { AttendanceAlertsModule } from '../../modules/attendance/AttendanceAlertsModule';
 import { HolidayCalendarModule } from '../../modules/attendance/HolidayCalendarModule';
+import { ForeignWorkerReportModule } from '../../modules/hr/ForeignWorkerReportModule';
 import { TimesheetModule } from '../../modules/attendance/TimesheetModule';
 import { TimesheetSummaryModule } from '../../modules/attendance/TimesheetSummaryModule';
 import { TimesheetRawDataModule } from '../../modules/attendance/TimesheetRawDataModule';
@@ -289,6 +290,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/hr/training') return <TrainingModule />;
   if (p === '/hr/performance' || p.startsWith('/hr/surveys')) return <PerformanceReviewModule />;
   if (p === '/hr/recruitment') return <RecruitmentModule />;
+  if (p === '/hr/foreign-workers') return <ForeignWorkerReportModule />;
   if (p.startsWith('/hr/certificates')) return <CertificatesModule />;
   if (p.startsWith('/hr/rewards')) return <RewardsModule />;
   if (p === '/hr/contracts') return <ContractsModule scope="hr" />;

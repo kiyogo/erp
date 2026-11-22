@@ -1487,6 +1487,16 @@ export const pitDeclarationApi = {
   get: (period: string) => api.get<PitDeclaration>('/finance/pit-declaration', { params: { period } }),
 };
 
+export type ForeignWorkerReport = {
+  period: string; start: string; end: string; deadline: string; label: string; total: number;
+  byNationality: Array<{ key: string; total: number }>; byJobCategory: Array<{ key: string; total: number }>; byPermitStatus: Array<{ key: string; total: number }>;
+  rows: Array<{ name: string; employeeCode: string; nationality: string; passportNumber: string; jobCategory: string; position: string; permitStatus: string; workPermitNumber: string; permitIssueDate: string; permitExpiryDate: string; contractCode: string; contractStart: string; contractEnd: string; issues: string[] }>;
+};
+// Báo cáo tình hình sử dụng người lao động nước ngoài theo kỳ 6 tháng (YYYY-H1) hoặc năm (YYYY).
+export const foreignWorkerReportApi = {
+  get: (period: string) => api.get<ForeignWorkerReport>('/hr/foreign-workers/report', { params: { period } }),
+};
+
 export const ekycApi = {
   getLanInfo: () => api.get<{ lanIp: string; port: number }>('/ekyc/lan-info'),
   createSession: (token?: string, userId?: string) => api.post<{ token: string; status: string }>('/ekyc/session', { token, userId }),

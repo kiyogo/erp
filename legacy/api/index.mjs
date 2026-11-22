@@ -45,7 +45,7 @@ import { CASUAL_INCOME_TYPE, calculateCasualIncomeTax, casualPayeeKey, commitmen
 import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
 import { DECLARATION_LABELS, buildPitDeclaration, declarationPeriod } from './pitDeclarationRules.mjs';
-import { foreignContractProblem, isForeignNationality, permitExpiryDate, workPermitProblem } from './foreignWorkerRules.mjs';
+import { buildForeignWorkerReport, foreignContractProblem, isForeignNationality, permitExpiryDate, workPermitProblem } from './foreignWorkerRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -15680,6 +15680,24 @@ async function handleRequest(request, response) {
       await recordAuditEvent(actor.id, 'pit_voucher_issue', 'finance_pit_vouchers', key, { source, employeeId, payeeKey, year, taxWithheld: saved.taxWithheld });
     });
     sendJson(response, 201, { voucher: saved });
+    return;
+  }
+
+  // Báo cáo tình hình sử dụng người lao động nước ngoài (foreignWorkerRules.mjs): người nước ngoài làm việc trong kỳ, giấy phép, hợp đồng, thống kê.
+  if (request.method === 'GET' && resource === '/hr/foreign-workers/report') {
+    await requireAdmin(request);
+    const rows = await db.prepare(`SELECT u.id, u.name, u.employee_code, p.position, p.join_date, p.employment_status, p.details_json FROM users u
+      JOIN employee_profiles p ON p.user_id = u.id WHERE u.role != 'ADMIN'`).all();
+    const people = [];
+    for (const row of rows) {
+      const details = decryptProfileDetails(parseJsonObject(row.details_json));
+      if (!isForeignNationality(details.nationality)) continue;
+      const contract = await db.prepare("SELECT code, start_date, end_date FROM contracts WHERE (employee_user_id = ? OR employee_code = ?) AND contract_category = 'labor' AND status NOT IN ('Đã hủy', 'Dự thảo') ORDER BY start_date DESC LIMIT 1").get(row.id, row.employee_code);
+      people.push({ name: row.name, employeeCode: row.employee_code, position: row.position, joinDate: row.join_date || '', leftDate: row.employment_status === 'Đã nghỉ việc' ? (details.resignationDate || '') : '', details, contract: contract ? { code: contract.code, startDate: contract.start_date, endDate: contract.end_date } : null });
+    }
+    let report;
+    try { report = buildForeignWorkerReport(people, url.searchParams.get('period')); } catch (error) { throw new HttpError(422, error.message); }
+    sendJson(response, 200, report);
     return;
   }
 

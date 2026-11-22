@@ -3608,6 +3608,11 @@ export const EmployeeFullEditModule: React.FC = () => {
                   </div>
                   <div className="k-form-grid-3" style={{ marginTop: 10 }}>
                     <div>
+                      <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Vị trí công việc</label>
+                      <Select value={formData.foreignJobCategory} onChange={val => handleChange('foreignJobCategory', val)}
+                        options={[{ label: 'Nhà quản lý', value: 'manager' }, { label: 'Giám đốc điều hành', value: 'executive' }, { label: 'Chuyên gia', value: 'expert' }, { label: 'Lao động kỹ thuật', value: 'technical' }]} />
+                    </div>
+                    <div>
                       <label style={{ display: 'block', fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Quốc khánh nước mình (tháng-ngày)</label>
                       <Input placeholder="Ví dụ: 10-03" value={formData.homeNationalDay || ''} onChange={e => handleChange('homeNationalDay', e.target.value)} />
                     </div>
