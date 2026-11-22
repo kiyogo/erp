@@ -50,6 +50,7 @@ import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMo
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
+import { auditActionLabel, auditScopeLabel } from './auditLabels.mjs';
 import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, carryOverDays, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
@@ -9506,7 +9507,7 @@ async function handleRequest(request, response) {
     const rows = await db.prepare("SELECT * FROM audit_events WHERE actor_id = ? AND action <> 'view_application' ORDER BY created_at DESC LIMIT ?").all(actor.id, limit);
     sendJson(response, 200, { data: rows.map((row) => {
       const details = parseJsonObject(row.details_json);
-      return { key: row.id, timestamp: String(row.created_at || '').replace('T', ' ').slice(0, 19), action: row.action, module: details.moduleLabel || row.resource_scope, resourceId: row.resource_id || '', detail: details.detail || (row.resource_id ? `Đối tượng: ${row.resource_id}` : '') };
+      return { key: row.id, timestamp: String(row.created_at || '').replace('T', ' ').slice(0, 19), action: auditActionLabel(row.action), actionCode: row.action, module: details.moduleLabel || auditScopeLabel(row.resource_scope), resourceId: row.resource_id || '', detail: details.detail || (row.resource_id ? `Đối tượng: ${row.resource_id}` : '') };
     }) });
     return;
   }
@@ -12110,8 +12111,9 @@ async function handleRequest(request, response) {
       timestamp: r.created_at ? r.created_at.replace('T', ' ').slice(0, 19) : '',
       user: r.actor_name ? `${r.actor_name} (${r.actor_email || ''})` : (r.actor_email || 'Hệ thống'),
       role: r.actor_role || 'Hệ thống',
-      action: r.action,
-      module: parseJsonObject(r.details_json).moduleLabel || r.resource_scope,
+      action: auditActionLabel(r.action),
+      actionCode: r.action,
+      module: parseJsonObject(r.details_json).moduleLabel || auditScopeLabel(r.resource_scope),
       resourceId: r.resource_id || '',
       detail: r.resource_id ? `Đối tượng: ${r.resource_id}` : (r.details_json || ''),
       details: parseJsonObject(r.details_json),

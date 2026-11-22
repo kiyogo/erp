@@ -21,7 +21,7 @@ const PAGE_SIZE = 25;
 
 function classifyAction(action: string, module: string): AuditLogCategory {
   const value = `${action} ${module}`.toLocaleLowerCase('vi');
-  if (/delete|xóa|replace|revoke|update|cập nhật|đổi trạng thái/.test(value)) return 'sensitive';
+  if (/delete|xóa|replace|revoke|update|cập nhật|đổi trạng thái|ghi đè|thu hồi|hủy/.test(value)) return 'sensitive';
   if (/approve|duyệt|ký số|ký duyệt/.test(value)) return 'approve';
   if (/create|tạo|thêm mới/.test(value)) return 'create';
   if (/auth|login|logout|password|đăng nhập|mật khẩu|phiên|bảo mật/.test(value)) return 'auth';
