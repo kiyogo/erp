@@ -215,3 +215,17 @@ test('tiền thưởng đã trao trong kỳ được cộng vào thu nhập ch�
   assert.equal(row.bonus, 5_000_000);
   assert.equal(row.gross, 25_000_000);
 });
+
+test('người nước ngoài không cư trú chịu thuế 20%, không bảo hiểm thất nghiệp; thiếu dữ liệu thì tạm tính cư trú kèm cảnh báo', async () => {
+  const foreign = await createEmployee('PAY-FW', 50_000_000);
+  await request(`/employees/${foreign.id}`, 'PATCH', { details: { nationality: 'Nhật Bản', passportNumber: 'TK1234567', workPermitStatus: 'pending', stayPeriods: [{ entry: '2026-02-01' }] } });
+  const nonResident = (await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', employeeCodes: ['PAY-FW'] })).rows[0];
+  assert.equal(nonResident.residency, 'non_resident');
+  assert.equal(nonResident.employeeInsurance.unemployment, 0);
+  assert.equal(nonResident.taxDeduction, Math.round(50_000_000 * 0.2));
+  assert.ok(nonResident.warnings.some((text) => text.includes('không cư trú')));
+  await request(`/employees/${foreign.id}`, 'PATCH', { details: { stayPeriods: [] } });
+  const provisional = (await request('/finance/payroll/calculate', 'POST', { period: '2026-03', region: 'I', employeeCodes: ['PAY-FW'] })).rows[0];
+  assert.equal(provisional.residency, 'resident');
+  assert.ok(provisional.warnings.some((text) => text.includes('Chưa khai thời gian ở Việt Nam')));
+});

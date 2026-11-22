@@ -234,9 +234,11 @@ export function calculatePayslip(input) {
   const employeeInsurance = employee.social + employee.health + employee.unemployment;
   const employerInsurance = employer.social + employer.health + employer.unemployment;
 
-  const familyDeduction = params.pit.personalDeduction + dependents * params.pit.dependentDeduction;
-  const taxableIncome = Math.max(0, gross - exemptIncome - employeeInsurance - familyDeduction);
-  const tax = progressiveTax(taxableIncome, params.pit.brackets);
+  // Cá nhân không cư trú (residency = 'non_resident'): thuế 20% trên thu nhập chịu thuế từ tiền lương, không giảm trừ gia cảnh, bảo hiểm (Luật Thuế TNCN Điều 25).
+  const nonResident = input.residency === 'non_resident';
+  const familyDeduction = nonResident ? 0 : params.pit.personalDeduction + dependents * params.pit.dependentDeduction;
+  const taxableIncome = nonResident ? Math.max(0, gross - exemptIncome) : Math.max(0, gross - exemptIncome - employeeInsurance - familyDeduction);
+  const tax = nonResident ? Math.round(taxableIncome * 0.2) : progressiveTax(taxableIncome, params.pit.brackets);
   const warnings = [];
   if (insuranceSalary > 0 && insuranceSalary < params.regionalMinimumWage) {
     warnings.push(`Lương đóng bảo hiểm thấp hơn lương tối thiểu vùng ${params.region} (${params.regionalMinimumWage.toLocaleString('vi-VN')} đồng).`);
@@ -247,7 +249,7 @@ export function calculatePayslip(input) {
     insuranceSalary, socialHealthBase: socialBase, unemploymentBase,
     employeeInsurance: { ...employee, total: employeeInsurance },
     employerInsurance: { ...employer, total: employerInsurance },
-    dependents, familyDeduction, taxableIncome, tax,
+    dependents, familyDeduction, taxableIncome, tax, residency: nonResident ? 'non_resident' : 'resident',
     insuranceDeduction: employeeInsurance, taxDeduction: tax,
     netSalary: gross - employeeInsurance - tax,
     warnings, legalBasis: params.legalBasis,

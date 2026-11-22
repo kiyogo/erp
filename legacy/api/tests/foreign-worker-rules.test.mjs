@@ -86,3 +86,26 @@ test('thị thực, thẻ tạm trú LĐ1 hoặc LĐ2 tối đa 02 năm, hết h
   const report = buildForeignWorkerReport([{ name: 'Kim', employeeCode: 'FW-1', details: { ...permit, foreignJobCategory: 'expert' } }], '2026');
   assert.ok(report.rows[0].issues.includes('Chưa có thị thực hoặc thẻ tạm trú'));
 });
+
+test('cư trú thuế: 183 ngày trong năm, 12 tháng liên tục, thẻ tạm trú; không cư trú chịu 20% không giảm trừ', async () => {
+  const { presenceDays, taxResidency, stayPeriodsProblem } = await import('../foreignWorkerRules.mjs');
+  const stays = [{ entry: '2026-01-10', exit: '2026-04-10' }, { entry: '2026-05-01', exit: '2026-08-15' }];
+  assert.equal(presenceDays(stays, '2026-01-01', '2026-12-31'), 196);
+  assert.equal(taxResidency({ nationality: 'Hàn Quốc', stayPeriods: stays }, 2026).resident, true);
+  const short = { nationality: 'Nhật Bản', stayPeriods: [{ entry: '2026-10-01' }] };
+  assert.equal(taxResidency(short, 2026, '2026-11-22').resident, false);
+  assert.equal(taxResidency(short, 2027, '2027-04-15').resident, true);
+  assert.equal(taxResidency({ ...short, residenceCardNumber: 'TT', residenceCardIssueDate: '2026-10-05', residenceCardExpiryDate: '2028-10-01' }, 2026, '2026-11-22').resident, true);
+  assert.equal(taxResidency({ ...short, taxResidentOverride: 'resident' }, 2026).resident, true);
+  assert.equal(taxResidency({ nationality: 'Việt Nam' }, 2026).resident, true);
+  const unknown = taxResidency({ nationality: 'Pháp' }, 2026);
+  assert.equal(unknown.resident, true);
+  assert.equal(unknown.unknown, true);
+  assert.match(stayPeriodsProblem({ stayPeriods: [{ entry: '2026-01-10', exit: '2026-05-01' }, { entry: '2026-04-01', exit: '2026-06-01' }] }), /chồng thời gian/);
+  assert.match(stayPeriodsProblem({ stayPeriods: [{ entry: '2026-01-10' }, { entry: '2026-04-01', exit: '2026-06-01' }] }), /lần ở cuối cùng/);
+  const base = { period: '2026-03', region: 'I', baseSalary: 50_000_000, insuranceSalary: 0 };
+  const nonResident = calculatePayslip({ ...base, residency: 'non_resident' });
+  assert.equal(nonResident.tax, 10_000_000);
+  assert.equal(nonResident.familyDeduction, 0);
+  assert.ok(calculatePayslip(base).tax < 10_000_000);
+});

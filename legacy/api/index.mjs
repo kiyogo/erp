@@ -45,7 +45,7 @@ import { CASUAL_INCOME_TYPE, calculateCasualIncomeTax, casualPayeeKey, commitmen
 import { holidayOverrides, holidaysOf, isHoliday, isWeeklyRestDay, setHolidayOverrides, statutoryHolidays } from './holidayRules.mjs';
 import { monthCalendar, overtimeBreakdown } from './timesheetRules.mjs';
 import { DECLARATION_LABELS, buildPitDeclaration, declarationPeriod } from './pitDeclarationRules.mjs';
-import { buildForeignWorkerReport, foreignContractProblem, immigrationExpiries, isForeignNationality, permitExpiryDate, workPermitProblem } from './foreignWorkerRules.mjs';
+import { buildForeignWorkerReport, foreignContractProblem, immigrationExpiries, isForeignNationality, permitExpiryDate, taxResidency, workPermitProblem } from './foreignWorkerRules.mjs';
 import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMonth, regimeDaysProblem } from './insuranceRules.mjs';
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
@@ -14258,6 +14258,9 @@ async function handleRequest(request, response) {
       const code = String(employee.employeeCode || '');
       if (wanted && !wanted.has(code.toLocaleLowerCase('vi-VN'))) continue;
       const extra = overrides.get(code.toLocaleLowerCase('vi-VN')) || {};
+      // Cư trú thuế của kỳ lương (foreignWorkerRules.mjs): không cư trú chịu 20%, thiếu dữ liệu thì tạm tính như cư trú và cảnh báo.
+      const residencyOf = (item) => taxResidency(item.details || {}, Number(period.slice(0, 4)), `${period}-${String(new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).getUTCDate()).padStart(2, '0')}`);
+      const residencyCheck = residencyOf(employee);
       const baseSalary = Number(employee.salaryBase) || 0;
       if (baseSalary <= 0) { skipped.push({ employeeCode: code, employeeName: employee.name, reason: 'Hồ sơ chưa có lương cơ bản.' }); continue; }
       try {
@@ -14279,8 +14282,11 @@ async function handleRequest(request, response) {
           insuranceSalary: extra.insuranceSalary ?? (attendance ? baseSalary : undefined),
           dependents: countActiveDependents(employee.details?.familyMembers, period),
           unemploymentInsured: !isForeignNationality(employee.details?.nationality),
+          residency: residencyCheck.resident ? 'resident' : 'non_resident',
         });
         const extraWarnings = [...(attendance?.warnings || [])];
+        if (residencyCheck.unknown) extraWarnings.push(residencyCheck.basis);
+        if (!residencyCheck.resident) extraWarnings.push(`Cá nhân không cư trú: thuế TNCN 20% trên thu nhập chịu thuế, không giảm trừ gia cảnh. ${residencyCheck.basis}`);
         if (timesheet && Number(timesheet.unpaidLeaveDays) >= 14) extraWarnings.push(`Nghỉ không hưởng lương ${timesheet.unpaidLeaveDays} ngày: kiểm tra quy định về đóng bảo hiểm xã hội khi nghỉ không lương từ 14 ngày làm việc trở lên trong tháng.`);
         rows.push({
           employeeCode: code, employeeName: employee.name, department: employee.department || '', ...slip, warnings: [...slip.warnings, ...extraWarnings],
@@ -15674,7 +15680,7 @@ async function handleRequest(request, response) {
           person: {
             name: row.name, employeeCode: row.employee_code, taxCode: details.taxCode || '', identityNumber: details.docNumber || details.idNumber || '',
             address: details.resAddress || details.hkttAddress || details.currentAddress || '', phone: decryptField(row.phone || '', 'profile'),
-            nationality: details.nationality || 'Việt Nam', resident: details.taxResident !== false,
+            nationality: details.nationality || 'Việt Nam', resident: taxResidency(details, year, `${year}-12-31`).resident,
           },
         });
       } catch (error) { throw new HttpError(422, error.message); }
@@ -15725,7 +15731,7 @@ async function handleRequest(request, response) {
     const payslips = await closedPayslipsByCode(info.year);
     const employees = await db.prepare("SELECT u.name, u.employee_code, p.details_json FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.role != 'ADMIN'").all();
     const people = employees.map((row) => ({
-      key: `payroll:${row.employee_code}`, name: row.name, source: 'payroll', resident: parseJsonObject(row.details_json).taxResident !== false, hasLaborContract: true,
+      key: `payroll:${row.employee_code}`, name: row.name, source: 'payroll', resident: taxResidency(parseJsonObject(row.details_json), info.year, info.periodEnd).resident, hasLaborContract: true,
       lines: payslips.get(String(row.employee_code || '').toLocaleLowerCase('vi-VN')) || [],
     }));
     const casual = new Map();
@@ -15820,13 +15826,15 @@ async function handleRequest(request, response) {
       if (!targetId && !payslips.length) continue;
       const details = parseJsonObject(row.details_json);
       const authorization = authorizations.get(`${year}:${row.id}`) || null;
+      const residency = taxResidency(details, year, `${year}-12-31`);
       const problems = authorizationProblems({
         employed: Boolean(row.is_active) && row.employment_status !== 'Đã nghỉ việc',
         contractMonths: await contractMonthsOf(row.id),
         otherIncomeMonthlyAverage: request.method === 'POST' ? params.otherIncomeMonthlyAverage : authorization?.otherIncomeMonthlyAverage,
       });
+      if (!residency.resident) problems.push(`Cá nhân không cư trú năm ${year} (${residency.basis}): không quyết toán theo biểu lũy tiến, thuế 20% đã khấu trừ là số cuối cùng.`);
       rows.push({
-        employeeId: row.id, employeeCode: row.employee_code, employeeName: row.name, authorization, authorizationProblems: problems,
+        employeeId: row.id, employeeCode: row.employee_code, employeeName: row.name, authorization, authorizationProblems: problems, residency,
         ...annualPitFinalization({ year, payslips, familyMembers: details.familyMembers ?? details.familyList }),
       });
     }

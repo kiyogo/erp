@@ -3664,6 +3664,22 @@ export const EmployeeFullEditModule: React.FC = () => {
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Thị thực, thẻ tạm trú LĐ1, LĐ2 tối đa 02 năm và phải hết hạn trước hộ chiếu ít nhất 30 ngày; người có giấy phép dùng LĐ2, người không thuộc diện cấp giấy phép dùng LĐ1. Hệ thống nhắc trước khi hết hạn.</div>
+                  <div style={{ fontSize: 13, color: '#334155', margin: '12px 0 8px' }}>Thời gian ở Việt Nam (xác định cư trú thuế TNCN)</div>
+                  {(Array.isArray(formData.stayPeriods) ? formData.stayPeriods : []).map((period: { entry: string; exit?: string }, index: number) => (
+                    <div key={index} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 40px', gap: 8, marginBottom: 6 }}>
+                      <Input type="date" value={period.entry || ''} onChange={e => handleChange('stayPeriods', formData.stayPeriods.map((row: any, i: number) => (i === index ? { ...row, entry: e.target.value } : row)))} />
+                      <Input type="date" placeholder="Đang ở Việt Nam" value={period.exit || ''} onChange={e => handleChange('stayPeriods', formData.stayPeriods.map((row: any, i: number) => (i === index ? { ...row, exit: e.target.value } : row)))} />
+                      <Button onClick={() => handleChange('stayPeriods', formData.stayPeriods.filter((_: any, i: number) => i !== index))}>Xóa</Button>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Button onClick={() => handleChange('stayPeriods', [...(Array.isArray(formData.stayPeriods) ? formData.stayPeriods : []), { entry: '', exit: '' }])}>Thêm lần nhập cảnh</Button>
+                    <div style={{ minWidth: 260 }}>
+                      <Select value={formData.taxResidentOverride || 'auto'} onChange={val => handleChange('taxResidentOverride', val === 'auto' ? '' : val)}
+                        options={[{ label: 'Tự xác định cư trú theo số ngày, thẻ tạm trú', value: 'auto' }, { label: 'Cư trú (xác định thủ công)', value: 'resident' }, { label: 'Không cư trú (xác định thủ công)', value: 'non_resident' }]} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Mỗi dòng là một lần ở (ngày nhập cảnh, ngày xuất cảnh; để trống ngày xuất cảnh nếu đang ở). Cư trú khi có mặt từ 183 ngày trong năm hoặc trong 12 tháng liên tục, hoặc có thẻ tạm trú; không cư trú chịu thuế 20% trên thu nhập, không giảm trừ gia cảnh. Chưa khai thì bảng lương tạm tính như cư trú và cảnh báo.</div>
                   <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Được nghỉ thêm 01 ngày Tết cổ truyền và 01 ngày Quốc khánh của nước mình (Điều 112 khoản 2); trùng ngày nghỉ của Việt Nam thì dời sang ngày làm việc kế tiếp, tự cộng vào bảng công và tính làm thêm 300%.</div>
                   <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>Bắt buộc có số hộ chiếu. Hợp đồng lao động phải xác định thời hạn và không vượt ngày hết hạn này; hệ thống nhắc trước 45, 30, 14, 7, 1 ngày và không tính bảo hiểm thất nghiệp trong bảng lương.</div>
                 </div>

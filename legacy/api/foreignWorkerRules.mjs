@@ -14,7 +14,7 @@ export const isForeignNationality = (value) => {
 };
 
 export const WORK_PERMIT_STATUSES = { permit: 'Có giấy phép lao động', exempt: 'Không thuộc diện cấp giấy phép (đã có xác nhận)', pending: 'Đang xin giấy phép' };
-const IMMIGRATION_FIELDS = ['passportExpiryDate', 'visaType', 'visaNumber', 'visaIssueDate', 'visaExpiryDate', 'residenceCardType', 'residenceCardNumber', 'residenceCardIssueDate', 'residenceCardExpiryDate'];
+const IMMIGRATION_FIELDS = ['stayPeriods', 'taxResidentOverride', 'passportExpiryDate', 'visaType', 'visaNumber', 'visaIssueDate', 'visaExpiryDate', 'residenceCardType', 'residenceCardNumber', 'residenceCardIssueDate', 'residenceCardExpiryDate'];
 const FIELDS = [...IMMIGRATION_FIELDS, 'foreignJobCategory', 'homeNationalDay', 'homeNewYearRule', 'homeNewYearDate', 'nationality', 'passportNumber', 'workPermitStatus', 'workPermitNumber', 'workPermitIssueDate', 'workPermitExpiryDate', 'workPermitExtended', 'workPermitPreviousExpiryDate', 'workPermitExemptReason', 'workPermitExemptExpiryDate'];
 const isoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 const addYears = (iso, years) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y + years, m - 1, d)).toISOString().slice(0, 10); };
@@ -24,7 +24,7 @@ export function workPermitProblem(details, previous = {}) {
   if (!isForeignNationality(details.nationality)) return '';
   if (!FIELDS.some((field) => String(details[field] ?? '') !== String(previous[field] ?? ''))) return '';
   if (!String(details.passportNumber || '').trim()) return 'Người lao động nước ngoài phải có số hộ chiếu.';
-  const immigration = immigrationProblem(details);
+  const immigration = immigrationProblem(details) || stayPeriodsProblem(details);
   if (immigration) return immigration;
   // Ngày nghỉ thêm Tết cổ truyền và Quốc khánh của nước người lao động (Điều 112 khoản 2): ngày dạng MM-DD.
   if (details.homeNationalDay && !isMonthDay(details.homeNationalDay)) return 'Ngày Quốc khánh của nước người lao động phải có dạng tháng-ngày (MM-DD).';
@@ -147,4 +147,62 @@ export function buildForeignWorkerReport(people, period) {
     });
   const count = (field) => Object.entries(rows.reduce((acc, row) => ({ ...acc, [row[field]]: (acc[row[field]] || 0) + 1 }), {})).map(([key, total]) => ({ key, total }));
   return { ...info, total: rows.length, byNationality: count('nationality'), byJobCategory: count('jobCategory'), byPermitStatus: count('permitStatus'), rows };
+}
+
+// Cư trú thuế TNCN (Luật Thuế TNCN Điều 2 khoản 2, Thông tư 111/2013/TT-BTC Điều 1 khoản 1): cá nhân cư trú khi có mặt tại Việt Nam từ 183 ngày trở lên
+// trong năm dương lịch hoặc trong 12 tháng liên tục kể từ ngày đầu tiên có mặt (ngày đến và ngày đi tính là một ngày), hoặc có nơi ở thường xuyên (đăng ký
+// thường trú hoặc có thẻ tạm trú). Công dân Việt Nam mặc định là cư trú. Hồ sơ ghi `stayPeriods` [{ entry, exit }] (exit trống là đang ở Việt Nam).
+// Xác minh qua trí nhớ văn bản, chưa đối chiếu bản gốc; trường hợp có nhà thuê từ 183 ngày và chứng minh cư trú nước khác chưa hỗ trợ (nhập tay bằng
+// `taxResidentOverride`).
+const dayNumber = (iso) => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 86_400_000);
+
+// Số ngày có mặt trong khoảng [from, to]: mỗi lần ở tính số ngày từ ngày đến tới ngày đi (ngày đến và ngày đi cộng lại là một ngày).
+export function presenceDays(stayPeriods, from, to) {
+  if (!Array.isArray(stayPeriods)) return 0;
+  return stayPeriods.reduce((total, period) => {
+    if (!isoDate(period?.entry)) return total;
+    const exit = isoDate(period.exit) ? period.exit : to;
+    const start = Math.max(dayNumber(period.entry), dayNumber(from));
+    const end = Math.min(dayNumber(exit), dayNumber(to));
+    if (end < start) return total;
+    // Lần ở bắt đầu trước khoảng xét được tính trọn ngày đầu của khoảng; lần ở trong khoảng tính theo hiệu ngày đi trừ ngày đến.
+    return total + (end - start) + (dayNumber(period.entry) < dayNumber(from) ? 1 : 0);
+  }, 0);
+}
+
+export function taxResidency(details, year, asOf) {
+  if (details?.taxResidentOverride === 'resident' || details?.taxResidentOverride === 'non_resident') {
+    return { resident: details.taxResidentOverride === 'resident', basis: 'Xác định thủ công theo hồ sơ (taxResidentOverride).', days: null };
+  }
+  if (!isForeignNationality(details?.nationality)) return { resident: details?.taxResident !== false, basis: 'Công dân Việt Nam.', days: null };
+  const end = asOf && asOf < `${year}-12-31` ? asOf : `${year}-12-31`;
+  const days = presenceDays(details.stayPeriods, `${year}-01-01`, end);
+  if (days >= 183) return { resident: true, basis: `Có mặt ${days} ngày trong năm ${year} (từ 183 ngày).`, days };
+  const card = details.residenceCardNumber && isoDate(details.residenceCardIssueDate) && isoDate(details.residenceCardExpiryDate)
+    && details.residenceCardIssueDate <= end && details.residenceCardExpiryDate >= `${year}-01-01`;
+  if (card) return { resident: true, basis: 'Có thẻ tạm trú còn hiệu lực trong năm (nơi ở thường xuyên).', days };
+  const entries = (Array.isArray(details.stayPeriods) ? details.stayPeriods : []).map((period) => period?.entry).filter(isoDate).sort();
+  // Chưa khai thời gian ở Việt Nam và không có thẻ tạm trú: thiếu dữ liệu, tạm tính như cư trú (không tự đẩy thuế lên 20%) và báo cần bổ sung.
+  if (!entries.length) return { resident: true, unknown: true, basis: 'Chưa khai thời gian ở Việt Nam hoặc thẻ tạm trú: tạm tính như cá nhân cư trú, cần bổ sung hồ sơ.', days };
+  if (entries[0]) {
+    const first = entries[0];
+    const twelve = addDays(addYears(first, 1), -1);
+    const rolling = presenceDays(details.stayPeriods, first, twelve < end ? twelve : end);
+    if (rolling >= 183 && first <= end) return { resident: true, basis: `Có mặt ${rolling} ngày trong 12 tháng liên tục kể từ ${first}.`, days };
+  }
+  return { resident: false, basis: `Có mặt ${days} ngày trong năm ${year}, chưa đủ 183 ngày và không có thẻ tạm trú.`, days };
+}
+
+export function stayPeriodsProblem(details) {
+  if (details.stayPeriods === undefined) return '';
+  if (!Array.isArray(details.stayPeriods) || details.stayPeriods.length > 200) return 'Danh sách thời gian ở Việt Nam không hợp lệ.';
+  const sorted = [...details.stayPeriods].sort((a, b) => String(a?.entry).localeCompare(String(b?.entry)));
+  for (const [index, period] of sorted.entries()) {
+    if (!isoDate(period?.entry)) return `Ngày nhập cảnh dòng ${index + 1} không hợp lệ.`;
+    if (period.exit && (!isoDate(period.exit) || period.exit < period.entry)) return `Ngày xuất cảnh dòng ${index + 1} phải sau ngày nhập cảnh.`;
+    if (!period.exit && index < sorted.length - 1) return 'Chỉ lần ở cuối cùng được để trống ngày xuất cảnh.';
+    if (index > 0 && sorted[index - 1].exit > period.entry) return 'Các lần ở Việt Nam không được chồng thời gian.';
+  }
+  if (details.taxResidentOverride && !['resident', 'non_resident'].includes(details.taxResidentOverride)) return 'Xác định cư trú thủ công phải là cư trú hoặc không cư trú.';
+  return '';
 }
