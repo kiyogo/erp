@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activitySummary, monthlySales, overdueReceivables, salesByCustomerKind, topCustomers } from '../src/modules/crm/crmOverviewRules.ts';
+import { activitySummary, monthlySales, overdueReceivables, salesByCustomerKind, targetPeriodsForFilter, targetProgress, topCustomers } from '../src/modules/crm/crmOverviewRules.ts';
 
 const customers = [
   { key: 'c1', name: 'Công ty A', details: { entityKind: 'organization' } },
@@ -38,4 +38,16 @@ test('tình hình thực hiện và nợ quá hạn', () => {
     delivered: { count: 2, value: 11_000_000 },
   });
   assert.deepEqual(overdueReceivables(docs, '2026-11-22'), { count: 1, value: 4_000_000 });
+});
+
+test('mục tiêu doanh số theo tháng và kỳ của bộ lọc', () => {
+  const progress = targetProgress(monthlySales(docs, 2026), { '2026-03': 20_000_000, '2026-04': 10_000_000, '2025-03': 99 }, 2026);
+  assert.deepEqual([progress.targetTotal, progress.actualTotal, progress.percent], [30_000_000, 14_000_000, 46.7]);
+  assert.equal(progress.rows[2].target, 20_000_000);
+  assert.equal(targetProgress([0, 0], {}, 2026).percent, null);
+  const now = new Date(2026, 10, 22);
+  assert.deepEqual(targetPeriodsForFilter('this_month', now), ['2026-11']);
+  assert.deepEqual(targetPeriodsForFilter('this_quarter', now), ['2026-10', '2026-11', '2026-12']);
+  assert.equal(targetPeriodsForFilter('2025', now).length, 12);
+  assert.deepEqual(targetPeriodsForFilter('this_week', now), []);
 });

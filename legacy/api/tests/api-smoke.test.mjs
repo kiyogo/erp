@@ -3261,6 +3261,18 @@ test('employees cannot approve their own payroll bank account and see their real
   assert.equal((await request('/auth/sessions', 'GET', undefined, 200, staff)).data.length, 1);
 });
 
+test('monthly sales targets are keyed by period and validated', async () => {
+  const saved = (await request('/collections/crm_sales_targets', 'POST', { record: { period: '2026-03', amount: 120_000_000, note: 'Quý 1' } }, 201)).record;
+  assert.deepEqual([saved.key, saved.amount], ['2026-03', 120_000_000]);
+  await request('/collections/crm_sales_targets', 'POST', { record: { period: '2026-13', amount: 1 } }, 422);
+  await request('/collections/crm_sales_targets', 'POST', { record: { period: '2026-04', amount: -5 } }, 422);
+  assert.equal((await request('/collections/crm_sales_targets/2026-03', 'PATCH', { patch: { amount: 150_000_000 } })).record.amount, 150_000_000);
+  await request('/collections/crm_sales_targets/2026-03', 'PATCH', { patch: { period: '2026-05' } }, 422);
+  await request('/users', 'POST', { email: 'target-staff@example.test', name: 'Target Staff', password: 'Target-Staff-26!Secure', employeeCode: 'TEST-TARGET', role: 'USER' }, 201);
+  const login = await request('/auth/login', 'POST', { email: 'target-staff@example.test', password: 'Target-Staff-26!Secure' });
+  await request('/collections/crm_sales_targets', 'POST', { record: { period: '2026-06', amount: 1 } }, 403, { ...headers, Authorization: `Bearer ${login.access_token || login.token}` });
+});
+
 test('shifts need a legal break and night pay, and consecutive shifts need 12 hours of rest', async () => {
   const employee = (await request('/users', 'POST', { email: 'rest-law@example.test', name: 'Rest Law', password: 'Rest-Test-26!Secure', employeeCode: 'TEST-REST-LAW', role: 'USER' }, 201)).user;
   const shift = (key, startTime, endTime, extra = {}) => ({ key, shiftCode: key, shiftName: key, startTime, endTime, timeRange: `${startTime} - ${endTime}`, workingHours: 8, workUnits: 1, status: 'Đang áp dụng', ...extra });

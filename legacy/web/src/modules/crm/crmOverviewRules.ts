@@ -85,3 +85,23 @@ export function overdueReceivables(docs: SaleDoc[], today: string) {
   const rows = revenueDocs(docs).filter((doc) => (Number(doc.remainingAmount) || 0) > 0 && doc.dueDate && doc.dueDate < today);
   return { count: rows.length, value: rows.reduce((sum, doc) => sum + (Number(doc.remainingAmount) || 0), 0) };
 }
+
+/** Mục tiêu doanh số theo tháng (khóa YYYY-MM) so với doanh số thực hiện của một năm. */
+export function targetProgress(actualMonths: number[], targets: Record<string, number>, year: number) {
+  const rows = actualMonths.map((actual, index) => ({ month: index + 1, actual, target: Number(targets[`${year}-${String(index + 1).padStart(2, '0')}`]) || 0 }));
+  const targetTotal = rows.reduce((sum, row) => sum + row.target, 0);
+  const actualTotal = rows.reduce((sum, row) => sum + row.actual, 0);
+  return { rows, targetTotal, actualTotal, percent: targetTotal ? Math.round(actualTotal / targetTotal * 1000) / 10 : null };
+}
+
+/** Các kỳ tháng (YYYY-MM) thuộc bộ lọc thời gian; hôm nay và tuần này không so được với mục tiêu tháng. */
+export function targetPeriodsForFilter(filter: string, now = new Date()): string[] {
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const key = (y: number, m: number) => `${y}-${String(m).padStart(2, '0')}`;
+  if (filter === 'this_month') return [key(year, month)];
+  if (filter === 'this_quarter') { const first = Math.floor((month - 1) / 3) * 3 + 1; return [first, first + 1, first + 2].map((m) => key(year, m)); }
+  if (filter === 'this_year') return Array.from({ length: 12 }, (_, i) => key(year, i + 1));
+  if (/^\d{4}$/.test(filter)) return Array.from({ length: 12 }, (_, i) => key(Number(filter), i + 1));
+  return [];
+}

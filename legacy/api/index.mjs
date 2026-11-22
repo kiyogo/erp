@@ -5131,6 +5131,17 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     delete record.scope;
   }
   if (scope === 'finance_fixed_assets') throw new HttpError(409, 'Sổ tài sản cố định đã gộp vào Tài sản > Danh mục tài sản; hãy thêm hoặc sửa tài sản ở đó.');
+  // Mục tiêu doanh số theo tháng của doanh nghiệp (CRM Tổng quan): khóa là kỳ YYYY-MM nên mỗi tháng một mục tiêu; số tiền là doanh số đơn bán,
+  // hợp đồng bán (chưa trừ thuế như giá trị chứng từ) cần đạt. Quy tắc quản trị nội bộ, không có căn cứ pháp luật riêng.
+  if (scope === 'crm_sales_targets') {
+    record.period = requiredText(record.period ?? record.key, 'Kỳ mục tiêu', 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(record.period)) throw new HttpError(422, 'Kỳ mục tiêu phải theo dạng YYYY-MM.');
+    if (current && current.period !== record.period) throw new HttpError(422, 'Không đổi được kỳ của mục tiêu đã lưu.');
+    record.key = record.period;
+    record.amount = Number(record.amount);
+    if (!Number.isSafeInteger(record.amount) || record.amount < 0 || record.amount > 1_000_000_000_000_000) throw new HttpError(422, 'Mục tiêu doanh số phải là số nguyên không âm.');
+    record.note = optionalText(record.note, 'Ghi chú mục tiêu', 500) || '';
+  }
   if (scope === 'finance_prepaid') {
     // Số liệu phái sinh (mức phân bổ hàng tháng, giá trị còn lại, trạng thái) luôn tính lại ở máy chủ từ số liệu gốc.
     record.code = requiredText(record.code, 'Mã khoản chi phí trả trước', 64).toUpperCase();

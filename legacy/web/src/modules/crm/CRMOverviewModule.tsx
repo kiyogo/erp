@@ -8,9 +8,9 @@ import {
   ShopOutlined,
   RiseOutlined,
 } from '@ant-design/icons';
-import { Button, Modal, Select, message } from '../../custom-ui';
-import { financeDocumentsApi, crmContactsApi, systemApi, FinanceDocument, type CrmContact } from '../../api/endpoints';
-import { activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, topCustomers } from './crmOverviewRules';
+import { Button, Input, Modal, Select, message } from '../../custom-ui';
+import { collectionsApi, financeDocumentsApi, crmContactsApi, systemApi, FinanceDocument, type CrmContact } from '../../api/endpoints';
+import { activitySummary, monthlySales, overdueReceivables, revenueDocs, saleNet, salesByCustomerKind, targetPeriodsForFilter, targetProgress, topCustomers } from './crmOverviewRules';
 
 // ===== Standard SVG Empty State Illustrations =====
 const EmptyLineChartSvg: React.FC = () => (
@@ -120,17 +120,24 @@ const CRM_HIDDEN_WIDGETS_KEY = 'kiyovn_crm_overview_hidden_widgets';
 const CRM_OVERVIEW_WIDGETS = ['Doanh số theo thời gian', 'Doanh số theo loại khách hàng', 'Khách hàng có doanh số cao nhất', 'Tình hình thực hiện hoạt động', 'Mục tiêu doanh số', 'Doanh số theo đơn vị, hàng hóa'];
 
 // Biểu đồ cột 12 tháng và danh sách thanh ngang vẽ bằng thẻ div (dự án không dùng thư viện biểu đồ).
-const MonthBars: React.FC<{ values: number[] }> = ({ values }) => {
-  const max = Math.max(...values, 0);
+const MonthBars: React.FC<{ values: number[]; targets?: number[] }> = ({ values, targets }) => {
+  const max = Math.max(...values, ...(targets || []), 0);
   if (!max) return null;
+  const bar = (value: number, color: string) => <div style={{ flex: 1, height: `${Math.max(2, Math.round(value / max * 120))}px`, background: value ? color : '#E2E8F0', borderRadius: 3 }} />;
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 150, paddingTop: 8 }}>
-      {values.map((value, index) => (
-        <div key={index} title={`Tháng ${index + 1}: ${value.toLocaleString('vi-VN')} ₫`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
-          <div style={{ width: '100%', height: `${Math.max(2, Math.round(value / max * 120))}px`, background: value ? '#2563EB' : '#E2E8F0', borderRadius: 3 }} />
-          <span style={{ fontSize: 10.5, color: '#64748B' }}>T{index + 1}</span>
-        </div>
-      ))}
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 150, paddingTop: 8 }}>
+        {values.map((value, index) => (
+          <div key={index} title={`Tháng ${index + 1}: ${value.toLocaleString('vi-VN')} ₫${targets ? ` / mục tiêu ${targets[index].toLocaleString('vi-VN')} ₫` : ''}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+            <div style={{ width: '100%', display: 'flex', alignItems: 'flex-end', gap: 2 }}>
+              {targets && bar(targets[index], '#CBD5E1')}
+              {bar(value, '#2563EB')}
+            </div>
+            <span style={{ fontSize: 10.5, color: '#64748B' }}>T{index + 1}</span>
+          </div>
+        ))}
+      </div>
+      {targets && <div style={{ display: 'flex', gap: 12, fontSize: 11.5, color: '#64748B', marginTop: 6 }}><span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#CBD5E1', borderRadius: 2, marginRight: 4 }} />Mục tiêu</span><span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#2563EB', borderRadius: 2, marginRight: 4 }} />Thực hiện</span></div>}
     </div>
   );
 };
@@ -298,6 +305,12 @@ export const CRMOverviewModule: React.FC = () => {
   // Real data state
   const [salesDocuments, setSalesDocuments] = useState<FinanceDocument[]>([]);
   const [customers, setCustomers] = useState<CrmContact[]>([]);
+  // Mục tiêu doanh số theo tháng (phạm vi crm_sales_targets, khóa YYYY-MM).
+  const [targets, setTargets] = useState<Record<string, number>>({});
+  const [targetModalOpen, setTargetModalOpen] = useState(false);
+  const [targetYear, setTargetYear] = useState(new Date().getFullYear());
+  const [targetDraft, setTargetDraft] = useState<string[]>([]);
+  const [savingTargets, setSavingTargets] = useState(false);
 
   const getCurrentTimeString = useCallback(() => {
     const now = new Date();
@@ -309,11 +322,15 @@ export const CRMOverviewModule: React.FC = () => {
   const loadDashboardData = useCallback(async () => {
     setLoading(true);
     try {
-      const [docsRes, contactsRes, profileRes] = await Promise.allSettled([
+      const [docsRes, contactsRes, profileRes, targetsRes] = await Promise.allSettled([
         financeDocumentsApi.getAll(),
         crmContactsApi.getAll('customer'),
         systemApi.getCompanyProfile(),
+        collectionsApi.get<{ key: string; period: string; amount: number }>('crm_sales_targets', { limit: 1000 }),
       ]);
+      if (targetsRes.status === 'fulfilled') {
+        setTargets(Object.fromEntries((targetsRes.value.data?.data || []).map((item) => [item.period || item.key, Number(item.amount) || 0])));
+      }
 
       if (docsRes.status === 'fulfilled' && docsRes.value.data?.data) {
         const sales = docsRes.value.data.data.filter(
@@ -359,6 +376,39 @@ export const CRMOverviewModule: React.FC = () => {
   const chartYear = /^\d{4}$/.test(timeFilter) ? Number(timeFilter) : new Date().getFullYear();
   const months = useMemo(() => monthlySales(salesDocuments, chartYear), [salesDocuments, chartYear]);
   const money = (value: number) => `${value.toLocaleString('vi-VN')} ₫`;
+  const progress = useMemo(() => targetProgress(months, targets, chartYear), [months, targets, chartYear]);
+  const periodTargetKeys = targetPeriodsForFilter(timeFilter);
+  const periodTarget = periodTargetKeys.reduce((sum, key) => sum + (targets[key] || 0), 0);
+  const periodTargetText = !periodTargetKeys.length ? 'Không so với mục tiêu tháng khi lọc theo ngày, tuần' : periodTarget ? `${money(stats.orderValue)} / ${money(periodTarget)} (${Math.round(stats.orderValue / periodTarget * 1000) / 10}%)` : 'Chưa đặt mục tiêu cho kỳ này';
+
+  const openTargetModal = (year: number) => {
+    setTargetYear(year);
+    setTargetDraft(Array.from({ length: 12 }, (_, index) => { const value = targets[`${year}-${String(index + 1).padStart(2, '0')}`]; return value ? String(value) : ''; }));
+    setTargetModalOpen(true);
+  };
+  const saveTargets = async () => {
+    const amounts = targetDraft.map((text) => (text.trim() === '' ? null : Number(text.replace(/[.\s]/g, ''))));
+    if (amounts.some((value) => value !== null && (!Number.isSafeInteger(value) || value < 0))) { message.error('Mục tiêu mỗi tháng phải là số tiền nguyên không âm.'); return; }
+    setSavingTargets(true);
+    try {
+      for (const [index, amount] of amounts.entries()) {
+        const period = `${targetYear}-${String(index + 1).padStart(2, '0')}`;
+        const exists = targets[period] !== undefined;
+        if (amount === null) { if (exists) await collectionsApi.remove('crm_sales_targets', period); continue; }
+        if (exists && targets[period] === amount) continue;
+        if (exists) await collectionsApi.update('crm_sales_targets', period, { key: period, period, amount });
+        else await collectionsApi.create('crm_sales_targets', { key: period, period, amount }, period);
+      }
+      message.success(`Đã lưu mục tiêu doanh số năm ${targetYear}.`);
+      setTargetModalOpen(false);
+      await loadDashboardData();
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || 'Không lưu được mục tiêu doanh số.');
+      await loadDashboardData();
+    } finally {
+      setSavingTargets(false);
+    }
+  };
 
   return (
     <div style={{ backgroundColor: '#F8FAFC', minHeight: '100vh', padding: '16px 20px 40px' }}>
@@ -578,9 +628,20 @@ export const CRMOverviewModule: React.FC = () => {
               <span style={{ color: '#475569' }}>Khách hàng trong danh bạ</span>
               <span style={{ color: '#0F172A' }}>{customers.length}</span>
             </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '8px 10px', background: '#F8FAFC', borderRadius: 6 }}>
+              <span style={{ color: '#475569' }}>Mục tiêu kỳ đang lọc</span>
+              <span style={{ color: '#0F172A', textAlign: 'right' }}>{periodTargetText}</span>
+            </div>
           </div>
         </ChartCard>)}
-        {showWidget('Mục tiêu doanh số') && (<ChartCard title="Mục tiêu doanh số" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="line" emptyText="Hệ thống chưa có chức năng đặt mục tiêu doanh số" />)}
+        {showWidget('Mục tiêu doanh số') && (<ChartCard title="Mục tiêu doanh số" subtitle={String(chartYear)} extraHeader={<Button onClick={() => openTargetModal(chartYear)}>Đặt mục tiêu</Button>} topMetric={progress.percent === null ? undefined : `${progress.percent}%`} timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="line" emptyText={`Chưa đặt mục tiêu doanh số năm ${chartYear}`}>
+          {progress.targetTotal ? (
+            <div>
+              <div style={{ fontSize: 12.5, color: '#64748B', marginBottom: 4 }}>Thực hiện {money(progress.actualTotal)} / mục tiêu {money(progress.targetTotal)}</div>
+              <MonthBars values={months} targets={progress.rows.map((row) => row.target)} />
+            </div>
+          ) : undefined}
+        </ChartCard>)}
         {showWidget('Doanh số theo đơn vị, hàng hóa') && (<ChartCard title="Doanh số theo đơn vị, hàng hóa" timestamp={timestamp} onReload={() => void loadDashboardData()} emptyType="bar" emptyText="Chứng từ bán hàng chưa ghi đơn vị bán và dòng hàng hóa" />)}
       </div>
 
@@ -599,8 +660,32 @@ export const CRMOverviewModule: React.FC = () => {
           <li>Trong kỳ có {stats.orderCount} đơn, hợp đồng bán, giá trị {money(stats.orderValue)}; đã thu {money(stats.collectedValue)}, còn phải thu {money(stats.remainingValue)}.</li>
           <li>{activity.quotes.count} báo giá trị giá {money(activity.quotes.value)}; {activity.inProgress.count} chứng từ đang triển khai, {activity.delivered.count} chứng từ đã bàn giao.</li>
           <li>{overdue.count ? `Có ${overdue.count} chứng từ quá hạn thanh toán, tổng ${money(overdue.value)} cần thu hồi.` : 'Không có công nợ quá hạn.'}</li>
+          <li>Mục tiêu doanh số: {periodTargetText}.</li>
           <li>{top.length ? `Khách hàng doanh số cao nhất: ${top.slice(0, 3).map((row) => `${row.label} (${money(row.value)})`).join(', ')}.` : 'Chưa có doanh số theo khách hàng trong kỳ.'}</li>
         </ul>
+      </Modal>
+
+      <Modal title={`Mục tiêu doanh số năm ${targetYear}`} open={targetModalOpen} onCancel={() => setTargetModalOpen(false)} footer={null} width={620}>
+        <div style={{ fontSize: 12.5, color: '#64748B', marginBottom: 12 }}>
+          Nhập doanh số cần đạt từng tháng (giá trị đơn bán, hợp đồng bán, đồng). Để trống tháng nào thì tháng đó không đặt mục tiêu.
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 13, color: '#334155' }}>Năm</span>
+          <Select value={targetYear} style={{ width: 120 }} onChange={(value) => openTargetModal(Number(value))}
+            options={[-1, 0, 1].map((offset) => ({ value: new Date().getFullYear() + offset, label: String(new Date().getFullYear() + offset) }))} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+          {targetDraft.map((value, index) => (
+            <div key={index}>
+              <div style={{ fontSize: 12, color: '#64748B', marginBottom: 4 }}>Tháng {index + 1}</div>
+              <Input type="number" min={0} value={value} onChange={(event: any) => setTargetDraft((current) => current.map((item, i) => (i === index ? event.target.value : item)))} />
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <Button onClick={() => setTargetModalOpen(false)}>Hủy</Button>
+          <Button type="primary" loading={savingTargets} onClick={() => void saveTargets()}>Lưu mục tiêu</Button>
+        </div>
       </Modal>
 
       {/* Edit Dashboard Layout Modal */}
