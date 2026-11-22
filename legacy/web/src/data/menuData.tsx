@@ -188,6 +188,7 @@ export const KIYOVN_MENU_ITEMS: MenuItem[] = [
       { id: 'crm-loyalty', title: 'Khách hàng thân thiết', path: '/admin/crm/loyalty' },
       { id: 'crm-feedback', title: 'Phản hồi khách hàng', path: '/admin/crm/feedback' },
       { id: 'crm-suppliers-eval', title: 'Đánh giá nhà cung cấp', path: '/admin/crm/suppliers-eval' },
+      { id: 'crm-commissions', title: 'Hoa hồng bán hàng', path: '/admin/crm/commissions' },
     ],
   },
   {

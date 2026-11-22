@@ -146,6 +146,7 @@ import { ChatAdminModule } from '../../modules/chat/ChatAdminModule';
 import { TicketsModule } from '../../modules/tickets/TicketsModule';
 import { IncidentsModule } from '../../modules/tickets/IncidentsModule';
 import { ReportsModule } from '../../modules/reports/ReportsModule';
+import { SalesCommissionModule } from '../../modules/crm/SalesCommissionModule';
 import { AccountSettingsModule } from '../../modules/settings/AccountSettingsModule';
 import { SecuritySettingsModule } from '../../modules/settings/SecuritySettingsModule';
 import { TwoStepVerificationModule } from '../../modules/settings/TwoStepVerificationModule';
@@ -382,6 +383,7 @@ export const GenericModulePage: React.FC = () => {
   if (p === '/crm/feedback' || p.startsWith('/crm/feedback')) return <CustomerFeedbackModule />;
   if (p === '/crm/partners' || p.startsWith('/crm/partners')) return <PartnersModule />;
   if (p === '/crm/marketing') return <AiMarketingModule />;
+  if (p === '/crm/commissions') return <SalesCommissionModule />;
   if (p.startsWith('/crm')) return <CRMModule />;
   if (p === '/insurance' || p === '/insurance/') return <Navigate to="/admin/insurance/overview" replace />;
   if (/^\/insurance\/(overview|labor|adjustments|regimes|card|voluntary|contributions|expenses)$/.test(p)) return <InsuranceModule />;

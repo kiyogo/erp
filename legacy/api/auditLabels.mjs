@@ -74,6 +74,7 @@ const ACTION_LABELS = {
   inventory_provision: 'Lập dự phòng giảm giá hàng tồn kho',
   link_sale_customer: 'Gắn khách hàng vào chứng từ bán',
   assign_salesperson: 'Gán nhân viên bán hàng',
+  close_sales_commissions: 'Chốt hoa hồng bán hàng',
   apply_sale_promotions: 'Áp dụng khuyến mại',
   // Thuế và lương
   post_payroll: 'Hạch toán bảng lương',
@@ -202,6 +203,9 @@ const SCOPE_LABELS = {
   crm_loyalty_ledger: 'Điểm khách hàng thân thiết',
   crm_promotions: 'Khuyến mại',
   crm_supplier_evaluations: 'Đánh giá nhà cung cấp',
+  crm_commission_policies: 'Chính sách hoa hồng',
+  crm_sales_targets: 'Mục tiêu doanh số',
+  hr_sales_commissions: 'Hoa hồng bán hàng',
   asset_items: 'Danh mục tài sản',
   asset_allocations: 'Cấp phát tài sản',
   asset_transfers: 'Điều chuyển tài sản',

@@ -818,6 +818,30 @@ test('sale documents record a salesperson snapshot and it can be reassigned', as
   assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === plain.key).salespersonId, undefined);
 });
 
+test('sales commissions follow the policy, close once per month and feed the payroll bonus', async () => {
+  const seller = (await request('/users', 'POST', { email: 'commission-seller@example.test', name: 'Người Hưởng Hoa Hồng', password: 'Commission-26!Secure', employeeCode: 'TEST-COMM', role: 'USER' }, 201)).user;
+  await request(`/employees/${seller.id}`, 'PATCH', { salaryBase: 10_000_000 });
+  const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).format(new Date());
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const policy = { key: 'comm-policy-1', name: 'Hoa hồng thử', rate: 2.5, basis: 'delivered', effectiveFrom: '2020-01-01' };
+  await request('/collections/crm_commission_policies', 'POST', { record: { ...policy, rate: 120 } }, 422);
+  await request('/collections/crm_commission_policies', 'POST', { record: policy }, 201);
+  await request('/collections/crm_commission_policies', 'POST', { record: { ...policy, key: 'comm-policy-2', effectiveFrom: '2025-01-01' } }, 409);
+  await request('/finance/documents', 'POST', { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách hoa hồng', description: 'Có hoa hồng', amount: 2_200_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 10, vatAmount: 200_000, salespersonId: seller.id }, 201);
+  const preview = await request(`/crm/commissions?month=${month}`);
+  const mine = preview.rows.find((row) => row.salespersonId === seller.id);
+  assert.deepEqual([preview.closed, mine.revenue, mine.commission], [false, 2_000_000, 50_000]);
+  await request('/crm/commissions/close', 'POST', { month: '2999-01' }, 422);
+  const closed = await request('/crm/commissions/close', 'POST', { month }, 201);
+  assert.equal(closed.closed, true);
+  await request('/crm/commissions/close', 'POST', { month }, 409);
+  await request(`/collections/hr_sales_commissions/${month}`, 'PATCH', { patch: { totalCommission: 1 } }, 409);
+  assert.equal((await request(`/crm/commissions?month=${month}`)).closed, true);
+  const payroll = await request('/finance/payroll/calculate', 'POST', { period: month, region: 'I', employeeCodes: ['TEST-COMM'] });
+  const row = payroll.rows.find((item) => item.employeeCode === 'TEST-COMM');
+  assert.deepEqual([row.commissionBonus, row.bonus], [mine.commission, mine.commission]);
+});
+
 test('loyalty points can reference only completed sales linked to the same CRM customer', async () => {
   const customer = (await request('/crm/contacts', 'POST', { name: 'Khách hàng liên kết chứng từ', type: 'customer' }, 201)).contact;
   const other = (await request('/crm/contacts', 'POST', { name: 'Khách hàng khác', type: 'customer' }, 201)).contact;

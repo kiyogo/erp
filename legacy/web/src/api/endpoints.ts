@@ -776,6 +776,13 @@ export interface LeaveCarryOverRow { employeeId: string; employeeName: string; e
 export const leaveCarryOverApi = {
   run: (payload: { fromYear: number; maxDays?: number | null; basis?: string; preview?: boolean }) => api.post<{ fromYear: number; toYear: number; rows: LeaveCarryOverRow[]; carried?: number }>('/attendance/leave-carryover', payload),
 };
+export interface CommissionDocument { key: string; code: string; documentDate: string; revenue: number; rate: number; commission: number; policy: string }
+export interface CommissionRow { salespersonId: string; salespersonName: string; salespersonCode: string; salespersonDepartment: string; revenue: number; commission: number; documents: CommissionDocument[] }
+export interface CommissionMonth { month: string; rows: CommissionRow[]; totalCommission: number; unassigned: Array<{ key: string; code: string }>; noPolicy: Array<{ key: string; code: string }>; closed: boolean; closedAt?: string; closedBy?: string }
+export const salesCommissionApi = {
+  get: (month: string) => api.get<CommissionMonth>('/crm/commissions', { params: { month } }),
+  close: (month: string) => api.post<CommissionMonth>('/crm/commissions/close', { month }),
+};
 export const leaveBalanceApi = {
   mine: (year: number) => api.get<LeaveBalance>('/employees/me/leave-balance', { params: { year } }),
 };

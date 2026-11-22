@@ -35,6 +35,7 @@ import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
+import { COMMISSION_BASES, calculateCommissions, commissionBonusByEmployee, commissionPolicyProblem } from './commissionRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
 import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
@@ -5142,6 +5143,19 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     if (!Number.isSafeInteger(record.amount) || record.amount < 0 || record.amount > 1_000_000_000_000_000) throw new HttpError(422, 'Mục tiêu doanh số phải là số nguyên không âm.');
     record.note = optionalText(record.note, 'Ghi chú mục tiêu', 500) || '';
   }
+  if (scope === 'crm_commission_policies') {
+    record.name = requiredText(record.name, 'Tên chính sách hoa hồng', 160);
+    record.rate = Number(record.rate);
+    record.basis = String(record.basis || '');
+    record.effectiveFrom = String(record.effectiveFrom || '');
+    record.effectiveTo = String(record.effectiveTo || '');
+    record.note = optionalText(record.note, 'Ghi chú', 500) || '';
+    record.key = record.key ?? current?.key ?? randomUUID();
+    const others = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'crm_commission_policies'").all()).map((row) => parseJsonObject(row.payload_json));
+    const problem = commissionPolicyProblem(record, others);
+    if (problem) throw new HttpError(problem.includes('trùng') ? 409 : 422, problem);
+    record.basisLabel = COMMISSION_BASES[record.basis];
+  }
   if (scope === 'finance_prepaid') {
     // Số liệu phái sinh (mức phân bổ hàng tháng, giá trị còn lại, trạng thái) luôn tính lại ở máy chủ từ số liệu gốc.
     record.code = requiredText(record.code, 'Mã khoản chi phí trả trước', 64).toUpperCase();
@@ -6110,6 +6124,15 @@ async function salespersonSnapshot(salespersonId) {
   const row = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.is_active = 1').get(salespersonId);
   if (!row) throw new HttpError(422, 'Nhân viên bán hàng không tồn tại hoặc đã khóa.');
   return { salespersonId: row.id, salespersonName: row.name, salespersonCode: row.employee_code || '', salespersonDepartment: row.department || '' };
+}
+
+async function commissionPreview(month) {
+  const termsByDocument = await financeDocumentTerms();
+  const adjusted = await adjustedAmounts();
+  const docs = (await db.prepare("SELECT * FROM finance_documents WHERE document_type = 'sale'").all())
+    .map((row) => withAdjustmentCredit(withDocumentTerms(publicFinanceDocument(row), termsByDocument.get(row.id)), adjusted));
+  const policies = (await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'crm_commission_policies'").all()).map((row) => parseJsonObject(row.payload_json));
+  return calculateCommissions({ docs, policies, month });
 }
 
 function publicSalePromotion(snapshot) {
@@ -10826,7 +10849,7 @@ async function handleRequest(request, response) {
   }
 
   if ((collectionMatch || collectionRecordMatch)
-    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers', 'finance_contractor_taxes', 'finance_casual_income_payments'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
+    && ['finance_sale_customer_links', 'finance_sale_promotions', 'finance_document_terms', 'finance_inventory_provisions', 'finance_costing_runs', 'finance_pit_vouchers', 'finance_contractor_taxes', 'finance_casual_income_payments', 'hr_sales_commissions'].includes(normalizeCollectionScope(decodeURIComponent((collectionMatch || collectionRecordMatch)[1])))) {
     await requireAdmin(request);
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(409, 'Dữ liệu bán hàng, mua hàng phải được ghi qua chức năng chứng từ.');
   }
@@ -14312,6 +14335,35 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Hoa hồng bán hàng theo tháng (commissionRules.mjs): xem tính thử và chốt; hoa hồng đã chốt được cộng vào bảng lương tháng đó.
+  if (resource === '/crm/commissions' && request.method === 'GET') {
+    await requireAdmin(request);
+    const month = String(url.searchParams.get('month') || todayInVietnam().slice(0, 7));
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(422, 'Tháng phải theo dạng YYYY-MM.');
+    const closingRow = await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_sales_commissions' AND record_key = ?").get(month);
+    const closing = closingRow ? parseJsonObject(closingRow.payload_json) : null;
+    sendJson(response, 200, closing ? { ...closing, closed: true } : { ...await commissionPreview(month), closed: false });
+    return;
+  }
+  if (resource === '/crm/commissions/close' && request.method === 'POST') {
+    const actor = await requireAdmin(request);
+    await requireSecurityPin(request, actor);
+    const month = requiredText((await readJson(request, 4096)).month, 'Tháng', 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(422, 'Tháng phải theo dạng YYYY-MM.');
+    if (month > todayInVietnam().slice(0, 7)) throw new HttpError(422, 'Chưa chốt được hoa hồng của tháng chưa đến.');
+    let saved;
+    await db.transaction(async () => {
+      if (await db.prepare("SELECT 1 FROM collection_records WHERE scope = 'hr_sales_commissions' AND record_key = ?").get(month)) throw new HttpError(409, `Hoa hồng tháng ${month} đã chốt.`);
+      const preview = await commissionPreview(month);
+      saved = { key: month, ...preview, closedAt: now(), closedBy: actor.name, closedById: actor.id };
+      const timestamp = now();
+      await db.prepare("INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, 'hr_sales_commissions', ?, ?, ?, ?, ?)").run(randomUUID(), month, actor.id, JSON.stringify(saved), timestamp, timestamp);
+      await recordAuditEvent(actor.id, 'close_sales_commissions', 'hr_sales_commissions', month, { totalCommission: saved.totalCommission, employees: saved.rows.length });
+    });
+    sendJson(response, 201, { ...saved, closed: true });
+    return;
+  }
+
   if (request.method === 'POST' && resource === '/finance/documents') {
     const actor = await requireAdmin(request);
     await requireAccountingProfile();
@@ -14495,6 +14547,8 @@ async function handleRequest(request, response) {
     const skipped = [];
     // Tiền thưởng đã trao trong kỳ là thu nhập chịu thuế TNCN: cộng vào khoản thưởng (rewardRules.mjs).
     const rewardBonuses = rewardBonusByEmployee((await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_rewards'").all()).map((item) => parseJsonObject(item.payload_json)), period);
+    // Hoa hồng bán hàng đã chốt của kỳ cũng là thu nhập chịu thuế từ tiền lương, tiền công (commissionRules.mjs).
+    const commissionBonuses = commissionBonusByEmployee((await db.prepare("SELECT payload_json FROM collection_records WHERE scope = 'hr_sales_commissions'").all()).map((item) => parseJsonObject(item.payload_json)), period);
     for (const row of employeeRows) {
       const employee = serializeEmployeeDetail(row, row, { role: 'ADMIN' });
       const code = String(employee.employeeCode || '');
@@ -14518,7 +14572,7 @@ async function handleRequest(request, response) {
           });
         }
         const slip = calculatePayslip({
-          period, region, baseSalary: attendance ? attendance.proratedBase : baseSalary, allowance: extra.allowance, bonus: (Number(extra.bonus) || 0) + (rewardBonuses.get(employee.id)?.amount || 0),
+          period, region, baseSalary: attendance ? attendance.proratedBase : baseSalary, allowance: extra.allowance, bonus: (Number(extra.bonus) || 0) + (rewardBonuses.get(employee.id)?.amount || 0) + (commissionBonuses.get(employee.id) || 0),
           overtimePay: attendance?.overtime.pay, exemptIncome: (Number(extra.exemptIncome) || 0) + (attendance?.overtime.exempt || 0),
           // Đóng bảo hiểm theo lương hợp đồng, không giảm theo ngày công.
           insuranceSalary: extra.insuranceSalary ?? (attendance ? baseSalary : undefined),
@@ -14534,6 +14588,7 @@ async function handleRequest(request, response) {
           employeeCode: code, employeeName: employee.name, department: employee.department || '', ...slip, warnings: [...slip.warnings, ...extraWarnings],
           basis, contractBaseSalary: baseSalary,
           rewardBonus: rewardBonuses.get(employee.id)?.amount || 0, rewardCodes: rewardBonuses.get(employee.id)?.codes || [],
+          commissionBonus: commissionBonuses.get(employee.id) || 0,
           workdays: attendance ? { standardDays: attendance.standardDays, payDays: attendance.payDays, actualDays: Number(timesheet.actualDays) || 0, paidLeaveDays: Number(timesheet.paidLeaveDays) || 0, unpaidLeaveDays: Number(timesheet.unpaidLeaveDays) || 0 } : null,
           overtime: attendance ? { ...attendance.overtime, hourlyWage: attendance.hourlyWage } : null,
         });
