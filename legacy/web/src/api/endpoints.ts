@@ -751,7 +751,11 @@ export type TerminationSettlement = {
 export const leaveEntitlementApi = {
   get: (employeeId: string, year: number) => api.get<{ baseDays: number; seniorityDays: number; monthsWorked: number; standardQuota: number; seniorityQuota: number; entitled: number; joinDate: string }>('/attendance/leave-entitlement', { params: { employeeId, year } }),
 };
-export interface LeaveBalance { year: number; source: 'ledger' | 'law'; standardQuota: number; seniorityQuota: number; carriedOver: number; entitled: number; used: number; remaining: number; pendingDays: number; joinDate: string }
+export interface LeaveBalance { year: number; source: 'ledger' | 'law'; standardQuota: number; seniorityQuota: number; carriedOver: number; entitled: number; used: number; remaining: number; pendingDays: number; carriedForward: number; joinDate: string }
+export interface LeaveCarryOverRow { employeeId: string; employeeName: string; employeeCode: string; status: 'ready' | 'none' | 'done' | 'error'; remaining?: number; pending?: number; legalCap?: number; days: number; forfeited?: number; note?: string }
+export const leaveCarryOverApi = {
+  run: (payload: { fromYear: number; maxDays?: number | null; basis?: string; preview?: boolean }) => api.post<{ fromYear: number; toYear: number; rows: LeaveCarryOverRow[]; carried?: number }>('/attendance/leave-carryover', payload),
+};
 export const leaveBalanceApi = {
   mine: (year: number) => api.get<LeaveBalance>('/employees/me/leave-balance', { params: { year } }),
 };

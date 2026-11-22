@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { annualLeaveEntitlement, isMinor, leaveDaysProblem, nightHoursOfShift, normalizeLeaveType, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from '../attendanceRules.mjs';
+import { annualLeaveEntitlement, carryOverDays, isMinor, leaveDaysProblem, nightHoursOfShift, normalizeLeaveType, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from '../attendanceRules.mjs';
 
 test('loại nghỉ nhận tên cũ và chặn số ngày vượt luật', () => {
   assert.equal(normalizeLeaveType('Nghỉ ốm'), 'Nghỉ ốm BHXH');
@@ -54,4 +54,13 @@ test('làm thêm: hệ số tối thiểu theo loại ngày và người chưa �
   assert.equal(isMinor('2009-12-01', '2026-11-21'), true);
   assert.equal(isMinor('2008-11-21', '2026-11-21'), false);
   assert.equal(isMinor('', '2026-11-21'), false);
+});
+
+test('unused annual leave carries over within the three-year consolidation limit and the company cap', () => {
+  assert.deepEqual(carryOverDays({ remaining: 5, quota: 12 }), { days: 5, legalCap: 12, limitedBy: null });
+  // Còn 20 ngày nhưng chỉ có 12 ngày phép của năm và 3 ngày gốc năm liền trước được chuyển: phần gốc từ hai năm trước bị loại.
+  assert.deepEqual(carryOverDays({ remaining: 20, quota: 12, previousCarry: 3 }), { days: 15, legalCap: 15, limitedBy: 'law' });
+  assert.deepEqual(carryOverDays({ remaining: 7.5, quota: 12, maxDays: 5 }), { days: 5, legalCap: 12, limitedBy: 'policy' });
+  assert.equal(carryOverDays({ remaining: 2.7, quota: 12 }).days, 2.5);
+  assert.equal(carryOverDays({ remaining: -1, quota: 12 }).days, 0);
 });

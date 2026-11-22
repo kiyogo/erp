@@ -50,7 +50,7 @@ import { ADJUST_TYPES, REGIME_TYPES, adjustmentSalaryCheck, normalizeInsuranceMo
 import { COUNTERPARTY_TYPES, loanRateProblem, loanWarnings, shareholderProblem, shareholderWarnings } from './loanEquityRules.mjs';
 import { dependentClaimConflict, identityProblems, normalizeFamilyMembers } from './employeeRules.mjs';
 import { ARCHIVE_SECURITY_LEVELS, ARCHIVE_URGENCY_LEVELS, archiveDateIssues, docNumberWarnings, secretDocumentWarnings } from './documentRules.mjs';
-import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
+import { LEAVE_TYPES, MIN_REST_BETWEEN_SHIFTS_HOURS, addDaysIsoDate, annualLeaveEntitlement, carryOverDays, annualLeaveLabel, isMinor, leaveDaysProblem, normalizeLeaveType, nightHoursOfShift, overtimeMinMultiplier, restBetweenShiftsHours, shiftLegalProblems } from './attendanceRules.mjs';
 import { documentPaymentPlan, paymentJournalLines } from './paymentRules.mjs';
 import { disposalFigures, disposalFinalProblem, disposalJournal, disposalWarnings, isSaleDisposal } from './assetDisposalRules.mjs';
 import { TAX_FILING_TYPES, citRate, ledgerProfit, taxFilingDeadline, vatSummary } from './taxRules.mjs';
@@ -2481,7 +2481,8 @@ async function leaveEntitlementFor(employeeId, year) {
 
 function deriveLeaveSummary(record) {
   record.totalEntitled = record.standardQuota + record.seniorityQuota + record.carriedOver;
-  record.remainingLeaves = record.totalEntitled - record.usedLeaves;
+  // carriedForward: số ngày đã chuyển sang năm sau (route chuyển phép), không còn dùng được trong năm này.
+  record.remainingLeaves = record.totalEntitled - record.usedLeaves - (Number(record.carriedForward) || 0);
   record.leaveUsagePct = record.totalEntitled ? Math.round(record.usedLeaves / record.totalEntitled * 1000) / 10 : 0;
   record.status = record.remainingLeaves <= 0 ? 'Đã hết phép' : record.remainingLeaves <= 3 ? 'Sắp hết phép' : 'Còn nhiều phép';
 }
@@ -2512,18 +2513,55 @@ async function consumeAnnualLeave(leave) {
   const year = Number(String(leave.startDate).slice(0, 4));
   const balance = await annualLeaveRemaining(leave.employeeId, year);
   if (leave.daysCount > balance.remaining + 0.001) throw new HttpError(422, `Nhân viên chỉ còn ${balance.remaining} ngày phép năm ${year}, không đủ cho đơn ${leave.daysCount} ngày.`);
+  await upsertLeaveSummary(leave.employeeId, year, (summary) => { summary.usedLeaves = (Number(summary.usedLeaves) || 0) + leave.daysCount; });
+}
+
+// Sửa sổ phép của một nhân viên và năm; chưa có thì lập theo hạn mức luật rồi sửa (dùng khi duyệt đơn và khi chuyển phép).
+async function upsertLeaveSummary(employeeId, year, mutate) {
   const timestamp = now();
-  if (balance.row) {
-    const summary = { ...balance.summary, usedLeaves: (Number(balance.summary.usedLeaves) || 0) + leave.daysCount };
+  const row = await leaveSummaryRow(employeeId, year);
+  if (row) {
+    const summary = parseJsonObject(row.payload_json);
+    mutate(summary);
     deriveLeaveSummary(summary);
-    await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(summary), timestamp, balance.row.id);
-    return;
+    await db.prepare('UPDATE collection_records SET payload_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(summary), timestamp, row.id);
+    return summary;
   }
-  const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ?').get(leave.employeeId);
-  const summary = { key: randomUUID(), employeeId: employee.id, employeeName: employee.name, empCode: employee.employee_code, employeeCode: employee.employee_code, department: employee.department || '', year, standardQuota: balance.entitlement.standardQuota, seniorityQuota: balance.entitlement.seniorityQuota, carriedOver: 0, usedLeaves: leave.daysCount, createdAt: timestamp };
+  const entitlement = await leaveEntitlementFor(employeeId, year);
+  const employee = await db.prepare('SELECT u.id, u.name, u.employee_code, p.department FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE u.id = ?').get(employeeId);
+  const summary = { key: randomUUID(), employeeId: employee.id, employeeName: employee.name, empCode: employee.employee_code, employeeCode: employee.employee_code, department: employee.department || '', year, standardQuota: entitlement.standardQuota, seniorityQuota: entitlement.seniorityQuota, carriedOver: 0, usedLeaves: 0, createdAt: timestamp };
+  mutate(summary);
   deriveLeaveSummary(summary);
   await db.prepare('INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(randomUUID(), 'attendance_leave_summary', summary.key, employee.id, JSON.stringify(summary), timestamp, timestamp);
+  return summary;
+}
+
+// Kế hoạch chuyển phép năm fromYear sang năm sau cho nhân viên đang làm việc (hoặc employeeIds): số còn lại trừ đơn chờ duyệt, giới hạn nghỉ gộp
+// 03 năm và mức tối đa của doanh nghiệp (carryOverDays). Nhân viên đã chuyển năm này (carriedForward) thì bỏ qua.
+async function leaveCarryOverPlan({ fromYear, maxDays, employeeIds }) {
+  const active = "u.role <> 'ADMIN' AND u.is_active = 1 AND COALESCE(p.employment_status, 'Chính thức') <> 'Đã nghỉ việc'";
+  let employees = await db.prepare(`SELECT u.id, u.name, u.employee_code FROM users u LEFT JOIN employee_profiles p ON p.user_id = u.id WHERE ${active} ORDER BY u.name, u.id`).all();
+  if (employeeIds) employees = employees.filter((employee) => employeeIds.includes(employee.id));
+  const rows = [];
+  for (const employee of employees) {
+    const base = { employeeId: employee.id, employeeName: employee.name, employeeCode: employee.employee_code || '' };
+    let balance;
+    try { balance = await annualLeaveRemaining(employee.id, fromYear); } catch (error) { rows.push({ ...base, status: 'error', note: error.message, days: 0 }); continue; }
+    if (Number(balance.summary?.carriedForward) > 0) { rows.push({ ...base, status: 'done', days: Number(balance.summary.carriedForward), note: `Đã chuyển sang năm ${fromYear + 1}.` }); continue; }
+    const pending = await pendingAnnualLeaveDays(employee.id, fromYear);
+    const source = balance.summary || balance.entitlement;
+    const quota = (Number(source.standardQuota) || 0) + (Number(source.seniorityQuota) || 0);
+    const previousRow = await leaveSummaryRow(employee.id, fromYear - 1);
+    const previous = previousRow ? parseJsonObject(previousRow.payload_json) : null;
+    const previousQuota = previous ? (Number(previous.standardQuota) || 0) + (Number(previous.seniorityQuota) || 0) : 0;
+    const previousCarry = Math.min(Number(balance.summary?.carriedOver) || 0, previousQuota);
+    const available = balance.remaining - pending;
+    const result = carryOverDays({ remaining: available, quota, previousCarry, maxDays });
+    const note = pending ? `Có ${pending} ngày phép năm ${fromYear} đang chờ duyệt, không chuyển phần này.` : result.limitedBy === 'law' ? 'Vượt giới hạn nghỉ gộp 03 năm, phần vượt không được chuyển.' : result.limitedBy === 'policy' ? 'Vượt mức tối đa của doanh nghiệp.' : '';
+    rows.push({ ...base, status: result.days > 0 ? 'ready' : 'none', remaining: balance.remaining, pending, quota, legalCap: result.legalCap, days: result.days, forfeited: Math.max(0, available - result.days), note });
+  }
+  return rows;
 }
 
 async function employeeBirthDate(employeeId) {
@@ -5769,6 +5807,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     for (const field of ['standardQuota', 'seniorityQuota', 'carriedOver', 'usedLeaves']) {
       record[field] = Number(record[field] ?? 0);
       if (!Number.isFinite(record[field]) || record[field] < 0) throw new HttpError(422, 'Số ngày phép không hợp lệ.');
+    }
+    // Thông tin chuyển phép chỉ do route chuyển phép ghi; sửa sổ phép bằng tay giữ nguyên.
+    for (const field of ['carriedForward', 'carryOverTo', 'carryOverFrom', 'carryOverBasis', 'carryOverAt']) {
+      if (current?.[field] !== undefined) record[field] = current[field]; else delete record[field];
     }
     deriveLeaveSummary(record);
     const summaries = await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'attendance_leave_summary'").all();
@@ -14942,6 +14984,33 @@ async function handleRequest(request, response) {
     return;
   }
 
+  // Chuyển phép năm chưa nghỉ sang năm sau (Điều 113 khoản 4): quản trị viên ghi căn cứ thỏa thuận hoặc quy chế, xem trước rồi ghi; sổ phép năm chuyển
+  // lưu carriedForward (không dùng tiếp được), sổ phép năm sau lưu carriedOver và căn cứ.
+  if (request.method === 'POST' && resource === '/attendance/leave-carryover') {
+    const actor = await requireAdmin(request);
+    const body = await readJson(request);
+    const fromYear = Number(body.fromYear);
+    if (!Number.isInteger(fromYear) || fromYear < 2000 || fromYear > Number(todayInVietnam().slice(0, 4))) throw new HttpError(422, 'Năm chuyển phép phải là năm hiện tại hoặc đã qua.');
+    const maxDays = body.maxDays === undefined || body.maxDays === null || body.maxDays === '' ? null : Number(body.maxDays);
+    if (maxDays !== null && (!Number.isFinite(maxDays) || maxDays < 0 || maxDays > 366)) throw new HttpError(422, 'Số ngày chuyển tối đa không hợp lệ.');
+    const employeeIds = Array.isArray(body.employeeIds) && body.employeeIds.length ? body.employeeIds.map(String) : null;
+    const plan = await leaveCarryOverPlan({ fromYear, maxDays, employeeIds });
+    if (body.preview) { sendJson(response, 200, { fromYear, toYear: fromYear + 1, rows: plan }); return; }
+    const basis = requiredText(body.basis, 'Căn cứ chuyển phép (thỏa thuận hoặc quy chế)', 500);
+    const ready = plan.filter((row) => row.status === 'ready');
+    if (!ready.length) throw new HttpError(422, 'Không có nhân viên nào còn phép để chuyển.');
+    const carryOverAt = now();
+    await db.transaction(async () => {
+      for (const row of ready) {
+        await upsertLeaveSummary(row.employeeId, fromYear, (summary) => { summary.carriedForward = row.days; summary.carryOverTo = fromYear + 1; summary.carryOverAt = carryOverAt; });
+        await upsertLeaveSummary(row.employeeId, fromYear + 1, (summary) => { summary.carriedOver = row.days; summary.carryOverFrom = fromYear; summary.carryOverBasis = basis; summary.carryOverAt = carryOverAt; });
+      }
+    });
+    await recordAuditEvent(actor.id, 'leave_carryover', 'attendance_leave_summary', String(fromYear), { fromYear, maxDays, basis, employees: ready.map((row) => ({ employeeId: row.employeeId, days: row.days })) });
+    sendJson(response, 200, { fromYear, toYear: fromYear + 1, rows: plan, carried: ready.length });
+    return;
+  }
+
   // Quỹ phép năm của chính nhân viên: sổ phép nếu nhân sự đã lập, chưa có thì hạn mức theo luật (cùng nguồn với kiểm tra khi tạo và duyệt đơn).
   if (request.method === 'GET' && resource === '/employees/me/leave-balance') {
     const actor = await requireUser(request);
@@ -14958,6 +15027,7 @@ async function handleRequest(request, response) {
       carriedOver: Number(balance.summary?.carriedOver) || 0,
       entitled: balance.entitled,
       used: Number(balance.summary?.usedLeaves) || 0,
+      carriedForward: Number(balance.summary?.carriedForward) || 0,
       remaining: balance.remaining,
       pendingDays,
       joinDate: balance.entitlement?.joinDate || '',

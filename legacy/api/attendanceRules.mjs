@@ -73,6 +73,19 @@ export function annualLeaveEntitlement({ baseDays, joinDate, year }) {
   return { baseDays: base, seniorityDays, monthsWorked, standardQuota, seniorityQuota, entitled: standardQuota + seniorityQuota };
 }
 
+// Phép năm chưa nghỉ chuyển sang năm sau (Bộ luật Lao động 2019 Điều 113 khoản 4): không tự động, phải có thỏa thuận giữa hai bên, và nghỉ gộp tối đa
+// 03 năm một lần, nên số ngày chuyển vào năm sau không vượt phép của chính năm chuyển (quota) cộng phần chuyển tiếp còn gốc từ năm liền trước
+// (previousCarry, đã giới hạn bằng phép của năm đó); cộng phép năm nhận là đủ 03 năm. Doanh nghiệp có thể đặt mức tối đa thấp hơn (maxDays).
+// Làm tròn xuống nửa ngày.
+export function carryOverDays({ remaining, quota, previousCarry = 0, maxDays = null }) {
+  const available = Math.max(0, Number(remaining) || 0);
+  const legalCap = Math.max(0, Number(quota) || 0) + Math.max(0, Number(previousCarry) || 0);
+  const policyCap = maxDays === null || maxDays === undefined || maxDays === '' ? Infinity : Math.max(0, Number(maxDays) || 0);
+  const days = Math.floor(Math.min(available, legalCap, policyCap) * 2) / 2;
+  const limitedBy = days >= available ? null : policyCap < legalCap ? 'policy' : 'law';
+  return { days, legalCap, limitedBy };
+}
+
 // Hệ số làm thêm tối thiểu: 150% ngày thường, 200% ngày nghỉ hằng tuần (theo thiết lập lịch nghỉ, mặc định thứ bảy, chủ nhật), 300% ngày lễ, tết, nghỉ bù
 // có hưởng lương (holidayRules.mjs, gồm Tết Âm lịch và Giỗ Tổ theo lịch âm).
 // details: hồ sơ người lao động; ngày nghỉ thêm của người nước ngoài (Tết cổ truyền, Quốc khánh nước họ) cũng là ngày lễ hưởng lương.

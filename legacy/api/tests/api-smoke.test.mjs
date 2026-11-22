@@ -3203,6 +3203,31 @@ test('leave requests follow legal types, caps and the annual leave balance', asy
   assert.equal((await request('/collections/attendance_leave_summary')).data.find(item => item.employeeId === employee.id && item.year === 2027).remainingLeaves, 0);
 });
 
+test('unused annual leave carries over to the next year by agreement within the legal limit', async () => {
+  const employee = (await request('/users', 'POST', { email: 'leave-carry@example.test', name: 'Leave Carry', password: 'Leave-Carry-26!Secure', employeeCode: 'TEST-LEAVE-CARRY', role: 'USER' }, 201)).user;
+  const leave = (key, startDate, endDate, daysCount, expected = 201) => request('/collections/leave_requests', 'POST', { record: { key, code: key, employeeId: employee.id, startDate, endDate, daysCount, reason: 'Test', leaveType: 'Nghỉ phép năm', status: 'Chờ duyệt' } }, expected);
+  await leave('carry-used', '2026-03-02', '2026-03-06', 4);
+  await request('/collections/leave_requests/carry-used', 'PATCH', { patch: { status: 'Đã duyệt' } });
+  await leave('carry-pending', '2026-12-01', '2026-12-01', 1);
+  const body = { fromYear: 2026, maxDays: 5, employeeIds: [employee.id] };
+  const preview = (await request('/attendance/leave-carryover', 'POST', { ...body, preview: true })).rows[0];
+  assert.deepEqual([preview.status, preview.remaining, preview.pending, preview.days, preview.forfeited], ['ready', 8, 1, 5, 2]);
+  await request('/attendance/leave-carryover', 'POST', body, 422);
+  await request('/attendance/leave-carryover', 'POST', { ...body, fromYear: 2027, basis: 'Thỏa thuận' }, 422);
+  assert.equal((await request('/attendance/leave-carryover', 'POST', { ...body, basis: 'Thỏa thuận nghỉ gộp ngày 20/11/2026' })).carried, 1);
+  const ledgers = (await request('/collections/attendance_leave_summary')).data.filter((item) => item.employeeId === employee.id);
+  const from = ledgers.find((item) => item.year === 2026);
+  const to = ledgers.find((item) => item.year === 2027);
+  assert.deepEqual([from.carriedForward, from.remainingLeaves], [5, 3]);
+  assert.deepEqual([to.carriedOver, to.totalEntitled, to.carryOverFrom, to.carryOverBasis], [5, 17, 2026, 'Thỏa thuận nghỉ gộp ngày 20/11/2026']);
+  assert.equal((await request('/attendance/leave-carryover', 'POST', { ...body, preview: true })).rows[0].status, 'done');
+  // Còn 3 ngày, 1 ngày đang chờ duyệt: không gửi thêm được 3 ngày phép năm 2026.
+  await leave('carry-over-limit', '2026-12-07', '2026-12-09', 3, 422);
+  // Sửa sổ phép bằng tay không ghi đè được thông tin chuyển phép.
+  await request(`/collections/attendance_leave_summary/${from.key}`, 'PATCH', { patch: { carriedForward: 0 } });
+  assert.equal((await request('/collections/attendance_leave_summary')).data.find((item) => item.key === from.key).carriedForward, 5);
+});
+
 test('shifts need a legal break and night pay, and consecutive shifts need 12 hours of rest', async () => {
   const employee = (await request('/users', 'POST', { email: 'rest-law@example.test', name: 'Rest Law', password: 'Rest-Test-26!Secure', employeeCode: 'TEST-REST-LAW', role: 'USER' }, 201)).user;
   const shift = (key, startTime, endTime, extra = {}) => ({ key, shiftCode: key, shiftName: key, startTime, endTime, timeRange: `${startTime} - ${endTime}`, workingHours: 8, workUnits: 1, status: 'Đang áp dụng', ...extra });

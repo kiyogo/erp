@@ -1,5 +1,5 @@
 import { dataService } from '../../services/dataService';
-import { collectionsApi, leaveEntitlementApi } from '../../api/endpoints';
+import { collectionsApi, leaveCarryOverApi, leaveEntitlementApi, type LeaveCarryOverRow } from '../../api/endpoints';
 import { downloadFile, generateValidPdfBlob, generateValidXlsxBlob } from '../../utils/fileExporter';
 import { attendanceNumber, employeeAttendanceFields, leaveBalance } from './attendanceRules';
 import React, { useEffect, useState } from 'react';
@@ -31,6 +31,10 @@ export interface EnterpriseLeaveSummaryItem {
   standardQuota: number;
   seniorityQuota: number;
   carriedOver: number;
+  carriedForward?: number;
+  carryOverTo?: number;
+  carryOverFrom?: number;
+  carryOverBasis?: string;
   totalEntitled: number;
   usedLeaves: number;
   remainingLeaves: number;
@@ -76,6 +80,37 @@ export const LeaveSummaryModule: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
+
+  // Chuyển phép năm chưa nghỉ sang năm sau (Điều 113 khoản 4 Bộ luật Lao động 2019): theo thỏa thuận, nghỉ gộp tối đa 03 năm một lần.
+  const [carryOpen, setCarryOpen] = useState(false);
+  const [carryForm] = Form.useForm();
+  const [carryRows, setCarryRows] = useState<LeaveCarryOverRow[] | null>(null);
+  const [carrying, setCarrying] = useState(false);
+
+  const carryPayload = () => {
+    const values = carryForm.getFieldsValue();
+    const fromYear = attendanceNumber(values.fromYear, 'Năm chuyển phép', 2000, 2200);
+    const maxDays = values.maxDays === undefined || values.maxDays === null || values.maxDays === '' ? null : attendanceNumber(values.maxDays, 'Số ngày chuyển tối đa', 0, 366);
+    return { fromYear, maxDays, basis: String(values.basis || '').trim() };
+  };
+  const previewCarryOver = async () => {
+    setCarrying(true);
+    try { setCarryRows((await leaveCarryOverApi.run({ ...carryPayload(), preview: true })).data.rows); }
+    catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không tính được số ngày chuyển.'); }
+    finally { setCarrying(false); }
+  };
+  const applyCarryOver = async () => {
+    setCarrying(true);
+    try {
+      const payload = carryPayload();
+      if (!payload.basis) throw new Error('Vui lòng nhập căn cứ chuyển phép (thỏa thuận hoặc quy chế).');
+      const { data: result } = await leaveCarryOverApi.run(payload);
+      await dataService.refreshGenericData('attendance_leave_summary');
+      message.success(`Đã chuyển phép năm ${result.fromYear} sang năm ${result.toYear} cho ${result.carried} nhân viên.`);
+      setCarryOpen(false); setCarryRows(null);
+    } catch (error: any) { message.error(error?.response?.data?.message || error.message || 'Không chuyển được phép.'); }
+    finally { setCarrying(false); }
+  };
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedSummary, setSelectedSummary] = useState<EnterpriseLeaveSummaryItem | null>(null);
@@ -137,7 +172,7 @@ export const LeaveSummaryModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#0F172A', fontSize: 13.5 }}>{record.employeeName}</div>
           <div style={{ fontSize: 11.5, color: '#009688', fontWeight: 600, marginTop: 2 }}>
-            Mã: <code>{record.employeeCode}</code> · {record.position}
+            Mã: <code>{record.employeeCode}</code> · Năm {record.year || new Date().getFullYear()}{record.position ? ` · ${record.position}` : ''}
           </div>
         </div>
       ),
@@ -195,6 +230,7 @@ export const LeaveSummaryModule: React.FC = () => {
             {d} Ngày phép
           </div>
           <Tag color={d > 3 ? 'success' : d > 0 ? 'warning' : 'error'}>{record.status}</Tag>
+          {!!record.carriedForward && <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Đã chuyển {record.carriedForward} ngày sang năm {record.carryOverTo}</div>}
         </div>
       ),
     },
@@ -293,6 +329,10 @@ export const LeaveSummaryModule: React.FC = () => {
             Xuất Báo Cáo
           </Button>
 
+          <Button icon={<CalendarOutlined />} onClick={() => { carryForm.resetFields(); carryForm.setFieldsValue({ fromYear: new Date().getFullYear() }); setCarryRows(null); setCarryOpen(true); }}>
+            Chuyển phép sang năm sau
+          </Button>
+
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -378,6 +418,46 @@ export const LeaveSummaryModule: React.FC = () => {
         </Form>
       </Modal>
 
+      <Modal title="Chuyển phép năm chưa nghỉ sang năm sau" open={carryOpen} onCancel={() => setCarryOpen(false)} footer={null} width={860}>
+        <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.6, marginBottom: 12 }}>
+          Phép năm không tự chuyển sang năm sau. Người lao động và doanh nghiệp thỏa thuận nghỉ gộp, tối đa 03 năm một lần (Điều 113 khoản 4 Bộ luật Lao động 2019), nên số ngày chuyển không vượt phép của năm chuyển cộng phần chuyển tiếp còn gốc từ năm liền trước. Ngày đang chờ duyệt không được chuyển. Phần không chuyển do doanh nghiệp quyết định theo quy chế.
+        </div>
+        <Form form={carryForm} layout="vertical" onValuesChange={() => setCarryRows(null)}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="fromYear" label="Năm chuyển phép" rules={[{ required: true }]}>
+              <Input type="number" min={2000} max={2200} />
+            </Form.Item>
+            <Form.Item name="maxDays" label="Số ngày chuyển tối đa theo quy chế">
+              <Input type="number" min={0} max={366} step={0.5} placeholder="Để trống nếu chỉ áp giới hạn của luật" />
+            </Form.Item>
+          </div>
+          <Form.Item name="basis" label="Căn cứ chuyển phép" rules={[{ required: true }]}>
+            <Input placeholder="Ví dụ: Thỏa thuận nghỉ gộp ngày 20/12/2026, quy chế nghỉ phép điều 5" />
+          </Form.Item>
+        </Form>
+        {carryRows && (
+          <KTable
+            rowKey="employeeId"
+            dataSource={carryRows}
+            pagination={{ pageSize: 8 }}
+            columns={[
+              { title: 'Nhân viên', key: 'employee', render: (_: any, row: LeaveCarryOverRow) => `${row.employeeName} (${row.employeeCode})` },
+              { title: 'Còn lại', dataIndex: 'remaining', key: 'remaining', width: 90, render: (value?: number) => value ?? '' },
+              { title: 'Chờ duyệt', dataIndex: 'pending', key: 'pending', width: 90, render: (value?: number) => value ?? '' },
+              { title: 'Giới hạn luật', dataIndex: 'legalCap', key: 'legalCap', width: 110, render: (value?: number) => value ?? '' },
+              { title: 'Chuyển', dataIndex: 'days', key: 'days', width: 80 },
+              { title: 'Không chuyển', dataIndex: 'forfeited', key: 'forfeited', width: 110, render: (value?: number) => value ?? '' },
+              { title: 'Ghi chú', key: 'note', render: (_: any, row: LeaveCarryOverRow) => <span style={{ fontSize: 12 }}>{row.status === 'done' ? <Tag color="success">Đã chuyển</Tag> : row.status === 'error' ? <Tag color="error">Lỗi</Tag> : null} {row.note}</span> },
+            ]}
+          />
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+          <Button onClick={() => setCarryOpen(false)}>Hủy</Button>
+          <Button onClick={previewCarryOver} loading={carrying}>Xem trước</Button>
+          <Button type="primary" onClick={applyCarryOver} loading={carrying} disabled={!carryRows?.some((row) => row.status === 'ready')}>Chuyển phép</Button>
+        </div>
+      </Modal>
+
       {/* DRAWER: Sổ Theo Dõi Quỹ Phép Cá Nhân */}
       <Drawer
         title="Sổ Theo Dõi Quỹ Phép Năm &amp; Lịch Sử Nghỉ Phép"
@@ -430,6 +510,15 @@ export const LeaveSummaryModule: React.FC = () => {
                   <span style={{ color: '#DC2626' }}>Đã nghỉ phép trong năm:</span>
                   <strong style={{ color: '#DC2626' }}>- {selectedSummary.usedLeaves} Ngày ({selectedSummary.leaveUsagePct}%)</strong>
                 </div>
+                {!!selectedSummary.carriedForward && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#64748B' }}>Đã chuyển sang năm {selectedSummary.carryOverTo}:</span>
+                    <strong>- {selectedSummary.carriedForward} Ngày</strong>
+                  </div>
+                )}
+                {!!selectedSummary.carryOverBasis && (
+                  <div style={{ color: '#64748B' }}>Căn cứ chuyển từ năm {selectedSummary.carryOverFrom}: {selectedSummary.carryOverBasis}</div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', background: '#F0FDF4', padding: '8px 10px', borderRadius: 6 }}>
                   <span style={{ color: '#166534', fontWeight: 700 }}>Quỹ phép còn lại khả dụng:</span>
                   <strong style={{ color: '#16A34A', fontSize: 15 }}>{selectedSummary.remainingLeaves} Ngày phép</strong>
