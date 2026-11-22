@@ -818,6 +818,20 @@ test('sale documents record a salesperson snapshot and it can be reassigned', as
   assert.equal((await request('/finance/documents?documentType=sale')).data.find((item) => item.key === plain.key).salespersonId, undefined);
 });
 
+test('document lines must add up to the pre-tax amount and are returned with the document', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const input = { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách dòng hàng', description: '', amount: 1_100_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đang triển khai', taxCode: '', vatRate: 10, vatAmount: 100_000 };
+  const lines = [{ name: 'Giấy A4', unit: 'Ram', quantity: 10, unitPrice: 80_000, discount: 100_000 }, { name: 'Lắp đặt', quantity: 1.5, unitPrice: 200_000 }];
+  await request('/finance/documents', 'POST', { ...input, lines: [lines[0]] }, 422);
+  await request('/finance/documents', 'POST', { ...input, lines: [{ ...lines[0], discount: 900_000 }, lines[1]] }, 422);
+  await request('/finance/documents', 'POST', { ...input, lines: [{ ...lines[0], name: ' ' }, lines[1]] }, 422);
+  await request('/finance/documents', 'POST', { ...input, lines: [{ ...lines[0], itemKey: 'khong-co' }, lines[1]] }, 422);
+  const created = (await request('/finance/documents', 'POST', { ...input, lines }, 201)).document;
+  assert.deepEqual(created.lines.map((line) => line.amount), [700_000, 300_000]);
+  const listed = (await request('/finance/documents?documentType=sale')).data.find((item) => item.key === created.key);
+  assert.deepEqual(listed.lines[0], { name: 'Giấy A4', unit: 'Ram', quantity: 10, unitPrice: 80_000, discount: 100_000, amount: 700_000 });
+});
+
 test('sales commissions follow the policy, close once per month and feed the payroll bonus', async () => {
   const seller = (await request('/users', 'POST', { email: 'commission-seller@example.test', name: 'Người Hưởng Hoa Hồng', password: 'Commission-26!Secure', employeeCode: 'TEST-COMM', role: 'USER' }, 201)).user;
   await request(`/employees/${seller.id}`, 'PATCH', { salaryBase: 10_000_000 });

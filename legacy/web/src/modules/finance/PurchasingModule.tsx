@@ -12,6 +12,8 @@ import { Modal, Form, Input, Select, Button, message, Tag, Progress } from '../.
 import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
 import { ContactSelect } from '../crm/ContactSelect';
 import { TradeTermsFields } from './TradeTermsFields';
+import { DocumentLinesEditor, DocumentLinesLink, DocumentLinesModal } from './DocumentLinesEditor';
+import { linesDraftProblem, linesNet, linesPayload, type DocumentLineDraft } from './documentLines';
 import { termsFromValues, vatOf } from './tradeTerms';
 import { vatRateOptions } from './vatRateRules';
 import { PurchaseRequestsModule } from './PurchaseRequestsModule';
@@ -43,6 +45,8 @@ const PurchasingDocumentsModule: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [supplierId, setSupplierId] = useState('');
   const [subTotal, setSubTotal] = useState(0);
+  const [lines, setLines] = useState<DocumentLineDraft[]>([]);
+  const [linesTarget, setLinesTarget] = useState<FinanceDocument | null>(null);
   const [vatRate, setVatRate] = useState(10);
   const [documentDate, setDocumentDate] = useState(currentBusinessDate());
   const [form] = Form.useForm();
@@ -103,6 +107,11 @@ const PurchasingDocumentsModule: React.FC = () => {
     const rate = Number(values.vatRate) || 0;
     const vat = vatOf(net, rate);
     const amount = net + vat;
+    const linesProblem = linesDraftProblem(lines);
+    if (linesProblem) {
+      message.error(linesProblem);
+      return;
+    }
     setSaving(true);
     try {
       await financeDocumentsApi.create({
@@ -119,11 +128,13 @@ const PurchasingDocumentsModule: React.FC = () => {
         vatRate: rate,
         vatAmount: vat,
         ...(values.supplierId ? { supplierId: values.supplierId } : {}),
+        ...(lines.length ? { lines: linesPayload(lines) } : {}),
         terms: termsFromValues(values),
       });
       message.success('Đã lưu chứng từ mua hàng. Trả tiền bằng nút Chi tiền ở cột Thanh toán.');
       setModalOpen(false);
       setSupplierId('');
+      setLines([]);
       form.resetFields();
       await loadData();
     } catch (error: any) {
@@ -151,6 +162,7 @@ const PurchasingDocumentsModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>{record.description || 'Không có diễn giải'}</div>
+          <DocumentLinesLink document={record} onOpen={setLinesTarget} />
           {record.terms?.contractNo && <div style={{ fontSize: 12, color: '#64748B' }}>Hợp đồng {record.terms.contractNo}</div>}
           {(record.termWarnings || []).map((warning) => <div key={warning} style={{ fontSize: 12, color: '#D97706' }}>{warning}</div>)}
         </div>
@@ -220,6 +232,7 @@ const PurchasingDocumentsModule: React.FC = () => {
                   form.resetFields();
                   setSupplierId('');
                   setSubTotal(0);
+                  setLines([]);
                   setVatRate(10);
                   setDocumentDate(currentBusinessDate());
                   form.setFieldsValue({ subtype: isContracts ? 'Hợp đồng mua' : isInputInvoices ? 'Hóa đơn đầu vào' : 'Đơn mua hàng', documentDate: currentBusinessDate(), vatRate: 10 });
@@ -238,9 +251,10 @@ const PurchasingDocumentsModule: React.FC = () => {
         </div>
       )}
 
+      <DocumentLinesModal document={linesTarget} onClose={() => setLinesTarget(null)} />
       <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
-      <Modal title="Thêm chứng từ mua hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSupplierId(''); }} footer={null} width={680}>
+      <Modal title="Thêm chứng từ mua hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSupplierId(''); }} footer={null} width={960}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
           <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
             <Select options={[{ label: 'Đơn mua hàng', value: 'Đơn mua hàng' }, { label: 'Hợp đồng mua', value: 'Hợp đồng mua' }, { label: 'Hóa đơn đầu vào', value: 'Hóa đơn đầu vào' }]} />
@@ -271,9 +285,13 @@ const PurchasingDocumentsModule: React.FC = () => {
               <Input type="date" />
             </Form.Item>
           </div>
+          <DocumentLinesEditor value={lines} onChange={(next) => {
+            setLines(next);
+            if (next.length) { setSubTotal(linesNet(next)); form.setFieldsValue({ subTotal: linesNet(next) }); }
+          }} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="subTotal" label="Tiền hàng chưa thuế" rules={[{ required: true }]}>
-              <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setSubTotal(Number(event.target.value) || 0)} />
+            <Form.Item name="subTotal" label={lines.length ? 'Tiền hàng chưa thuế (tổng các dòng hàng)' : 'Tiền hàng chưa thuế'} rules={[{ required: true }]}>
+              <Input type="number" min={1} disabled={lines.length > 0} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setSubTotal(Number(event.target.value) || 0)} />
             </Form.Item>
             <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
               <Select options={vatRateOptions(documentDate)} onChange={(value: number) => setVatRate(Number(value) || 0)} />

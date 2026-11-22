@@ -14,6 +14,8 @@ import { financeDocumentsApi, FinanceDocument } from '../../api/endpoints';
 import { vatRateOptions } from './vatRateRules';
 import { PaymentMethodField } from './TradeTermsFields';
 import { termsFromValues } from './tradeTerms';
+import { DocumentLinesEditor, DocumentLinesLink, DocumentLinesModal } from './DocumentLinesEditor';
+import { linesDraftProblem, linesNet, linesPayload, type DocumentLineDraft } from './documentLines';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
 import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
 import type { FinanceDocument as PayableDocument } from '../../api/endpoints';
@@ -32,6 +34,8 @@ export const InvoicesModule: React.FC = () => {
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().substring(0, 10));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<FinanceDocument | null>(null);
+  const [lines, setLines] = useState<DocumentLineDraft[]>([]);
+  const [linesTarget, setLinesTarget] = useState<FinanceDocument | null>(null);
   const [form] = Form.useForm();
   const { posted: ledgerPosted, reload: reloadLedgerPostings } = useLedgerPostings();
   const [ledgerTarget, setLedgerTarget] = useState<{ kind: LedgerSourceKind; key: string; title: string } | null>(null);
@@ -80,6 +84,11 @@ export const InvoicesModule: React.FC = () => {
     const vatRate = Number(values.vatRate) || 0;
     const vatAmount = Math.round((subTotal * vatRate) / 100);
     const amount = subTotal + vatAmount;
+    const linesProblem = linesDraftProblem(lines);
+    if (linesProblem) {
+      message.error(linesProblem);
+      return;
+    }
     try {
       await financeDocumentsApi.create({
         documentType: 'invoice',
@@ -95,9 +104,11 @@ export const InvoicesModule: React.FC = () => {
         vatRate,
         vatAmount,
         terms: termsFromValues(values),
+        ...(lines.length ? { lines: linesPayload(lines) } : {}),
       });
       message.success('Đã lưu hóa đơn. Lập phiếu thu hoặc chi bằng nút Thu tiền, Chi tiền ở cột Thanh toán.');
       setModalOpen(false);
+      setLines([]);
       form.resetFields();
       await loadData();
     } catch (error: any) {
@@ -129,6 +140,7 @@ export const InvoicesModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>MST: {record.taxCode || 'Chưa nhập'}</div>
+          <DocumentLinesLink document={record} onOpen={setLinesTarget} />
         </div>
       ),
     },
@@ -206,6 +218,7 @@ export const InvoicesModule: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              setLines([]);
               setInvoiceDate(new Date().toISOString().substring(0, 10)); form.setFieldsValue({ subtype: outputSubtype, documentDate: new Date().toISOString().substring(0, 10), vatRate: 10, status: 'Đã phát hành' });
               setModalOpen(true);
             }}
@@ -220,9 +233,10 @@ export const InvoicesModule: React.FC = () => {
         <KTable dataSource={filteredData} columns={columns} loading={loading} pagination={{ pageSize: 8 }} locale={{ emptyText: 'Chưa có hóa đơn tài chính.' }} />
       </div>
 
+      <DocumentLinesModal document={linesTarget} onClose={() => setLinesTarget(null)} />
       <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
-      <Modal title="Thêm hóa đơn tài chính" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={660}>
+      <Modal title="Thêm hóa đơn tài chính" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={960}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="terms_invoiceNo" label="Số hóa đơn" rules={[{ required: true, whitespace: true }]}>
@@ -249,9 +263,13 @@ export const InvoicesModule: React.FC = () => {
           <Form.Item name="description" label="Nội dung hóa đơn">
             <Input.TextArea rows={2} />
           </Form.Item>
+          <DocumentLinesEditor value={lines} onChange={(next) => {
+            setLines(next);
+            if (next.length) form.setFieldsValue({ subTotal: linesNet(next) });
+          }} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="subTotal" label="Tiền trước thuế" rules={[{ required: true }]}>
-              <Input type="number" min={1} />
+            <Form.Item name="subTotal" label={lines.length ? 'Tiền trước thuế (tổng các dòng hàng)' : 'Tiền trước thuế'} rules={[{ required: true }]}>
+              <Input type="number" min={1} disabled={lines.length > 0} />
             </Form.Item>
             <Form.Item name="vatRate" label="VAT" rules={[{ required: true }]}>
               <Select options={vatRateOptions(invoiceDate)} />
@@ -284,6 +302,7 @@ export const InvoicesModule: React.FC = () => {
               <div style={{ fontSize: 13, color: '#009688', fontWeight: 800 }}>{selectedInvoice.code}</div>
               <div style={{ fontSize: 17, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>{selectedInvoice.partnerName}</div>
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>Ngày: {selectedInvoice.documentDate} · MST: {selectedInvoice.taxCode || 'Chưa nhập'}</div>
+              <DocumentLinesLink document={selectedInvoice} onOpen={setLinesTarget} />
             </div>
             <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 14, fontSize: 13 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>Tiền trước thuế</span><strong>{formatMoney(selectedInvoice.amount - selectedInvoice.vatAmount)}</strong></div>

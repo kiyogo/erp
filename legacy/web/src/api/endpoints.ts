@@ -662,9 +662,12 @@ export type FinanceDocument = {
   adjustsDocumentId?: string;
   adjustedAmount?: number;
   terms?: FinanceDocumentTerms;
+  /** Dòng hàng do máy chủ kiểm tra (legacy/api/documentLineRules.mjs): tổng thành tiền bằng tiền hàng chưa thuế. */
+  lines?: FinanceDocumentLine[];
   paymentMethod?: string;
   termWarnings?: string[];
 };
+export type FinanceDocumentLine = { itemKey?: string; sku?: string; name: string; unit: string; quantity: number; unitPrice: number; discount?: number; amount: number };
 export type FinanceDocumentTerms = {
   reason?: string;
   invoiceNo?: string;
@@ -707,7 +710,8 @@ export const financeOverviewApi = {
   getSummary: (params: { dateFrom?: string; dateTo?: string; source?: 'all' | 'bank' | 'petty'; type?: 'all' | 'Thu' | 'Chi'; currency?: 'VND'; accountId?: string; counterpartyId?: string }) => api.get<FinanceOverviewSummary>('/finance/overview', { params }),
 };
 
-export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'code' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions' | 'paymentMethod' | 'termWarnings' | 'adjustedAmount'> & {
+export type CreateFinanceDocument = Omit<FinanceDocument, 'key' | 'code' | 'remainingAmount' | 'createdAt' | 'updatedAt' | 'customerCode' | 'grossAmount' | 'discountAmount' | 'appliedPromotions' | 'paymentMethod' | 'termWarnings' | 'adjustedAmount' | 'lines'> & {
+  lines?: Array<Omit<FinanceDocumentLine, 'sku' | 'amount'>>;
   promotionKeys?: string[];
   promotionFingerprint?: string;
   requestId?: string;

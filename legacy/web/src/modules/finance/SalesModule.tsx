@@ -15,6 +15,8 @@ import { ContactSelect } from '../crm/ContactSelect';
 import { EmployeeSelect } from '../hr/EmployeeSelect';
 import { TradeAdjustmentsModule } from './TradeAdjustmentsModule';
 import { TradeTermsFields } from './TradeTermsFields';
+import { DocumentLinesEditor, DocumentLinesLink, DocumentLinesModal } from './DocumentLinesEditor';
+import { linesDraftProblem, linesNet, linesPayload, type DocumentLineDraft } from './documentLines';
 import { isAdjustment, netTradeTotals } from './tradeAdjustments';
 import { LedgerPostingModal, ledgerPostingColumn, useLedgerPostings } from './LedgerPostingModal';
 import { DocumentPaymentModal, documentPaymentColumn } from './DocumentPaymentModal';
@@ -51,6 +53,8 @@ const SalesDocumentsModule: React.FC = () => {
   const [subTotal, setSubTotal] = useState(0);
   const [vatRate, setVatRate] = useState(10);
   const [documentDate, setDocumentDate] = useState(currentBusinessDate());
+  const [lines, setLines] = useState<DocumentLineDraft[]>([]);
+  const [linesTarget, setLinesTarget] = useState<FinanceDocument | null>(null);
   const [linkTarget, setLinkTarget] = useState<FinanceDocument | null>(null);
   const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -169,6 +173,11 @@ const SalesDocumentsModule: React.FC = () => {
       return;
     }
     const amount = context.amount;
+    const linesProblem = linesDraftProblem(lines);
+    if (linesProblem) {
+      message.error(linesProblem);
+      return;
+    }
     setSaving(true);
     try {
       await financeDocumentsApi.create({
@@ -185,6 +194,7 @@ const SalesDocumentsModule: React.FC = () => {
         vatRate: context.vatRate,
         vatAmount: context.vatAmount,
         terms: termsFromValues(values),
+        ...(lines.length ? { lines: linesPayload(lines) } : {}),
         ...(values.customerId ? { customerId: values.customerId } : {}),
         ...(values.salespersonId ? { salespersonId: values.salespersonId } : {}),
         ...(context.promotionKeys.length && promotionPreview ? { promotionKeys: context.promotionKeys, promotionFingerprint: promotionPreview.fingerprint, requestId } : {}),
@@ -194,6 +204,7 @@ const SalesDocumentsModule: React.FC = () => {
       setSelectedCustomerId('');
       setSelectedPromotions([]);
       setPromotionPreview(null);
+      setLines([]);
       form.resetFields();
       await loadData();
     } catch (error: any) {
@@ -257,6 +268,7 @@ const SalesDocumentsModule: React.FC = () => {
         <div>
           <div style={{ fontWeight: 700, color: '#0F172A' }}>{record.partnerName}{record.customerCode ? ` · ${record.customerCode}` : ''}</div>
           <div style={{ fontSize: 12, color: '#64748B' }}>{record.description || 'Không có diễn giải'}</div>
+          <DocumentLinesLink document={record} onOpen={setLinesTarget} />
           {record.terms?.contractNo && <div style={{ fontSize: 12, color: '#64748B' }}>Hợp đồng {record.terms.contractNo}</div>}
           {(record.termWarnings || []).map((warning) => <div key={warning} style={{ fontSize: 12, color: '#D97706' }}>{warning}</div>)}
         </div>
@@ -340,6 +352,7 @@ const SalesDocumentsModule: React.FC = () => {
                     setPromotionPreview(null);
                     setRequestId(crypto.randomUUID());
                     setSubTotal(0);
+                    setLines([]);
                     setVatRate(10);
                     setDocumentDate(currentBusinessDate());
                     form.setFieldsValue({ subtype: isQuotes ? 'Báo giá' : 'Đơn bán hàng', documentDate: currentBusinessDate(), vatRate: 10, promotionKeys: [] });
@@ -365,9 +378,10 @@ const SalesDocumentsModule: React.FC = () => {
         </div>
       )}
 
+      <DocumentLinesModal document={linesTarget} onClose={() => setLinesTarget(null)} />
       <DocumentPaymentModal target={payTarget} onClose={() => setPayTarget(null)} onPaid={() => void loadData()} />
       <LedgerPostingModal target={ledgerTarget} onClose={() => setLedgerTarget(null)} onPosted={() => void reloadLedgerPostings()} />
-      <Modal title="Thêm chứng từ bán hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSelectedCustomerId(''); }} footer={null} width={620}>
+      <Modal title="Thêm chứng từ bán hàng" open={modalOpen} onCancel={() => { setModalOpen(false); setSelectedCustomerId(''); }} footer={null} width={960}>
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 14, maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 }}>
           <Form.Item name="subtype" label="Phân loại" rules={[{ required: true }]}>
             <Select options={[{ label: 'Báo giá', value: 'Báo giá' }, { label: 'Đơn bán hàng', value: 'Đơn bán hàng' }, { label: 'Hợp đồng bán', value: 'Hợp đồng bán' }]} onChange={() => setPromotionPreview(null)} />
@@ -403,9 +417,14 @@ const SalesDocumentsModule: React.FC = () => {
               <Input type="date" />
             </Form.Item>
           </div>
+          <DocumentLinesEditor value={lines} onChange={(next) => {
+            setLines(next);
+            if (next.length) { setSubTotal(linesNet(next)); form.setFieldsValue({ subTotal: linesNet(next) }); }
+            setPromotionPreview(null);
+          }} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Form.Item name="subTotal" label="Tiền hàng chưa thuế, trước khuyến mại" rules={[{ required: true }]}>
-              <Input type="number" min={1} onChange={(event: React.ChangeEvent<HTMLInputElement>) => { setSubTotal(Number(event.target.value) || 0); setPromotionPreview(null); }} />
+            <Form.Item name="subTotal" label={lines.length ? 'Tiền hàng chưa thuế (tổng các dòng hàng)' : 'Tiền hàng chưa thuế, trước khuyến mại'} rules={[{ required: true }]}>
+              <Input type="number" min={1} disabled={lines.length > 0} onChange={(event: React.ChangeEvent<HTMLInputElement>) => { setSubTotal(Number(event.target.value) || 0); setPromotionPreview(null); }} />
             </Form.Item>
             <Form.Item name="vatRate" label="Thuế suất GTGT" rules={[{ required: true }]}>
               <Select options={vatRateOptions(documentDate)} onChange={(value: number) => { setVatRate(Number(value) || 0); setPromotionPreview(null); }} />

@@ -36,6 +36,7 @@ import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
 import { COMMISSION_BASES, calculateCommissions, commissionBonusByEmployee, commissionPolicyProblem } from './commissionRules.mjs';
+import { documentLinesProblem, normalizeDocumentLines } from './documentLineRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
 import { EKYC_SESSION_TTL_MS, ekycVerificationProblem, isEkycToken, withdrawBiometricData } from './ekycRules.mjs';
@@ -6114,6 +6115,7 @@ function withDocumentTerms(document, record) {
     terms,
     ...(record?.supplierId ? { supplierId: record.supplierId } : {}),
     ...(record?.salespersonId ? { salespersonId: record.salespersonId, salespersonName: record.salespersonName || '', salespersonCode: record.salespersonCode || '', salespersonDepartment: record.salespersonDepartment || '' } : {}),
+    ...(record?.lines?.length ? { lines: record.lines } : {}),
     paymentMethod: terms.paymentMethod || '',
     termWarnings: tradeWarnings(document, terms),
   };
@@ -14386,6 +14388,7 @@ async function handleRequest(request, response) {
     const requestId = promotionKeys.length ? requiredText(input.requestId, 'Mã yêu cầu', 160) : '';
     const fingerprint = promotionKeys.length ? requiredText(input.promotionFingerprint, 'Kết quả tính khuyến mại', 64) : '';
     let document;
+    let lines = [];
     let link;
     let snapshot;
     let replayed = false;
@@ -14424,6 +14427,13 @@ async function handleRequest(request, response) {
         partnerName: original ? original.partnerName : customer ? customer.name : supplier ? supplier.name : input.partnerName,
         taxCode: original ? original.taxCode : supplier && !String(input.taxCode || '').trim() ? supplier.tax_code : input.taxCode,
       });
+      // Dòng hàng (documentLineRules.mjs): mặt hàng chọn từ danh mục kho thì lấy mã, tên, đơn vị tính từ danh mục; tổng thành tiền phải bằng tiền hàng chưa thuế.
+      if (Array.isArray(input.lines) && input.lines.length) {
+        const items = new Map((await db.prepare("SELECT record_key, payload_json FROM collection_records WHERE scope = 'finance_inventory'").all()).map((row) => [row.record_key, parseJsonObject(row.payload_json)]));
+        try { ({ lines } = normalizeDocumentLines(input.lines, items)); } catch (error) { throw new HttpError(422, error.message); }
+        const linesProblem = documentLinesProblem(lines.reduce((sum, line) => sum + line.amount, 0), document);
+        if (linesProblem) throw new HttpError(422, linesProblem);
+      }
       if (original) {
         const alreadyAdjusted = (await adjustedAmounts()).get(original.key) || 0;
         const amountProblem = adjustmentAmountProblem(document, original, alreadyAdjusted);
@@ -14473,10 +14483,10 @@ async function handleRequest(request, response) {
         original ? original.key : null,
       );
       if (customer) link = await insertSaleCustomerLink(id, document.code, customer, actor, timestamp);
-      if (supplier || salesperson || Object.keys(terms).length) {
+      if (supplier || salesperson || lines.length || Object.keys(terms).length) {
         await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
           VALUES (?, 'finance_document_terms', ?, ?, ?, ?, ?)`)
-          .run(randomUUID(), id, actor.id, JSON.stringify({ key: id, documentCode: document.code, terms, ...(supplier ? { supplierId: supplier.id, supplierCode: supplier.code } : {}), ...(salesperson || {}) }), timestamp, timestamp);
+          .run(randomUUID(), id, actor.id, JSON.stringify({ key: id, documentCode: document.code, terms, ...(supplier ? { supplierId: supplier.id, supplierCode: supplier.code } : {}), ...(salesperson || {}), ...(lines.length ? { lines } : {}) }), timestamp, timestamp);
       }
       if (snapshot) {
         await db.prepare(`INSERT INTO collection_records (id, scope, record_key, owner_id, payload_json, created_at, updated_at)
