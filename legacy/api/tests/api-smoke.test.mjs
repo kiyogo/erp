@@ -841,6 +841,10 @@ test('sales commissions follow the policy, close once per month and feed the pay
   await request('/collections/crm_commission_policies', 'POST', { record: { ...policy, rate: 120 } }, 422);
   await request('/collections/crm_commission_policies', 'POST', { record: policy }, 201);
   await request('/collections/crm_commission_policies', 'POST', { record: { ...policy, key: 'comm-policy-2', effectiveFrom: '2025-01-01' } }, 409);
+  const tiered = { ...policy, key: 'comm-policy-old', effectiveFrom: '2019-01-01', effectiveTo: '2019-12-31', rate: 99, tiers: [{ from: 0, rate: 1 }, { from: 1_000_000, rate: 3 }] };
+  await request('/collections/crm_commission_policies', 'POST', { record: tiered }, 422);
+  const savedTiered = (await request('/collections/crm_commission_policies', 'POST', { record: { ...tiered, tierMode: 'progressive' } }, 201)).record;
+  assert.deepEqual([savedTiered.rate, savedTiered.tierModeLabel], [1, 'Lũy tiến từng phần']);
   await request('/finance/documents', 'POST', { documentType: 'sale', subtype: 'Đơn bán hàng', partnerName: 'Khách hoa hồng', description: 'Có hoa hồng', amount: 2_200_000, paidAmount: 0, documentDate: today, dueDate: '', status: 'Đã bàn giao', taxCode: '', vatRate: 10, vatAmount: 200_000, salespersonId: seller.id }, 201);
   const preview = await request(`/crm/commissions?month=${month}`);
   const mine = preview.rows.find((row) => row.salespersonId === seller.id);

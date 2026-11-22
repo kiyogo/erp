@@ -10,13 +10,52 @@ export const COMMISSION_BASES = {
   paid: 'Khi đã thu đủ tiền',
 };
 
+// Hoa hồng bậc thang theo doanh số chưa thuế trong tháng của từng nhân viên (theo từng chính sách): mỗi bậc { from, rate } áp dụng từ mức doanh số
+// `from` trở lên, bậc đầu từ 0. Lũy tiến từng phần: phần doanh số trong mỗi bậc nhân tỷ lệ của bậc đó. Toàn bộ theo bậc: cả doanh số nhân tỷ lệ của
+// bậc cao nhất đạt được. Đây là quy chế nội bộ của doanh nghiệp, không có căn cứ pháp luật riêng.
+export const COMMISSION_TIER_MODES = {
+  progressive: 'Lũy tiến từng phần',
+  whole: 'Toàn bộ doanh số theo bậc đạt được',
+};
+export const MAX_COMMISSION_TIERS = 10;
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const validRate = (rate) => Number.isFinite(rate) && rate > 0 && rate <= 100 && Math.round(rate * 100) === rate * 100;
+
+function tiersProblem(policy) {
+  const tiers = policy.tiers || [];
+  if (!tiers.length) return '';
+  if (!Array.isArray(tiers) || tiers.length > MAX_COMMISSION_TIERS) return `Hoa hồng bậc thang có tối đa ${MAX_COMMISSION_TIERS} bậc.`;
+  if (!COMMISSION_TIER_MODES[policy.tierMode]) return 'Chọn cách tính bậc thang: lũy tiến từng phần hoặc toàn bộ doanh số theo bậc đạt được.';
+  for (const [index, tier] of tiers.entries()) {
+    const from = Number(tier?.from);
+    if (!Number.isSafeInteger(from) || from < 0) return `Bậc ${index + 1}: mức doanh số phải là số nguyên không âm.`;
+    if (index === 0 && from !== 0) return 'Bậc 1 phải bắt đầu từ doanh số 0.';
+    if (index > 0 && from <= Number(tiers[index - 1].from)) return `Bậc ${index + 1}: mức doanh số phải lớn hơn bậc trước.`;
+    if (!validRate(Number(tier?.rate))) return `Bậc ${index + 1}: tỷ lệ phải lớn hơn 0, tối đa 100% và tối đa 2 chữ số thập phân.`;
+  }
+  return '';
+}
+
+/** Hoa hồng của tổng doanh số theo bậc thang của chính sách. */
+export function tierCommission(revenue, tiers, mode) {
+  if (revenue <= 0) return 0;
+  if (mode === 'whole') {
+    const reached = [...tiers].reverse().find((tier) => revenue >= tier.from) || tiers[0];
+    return Math.round(revenue * reached.rate / 100);
+  }
+  return Math.round(tiers.reduce((sum, tier, index) => {
+    const upper = index + 1 < tiers.length ? Math.min(revenue, tiers[index + 1].from) : revenue;
+    return sum + Math.max(0, upper - tier.from) * tier.rate / 100;
+  }, 0));
+}
 
 export function commissionPolicyProblem(policy, others = []) {
   const name = String(policy.name || '').trim();
   if (!name) return 'Nhập tên chính sách hoa hồng.';
-  const rate = Number(policy.rate);
-  if (!Number.isFinite(rate) || rate <= 0 || rate > 100 || Math.round(rate * 100) !== rate * 100) return 'Tỷ lệ hoa hồng phải lớn hơn 0, tối đa 100% và tối đa 2 chữ số thập phân.';
+  const tierProblem = tiersProblem(policy);
+  if (tierProblem) return tierProblem;
+  if (!validRate(Number(policy.rate))) return 'Tỷ lệ hoa hồng phải lớn hơn 0, tối đa 100% và tối đa 2 chữ số thập phân.';
   if (!COMMISSION_BASES[policy.basis]) return 'Chọn căn cứ tính hoa hồng: khi đã bàn giao hoặc khi đã thu đủ tiền.';
   if (!ISO_DATE.test(String(policy.effectiveFrom || ''))) return 'Nhập ngày bắt đầu áp dụng.';
   if (policy.effectiveTo && (!ISO_DATE.test(policy.effectiveTo) || policy.effectiveTo < policy.effectiveFrom)) return 'Ngày kết thúc phải sau ngày bắt đầu áp dụng.';
@@ -37,9 +76,13 @@ export function preTaxNet(doc) {
   return Math.round(net * (1 - vatShare));
 }
 
-/** Hoa hồng của tháng (YYYY-MM) theo ngày chứng từ. Trả về từng nhân viên kèm chứng từ, và các chứng từ chưa gán nhân viên hoặc chưa có chính sách. */
+/**
+ * Hoa hồng của tháng (YYYY-MM) theo ngày chứng từ. Trả về từng nhân viên kèm chứng từ, và các chứng từ chưa gán nhân viên hoặc chưa có chính sách.
+ * Chính sách một tỷ lệ tính trên từng chứng từ; chính sách bậc thang tính trên tổng doanh số của nhân viên trong tháng theo chính sách đó rồi chia
+ * lại cho từng chứng từ theo tỷ lệ doanh số (chứng từ cuối nhận phần chênh làm tròn), tỷ lệ của chứng từ là tỷ lệ bình quân.
+ */
 export function calculateCommissions({ docs, policies, month }) {
-  const byPerson = new Map();
+  const groups = new Map();
   const unassigned = [];
   const noPolicy = [];
   for (const doc of docs) {
@@ -50,13 +93,29 @@ export function calculateCommissions({ docs, policies, month }) {
     const eligible = policy.basis === 'paid' ? doc.remainingAmount !== undefined && doc.remainingAmount !== null && Number(doc.remainingAmount) <= 0 : doc.status === 'Đã bàn giao';
     if (!eligible) continue;
     if (!doc.salespersonId) { unassigned.push({ key: doc.key, code: doc.code }); continue; }
-    const revenue = preTaxNet(doc);
-    const commission = Math.round(revenue * Number(policy.rate) / 100);
-    const entry = byPerson.get(doc.salespersonId) || { salespersonId: doc.salespersonId, salespersonName: doc.salespersonName || '', salespersonCode: doc.salespersonCode || '', salespersonDepartment: doc.salespersonDepartment || '', revenue: 0, commission: 0, documents: [] };
-    entry.revenue += revenue;
-    entry.commission += commission;
-    entry.documents.push({ key: doc.key, code: doc.code, documentDate: doc.documentDate, revenue, rate: Number(policy.rate), commission, policy: policy.name });
-    byPerson.set(doc.salespersonId, entry);
+    const groupKey = `${doc.salespersonId}|${policy.key}`;
+    const group = groups.get(groupKey) || { policy, doc, items: [] };
+    group.items.push({ doc, revenue: preTaxNet(doc) });
+    groups.set(groupKey, group);
+  }
+  const byPerson = new Map();
+  for (const { policy, doc: first, items } of groups.values()) {
+    const tiered = (policy.tiers || []).length > 0;
+    const revenue = items.reduce((sum, item) => sum + item.revenue, 0);
+    const total = tiered ? tierCommission(revenue, policy.tiers, policy.tierMode) : 0;
+    const groupRate = revenue > 0 ? Math.round(total / revenue * 10_000) / 100 : 0;
+    let allocated = 0;
+    const entry = byPerson.get(first.salespersonId) || { salespersonId: first.salespersonId, salespersonName: first.salespersonName || '', salespersonCode: first.salespersonCode || '', salespersonDepartment: first.salespersonDepartment || '', revenue: 0, commission: 0, documents: [] };
+    items.forEach(({ doc, revenue: docRevenue }, index) => {
+      let commission;
+      if (!tiered) commission = Math.round(docRevenue * Number(policy.rate) / 100);
+      else commission = index === items.length - 1 ? total - allocated : (revenue > 0 ? Math.round(total * docRevenue / revenue) : 0);
+      allocated += commission;
+      entry.revenue += docRevenue;
+      entry.commission += commission;
+      entry.documents.push({ key: doc.key, code: doc.code, documentDate: doc.documentDate, revenue: docRevenue, rate: tiered ? groupRate : Number(policy.rate), commission, policy: policy.name, ...(tiered ? { tierMode: policy.tierMode, policyRevenue: revenue } : {}) });
+    });
+    byPerson.set(first.salespersonId, entry);
   }
   const rows = [...byPerson.values()].sort((a, b) => b.commission - a.commission);
   return { month, rows, totalCommission: rows.reduce((sum, row) => sum + row.commission, 0), unassigned, noPolicy };

@@ -35,7 +35,7 @@ import { isInternalLink, trashPurgeProblem } from './retentionRules.mjs';
 import { assessDiscipline } from './disciplineRules.mjs';
 import { jobPostingWarnings, offerSalaryProblem } from './recruitmentRules.mjs';
 import { rewardBonusByEmployee } from './rewardRules.mjs';
-import { COMMISSION_BASES, calculateCommissions, commissionBonusByEmployee, commissionPolicyProblem } from './commissionRules.mjs';
+import { COMMISSION_BASES, COMMISSION_TIER_MODES, calculateCommissions, commissionBonusByEmployee, commissionPolicyProblem } from './commissionRules.mjs';
 import { documentLinesProblem, normalizeDocumentLines } from './documentLineRules.mjs';
 import { isAdvanceSettled, normalizeAdvance, settlementLedgerLines } from './advanceRules.mjs';
 import { statementPostingProblem } from './bankStatementRules.mjs';
@@ -5146,6 +5146,10 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
   }
   if (scope === 'crm_commission_policies') {
     record.name = requiredText(record.name, 'Tên chính sách hoa hồng', 160);
+    // Bậc thang (tùy chọn): tỷ lệ của chính sách là tỷ lệ bậc 1 để danh sách và kiểm tra cũ dùng tiếp.
+    record.tiers = Array.isArray(record.tiers) ? record.tiers.map((tier) => ({ from: Number(tier?.from), rate: Number(tier?.rate) })) : [];
+    record.tierMode = record.tiers.length ? String(record.tierMode || '') : '';
+    if (record.tiers.length) record.rate = record.tiers[0].rate;
     record.rate = Number(record.rate);
     record.basis = String(record.basis || '');
     record.effectiveFrom = String(record.effectiveFrom || '');
@@ -5156,6 +5160,7 @@ async function normalizeCollectionRecord(value, scope, actor, current = null) {
     const problem = commissionPolicyProblem(record, others);
     if (problem) throw new HttpError(problem.includes('trùng') ? 409 : 422, problem);
     record.basisLabel = COMMISSION_BASES[record.basis];
+    record.tierModeLabel = COMMISSION_TIER_MODES[record.tierMode] || '';
   }
   if (scope === 'finance_prepaid') {
     // Số liệu phái sinh (mức phân bổ hàng tháng, giá trị còn lại, trạng thái) luôn tính lại ở máy chủ từ số liệu gốc.

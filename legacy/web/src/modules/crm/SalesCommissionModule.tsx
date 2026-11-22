@@ -6,7 +6,18 @@ import { collectionsApi, salesCommissionApi, type CommissionMonth, type Commissi
 
 // Hoa hồng bán hàng: chính sách hoa hồng (crm_commission_policies) và bảng hoa hồng theo tháng tính ở máy chủ (legacy/api/commissionRules.mjs) từ chứng từ
 // bán đã ghi nhân viên bán hàng. Chốt tháng thì hoa hồng được cộng vào khoản thưởng chịu thuế TNCN của bảng lương tháng đó.
-interface CommissionPolicy { key: string; name: string; rate: number; basis: 'delivered' | 'paid'; basisLabel?: string; effectiveFrom: string; effectiveTo?: string; note?: string }
+interface CommissionTier { from: number; rate: number }
+interface CommissionPolicy { key: string; name: string; rate: number; basis: 'delivered' | 'paid'; basisLabel?: string; effectiveFrom: string; effectiveTo?: string; note?: string; tiers?: CommissionTier[]; tierMode?: 'progressive' | 'whole' | ''; tierModeLabel?: string }
+type TierDraft = { from: string; rate: string };
+
+// Cách tính: một tỷ lệ trên từng chứng từ, hoặc bậc thang theo doanh số chưa thuế trong tháng của nhân viên (máy chủ: COMMISSION_TIER_MODES).
+const MODE_OPTIONS = [
+  { value: 'single', label: 'Một tỷ lệ' },
+  { value: 'progressive', label: 'Bậc thang lũy tiến từng phần' },
+  { value: 'whole', label: 'Bậc thang toàn bộ doanh số theo bậc đạt được' },
+];
+const toNumber = (value: string) => Number(String(value).replace(',', '.'));
+const tierSummary = (tiers: CommissionTier[]) => tiers.map((tier) => `từ ${tier.from.toLocaleString('vi-VN')}: ${tier.rate}%`).join('; ');
 
 const BASIS_OPTIONS = [
   { value: 'delivered', label: 'Khi đã bàn giao' },
@@ -37,6 +48,8 @@ export const SalesCommissionModule: React.FC = () => {
   const [detail, setDetail] = useState<CommissionRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  const [mode, setMode] = useState('single');
+  const [tiers, setTiers] = useState<TierDraft[]>([]);
 
   const loadPolicies = () => collectionsApi.get<CommissionPolicy>('crm_commission_policies', { limit: 500 })
     .then((response) => setPolicies([...(response.data?.data || [])].sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))))
@@ -50,8 +63,11 @@ export const SalesCommissionModule: React.FC = () => {
 
   const openPolicy = (policy: CommissionPolicy | 'new') => {
     form.resetFields();
-    if (policy !== 'new') form.setFieldsValue(policy);
-    else form.setFieldsValue({ basis: 'delivered', effectiveFrom: new Date().toISOString().slice(0, 10) });
+    const nextMode = policy !== 'new' && policy.tiers?.length ? policy.tierMode || 'progressive' : 'single';
+    if (policy !== 'new') form.setFieldsValue({ ...policy, mode: nextMode });
+    else form.setFieldsValue({ basis: 'delivered', mode: 'single', effectiveFrom: new Date().toISOString().slice(0, 10) });
+    setMode(nextMode);
+    setTiers(policy !== 'new' && policy.tiers?.length ? policy.tiers.map((tier) => ({ from: String(tier.from), rate: String(tier.rate) })) : [{ from: '0', rate: '' }, { from: '', rate: '' }]);
     setPolicyModal(policy);
   };
 
@@ -59,7 +75,13 @@ export const SalesCommissionModule: React.FC = () => {
     if (saving || !policyModal) return;
     setSaving(true);
     try {
-      const record = { name: values.name, rate: Number(String(values.rate).replace(',', '.')), basis: values.basis, effectiveFrom: values.effectiveFrom, effectiveTo: values.effectiveTo || '', note: values.note || '' };
+      const tiered = mode !== 'single';
+      const record = {
+        name: values.name, basis: values.basis, effectiveFrom: values.effectiveFrom, effectiveTo: values.effectiveTo || '', note: values.note || '',
+        ...(tiered
+          ? { tiers: tiers.map((tier) => ({ from: toNumber(tier.from), rate: toNumber(tier.rate) })), tierMode: mode, rate: toNumber(tiers[0]?.rate || '') }
+          : { rate: toNumber(values.rate), tiers: [], tierMode: '' }),
+      };
       if (policyModal === 'new') await collectionsApi.create('crm_commission_policies', record);
       else await collectionsApi.update('crm_commission_policies', policyModal.key, { ...record, key: policyModal.key });
       message.success('Đã lưu chính sách hoa hồng.');
@@ -134,7 +156,9 @@ export const SalesCommissionModule: React.FC = () => {
       <div className="transparent-table-card">
         <KTable rowKey="key" dataSource={policies} pagination={false} columns={[
           { title: 'Tên chính sách', dataIndex: 'name', key: 'name' },
-          { title: 'Tỷ lệ', dataIndex: 'rate', key: 'rate', width: 100, render: (value: number) => `${value}%` },
+          { title: 'Tỷ lệ', key: 'rate', width: 260, render: (_: unknown, item: CommissionPolicy) => item.tiers?.length
+            ? <span>{item.tierModeLabel || MODE_OPTIONS.find((option) => option.value === item.tierMode)?.label}<br /><span style={{ fontSize: 12, color: '#64748B' }}>{tierSummary(item.tiers)}</span></span>
+            : `${item.rate}%` },
           { title: 'Căn cứ tính', key: 'basis', width: 170, render: (_: unknown, item: CommissionPolicy) => item.basisLabel || BASIS_OPTIONS.find((option) => option.value === item.basis)?.label },
           { title: 'Áp dụng', key: 'period', width: 220, render: (_: unknown, item: CommissionPolicy) => `Từ ${item.effectiveFrom}${item.effectiveTo ? ` đến ${item.effectiveTo}` : ''}` },
           { title: 'Ghi chú', dataIndex: 'note', key: 'note' },
@@ -156,13 +180,38 @@ export const SalesCommissionModule: React.FC = () => {
             <Input placeholder="Ví dụ: Hoa hồng nhân viên kinh doanh năm 2026" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="rate" label="Tỷ lệ hoa hồng (%)" rules={[{ required: true }]}>
-              <Input type="number" min={0} max={100} step={0.01} />
+            <Form.Item name="mode" label="Cách tính" rules={[{ required: true }]}>
+              <Select options={MODE_OPTIONS} onChange={(value: string) => setMode(String(value))} />
             </Form.Item>
             <Form.Item name="basis" label="Căn cứ tính" rules={[{ required: true }]}>
               <Select options={BASIS_OPTIONS} />
             </Form.Item>
           </div>
+          {mode === 'single' ? (
+            <Form.Item name="rate" label="Tỷ lệ hoa hồng (%)" rules={[{ required: true }]}>
+              <Input type="number" min={0} max={100} step={0.01} />
+            </Form.Item>
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 32px', gap: 8, fontSize: 12, color: '#64748B', marginBottom: 4 }}>
+                <span>Doanh số tháng chưa thuế từ (đồng)</span><span>Tỷ lệ (%)</span><span />
+              </div>
+              {tiers.map((tier, index) => (
+                <div key={index} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 32px', gap: 8, marginBottom: 6 }}>
+                  <Input type="number" min={0} step={1} value={tier.from} disabled={index === 0} onChange={(event) => setTiers(tiers.map((item, i) => (i === index ? { ...item, from: event.target.value } : item)))} />
+                  <Input type="number" min={0} max={100} step={0.01} value={tier.rate} onChange={(event) => setTiers(tiers.map((item, i) => (i === index ? { ...item, rate: event.target.value } : item)))} />
+                  <Button icon={<DeleteOutlined />} disabled={index === 0} onClick={() => setTiers(tiers.filter((_, i) => i !== index))} />
+                </div>
+              ))}
+              <Button icon={<PlusOutlined />} disabled={tiers.length >= 10} onClick={() => setTiers([...tiers, { from: '', rate: '' }])}>Thêm bậc</Button>
+              <div style={{ color: '#64748B', fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+                {mode === 'progressive'
+                  ? 'Phần doanh số trong mỗi bậc nhân tỷ lệ của bậc đó (ví dụ bậc 0: 1%, từ 100 triệu: 2%; doanh số 150 triệu được 100 triệu × 1% + 50 triệu × 2%).'
+                  : 'Cả doanh số trong tháng nhân tỷ lệ của bậc cao nhất đạt được (ví dụ bậc 0: 1%, từ 100 triệu: 2%; doanh số 150 triệu được 150 triệu × 2%).'}
+                {' '}Doanh số tính theo từng nhân viên trong tháng, theo chính sách này.
+              </div>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Form.Item name="effectiveFrom" label="Áp dụng từ ngày" rules={[{ required: true }]}>
               <Input type="date" />
@@ -187,7 +236,7 @@ export const SalesCommissionModule: React.FC = () => {
             { title: 'Chứng từ', dataIndex: 'code', key: 'code' },
             { title: 'Ngày', dataIndex: 'documentDate', key: 'documentDate', width: 110 },
             { title: 'Doanh số chưa thuế', dataIndex: 'revenue', key: 'revenue', width: 150, render: (value: number) => money(value) },
-            { title: 'Tỷ lệ', dataIndex: 'rate', key: 'rate', width: 80, render: (value: number) => `${value}%` },
+            { title: 'Tỷ lệ', dataIndex: 'rate', key: 'rate', width: 80, render: (value: number, item: CommissionRow['documents'][number]) => item.tierMode ? <span title={`Tỷ lệ bình quân theo bậc thang trên doanh số tháng ${money(item.policyRevenue || 0)}`}>{value.toLocaleString('vi-VN')}% bình quân</span> : `${value}%` },
             { title: 'Hoa hồng', dataIndex: 'commission', key: 'commission', width: 130, render: (value: number) => money(value) },
           ]} />
         )}
